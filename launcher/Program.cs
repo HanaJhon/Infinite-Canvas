@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -39,12 +40,177 @@ internal static class Program
     }
 }
 
+internal sealed class LauncherForm : Form
+{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int x;
+        public int y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MINMAXINFO
+    {
+        public POINT ptReserved;
+        public POINT ptMaxSize;
+        public POINT ptMaxPosition;
+        public POINT ptMinTrackSize;
+        public POINT ptMaxTrackSize;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int left;
+        public int top;
+        public int right;
+        public int bottom;
+    }
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateRoundRectRgn(int x1, int y1, int x2, int y2, int cx, int cy);
+
+    [DllImport("user32.dll")]
+    private static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr hObject);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+    private const int WM_GETMINMAXINFO = 0x24;
+    private const int WM_SIZING = 0x0214;
+    private const int WS_MINIMIZEBOX = 0x20000;
+    private const int WS_MAXIMIZEBOX = 0x10000;
+    private const int CS_DROPSHADOW = 0x20000;
+
+    private const int WMSZ_LEFT = 1;
+    private const int WMSZ_RIGHT = 2;
+    private const int WMSZ_TOP = 3;
+    private const int WMSZ_TOPLEFT = 4;
+    private const int WMSZ_TOPRIGHT = 5;
+    private const int WMSZ_BOTTOM = 6;
+    private const int WMSZ_BOTTOMLEFT = 7;
+    private const int WMSZ_BOTTOMRIGHT = 8;
+
+    private const double TargetAspectRatio = 16.0 / 9.0;
+    private const int CornerRadius = 24;
+
+    public LauncherForm()
+    {
+        FormBorderStyle = FormBorderStyle.None;
+        DoubleBuffered = true;
+        SetStyle(ControlStyles.ResizeRedraw | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+    }
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var cp = base.CreateParams;
+            cp.Style |= WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+            cp.ClassStyle |= CS_DROPSHADOW;
+            return cp;
+        }
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        try
+        {
+            // Windows 11 rounded corners (DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUND = 2)
+            int preference = 2;
+            DwmSetWindowAttribute(Handle, 33, ref preference, sizeof(int));
+        }
+        catch {}
+        UpdateFormRegion();
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        UpdateFormRegion();
+    }
+
+    public void UpdateFormRegion()
+    {
+        if (WindowState == FormWindowState.Maximized)
+        {
+            SetWindowRgn(Handle, IntPtr.Zero, true);
+        }
+        else
+        {
+            IntPtr hRgn = CreateRoundRectRgn(0, 0, Width + 1, Height + 1, CornerRadius, CornerRadius);
+            SetWindowRgn(Handle, hRgn, true);
+            DeleteObject(hRgn);
+        }
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WM_GETMINMAXINFO)
+        {
+            var screen = Screen.FromHandle(Handle);
+            var workingArea = screen.WorkingArea;
+            var minMax = Marshal.PtrToStructure<MINMAXINFO>(m.LParam);
+            minMax.ptMaxPosition.x = Math.Abs(screen.Bounds.Left - workingArea.Left);
+            minMax.ptMaxPosition.y = Math.Abs(screen.Bounds.Top - workingArea.Top);
+            minMax.ptMaxSize.x = workingArea.Width;
+            minMax.ptMaxSize.y = workingArea.Height;
+            minMax.ptMinTrackSize.x = 960;
+            minMax.ptMinTrackSize.y = 540;
+            Marshal.StructureToPtr(minMax, m.LParam, true);
+        }
+        else if (m.Msg == WM_SIZING)
+        {
+            // 锁定 16:9 比例拖拽缩放
+            var rect = Marshal.PtrToStructure<RECT>(m.LParam);
+            int width = rect.right - rect.left;
+            int height = rect.bottom - rect.top;
+            int edge = m.WParam.ToInt32();
+
+            switch (edge)
+            {
+                case WMSZ_LEFT:
+                case WMSZ_RIGHT:
+                    int newH = (int)Math.Round(width / TargetAspectRatio);
+                    rect.bottom = rect.top + newH;
+                    break;
+
+                case WMSZ_TOP:
+                case WMSZ_BOTTOM:
+                    int newW = (int)Math.Round(height * TargetAspectRatio);
+                    rect.right = rect.left + newW;
+                    break;
+
+                case WMSZ_BOTTOMRIGHT:
+                case WMSZ_BOTTOMLEFT:
+                    int targetHBottom = (int)Math.Round(width / TargetAspectRatio);
+                    rect.bottom = rect.top + targetHBottom;
+                    break;
+
+                case WMSZ_TOPLEFT:
+                case WMSZ_TOPRIGHT:
+                    int targetHTop = (int)Math.Round(width / TargetAspectRatio);
+                    rect.top = rect.bottom - targetHTop;
+                    break;
+            }
+
+            Marshal.StructureToPtr(rect, m.LParam, true);
+        }
+        base.WndProc(ref m);
+    }
+}
+
 sealed class LauncherHost : IDisposable
 {
     public const string Title = "CANVAS · LOCHOU LAUNCHER";
     private readonly string root;
     private readonly string appUrl;
-    private readonly Form form;
+    private readonly LauncherForm form;
     private readonly Icon applicationIcon;
     private readonly WebView2 webView;
     private readonly NotifyIcon tray;
@@ -58,6 +224,15 @@ sealed class LauncherHost : IDisposable
     private bool keepRunningInBackground = true;
     private bool launchAtStartup = false;
 
+    [DllImport("user32.dll")]
+    private static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+
+    private const int WM_NCLBUTTONDOWN = 0xA1;
+    private const int HT_CAPTION = 0x2;
+
     public Form Form => form;
 
     public LauncherHost(string projectRoot, string canvasUrl)
@@ -69,25 +244,45 @@ sealed class LauncherHost : IDisposable
         apiEnvPath = Path.Combine(root, "API", ".env");
 
         applicationIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? (Icon)SystemIcons.Application.Clone();
-        form = new Form
+
+        var screenArea = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1080);
+        int initialWidth = 1920;
+        int initialHeight = 1080;
+
+        // 若当前显示器可用区域小于 1920x1080，则按 16:9 比例等比适配工作区
+        if (screenArea.Width < 1920 || screenArea.Height < 1080)
+        {
+            double scale = Math.Min((double)(screenArea.Width - 40) / 1920.0, (double)(screenArea.Height - 40) / 1080.0);
+            scale = Math.Max(scale, 0.5);
+            initialWidth = (int)Math.Round(1920 * scale);
+            initialHeight = (int)Math.Round(1080 * scale);
+        }
+
+        form = new LauncherForm
         {
             Text = LauncherHost.Title,
-            Width = 1440,
-            Height = 920,
-            MinimumSize = new Size(1024, 680),
+            Width = initialWidth,
+            Height = initialHeight,
+            MinimumSize = new Size(960, 540),
             StartPosition = FormStartPosition.CenterScreen,
             BackColor = Color.FromArgb(9, 10, 15),
-            Icon = applicationIcon
+            Icon = applicationIcon,
+            Opacity = 0.0 // 初始完全透明，等页面渲染就绪后平滑渐显，杜绝白屏/黑屏闪烁
         };
 
-        webView = new WebView2 { Dock = DockStyle.Fill };
+        webView = new WebView2
+        {
+            Dock = DockStyle.Fill,
+            DefaultBackgroundColor = Color.FromArgb(9, 10, 15) // 设置 WebView2 底层画板默认背景为深色
+        };
         form.Controls.Add(webView);
         form.FormClosing += OnFormClosing;
         form.Shown += async (_, _) => await InitializeLauncherAsync();
 
         tray = new NotifyIcon { Icon = applicationIcon, Text = LauncherHost.Title, Visible = false };
         var menu = new ContextMenuStrip();
-        menu.Items.Add("打开启动器/画布", null, (_, _) => RestoreWindow());
+        menu.Items.Add("打开启动器面板", null, (_, _) => RestoreWindow());
+        menu.Items.Add("在浏览器中打开无限画布", null, (_, _) => OpenInDefaultBrowser(appUrl));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("彻底退出并关闭服务", null, (_, _) => ExitFromTray());
         tray.ContextMenuStrip = menu;
@@ -104,14 +299,167 @@ sealed class LauncherHost : IDisposable
             webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
             webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
 
+            var windowBridgeScript = @"
+(function() {
+    function injectGlobalStyles() {
+        if (!document.getElementById('launcher-corner-style')) {
+            const style = document.createElement('style');
+            style.id = 'launcher-corner-style';
+            style.textContent = `
+                html, body, #root {
+                    border-radius: 18px !important;
+                    overflow: hidden !important;
+                    background-color: #090a0f !important;
+                }
+                *:focus, *:focus-visible, button:focus, button:focus-visible {
+                    outline: none !important;
+                    box-shadow: none !important;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+    }
+
+    function setupWindowBridge() {
+        injectGlobalStyles();
+
+        // 绑定 Header 拖拽与双击最大化
+        const header = document.querySelector('header');
+        if (header && !header.dataset.launcherDragBound) {
+            header.dataset.launcherDragBound = 'true';
+            header.style.userSelect = 'none';
+
+            header.addEventListener('mousedown', function(e) {
+                if (e.button !== 0) return;
+                if (e.target.closest('button, input, select, textarea, a, .cursor-pointer, [role=""button""]')) {
+                    return;
+                }
+                window.chrome?.webview?.postMessage({ type: 'WINDOW_DRAG' });
+            });
+
+            header.addEventListener('dblclick', function(e) {
+                if (e.target.closest('button, input, select, textarea, a, .cursor-pointer, [role=""button""]')) {
+                    return;
+                }
+                window.chrome?.webview?.postMessage({ type: 'WINDOW_TOGGLE_MAXIMIZE' });
+            });
+        }
+
+        // 绑定右上角最小化、最大化/还原、关闭按钮
+        if (header) {
+            const btnGroup = header.querySelector('.border-l') || header.querySelector('div.flex.items-center.gap-1');
+            if (btnGroup) {
+                const buttons = btnGroup.querySelectorAll('button');
+                if (buttons.length >= 3) {
+                    const minBtn = buttons[0];
+                    const maxBtn = buttons[1];
+                    const closeBtn = buttons[2];
+
+                    if (!minBtn.dataset.bound) {
+                        minBtn.dataset.bound = 'true';
+                        minBtn.setAttribute('title', '最小化');
+                        minBtn.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            window.chrome?.webview?.postMessage({ type: 'WINDOW_MINIMIZE' });
+                        });
+                    }
+
+                    if (!maxBtn.dataset.bound) {
+                        maxBtn.dataset.bound = 'true';
+                        maxBtn.setAttribute('title', '最大化 / 还原');
+                        maxBtn.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            window.chrome?.webview?.postMessage({ type: 'WINDOW_TOGGLE_MAXIMIZE' });
+                        });
+                    }
+
+                    if (!closeBtn.dataset.bound) {
+                        closeBtn.dataset.bound = 'true';
+                        closeBtn.setAttribute('title', '关闭');
+                        closeBtn.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            window.chrome?.webview?.postMessage({ type: 'WINDOW_CLOSE' });
+                        });
+                    }
+                }
+            }
+        }
+
+        // 四角与边缘拖拽等比缩放抓手 (Corner Resizing Handles)
+        setupResizeHandles();
+    }
+
+    function setupResizeHandles() {
+        if (document.getElementById('launcher-resize-handles')) return;
+
+        const container = document.createElement('div');
+        container.id = 'launcher-resize-handles';
+        container.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:999999;';
+
+        const handles = [
+            { id: 'tl', edge: 'TOP_LEFT', cursor: 'nwse-resize', style: 'top:0;left:0;width:14px;height:14px;' },
+            { id: 'tr', edge: 'TOP_RIGHT', cursor: 'nesw-resize', style: 'top:0;right:0;width:14px;height:14px;' },
+            { id: 'bl', edge: 'BOTTOM_LEFT', cursor: 'nesw-resize', style: 'bottom:0;left:0;width:14px;height:14px;' },
+            { id: 'br', edge: 'BOTTOM_RIGHT', cursor: 'nwse-resize', style: 'bottom:0;right:0;width:14px;height:14px;' },
+            { id: 'b', edge: 'BOTTOM', cursor: 'ns-resize', style: 'bottom:0;left:14px;right:14px;height:6px;' },
+            { id: 'r', edge: 'RIGHT', cursor: 'ew-resize', style: 'top:14px;right:0;bottom:14px;width:6px;' },
+            { id: 'l', edge: 'LEFT', cursor: 'ew-resize', style: 'top:14px;left:0;bottom:14px;width:6px;' }
+        ];
+
+        handles.forEach(h => {
+            const el = document.createElement('div');
+            el.id = 'resize-handle-' + h.id;
+            el.style.cssText = 'position:absolute;pointer-events:auto;user-select:none;' + h.style + 'cursor:' + h.cursor + ';';
+            el.addEventListener('mousedown', function(e) {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                window.chrome?.webview?.postMessage({ type: 'WINDOW_RESIZE', edge: h.edge });
+            });
+            container.appendChild(el);
+        });
+
+        document.body.appendChild(container);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', setupWindowBridge);
+    } else {
+        setupWindowBridge();
+    }
+
+    if (!window._launcherBridgeObs) {
+        window._launcherBridgeObs = true;
+        const obs = new MutationObserver(setupWindowBridge);
+        obs.observe(document.documentElement, { childList: true, subtree: true });
+    }
+})();";
+
+            await webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(windowBridgeScript);
+            webView.NavigationCompleted += async (_, _) =>
+            {
+                try
+                {
+                    await webView.CoreWebView2.ExecuteScriptAsync(windowBridgeScript);
+                }
+                catch {}
+
+                // 当页面 HTML/CSS 加载完毕，触发启动器窗口平滑渐显动画
+                FadeInWindow();
+            };
+
             // Resolve dist directory across various single-file extract and project directory structures
             var candidatePaths = new[]
             {
-                Path.Combine(AppContext.BaseDirectory, "dist"),
-                Path.Combine(AppContext.BaseDirectory, "launcher", "dist"),
+                Path.Combine(root, "dist", "launcher"),
+                Path.Combine(AppContext.BaseDirectory, "dist", "launcher"),
                 Path.Combine(root, "launcher", "dist"),
+                Path.Combine(AppContext.BaseDirectory, "launcher", "dist"),
                 Path.Combine(root, "dist"),
-                Path.Combine(root, "dist", "dist")
+                Path.Combine(AppContext.BaseDirectory, "dist")
             };
 
             var distDir = candidatePaths.FirstOrDefault(p => File.Exists(Path.Combine(p, "index.html")));
@@ -131,9 +479,12 @@ sealed class LauncherHost : IDisposable
                 webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
                 webView.Source = new Uri("http://localhost:5173/");
             }
+            // 超时保底淡入机制（避免网络或极端情况下页面加载事件未触发导致一直透明）
+            _ = Task.Delay(1200).ContinueWith(_ => FadeInWindow());
         }
         catch (Exception ex)
         {
+            FadeInWindow();
             MessageBox.Show($"启动器界面初始化失败: {ex.Message}", LauncherHost.Title, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
@@ -148,6 +499,7 @@ sealed class LauncherHost : IDisposable
             var requestId = rootEl.TryGetProperty("requestId", out var reqProp) ? reqProp.GetString() : "";
             var type = rootEl.TryGetProperty("type", out var typeProp) ? typeProp.GetString() : "";
             var payload = rootEl.TryGetProperty("payload", out var payloadProp) ? payloadProp : default;
+            var edge = rootEl.TryGetProperty("edge", out var edgeProp) ? edgeProp.GetString() : "";
 
             object? result = null;
             bool success = true;
@@ -157,6 +509,34 @@ sealed class LauncherHost : IDisposable
             {
                 switch (type)
                 {
+                    case "WINDOW_DRAG":
+                        HandleWindowDrag();
+                        result = new { acknowledged = true };
+                        break;
+                    case "WINDOW_RESIZE":
+                        HandleWindowResize(edge);
+                        result = new { acknowledged = true };
+                        break;
+                    case "WINDOW_MINIMIZE":
+                        HandleWindowMinimize();
+                        result = new { acknowledged = true };
+                        break;
+                    case "WINDOW_MAXIMIZE":
+                        HandleWindowMaximize();
+                        result = new { acknowledged = true };
+                        break;
+                    case "WINDOW_RESTORE":
+                        HandleWindowRestore();
+                        result = new { acknowledged = true };
+                        break;
+                    case "WINDOW_TOGGLE_MAXIMIZE":
+                        HandleToggleMaximize();
+                        result = new { acknowledged = true };
+                        break;
+                    case "WINDOW_CLOSE":
+                        HandleWindowClose();
+                        result = new { acknowledged = true };
+                        break;
                     case "GET_CONFIG":
                         result = HandleGetConfig();
                         break;
@@ -166,6 +546,9 @@ sealed class LauncherHost : IDisposable
                         break;
                     case "START_SERVER":
                         result = await HandleStartServerAsync();
+                        break;
+                    case "STOP_SERVER":
+                        result = HandleStopServer();
                         break;
                     case "SAVE_PREFERENCES":
                         HandleSavePreferences(payload);
@@ -190,19 +573,98 @@ sealed class LauncherHost : IDisposable
             }
 
             // Post response back to webview
-            var response = JsonSerializer.Serialize(new
+            if (!string.IsNullOrEmpty(requestId))
             {
-                requestId,
-                success,
-                result,
-                error
-            });
-            webView.CoreWebView2.PostWebMessageAsJson(response);
+                var response = JsonSerializer.Serialize(new
+                {
+                    requestId,
+                    success,
+                    result,
+                    error
+                });
+                webView.CoreWebView2.PostWebMessageAsJson(response);
+            }
         }
         catch (Exception ex)
         {
             SendLog($"[Bridge Error] {ex.Message}");
         }
+    }
+
+    private void HandleWindowDrag()
+    {
+        form.BeginInvoke(() =>
+        {
+            if (form.WindowState == FormWindowState.Normal)
+            {
+                ReleaseCapture();
+                SendMessage(form.Handle, WM_NCLBUTTONDOWN, (IntPtr)HT_CAPTION, IntPtr.Zero);
+            }
+        });
+    }
+
+    private void HandleWindowResize(string? edge)
+    {
+        form.BeginInvoke(() =>
+        {
+            if (form.WindowState == FormWindowState.Normal)
+            {
+                ReleaseCapture();
+                int hitTest = edge switch
+                {
+                    "TOP_LEFT" => 13,     // HTTOPLEFT
+                    "TOP_RIGHT" => 14,    // HTTOPRIGHT
+                    "BOTTOM_LEFT" => 16,  // HTBOTTOMLEFT
+                    "BOTTOM_RIGHT" => 17, // HTBOTTOMRIGHT
+                    "TOP" => 12,          // HTTOP
+                    "BOTTOM" => 15,       // HTBOTTOM
+                    "LEFT" => 10,         // HTLEFT
+                    "RIGHT" => 11,        // HTRIGHT
+                    _ => 17
+                };
+                SendMessage(form.Handle, WM_NCLBUTTONDOWN, (IntPtr)hitTest, IntPtr.Zero);
+            }
+        });
+    }
+
+    private void HandleWindowMinimize()
+    {
+        form.BeginInvoke(() =>
+        {
+            form.WindowState = FormWindowState.Minimized;
+        });
+    }
+
+    private void HandleWindowMaximize()
+    {
+        form.BeginInvoke(() =>
+        {
+            form.WindowState = FormWindowState.Maximized;
+        });
+    }
+
+    private void HandleWindowRestore()
+    {
+        form.BeginInvoke(() =>
+        {
+            form.WindowState = FormWindowState.Normal;
+        });
+    }
+
+    private void HandleToggleMaximize()
+    {
+        form.BeginInvoke(() =>
+        {
+            form.WindowState = form.WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized;
+        });
+    }
+
+    private void HandleWindowClose()
+    {
+        form.BeginInvoke(() =>
+        {
+            form.Close();
+        });
     }
 
     private object HandleGetConfig()
@@ -285,6 +747,26 @@ sealed class LauncherHost : IDisposable
         }
     }
 
+    private static void OpenInDefaultBrowser(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true
+            });
+        }
+        catch
+        {
+            try
+            {
+                Process.Start("explorer.exe", url);
+            }
+            catch {}
+        }
+    }
+
     private async Task<object> HandleStartServerAsync()
     {
         SendLog("[启动] 正在检查 Infinite Canvas 环境与依赖...");
@@ -292,9 +774,8 @@ sealed class LauncherHost : IDisposable
         var existing = await ProbeAsync(appUrl, TimeSpan.FromSeconds(2), CancellationToken.None);
         if (existing)
         {
-            SendLog("检测到已有后端服务 (127.0.0.1:3000)，直接连接...");
-            // Navigate webview to Canvas
-            webView.BeginInvoke(() => webView.Source = new Uri(appUrl));
+            SendLog("检测到已有后端服务 (127.0.0.1:3000)，正在使用系统默认浏览器打开...");
+            OpenInDefaultBrowser(appUrl);
             return new { running = true, url = appUrl };
         }
 
@@ -315,9 +796,17 @@ sealed class LauncherHost : IDisposable
         var ready = await WaitForServerAsync(appUrl, TimeSpan.FromSeconds(45), CancellationToken.None);
         if (!ready) throw new InvalidOperationException("服务启动超时 (45s)");
 
-        SendLog("🚀 服务就绪，正在无缝跳转至无限画布主界面...");
-        webView.BeginInvoke(() => webView.Source = new Uri(appUrl));
+        SendLog("🚀 服务就绪，正在使用系统默认浏览器打开无限画布页面...");
+        OpenInDefaultBrowser(appUrl);
         return new { running = true, url = appUrl };
+    }
+
+    private object HandleStopServer()
+    {
+        SendLog("[停止] 收到停止服务指令，正在关闭后台服务...");
+        StopOwnedServer();
+        SendLog("🛑 后端服务已成功停止。");
+        return new { stopped = true };
     }
 
     private void HandleSavePreferences(JsonElement payload)
@@ -389,11 +878,38 @@ sealed class LauncherHost : IDisposable
         }
     }
 
+    private void FadeInWindow()
+    {
+        form.BeginInvoke(() =>
+        {
+            if (form.Opacity >= 1.0) return;
+
+            var fadeTimer = new System.Windows.Forms.Timer { Interval = 16 }; // ~60fps
+            fadeTimer.Tick += (s, _) =>
+            {
+                if (form.Opacity < 1.0)
+                {
+                    form.Opacity = Math.Min(1.0, form.Opacity + 0.08); // 约 200ms 内丝滑淡入
+                }
+                else
+                {
+                    fadeTimer.Stop();
+                    fadeTimer.Dispose();
+                }
+            };
+            fadeTimer.Start();
+        });
+    }
+
     private void RestoreWindow()
     {
         form.Show();
         form.WindowState = FormWindowState.Normal;
         form.Activate();
+        if (form.Opacity < 1.0)
+        {
+            form.Opacity = 1.0;
+        }
     }
 
     private void ExitFromTray()
@@ -561,7 +1077,7 @@ sealed class LauncherHost : IDisposable
         var requirements = new Dictionary<string, string> { ["fastapi"] = "fastapi", ["uvicorn"] = "uvicorn", ["requests"] = "requests", ["pydantic"] = "pydantic", ["multipart"] = "python-multipart", ["httpx"] = "httpx", ["PIL"] = "pillow" };
         var missing = new List<string>();
         foreach (var item in requirements) if (!await RunAsync(python, $"-c \"import {item.Key}\"", root, token, false)) missing.Add(item.Value);
-        if (missing.Count == 0) { SendLog("依赖检查全部通过，跳过安装。"); return true; }
+        if (missing.Count == 0) { SendLog("依赖检查全部通过，跳过安装。"); return true; };
         SendLog($"缺少依赖包: {string.Join(", ", missing)}");
         var args = string.Join(" ", missing.Select(Quote));
         var packages = Path.Combine(root, "packages");

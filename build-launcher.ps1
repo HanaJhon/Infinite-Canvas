@@ -2,9 +2,24 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $project = Join-Path $root 'launcher\InfiniteCanvasLauncher.csproj'
 $output = Join-Path $root 'dist'
+$launcherWebSrc = 'E:\claude\skill\canvas-launcher\dist'
 
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     throw 'dotnet SDK was not found. Install the .NET 8 SDK and run this script again.'
+}
+
+# Sync web assets to all target locations
+if (Test-Path $launcherWebSrc) {
+    Write-Host "Syncing launcher web assets from $launcherWebSrc ..."
+    $targetDistLauncher = Join-Path $root 'dist\launcher'
+    $targetLauncherDist = Join-Path $root 'launcher\dist'
+
+    if (-not (Test-Path $targetDistLauncher)) { New-Item -ItemType Directory -Path $targetDistLauncher -Force | Out-Null }
+    if (-not (Test-Path $targetLauncherDist)) { New-Item -ItemType Directory -Path $targetLauncherDist -Force | Out-Null }
+
+    Copy-Item -Path "$launcherWebSrc\*" -Destination $targetDistLauncher -Recurse -Force
+    Copy-Item -Path "$launcherWebSrc\*" -Destination $targetLauncherDist -Recurse -Force
+    Copy-Item -Path "$launcherWebSrc\*" -Destination $output -Recurse -Force
 }
 
 Write-Host 'Publishing InfiniteCanvasLauncher.exe ...'

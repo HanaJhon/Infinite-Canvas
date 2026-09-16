@@ -96,7 +96,7 @@
         "id": "2058554058318897153",
         "title": "GPT-Image-2-图片编辑",
         "note": "",
-        "thumbnail": "",
+        "thumbnail": "/static/runninghub/thumbnails/workflow-2058554058318897153.jpg?v=1788083492",
         "enabled": true,
         "optionalImageMode": "prune-workflow",
         "workflowId": "2058554058318897153"
@@ -105,7 +105,7 @@
         "id": "2058541134623891458",
         "title": "NanoBanana-2-图片编辑",
         "note": "",
-        "thumbnail": "",
+        "thumbnail": "/static/runninghub/thumbnails/workflow-2058541134623891458.jpg?v=1788083492",
         "enabled": true,
         "optionalImageMode": "prune-workflow",
         "workflowId": "2058541134623891458"

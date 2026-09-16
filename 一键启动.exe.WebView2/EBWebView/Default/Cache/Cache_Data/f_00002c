@@ -1,330 +1,357 @@
-(function(){
-    if(!window.StudioI18n) return;
-    window.StudioI18n.register({
-        "canvas.noApiProviders": { zh: "暂无 API 平台", en: "No API providers" },
-        "canvas.noApiProvidersHint": { zh: "暂无 API 平台，请到 API 设置添加", en: "No API providers. Add one in API Settings." },
-        "canvas.noImageModelsHint": { zh: "暂无生图模型，请到 API 设置添加", en: "No image models. Add some in API Settings." },
-        "canvas.noModelsHint": { zh: "暂无模型，请到 API 设置添加", en: "No models. Add some in API Settings." },
-        "canvas.title": { zh: "无限画布", en: "Infinite Canvas" },
-        "canvas.backToManager": { zh: "返回画布管理", en: "Back to canvas manager" },
-        "canvas.untitled": { zh: "未命名画布", en: "Untitled Canvas" },
-        "canvas.chooseFirst": { zh: "请选择或新建画布", en: "Choose or create a canvas" },
-        "canvas.image": { zh: "上传", en: "Upload" },
-        "canvas.uploadCard": { zh: "上传卡片", en: "Upload Card" },
-        "canvas.prompt": { zh: "提示词", en: "Prompt" },
-        "canvas.promptTemplateLibrary": { zh: "提示词模板库", en: "Prompt Templates" },
-        "canvas.promptTemplateShort": { zh: "模板库", en: "Templates" },
-        "canvas.promptTemplateSystem": { zh: "系统提示词", en: "System prompts" },
-        "canvas.promptTemplateSearch": { zh: "搜索模板", en: "Search templates" },
-        "canvas.promptTemplateAll": { zh: "全部", en: "All" },
-        "canvas.promptTemplateView": { zh: "视角", en: "View" },
-        "canvas.promptTemplateStoryboard": { zh: "分镜", en: "Storyboard" },
-        "canvas.promptTemplateCharacter": { zh: "角色", en: "Character" },
-        "canvas.promptTemplateProduct": { zh: "产品", en: "Product" },
-        "canvas.promptTemplateLighting": { zh: "光影", en: "Lighting" },
-        "canvas.promptTemplateEmpty": { zh: "没有匹配的模板", en: "No matching templates" },
-        "canvas.promptTemplatePick": { zh: "选择一个模板", en: "Select a template" },
-        "canvas.promptTemplatePositive": { zh: "正向提示词", en: "Positive prompt" },
-        "canvas.promptTemplateNegative": { zh: "负向提示词", en: "Negative prompt" },
-        "canvas.promptTemplateParams": { zh: "参数建议", en: "Parameter suggestions" },
-        "canvas.promptTemplateApplyPositive": { zh: "正向", en: "Positive" },
-        "canvas.promptTemplateApplyFull": { zh: "完整应用", en: "Apply full" },
-        "canvas.loop": { zh: "循环", en: "Loop" },
-        "canvas.loopNode": { zh: "循环节点", en: "Loop Node" },
-        "canvas.loopCount": { zh: "次数", en: "Runs" },
-        "canvas.loopStart": { zh: "起始", en: "Start" },
-        "canvas.loopSerial": { zh: "循环", en: "Batch" },
-        "canvas.loopParallel": { zh: "并发", en: "Concurrent" },
-        "canvas.loopHint": { zh: "控制一键运行轮数", en: "Controls cascade rounds" },
-        "canvas.loopPromptToggle": { zh: "提示词", en: "Prompt" },
-        "canvas.loopImageToggle": { zh: "图片", en: "Images" },
-        "canvas.loopImageStart": { zh: "起始计数", en: "Start index" },
-        "canvas.loopBatchSize": { zh: "批次", en: "Batch size" },
-        "canvas.loopImageWillOutput": { zh: "当前会输出 {n} 张图片", en: "Will output {n} images" },
-        "canvas.loopImageEmpty": { zh: "把图片或图片组连接到左侧输入口", en: "Connect images or image groups to the left input" },
-        "canvas.loopImageLabel": { zh: "循环图片 {n}", en: "Loop image {n}" },
-        "canvas.loopVideoToggle": { zh: "视频", en: "Videos" },
-        "canvas.loopVideoWillOutput": { zh: "当前会输出 {n} 个视频", en: "Will output {n} videos" },
-        "canvas.loopVideoEmpty": { zh: "把视频或视频组连接到左侧输入口", en: "Connect videos or video groups to the left input" },
-        "canvas.loopVideoLabel": { zh: "循环视频 {n}", en: "Loop video {n}" },
-        "canvas.outputConvertToInputGroup": { zh: "转为输入组", en: "Convert to input group" },
-        "canvas.outputCopyToInputGroup": { zh: "复制为新的输入组", en: "Copy as new input group" },
-        "canvas.outputGroupActions": { zh: "分组", en: "Group" },
-        "canvas.outputFileActions": { zh: "文件", en: "Files" },
-        "canvas.outputDownloadAllImages": { zh: "下载全部图片", en: "Download all images" },
-        "canvas.outputDownloadEmpty": { zh: "没有可下载的本地图片", en: "No local images to download" },
-        "canvas.loopVariablePrompt": { zh: "可变提示词", en: "Variable Prompt" },
-        "canvas.loopVariablePlaceholder": { zh: "例如：现在生成第[计数]个卖点", en: "Example: generate item [Count]" },
-        "canvas.loopFixedPrompt": { zh: "固定提示词", en: "Fixed Prompt" },
-        "canvas.loopFixedPlaceholder": { zh: "每一轮都会附加的文本", en: "Text appended on every run" },
-        "canvas.insertCounter": { zh: "插入计数", en: "Insert Count" },
-        "canvas.insertTotal": { zh: "插入总数", en: "Insert Total" },
-        "canvas.insertProgress": { zh: "插入进度", en: "Insert Progress" },
-        "canvas.counterToken": { zh: "计数", en: "Count" },
-        "canvas.totalToken": { zh: "总数", en: "Total" },
-        "canvas.progressToken": { zh: "进度", en: "Progress" },
-        "canvas.loopRounds": { zh: "轮", en: "rounds" },
-        "canvas.loopRound": { zh: "第", en: "Round" },
-        "canvas.apiGenerate": { zh: "API生成", en: "API Generate" },
-        "canvas.msGenerate": { zh: "Modelscope生成", en: "Modelscope Generate" },
-        "canvas.videoGenerate": { zh: "视频生成", en: "Video Generate" },
-        "canvas.group": { zh: "分组", en: "Group" },
-        "canvas.logs": { zh: "日志", en: "Logs" },
-        "canvas.generationLogs": { zh: "生成日志", en: "Generation Logs" },
-        "canvas.noLogs": { zh: "还没有生成日志", en: "No generation logs yet" },
-        "canvas.success": { zh: "成功", en: "Success" },
-        "canvas.failed": { zh: "失败", en: "Failed" },
-        "canvas.selectCanvas": { zh: "选择画布", en: "Select Canvas" },
-        "canvas.trash": { zh: "回收站", en: "Trash" },
-        "canvas.backToList": { zh: "返回画布列表", en: "Back to canvases" },
-        "canvas.subtitle": { zh: "打开已有画布，或新建一个开始创作。", en: "Open an existing canvas, or create a new one to start." },
-        "canvas.trashSubtitle": { zh: "已删除画布可恢复，30 天后自动清理。", en: "Deleted canvases can be restored and are cleaned after 30 days." },
-        "canvas.refresh": { zh: "刷新列表", en: "Refresh list" },
-        "canvas.openTrash": { zh: "打开回收站", en: "Open trash" },
-        "canvas.newCanvas": { zh: "新建画布", en: "New Canvas" },
-        "canvas.newSmartCanvas": { zh: "新建智能画布", en: "New Smart Canvas" },
-        "canvas.smartCanvas": { zh: "智能画布", en: "Smart Canvas" },
-        "canvas.smartCanvasShort": { zh: "智能", en: "Smart" },
-        "canvas.newSmartCanvasPlaceholder": { zh: "智能画布名称（可留空使用默认）", en: "Smart canvas name (optional)" },
-        "canvas.newCanvasPlaceholder": { zh: "新画布名称（可留空使用默认）", en: "New canvas name (optional)" },
-        "canvas.trashNote": { zh: "回收站中的画布会在 30 天后自动清理。", en: "Canvases in Trash are automatically cleaned after 30 days." },
-        "canvas.dropImage": { zh: "拖放素材到画布", en: "Drop media onto the canvas" },
-        "canvas.imageCard": { zh: "上传节点", en: "Upload Node" },
-        "canvas.imageCardHint": { zh: "支持图片/音频/视频/批量上传", en: "Images, audio, video, batch upload" },
-        "canvas.llmNode": { zh: "LLM 节点", en: "LLM Node" },
-        "canvas.modelscopeGenerate": { zh: "Modelscope生成", en: "Modelscope Generate" },
-        "canvas.comfyGenerate": { zh: "ComfyUI 生成", en: "ComfyUI Generate" },
-        "canvas.videoGenerateNode": { zh: "视频生成", en: "Video Generate" },
-        "canvas.rhGenerate": { zh: "RunningHub生成", en: "RunningHub Generate" },
-        "canvas.rhModeApp": { zh: "AI应用", en: "AI App" },
-        "canvas.rhModeWorkflow": { zh: "工作流", en: "Workflow" },
-        "canvas.rhWebappId": { zh: "Webapp ID", en: "Webapp ID" },
-        "canvas.rhWorkflowId": { zh: "Workflow ID", en: "Workflow ID" },
-        "canvas.rhFetchApp": { zh: "拉取应用", en: "Fetch App" },
-        "canvas.rhFetchWorkflow": { zh: "拉取工作流", en: "Fetch Workflow" },
-        "canvas.rhFetching": { zh: "拉取中", en: "Fetching" },
-        "canvas.rhImportJson": { zh: "导入JSON", en: "Import JSON" },
-        "canvas.rhImportJsonFallback": { zh: "本地导入JSON", en: "Import local JSON" },
-        "canvas.rhInstanceType": { zh: "实例类型", en: "Instance Type" },
-        "canvas.rhDefault": { zh: "默认", en: "Default" },
-        "canvas.rhInputs": { zh: "输入素材", en: "Input Media" },
-        "canvas.rhParams": { zh: "RunningHub 参数", en: "RunningHub Params" },
-        "canvas.rhWorkflowParams": { zh: "工作流参数", en: "Workflow Params" },
-        "canvas.rhNoParams": { zh: "输入 webappId 并拉取应用参数", en: "Enter webappId and fetch app params" },
-        "canvas.rhUseUpstream": { zh: "使用上游", en: "Use upstream" },
-        "canvas.rhRun": { zh: "运行 RunningHub", en: "Run RunningHub" },
-        "canvas.rhRunning": { zh: "RunningHub运行中", en: "Running RunningHub" },
-        "canvas.rhNeedWebappId": { zh: "请先填写 RunningHub webappId", en: "Enter a RunningHub webappId first" },
-        "canvas.rhNeedWorkflowId": { zh: "请先填写 RunningHub workflowId", en: "Enter a RunningHub workflowId first" },
-        "canvas.rhNeedWorkflowJson": { zh: "请先导入工作流 api.json", en: "Import the workflow api.json first" },
-        "canvas.rhWorkflowJsonInvalid": { zh: "工作流 JSON 无法解析，或没有可编辑节点", en: "Workflow JSON could not be parsed or has no editable nodes" },
-        "canvas.rhWorkflowJsonOptional": { zh: "可直接用 workflowId 运行默认工作流；如需修改节点参数，再导入从 RunningHub 导出的 api.json。", en: "You can run the default workflow with only workflowId. Import RunningHub api.json only when you need editable node params." },
-        "canvas.rhWorkflowFetchHint": { zh: "填写 workflowId 后点击拉取工作流参数；如果接口不可用，可本地导入 RunningHub 导出的 api.json。", en: "Enter workflowId and fetch workflow params. If the API is unavailable, import RunningHub api.json locally." },
-        "canvas.rhWorkflowJsonLoaded": { zh: "已导入 {n} 个可修改字段，可按需要覆盖参数。", en: "{n} editable fields imported. Override params as needed." },
-        "canvas.rhFailed": { zh: "RunningHub 任务失败", en: "RunningHub task failed" },
-        "canvas.rhUploadFailed": { zh: "RunningHub 素材上传失败", en: "RunningHub asset upload failed" },
-        "canvas.rhNoTaskId": { zh: "RunningHub 没有返回 taskId", en: "RunningHub did not return a taskId" },
-        "canvas.rhTimeout": { zh: "RunningHub 任务超时", en: "RunningHub task timed out" },
-        "canvas.rhOutputsEmpty": { zh: "RunningHub 没有返回产物", en: "RunningHub returned no outputs" },
-        "canvas.hint": { zh: "拖拽画布移动，Ctrl 框选多选，拖动选中节点可一起移动。上传/提示词节点右下端口拖线到生成节点。", en: "Drag the canvas to pan. Ctrl-select multiple nodes. Drag selected nodes together. Connect upload/prompt ports to generation nodes." },
-        "canvas.cropImage": { zh: "裁剪图片", en: "Crop Image" },
-        "canvas.cropHint": { zh: "拖动裁剪框移动，拖右下角调整大小", en: "Drag the crop box to move it. Drag the corner to resize." },
-        "canvas.editImage": { zh: "编辑图片", en: "Edit Image" },
-        "canvas.editImageSub": { zh: "选择裁剪、遮罩或画笔模式", en: "Select crop, mask, brush, or grid mode" },
-        "canvas.modeCrop": { zh: "裁剪", en: "Crop" },
-        "canvas.modeOutpaint": { zh: "扩图", en: "Expand" },
-        "canvas.modeMask": { zh: "遮罩", en: "Mask" },
-        "canvas.modeBrush": { zh: "画笔", en: "Brush" },
-        "canvas.modeGrid": { zh: "宫格切分", en: "Grid Split" },
-        "canvas.brushSize": { zh: "笔刷", en: "Brush" },
-        "canvas.clear": { zh: "清空", en: "Clear" },
-        "canvas.maskHint": { zh: "白色区域为要编辑的遮罩", en: "White areas mark the region to edit" },
-        "canvas.maskHint2": { zh: "在要重绘的位置涂白，保存后会生成遮罩图片节点", en: "Paint white over areas to repaint. Saving will create a mask image node." },
-        "canvas.color": { zh: "颜色", en: "Color" },
-        "canvas.textContent": { zh: "文字", en: "Text" },
-        "canvas.textSize": { zh: "字号", en: "Size" },
-        "canvas.brushHint": { zh: "直接在图片上绘制标记或草图", en: "Draw marks or sketches directly on the image" },
-        "canvas.maskEdit": { zh: "遮罩编辑", en: "Mask Edit" },
-        "canvas.brushEdit": { zh: "画笔编辑", en: "Brush Edit" },
-        "canvas.applyMask": { zh: "生成遮罩节点", en: "Create Mask Node" },
-        "canvas.applyBrush": { zh: "应用画笔", en: "Apply Brush" },
-        "canvas.applyOutpaint": { zh: "应用扩图", en: "Apply Expand" },
-        "canvas.outpaintImage": { zh: "扩图", en: "Expand Image" },
-        "canvas.outpaintHint": { zh: "拖动红框调整画布范围，最大不超过 4K 尺寸，确认后空白区域填充白色", en: "Drag the red box to extend the canvas. It is capped at 4K size, and empty areas are filled white." },
-        "canvas.applyGrid": { zh: "切分到 Output", en: "Split to Output" },
-        "canvas.gridHint": { zh: "按切分线分割图片，间隔会从线两侧扣除", en: "Split image along cut lines. Gap removes pixels on each side of every line." },
-        "canvas.gridCustom": { zh: "自定义", en: "Custom" },
-        "canvas.gridCustomTitle": { zh: "自由放置切割线", en: "Place cut lines freely" },
-        "canvas.gridHLines": { zh: "横向线", en: "H-lines" },
-        "canvas.gridVLines": { zh: "竖向线", en: "V-lines" },
-        "canvas.gridOrientH": { zh: "水平", en: "Horizontal" },
-        "canvas.gridOrientHTitle": { zh: "点击图片放置水平线", en: "Click image to place a horizontal line" },
-        "canvas.gridOrientV": { zh: "垂直", en: "Vertical" },
-        "canvas.gridOrientVTitle": { zh: "点击图片放置竖直线", en: "Click image to place a vertical line" },
-        "canvas.gridUndo": { zh: "撤销上一条线", en: "Undo last line" },
-        "canvas.gridClearLines": { zh: "清除所有自定义线", en: "Clear all custom lines" },
-        "canvas.gridGap": { zh: "间隔(px)", en: "Gap (px)" },
-        "canvas.gridPresets": { zh: "预设", en: "Presets" },
-        "canvas.gridWillOutput": { zh: "将输出 {n} 张", en: "Will output {n} images" },
-        "canvas.copyPrompt": { zh: "复制提示词", en: "Copy Prompt" },
-        "canvas.copied": { zh: "已复制", en: "Copied" },
-        "canvas.copyFailed": { zh: "复制失败", en: "Copy Failed" },
-        "canvas.rerun": { zh: "再次运行", en: "Run Again" },
-        "canvas.noPromptMeta": { zh: "没有记录提示词", en: "No prompt recorded" },
-        "canvas.reset": { zh: "重置", en: "Reset" },
-        "canvas.applyCrop": { zh: "应用裁剪", en: "Apply Crop" },
-        "canvas.manageModels": { zh: "管理模型", en: "Manage Models" },
-        "canvas.manageModelsSub": { zh: "拖动调整顺序，删除不需要的模型，也可以输入新模型名称。", en: "Drag to reorder, delete unused models, or add a new model name." },
-        "canvas.apiProvider": { zh: "API 平台", en: "API Provider" },
-        "canvas.provider": { zh: "平台", en: "Provider" },
-        "canvas.displayName": { zh: "显示名称", en: "Display Name" },
-        "canvas.providerId": { zh: "平台 ID", en: "Provider ID" },
-        "canvas.keepKey": { zh: "留空则保持当前 Key", en: "Leave blank to keep current key" },
-        "canvas.modelInputPlaceholder": { zh: "粘贴或输入模型名称", en: "Paste or enter a model name" },
-        "canvas.add": { zh: "添加", en: "Add" },
-        "canvas.manageModelList": { zh: "管理模型列表...", en: "Manage model list..." },
-        "canvas.manageApiProviders": { zh: "管理 API 平台...", en: "Manage API providers..." },
-        "canvas.countSuffix": { zh: "个", en: "" },
-        "canvas.noCanvas": { zh: "暂无画布", en: "No canvases" },
-        "canvas.startWithNewCanvas": { zh: "点击右上方「新建画布」开始创作", en: "Click New Canvas in the top right to start." },
-        "canvas.trashEmpty": { zh: "回收站为空", en: "Trash is empty" },
-        "canvas.deletedCanvas": { zh: "已删除画布", en: "Deleted canvas" },
-        "canvas.changeIcon": { zh: "修改画布图标", en: "Change canvas icon" },
-        "canvas.modePreview": { zh: "预览", en: "Preview" },
-        "canvas.previewImage": { zh: "预览图片", en: "Preview image" },
-        "canvas.previewHint": { zh: "查看大图，可切换到裁剪 / 扩图 / 遮罩等模式", en: "View the full image, or switch to crop / expand / mask modes" },
-        "canvas.sortRecent": { zh: "最近编辑", en: "Recent" },
-        "canvas.sortName": { zh: "名称", en: "Name" },
-        "canvas.ownerLabel": { zh: "负责人 / 项目", en: "Owner / Project" },
-        "canvas.ownerPlaceholder": { zh: "输入负责人或项目", en: "Owner or project" },
-        "canvas.colorLabel": { zh: "颜色标记", en: "Color" },
-        "canvas.colorNone": { zh: "无", en: "None" },
-        "canvas.pin": { zh: "置顶", en: "Pin" },
-        "canvas.unpin": { zh: "取消置顶", en: "Unpin" },
-        "canvas.editMeta": { zh: "编辑图标 / 颜色 / 负责人", en: "Edit icon / color / owner" },
-        "canvas.pinned": { zh: "已置顶", en: "Pinned" },
-        "canvas.metaSaveFailed": { zh: "保存失败", en: "Save failed" },
-        "canvas.deletedAt": { zh: "删除于", en: "Deleted" },
-        "canvas.purgeConfirm": { zh: "彻底删除？无法恢复", en: "Delete forever? This cannot be undone." },
-        "canvas.moveToTrashConfirm": { zh: "移入回收站？", en: "Move to Trash?" },
-        "canvas.restoreCanvas": { zh: "恢复画布", en: "Restore canvas" },
-        "canvas.purgeCanvas": { zh: "彻底删除", en: "Delete forever" },
-        "canvas.rename": { zh: "重命名", en: "Rename" },
-        "canvas.moveToTrash": { zh: "移入回收站", en: "Move to Trash" },
-        "canvas.loadingCanvases": { zh: "正在加载画布列表...", en: "Loading canvases..." },
-        "canvas.needCanvas": { zh: "请先新建或选择画布", en: "Choose or create a canvas first" },
-        "canvas.enterCanvasName": { zh: "输入画布名称后确认", en: "Enter a canvas name and confirm" },
-        "canvas.noCanvasCreateFirst": { zh: "暂无画布，请先新建画布", en: "No canvases yet. Create one first." },
-        "canvas.canvasListFailed": { zh: "画布列表加载失败", en: "Failed to load canvas list" },
-        "canvas.trashLoadFailed": { zh: "回收站加载失败", en: "Failed to load Trash" },
-        "canvas.movedToTrash": { zh: "已移入回收站", en: "Moved to Trash" },
-        "canvas.moveToTrashFailed": { zh: "移入回收站失败", en: "Failed to move to Trash" },
-        "canvas.purged": { zh: "已彻底删除", en: "Deleted forever" },
-        "canvas.clickDragPasteImage": { zh: "点击/拖拽上传素材，或在空节点粘贴图片", en: "Click/drop media, or paste image into an empty node" },
-        "canvas.promptPlaceholder": { zh: "输入提示词...", en: "Enter a prompt..." },
-        "canvas.groupEmpty": { zh: "拖入图片或提示词到此", en: "Drop images or prompts here" },
-        "canvas.grouped": { zh: "已成组", en: "grouped" },
-        "canvas.imageCount": { zh: "张图片", en: "images" },
-        "canvas.promptCount": { zh: "个提示词", en: "prompts" },
-        "canvas.connectHere": { zh: "连接到这里", en: "Connect here" },
-        "canvas.dragConnect": { zh: "拖线连接", en: "Drag to connect" },
-        "canvas.resize": { zh: "调整大小", en: "Resize" },
-        "canvas.nodeMode": { zh: "节点", en: "Node" },
-        "canvas.chatMode": { zh: "聊天", en: "Chat" },
-        "canvas.systemPrompt": { zh: "系统提示词...", en: "System prompt..." },
-        "canvas.llmInputEmpty": { zh: "把 Prompt 连到 LLM 输入点", en: "Connect a Prompt to the LLM input" },
-        "canvas.llmOutputEmpty": { zh: "运行后会输出文本，可连到生成卡片", en: "Run to output text. It can connect to a generation card." },
-        "canvas.resizePanes": { zh: "拖动调整输入/输出高度", en: "Drag to resize input/output" },
-        "canvas.running": { zh: "运行中", en: "Running" },
-        "canvas.startChat": { zh: "开始一段聊天...", en: "Start a chat..." },
-        "canvas.chatInput": { zh: "输入消息...", en: "Type a message..." },
-        "canvas.sending": { zh: "发送中", en: "Sending" },
-        "canvas.images": { zh: "Images", en: "Images" },
-        "canvas.custom": { zh: "自定义", en: "Custom" },
-        "canvas.fitImageSize": { zh: "适配图片", en: "Match Image" },
-        "canvas.adaptiveRatio": { zh: "适配比例", en: "Adaptive Ratio" },
-        "canvas.inputImagesEmpty": { zh: "把图片或图片组连到这里", en: "Connect images or image groups here" },
-        "canvas.enableLora": { zh: "启用 LoRA", en: "Enable LoRA" },
-        "canvas.loraStrength": { zh: "LoRA 强度", en: "LoRA Strength" },
-        "canvas.noLoraForModel": { zh: "当前模型暂无绑定 LoRA，可在 API 设置 · Modelscope · LoRA 管理中添加。", en: "No LoRA is bound to this model. Add one in API Settings · Modelscope · LoRA Manager." },
-        "canvas.noLoraBoundError": { zh: "当前模型没有可用 LoRA，请先到 API 设置绑定", en: "No LoRA is available for this model. Bind one in API Settings first." },
-        "canvas.imageReadFailed": { zh: "无法读取参考图尺寸", en: "Could not read reference image size" },
-        "canvas.msFailed": { zh: "Modelscope 生成失败", en: "Modelscope generation failed" },
-        "canvas.generationFailed": { zh: "生成失败", en: "Generation failed" },
-        "canvas.apiFailed": { zh: "API 生成失败", en: "API generation failed" },
-        "canvas.emptyRatio": { zh: "比例空", en: "No ratio" },
-        "canvas.decrease": { zh: "减少", en: "Decrease" },
-        "canvas.decreaseCount": { zh: "减少生成数量", en: "Decrease generation count" },
-        "canvas.increase": { zh: "增加", en: "Increase" },
-        "canvas.increaseCount": { zh: "增加生成数量", en: "Increase generation count" },
-        "canvas.ratioWidth": { zh: "比例宽", en: "Ratio W" },
-        "canvas.ratioHeight": { zh: "比例高", en: "Ratio H" },
-        "canvas.width": { zh: "宽度", en: "Width" },
-        "canvas.height": { zh: "高度", en: "Height" },
-        "canvas.generating": { zh: "生成中", en: "Generating" },
-        "canvas.needPrompt": { zh: "请先连接提示词", en: "Connect a prompt first" },
-        "canvas.needPromptOrImage": { zh: "请先连接提示词或图片", en: "Connect a prompt or image first" },
-        "canvas.needImage": { zh: "请先连接图片", en: "Connect an image first" },
-        "canvas.videoNeedsPrompt": { zh: "请先连接提示词", en: "Connect a prompt first" },
-        "canvas.needPromptToLLM": { zh: "请先连接 Prompt 到 LLM", en: "Connect a Prompt to the LLM first" },
-        "canvas.createFailed": { zh: "新建画布失败", en: "Failed to create canvas" },
-        "canvas.openFailed": { zh: "打开画布失败", en: "Failed to open canvas" },
-        "canvas.restored": { zh: "画布已恢复", en: "Canvas restored" },
-        "canvas.restoreFailed": { zh: "恢复画布失败", en: "Failed to restore canvas" },
-        "canvas.purgeFailed": { zh: "彻底删除失败", en: "Failed to delete forever" },
-        "canvas.defaultProviderNoDelete": { zh: "默认平台不能删除，可以修改名称、地址和模型。", en: "Default providers cannot be deleted. You can edit their name, URL, and models." },
-        "canvas.noModelsAddFirst": { zh: "暂无模型，输入名称后添加", en: "No models yet. Enter a model name to add one." },
-        "canvas.manageLlmModelsTitle": { zh: "管理 LLM 模型", en: "Manage LLM Models" },
-        "canvas.manageLlmModelsSub": { zh: "这些模型会出现在 LLM 节点下拉框里。拖动排序，删除或新增后保存。", en: "These models appear in LLM node dropdowns. Drag to reorder, delete, or add new ones." },
-        "canvas.manageApiTitle": { zh: "管理 API 平台", en: "Manage API Providers" },
-        "canvas.manageApiSub": { zh: "选择平台后维护 Base URL、Key 和这个平台下的生成模型。Key 会写入 API/.env，页面只显示脱敏状态。", en: "Edit the selected provider Base URL, Key, and generation models. Keys are saved to API/.env and only shown in masked form." },
-        "canvas.manageVideoModelsTitle": { zh: "管理视频模型", en: "Manage Video Models" },
-        "canvas.manageVideoModelsSub": { zh: "这些模型会出现在视频生成节点下拉框里。选择平台后维护该平台的视频模型。", en: "These models appear in video generation node dropdowns. Select a provider to edit its video models." },
-        "canvas.keepCurrentKey": { zh: "保持当前", en: "Keep current" },
-        "canvas.enterApiKey": { zh: "输入 API Key", en: "Enter API key" },
-        "canvas.deleteModel": { zh: "删除模型", en: "Delete model" },
-        "canvas.deleteLink": { zh: "删除连线", en: "Delete link" },
-        "canvas.download": { zh: "下载", en: "Download" },
-        "canvas.comfyModeText": { zh: "文生图", en: "Text to Image" },
-        "canvas.comfyModeEnhance": { zh: "细节增强", en: "Detail Enhance" },
-        "canvas.comfyModeEdit": { zh: "图片编辑", en: "Image Edit" },
-        "canvas.comfyModeCustom": { zh: "自定义", en: "Custom" },
-        "canvas.comfyText": { zh: "文生图", en: "Text to Image" },
-        "canvas.comfyEnhance": { zh: "细节增强", en: "Enhance" },
-        "canvas.comfyEdit": { zh: "图片编辑", en: "Image Edit" },
-        "canvas.comfyCustom": { zh: "自定义", en: "Custom" },
-        "canvas.comfyRunning": { zh: "处理中", en: "Processing" },
-        "canvas.comfyRun": { zh: "Run ComfyUI", en: "Run ComfyUI" },
-        "canvas.comfyNeedImages": { zh: "需要", en: "Needs" },
-        "canvas.comfyNoWorkflow": { zh: "请先在 ComfyUI 设置中保存工作流。", en: "Save a workflow in ComfyUI Settings first." },
-        "canvas.comfyLoadingWorkflow": { zh: "正在读取工作流参数...", en: "Loading workflow parameters..." },
-        "canvas.comfyNoExtraParams": { zh: "这个工作流只有图片/提示词输入，没有额外参数。", en: "This workflow only has image/prompt inputs and no extra parameters." },
-        "canvas.ltxDirector": { zh: "LTX Director", en: "LTX Director" },
-        "canvas.ltxDurationSec": { zh: "秒数", en: "Seconds" },
-        "canvas.ltxDurationFrames": { zh: "帧数", en: "Frames" },
-        "canvas.ltxFps": { zh: "帧率", en: "FPS" },
-        "canvas.ltxLinkedImages": { zh: "已连接图片", en: "Linked Images" },
-        "canvas.ltxRun": { zh: "运行 LTX", en: "Run LTX" },
-        "canvas.ltxRunning": { zh: "LTX 运行中", en: "Running LTX" },
-        "canvas.ltxFailed": { zh: "LTX 生成失败", en: "LTX generation failed" },
-        "canvas.ltxNoOutput": { zh: "LTX 没有返回产物", en: "LTX returned no outputs" },
-        "canvas.ltxImageSegNeedRef": { zh: "LTX 图片段缺少参考图", en: "An LTX image segment is missing a reference image" },
-        "canvas.ltxTimelineLoadFailed": { zh: "LTX 时间线 UI 加载失败，请查看控制台。", en: "LTX timeline UI failed to load. Check the console." },
-        "canvas.ltxTimelineScriptMissing": { zh: "LTX 时间线脚本未加载。", en: "LTX timeline script is not loaded." },
-        "canvas.videoModel": { zh: "视频模型", en: "Video Model" },
-        "canvas.videoDuration": { zh: "时长", en: "Duration" },
-        "canvas.videoAspect": { zh: "比例", en: "Aspect" },
-        "canvas.videoResolution": { zh: "分辨率", en: "Resolution" },
-        "canvas.videoUpsample": { zh: "提升到 1080p", en: "Upsample to 1080p" },
-        "canvas.videoEnhancePrompt": { zh: "优化提示词", en: "Enhance Prompt" },
-        "canvas.videoWatermark": { zh: "水印", en: "Watermark" },
-        "canvas.videoCameraFixed": { zh: "固定镜头", en: "Fixed Camera" },
-        "canvas.videoGenerateAudio": { zh: "生成音频", en: "Generate Audio" },
-        "canvas.videoMultimodal": { zh: "全能参考", en: "Omni Reference" },
-        "canvas.videoFirstLastFrames": { zh: "首尾帧", en: "First/Last" },
-        "canvas.videoRoleReference": { zh: "参考", en: "Ref" },
-        "canvas.videoRoleFirstFrame": { zh: "首帧", en: "First" },
-        "canvas.videoRoleLastFrame": { zh: "尾帧", en: "Last" },
-        "canvas.videoFailed": { zh: "视频生成失败", en: "Video generation failed" }
-    });
-})();
+@import url('/static/vendor/css/fonts.css?v=2026.05.22.1');
+
+/* ===== Theme variables ===== */
+:root {
+    --ease:cubic-bezier(.4,0,.2,1);
+    --page:#f6f7f9;
+    --grid:rgba(100,116,139,.18);
+    --panel:rgba(255,255,255,.9);
+    --panel-solid:#fff;
+    --card:rgba(255,255,255,.98);
+    --card-solid:#fff;
+    --soft:#f7f8fa;
+    --soft-2:#eef2f6;
+    --line:#e5e9ef;
+    --line-2:#cbd5e1;
+    --text:#151922;
+    --muted:#5f6b7a;
+    --faint:#98a2b3;
+    --shadow:rgba(15,23,42,.08);
+    --shadow-strong:rgba(15,23,42,.14);
+    --strong:#171c26;
+    --strong-text:#fff;
+    --accent:#2563eb;
+    --accent-soft:#eff6ff;
+    --accent-line:#bfdbfe;
+    --success:#059669;
+    --danger:#dc2626;
+    --danger-soft:#fff1f2;
+}
+.theme-dark {
+    --page:#10141d;
+    --grid:rgba(148,163,184,.16);
+    --panel:rgba(18,23,33,.9);
+    --panel-solid:#141a24;
+    --card:rgba(21,27,38,.98);
+    --card-solid:#151b26;
+    --soft:#1d2533;
+    --soft-2:#263143;
+    --line:#2d394c;
+    --line-2:#4b5c75;
+    --text:#f4f7fb;
+    --muted:#c4cedb;
+    --faint:#8c98aa;
+    --shadow:rgba(0,0,0,.24);
+    --shadow-strong:rgba(0,0,0,.36);
+    --strong:#e8edf5;
+    --strong-text:#111827;
+    --accent:#60a5fa;
+    --accent-soft:rgba(37,99,235,.16);
+    --accent-line:rgba(96,165,250,.34);
+    --danger-soft:rgba(220,38,38,.16);
+}
+
+* { box-sizing:border-box; }
+body { margin:0; height:100vh; overflow:hidden; background:var(--page); color:var(--text); font-family:'Inter',-apple-system,sans-serif; -webkit-font-smoothing:antialiased; }
+
+/* ===== Workspace shell (two pane) ===== */
+.workspace { position:relative; display:flex; height:100vh; overflow:hidden; }
+html[data-studio-scale="off"].studio-scale-managed .workspace {
+    /* 标准化 zoom 下百分比宽度已按 zoom 换算，不能再除以 scale（会宽出 1/scale 倍、右侧被裁）；
+       vh 单位不受 zoom 影响，高度仍需除以 scale 补偿 */
+    width: 100%;
+    height: calc(100vh / var(--studio-ui-scale, 1));
+    zoom: var(--studio-ui-scale, 1);
+}
+
+/* ===== LEFT sidebar ===== */
+.ws-sidebar { flex:0 0 272px; width:272px; display:flex; flex-direction:column; background:var(--panel); border-right:1px solid var(--line); border-left:0; backdrop-filter:blur(14px); box-shadow:none; }
+.ws-side-head { display:flex; align-items:center; justify-content:space-between; padding:18px 16px 12px; }
+.ws-side-title { font-size:15px; font-weight:850; letter-spacing:0; color:var(--text); }
+.ws-side-add { width:32px; height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:var(--muted); background:var(--panel-solid); border:1px solid var(--line); transition:all .15s var(--ease); cursor:pointer; }
+.ws-side-add:hover { color:var(--text); border-color:var(--line-2); background:var(--soft); box-shadow:0 6px 14px var(--shadow); }
+.ws-side-add:focus-visible,.ws-icon-btn:focus-visible,.ws-primary-btn:focus-visible,.ws-paste-btn:focus-visible,.ws-trash-act:focus-visible,.ws-pop-item:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+.ws-newproj-row { display:none; align-items:center; gap:4px; margin:0 12px 8px; padding:4px; border:1px solid var(--line); border-radius:8px; background:var(--card-solid); box-shadow:0 8px 18px var(--shadow); }
+.ws-newproj-row.active { display:flex; }
+.ws-newproj-input { flex:1; min-width:0; height:30px; border:0; background:transparent; padding:0 8px; outline:none; color:var(--text); font-size:13px; font-weight:600; }
+.ws-mini-btn { width:30px; height:30px; flex:0 0 auto; border-radius:8px; display:flex; align-items:center; justify-content:center; color:var(--muted); background:var(--soft); border:1px solid var(--line); cursor:pointer; transition:all .14s var(--ease); }
+.ws-mini-btn:hover { color:var(--text); border-color:var(--line-2); }
+.ws-mini-btn.primary { background:var(--strong); color:var(--strong-text); border-color:var(--strong); }
+
+.ws-project-list { flex:1; min-height:0; overflow:auto; padding:4px 10px 10px; display:flex; flex-direction:column; gap:4px; }
+.ws-project-row { position:relative; display:flex; align-items:center; gap:9px; min-height:40px; padding:8px 10px; border-radius:8px; cursor:pointer; border:0; transition:background .14s var(--ease), box-shadow .14s var(--ease); }
+.ws-project-row:hover { background:var(--soft); }
+.ws-project-row.active { background:var(--strong); box-shadow:none; outline:none; }
+.ws-project-row.active::before { display:none; }
+.ws-project-row.active .ws-project-name { color:var(--strong-text); }
+.ws-project-row.active .ws-project-icon { color:var(--strong-text); opacity:.96; }
+.ws-project-icon { flex:0 0 auto; width:18px; height:18px; display:flex; align-items:center; justify-content:center; color:var(--faint); }
+.ws-project-name { flex:1; min-width:0; font-size:13px; font-weight:700; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ws-project-name-input { flex:1; min-width:0; font-size:13px; font-weight:700; color:var(--text); background:var(--card-solid); border:1px solid var(--line-2); border-radius:7px; padding:3px 6px; outline:none; }
+.ws-project-count { flex:0 0 auto; min-width:20px; height:20px; padding:0 6px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; background:var(--soft-2); color:var(--muted); font-size:10px; font-weight:800; }
+.ws-project-row.active .ws-project-count { background:rgba(255,255,255,.16); color:var(--strong-text); }
+.ws-project-actions { display:none; align-items:center; gap:2px; flex:0 0 auto; }
+.ws-project-row:hover .ws-project-actions { display:flex; }
+.ws-project-row:hover .ws-project-count { display:none; }
+.ws-proj-act { width:22px; height:22px; border-radius:7px; display:flex; align-items:center; justify-content:center; color:var(--faint); background:transparent; border:none; cursor:pointer; transition:all .13s var(--ease); }
+.ws-proj-act:hover { color:var(--text); background:var(--soft-2); }
+.ws-project-row.active .ws-proj-act { color:rgba(255,255,255,.9); background:rgba(255,255,255,.1); }
+.ws-project-row.active .ws-proj-act:hover { color:#fff; background:rgba(255,255,255,.22); }
+.ws-proj-act.del:hover { color:#dc2626; background:#fee2e2; }
+.theme-dark .ws-proj-act.del:hover { color:#fca5a5; background:rgba(220,38,38,.22); }
+.ws-project-row.active .ws-proj-act.del:hover { color:#fecaca; background:rgba(248,113,113,.22); }
+
+/* delete-confirm inline */
+.ws-project-confirm { display:flex; flex-direction:column; gap:7px; padding:10px; margin:2px 0; border-radius:8px; background:var(--strong); box-shadow:0 10px 24px var(--shadow); }
+.ws-project-confirm-title { color:var(--strong-text); font-size:11px; font-weight:800; line-height:1.4; }
+.ws-project-confirm-actions { display:flex; gap:6px; }
+.ws-confirm-btn,.ws-cancel-btn { flex:1; height:26px; border-radius:999px; font-size:11px; font-weight:800; cursor:pointer; border:none; }
+.ws-confirm-btn { background:#dc2626; color:#fff; }
+.ws-confirm-btn:hover { background:#b91c1c; }
+.ws-cancel-btn { background:var(--soft); color:var(--text); border:1px solid var(--line); }
+
+.ws-side-foot { padding:10px 12px; border-top:1px solid var(--line); background:linear-gradient(180deg, transparent, rgba(100,116,139,.04)); }
+.ws-trash-entry { width:100%; display:flex; align-items:center; gap:9px; min-height:40px; padding:8px 10px; border-radius:8px; color:var(--muted); background:transparent; border:1px solid transparent; cursor:pointer; transition:all .14s var(--ease); font-size:13px; font-weight:750; }
+.ws-trash-entry:hover { color:var(--text); background:var(--soft); }
+.ws-trash-entry.active { color:var(--text); background:var(--danger-soft); border-color:rgba(220,38,38,.22); }
+.ws-trash-label { flex:1; text-align:left; }
+.ws-trash-badge { min-width:18px; height:18px; padding:0 6px; border-radius:999px; display:none; align-items:center; justify-content:center; background:#475569; color:#fff; font-size:10px; font-weight:800; }
+.ws-trash-badge.visible { display:inline-flex; }
+
+/* ===== RIGHT main / smart canvas embed ===== */
+.ws-main { position:relative; flex:1; min-width:0; display:flex; flex-direction:column; overflow:hidden; }
+.ws-canvas-frame { position:absolute; inset:0; width:100%; height:100%; border:0; display:block; background:var(--page); }
+.ws-topbar { position:relative; z-index:6; display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:60px; padding:11px 18px; background:var(--panel); border-bottom:1px solid var(--line); backdrop-filter:blur(14px); }
+.ws-topbar-left { display:flex; align-items:center; gap:10px; min-width:0; }
+.ws-board-name { font-size:17px; font-weight:850; letter-spacing:0; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:40vw; }
+.ws-board-count { min-width:20px; height:20px; padding:0 8px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; background:var(--soft-2); color:var(--muted); font-size:11px; font-weight:800; }
+.ws-topbar-right { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+.ws-icon-btn { width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:var(--muted); background:var(--card-solid); border:1px solid var(--line); cursor:pointer; transition:all .15s var(--ease); }
+.ws-icon-btn:hover { color:var(--text); border-color:var(--line-2); background:var(--soft); box-shadow:0 6px 14px var(--shadow); }
+.ws-primary-btn { height:36px; padding:0 14px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; gap:7px; background:var(--strong); color:var(--strong-text); border:none; cursor:pointer; font-size:12px; font-weight:850; box-shadow:0 8px 18px var(--shadow); }
+.ws-primary-btn:hover { transform:translateY(-1px); box-shadow:0 12px 24px var(--shadow-strong); }
+/* 粘贴到此项目：剪切后才出现的强调按钮，固定高对比色避免主题变量冲淡文字。 */
+.ws-paste-btn { height:36px; padding:0 13px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; gap:7px; background:#1d4ed8; color:#fff; border:1px solid rgba(255,255,255,.18); cursor:pointer; font-size:12px; font-weight:850; box-shadow:0 8px 18px rgba(37,99,235,.28); }
+.ws-paste-btn:hover { background:#1e40af; box-shadow:0 10px 22px rgba(37,99,235,.34); }
+.ws-paste-btn span { color:inherit; }
+.ws-paste-btn i,.ws-paste-btn svg { width:16px; height:16px; color:inherit; stroke:currentColor; }
+.theme-dark .ws-paste-btn { background:#2563eb; color:#fff; border-color:rgba(147,197,253,.28); box-shadow:0 10px 24px rgba(37,99,235,.34); }
+.theme-dark .ws-paste-btn:hover { background:#1d4ed8; }
+
+.ws-board { position:relative; flex:1; min-height:0; overflow:hidden; background:var(--page); background-image:linear-gradient(rgba(100,116,139,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(100,116,139,.045) 1px, transparent 1px), radial-gradient(var(--grid) 1px, transparent 1px); background-size:120px 120px, 120px 120px, 24px 24px; cursor:grab; user-select:none; }
+.ws-board.panning { cursor:grabbing; }
+.ws-board-world { position:absolute; left:0; top:0; transform-origin:0 0; will-change:transform; }
+
+.ws-board-empty { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); display:flex; flex-direction:column; align-items:center; gap:12px; width:min(320px, calc(100% - 48px)); color:var(--faint); }
+.ws-board-empty.hidden { display:none; }
+.ws-board-empty-icon { width:58px; height:58px; border-radius:8px; display:flex; align-items:center; justify-content:center; background:var(--card-solid); border:1px solid var(--line); color:var(--faint); box-shadow:0 12px 28px var(--shadow); }
+.ws-board-empty-text { font-size:15px; font-weight:850; color:var(--text); }
+.ws-board-empty-sub { margin-top:-6px; font-size:12px; font-weight:650; color:var(--muted); text-align:center; }
+.ws-board-empty-actions { display:flex; align-items:center; gap:8px; }
+
+/* ===== Board card ===== */
+.ws-card {
+    position:absolute;
+    width:248px;
+    height:150px;
+    border-radius:8px;
+    background:var(--card-solid);
+    border:1px solid var(--line);
+    box-shadow:0 6px 18px rgba(15,23,42,.06);
+    padding:14px;
+    display:flex;
+    flex-direction:column;
+    gap:12px;
+    cursor:pointer;
+    overflow:hidden;
+    transition:box-shadow .16s var(--ease), border-color .16s var(--ease), transform .16s var(--ease), background .16s var(--ease);
+}
+.ws-card::before { display:none; }
+.ws-card:hover { border-color:var(--line-2); box-shadow:0 16px 36px var(--shadow-strong); transform:translateY(-2px); }
+.ws-card.dragging { box-shadow:0 20px 48px var(--shadow-strong); border-color:var(--line-2); transform:none; z-index:50; cursor:grabbing; transition:none; }
+.ws-card.cc-marked { border-color:var(--line-2); }
+.ws-card.cut { opacity:.56; border-style:dashed; }
+.ws-card-top { display:flex; align-items:center; gap:8px; min-height:28px; flex:0 0 auto; min-width:0; white-space:nowrap; overflow:hidden; }
+.ws-card-icon { width:30px; height:30px; flex:0 0 auto; border-radius:8px; display:flex; align-items:center; justify-content:center; background:var(--soft); color:var(--muted); border:1px solid var(--line); font-size:16px; }
+.ws-card-icon.icon-has-color { background:var(--accent); color:#fff; border-color:transparent; }
+.ws-card-kind { display:inline-flex; align-items:center; justify-content:center; flex:0 1 auto; min-width:0; max-width:calc(100% - 36px); height:22px; padding:0 8px; border-radius:6px; font-size:10px; font-weight:850; letter-spacing:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ws-card-kind.smart { background:#f5f3ff; color:#6d28d9; border:1px solid #ddd6fe; }
+.ws-card-kind.classic { background:var(--soft-2); color:var(--muted); border:1px solid var(--line); }
+.ws-card-menu { margin-left:auto; width:28px; height:28px; flex:0 0 28px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:var(--faint); background:transparent; border:1px solid transparent; cursor:pointer; opacity:.58; transition:all .14s var(--ease); }
+.ws-card:hover .ws-card-menu,.ws-card:focus-within .ws-card-menu { opacity:1; }
+.ws-card-menu:hover { color:var(--text); background:var(--soft); border-color:var(--line); }
+.ws-card-title { font-size:15px; line-height:1.35; font-weight:800; letter-spacing:0; color:var(--text); overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; word-break:break-word; }
+.ws-card-title-input { font-size:15px; line-height:1.35; font-weight:800; color:var(--text); background:var(--card-solid); border:1px solid var(--line-2); border-radius:8px; padding:5px 7px; outline:none; width:100%; }
+.ws-card-meta { margin-top:auto; display:flex; align-items:center; gap:6px; align-self:stretch; min-width:0; padding:9px 10px; border-radius:8px; background:var(--soft); border:1px solid var(--line); }
+.ws-card-meta-dot { width:4px; height:4px; flex:0 0 auto; border-radius:50%; background:var(--faint); opacity:.7; }
+.ws-card-time { min-width:0; font-size:11px; font-weight:650; color:var(--muted); letter-spacing:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ws-card-nodes { font-size:11px; font-weight:750; color:var(--muted); white-space:nowrap; }
+.ws-card-actions { display:flex; gap:7px; margin-top:auto; }
+.ws-card-delete-confirm { display:none; flex-direction:column; gap:8px; margin-top:auto; padding:8px; border-radius:8px; background:var(--danger-soft); border:1px solid rgba(220,38,38,.2); }
+.ws-card.confirming-delete .ws-card-title,
+.ws-card.confirming-delete .ws-card-meta { display:none; }
+.ws-card.confirming-delete .ws-card-delete-confirm { display:flex; }
+.ws-card-delete-title { font-size:12px; line-height:1.45; font-weight:800; color:var(--text); }
+.ws-card-delete-actions { display:flex; gap:7px; }
+.ws-card-delete-actions button { flex:1; height:30px; border-radius:8px; border:1px solid var(--line); cursor:pointer; font-size:12px; font-weight:800; }
+.ws-card-delete-yes { background:var(--danger); color:#fff; border-color:var(--danger) !important; }
+.ws-card-delete-no { background:var(--card-solid); color:var(--muted); }
+
+/* ===== Card context menu ===== */
+.ws-card-pop { position:fixed; left:0; top:0; z-index:200; width:214px; padding:6px; border-radius:8px; border:1px solid var(--line); background:var(--card-solid); color:var(--text); box-shadow:0 22px 54px var(--shadow-strong); display:flex; flex-direction:column; gap:1px; }
+.ws-pop-item { display:flex; align-items:center; gap:9px; width:100%; padding:8px 10px; border-radius:8px; background:transparent; border:none; cursor:pointer; color:var(--text); font-size:12.5px; font-weight:700; text-align:left; transition:background .12s var(--ease); }
+.ws-pop-item:hover { background:var(--soft); }
+.ws-pop-item.danger { color:var(--danger); }
+.ws-pop-item.danger:hover { background:var(--danger-soft); }
+.ws-pop-sep { height:1px; margin:3px 4px; background:var(--line); }
+.ws-pop-sub-title { padding:6px 10px 2px; font-size:9px; font-weight:800; letter-spacing:0; text-transform:uppercase; color:var(--faint); }
+.ws-pop-proj { display:flex; align-items:center; gap:8px; width:100%; padding:7px 10px; border-radius:9px; background:transparent; border:none; cursor:pointer; color:var(--text); font-size:12px; font-weight:700; text-align:left; transition:background .12s var(--ease); }
+.ws-pop-proj:hover { background:var(--soft); }
+.ws-pop-proj.current { color:var(--faint); cursor:default; }
+.ws-pop-proj.current:hover { background:transparent; }
+.ws-pop-scroll { max-height:200px; overflow:auto; }
+
+/* ===== Inline card create flow (on board) ===== */
+.ws-create-card { position:absolute; width:260px; border-radius:8px; background:var(--card-solid); border:1px solid var(--line-2); box-shadow:0 18px 44px var(--shadow-strong); padding:12px; display:flex; flex-direction:column; gap:10px; z-index:60; }
+.ws-create-title { font-size:12px; font-weight:850; color:var(--text); }
+.ws-create-input { width:100%; height:34px; border-radius:8px; border:1px solid var(--line); background:var(--soft); color:var(--text); font-size:13px; font-weight:600; padding:0 10px; outline:none; }
+.ws-create-input:focus { border-color:var(--line-2); background:var(--card-solid); }
+.ws-create-toggle { display:flex; gap:4px; padding:4px; border-radius:8px; background:var(--soft-2); border:1px solid var(--line-2); }
+.ws-create-toggle-btn { flex:1; height:30px; border-radius:8px; font-size:11px; font-weight:800; color:var(--muted); background:transparent; border:none; cursor:pointer; transition:all .13s var(--ease); }
+.ws-create-toggle-btn.active { background:var(--strong); color:var(--strong-text); box-shadow:0 6px 14px var(--shadow); }
+.ws-create-actions { display:flex; gap:6px; }
+.ws-create-confirm,.ws-create-cancel { flex:1; height:32px; border-radius:8px; font-size:12px; font-weight:800; cursor:pointer; border:none; }
+.ws-create-confirm { background:var(--strong); color:var(--strong-text); }
+.ws-create-cancel { background:var(--soft); color:var(--muted); border:1px solid var(--line); }
+
+/* ===== Trash panel ===== */
+.ws-trash-panel { position:absolute; inset:0; z-index:20; display:none; flex-direction:column; background:var(--page); }
+.ws-trash-panel.active { display:flex; }
+.ws-trash-head { display:flex; align-items:center; justify-content:space-between; min-height:60px; padding:11px 18px; border-bottom:1px solid var(--line); background:var(--panel); backdrop-filter:blur(14px); }
+.ws-trash-head-title { display:flex; align-items:center; gap:8px; font-size:15px; font-weight:850; color:var(--text); }
+.ws-trash-note { display:flex; align-items:center; gap:7px; margin:14px 18px 0; padding:10px 12px; border-radius:8px; background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent-line); font-size:12px; font-weight:700; }
+.ws-trash-list { flex:1; min-height:0; overflow:auto; padding:16px 18px 24px; display:grid; grid-template-columns:repeat(auto-fill, minmax(248px, 1fr)); gap:14px; align-content:start; }
+.ws-trash-empty { grid-column:1/-1; min-height:280px; display:flex; align-items:center; justify-content:center; text-align:center; color:var(--faint); font-size:14px; font-weight:750; }
+.ws-trash-card { position:relative; border-radius:8px; background:var(--card-solid); border:1px solid var(--line); padding:14px; display:flex; flex-direction:column; gap:12px; min-height:150px; box-shadow:0 6px 18px rgba(15,23,42,.06); overflow:hidden; }
+.ws-trash-card::before { display:none; }
+.ws-trash-card .ws-card-actions { display:flex; gap:6px; margin-top:auto; }
+.ws-trash-act { flex:1; height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; gap:5px; font-size:11.5px; font-weight:800; cursor:pointer; border:1px solid var(--line); background:var(--soft); color:var(--muted); transition:all .14s var(--ease); }
+.ws-trash-act.restore:hover { color:var(--success); background:#ecfdf5; border-color:#a7f3d0; }
+.ws-trash-act.purge:hover { color:var(--danger); background:var(--danger-soft); border-color:#fecaca; }
+.ws-trash-card.confirming .ws-card-actions { display:none; }
+.ws-trash-confirm { display:none; flex-direction:column; gap:8px; margin-top:auto; padding:8px; border-radius:8px; background:var(--danger-soft); border:1px solid rgba(220,38,38,.2); }
+.ws-trash-card.confirming .ws-trash-confirm { display:flex; }
+.ws-trash-confirm-title { font-size:11px; font-weight:800; color:var(--text); }
+.ws-trash-confirm-actions { display:flex; gap:6px; }
+.ws-trash-confirm-actions button { flex:1; height:30px; border-radius:8px; font-size:11px; font-weight:800; cursor:pointer; border:none; }
+.ws-trash-confirm-yes { background:var(--danger); color:#fff; }
+.ws-trash-confirm-no { background:var(--soft); color:var(--muted); border:1px solid var(--line); }
+
+/* ===== Status toast ===== */
+.ws-status { position:absolute; left:50%; bottom:18px; transform:translateX(-50%); z-index:30; padding:8px 16px; border-radius:999px; background:var(--strong); color:var(--strong-text); font-size:12px; font-weight:700; box-shadow:0 10px 30px var(--shadow); opacity:0; pointer-events:none; transition:opacity .2s var(--ease); }
+.ws-status.show { opacity:1; }
+
+/* ===== Dark theme adjustments ===== */
+.theme-dark .ws-trash-note { background:var(--accent-soft); color:#bfdbfe; border-color:var(--accent-line); }
+.theme-dark .ws-project-row.active,
+.theme-dark .ws-primary-btn { background:#d8dee9; color:#0f172a; }
+.theme-dark .ws-project-row.active .ws-project-name,
+.theme-dark .ws-project-row.active .ws-project-icon,
+.theme-dark .ws-project-row.active .ws-project-count { color:#0f172a; }
+.theme-dark .ws-project-row.active .ws-project-count { background:rgba(15,23,42,.12); }
+.theme-dark .ws-project-row.active .ws-proj-act { color:#1f2937; background:rgba(15,23,42,.08); }
+.theme-dark .ws-project-row.active .ws-proj-act:hover { color:#0f172a; background:rgba(15,23,42,.16); }
+.theme-dark .ws-project-row.active .ws-proj-act.del:hover { color:#991b1b; background:rgba(220,38,38,.14); }
+.theme-dark .ws-mini-btn.primary { background:#d8dee9; color:#0f172a; border-color:#d8dee9; }
+.theme-dark .ws-card-kind.smart { background:rgba(139,92,246,.18); color:#c4b5fd; border-color:rgba(139,92,246,.3); }
+.theme-dark .ws-create-confirm { background:#d8dee9; color:#0f172a; }
+.theme-dark .ws-create-toggle-btn.active { background:#d8dee9; color:#0f172a; }
+.theme-dark .ws-trash-act.restore:hover { color:#6ee7b7; background:rgba(5,150,105,.15); border-color:rgba(110,231,183,.35); }
+.theme-dark .ws-trash-act.purge:hover { color:#fecaca; background:rgba(220,38,38,.18); border-color:rgba(248,113,113,.35); }
+.theme-dark .ws-pop-item.danger:hover { background:rgba(220,38,38,.18); }
+.theme-dark .ws-card-delete-no { background:var(--soft); }
+
+/* ===== Responsive ===== */
+@media (max-width:760px) {
+    .workspace { flex-direction:column; }
+    .ws-sidebar { flex:0 0 auto; width:100%; max-height:42vh; border-right:none; border-bottom:1px solid var(--line); }
+    .ws-side-head { padding:12px 12px 8px; }
+    .ws-project-list { padding:4px 8px 8px; }
+    .ws-main { min-height:0; }
+    .ws-topbar { align-items:flex-start; gap:10px; padding:10px 12px; }
+    .ws-topbar-left { min-width:0; flex:1; }
+    .ws-topbar-right { gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+    .ws-board-name { max-width:46vw; font-size:15px; }
+    .ws-board-count { height:18px; min-width:18px; font-size:10px; }
+    .ws-primary-btn span { display:none; }
+    .ws-board-empty .ws-primary-btn span { display:inline; }
+    .ws-primary-btn { padding:0 12px; }
+    .ws-paste-btn span { display:none; }
+    .ws-card { width:230px; height:146px; padding:12px; gap:10px; }
+    .ws-card-top { gap:6px; min-height:26px; }
+    .ws-card-kind { height:20px; max-width:calc(100% - 32px); padding:0 7px; font-size:9.5px; }
+    .ws-card-menu { width:26px; height:26px; flex-basis:26px; opacity:1; }
+    .ws-card-title { font-size:14px; }
+    .ws-card-meta { padding:8px; gap:5px; }
+    .ws-trash-list { grid-template-columns:1fr; padding:12px; }
+    .ws-trash-note { margin:12px 12px 0; }
+}
+html[data-studio-scale="off"].studio-scale-managed .ws-primary-btn span {
+    display:inline;
+}
+html[data-studio-scale="off"].studio-scale-managed .workspace {
+    flex-direction:row;
+}
+html[data-studio-scale="off"].studio-scale-managed .ws-sidebar {
+    flex:0 0 272px;
+    width:272px;
+    max-height:none;
+    border-right:1px solid var(--line);
+    border-bottom:none;
+}
+html[data-studio-scale="off"].studio-scale-managed .ws-main {
+    min-width:0;
+    min-height:0;
+}
+html[data-studio-scale="off"].studio-scale-managed .ws-topbar {
+    align-items:center;
+    gap:12px;
+    padding:11px 18px;
+}
+html[data-studio-scale="off"].studio-scale-managed .ws-topbar-left {
+    flex:1 1 auto;
+    min-width:0;
+}
+html[data-studio-scale="off"].studio-scale-managed .ws-board-name {
+    max-width:none;
+}
+html[data-studio-scale="off"].studio-scale-managed .ws-topbar-right {
+    flex:0 0 auto;
+    flex-wrap:nowrap;
+    justify-content:flex-end;
+}
+html[data-studio-scale="off"].studio-scale-managed .ws-paste-btn span {
+    display:inline;
+}
+@media (max-width:1320px), (max-height:860px) {
+    /* 按钮保持在顶栏行内：.workspace 有 zoom 缩放，fixed/absolute 在 zoom 子树里定位不可靠，会被推出屏幕外 */
+    html[data-studio-scale="off"].studio-scale-managed .ws-topbar-left {
+        flex:1 1 auto;
+        min-width:0;
+    }
+    html[data-studio-scale="off"].studio-scale-managed .ws-topbar-right {
+        position:static;
+        display:flex;
+        align-items:center;
+        gap:8px;
+        flex:0 0 auto;
+        flex-wrap:nowrap;
+    }
+    html[data-studio-scale="off"].studio-scale-managed .ws-topbar-right .ws-icon-btn,
+    html[data-studio-scale="off"].studio-scale-managed .ws-topbar-right .ws-primary-btn {
+        display:inline-flex;
+        visibility:visible;
+        opacity:1;
+    }
+}

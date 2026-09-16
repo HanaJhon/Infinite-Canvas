@@ -1,0 +1,1 @@
+Windows用户双击"Lochou启动器"可启动无限画布
