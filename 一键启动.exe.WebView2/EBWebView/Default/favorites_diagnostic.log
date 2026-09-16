@@ -1,59 +1,409 @@
-2026-09-02 08:41:25.447: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default
-2026-09-02 08:41:25.447: [INFO] Profiles total count: 1
-2026-09-02 08:41:25.447: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default lastActive=null
-2026-09-02 08:41:25.447: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default
-2026-09-02 08:41:25.447: [INFO] OnDoneLoading sync enabled: 0
-2026-09-02 08:41:25.447: [INFO] BookmarkModelLoaded, ids_reassigned: 0
-2026-09-02 08:41:25.447: [INFO] BookmarksLoadDropped droppedNodes=0
-2026-09-02 08:41:25.447: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
-2026-09-02 08:43:01.244: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
-2026-09-02 08:59:38.725: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default
-2026-09-02 08:59:38.725: [INFO] Profiles total count: 1
-2026-09-02 08:59:38.726: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-02T08:43:01.081Z
-2026-09-02 08:59:38.726: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default
-2026-09-02 08:59:38.726: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-02T08:43:01.081Z
-2026-09-02 08:59:38.726: [INFO] OnDoneLoading sync enabled: 0
-2026-09-02 08:59:38.726: [INFO] BookmarkModelLoaded, ids_reassigned: 0
-2026-09-02 08:59:38.726: [INFO] BookmarksLoadDropped droppedNodes=0
-2026-09-02 08:59:38.726: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
-2026-09-02 08:59:43.755: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
-2026-09-02 09:07:24.370: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default
-2026-09-02 09:07:24.370: [INFO] Profiles total count: 1
-2026-09-02 09:07:24.370: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-02T08:59:42.811Z
-2026-09-02 09:07:24.370: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default
-2026-09-02 09:07:24.371: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-02T08:59:42.811Z
-2026-09-02 09:07:24.371: [INFO] OnDoneLoading sync enabled: 0
-2026-09-02 09:07:24.371: [INFO] BookmarkModelLoaded, ids_reassigned: 0
-2026-09-02 09:07:24.371: [INFO] BookmarksLoadDropped droppedNodes=0
-2026-09-02 09:07:24.371: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
-2026-09-02 09:08:05.201: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
-2026-09-03 09:16:29.674: [INFO] CurrentProfilePath: G:\Infinite-Canvas-agent.dev\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default
-2026-09-03 09:16:29.674: [INFO] Profiles total count: 1
-2026-09-03 09:16:29.674: [INFO] Profile: name=用户配置 1 path=G:\Infinite-Canvas-agent.dev\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-02T09:07:27.810Z
-2026-09-03 09:16:29.674: [INFO] LastUsedProfileDir: G:\Infinite-Canvas-agent.dev\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default
-2026-09-03 09:16:29.674: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=G:\Infinite-Canvas-agent.dev\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-02T09:07:27.810Z
-2026-09-03 09:16:29.674: [INFO] OnDoneLoading sync enabled: 0
-2026-09-03 09:16:29.674: [INFO] BookmarkModelLoaded, ids_reassigned: 0
-2026-09-03 09:16:29.674: [INFO] BookmarksLoadDropped droppedNodes=0
-2026-09-03 09:16:29.674: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
-2026-09-03 09:18:50.769: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
-2026-09-03 09:23:00.438: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas-agent\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default
-2026-09-03 09:23:00.438: [INFO] Profiles total count: 1
-2026-09-03 09:23:00.438: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas-agent\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-03T09:18:50.554Z
-2026-09-03 09:23:00.438: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas-agent\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default
-2026-09-03 09:23:00.438: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas-agent\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-03T09:18:50.554Z
-2026-09-03 09:23:00.438: [INFO] OnDoneLoading sync enabled: 0
-2026-09-03 09:23:00.438: [INFO] BookmarkModelLoaded, ids_reassigned: 0
-2026-09-03 09:23:00.438: [INFO] BookmarksLoadDropped droppedNodes=0
-2026-09-03 09:23:00.438: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
-2026-09-03 09:23:17.420: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
-2026-09-03 09:56:50.913: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas-agent\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default
-2026-09-03 09:56:50.913: [INFO] Profiles total count: 1
-2026-09-03 09:56:50.913: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas-agent\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-03T09:23:08.379Z
-2026-09-03 09:56:50.913: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas-agent\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default
-2026-09-03 09:56:50.913: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas-agent\Infinite-Canvas-agent-main\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-03T09:23:08.379Z
-2026-09-03 09:56:50.913: [INFO] OnDoneLoading sync enabled: 0
-2026-09-03 09:56:50.913: [INFO] BookmarkModelLoaded, ids_reassigned: 0
-2026-09-03 09:56:50.913: [INFO] BookmarksLoadDropped droppedNodes=0
-2026-09-03 09:56:50.913: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
-2026-09-03 09:58:03.819: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 06:15:15.838: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 06:15:15.838: [INFO] Profiles total count: 1
+2026-09-14 06:15:15.838: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=null
+2026-09-14 06:15:15.838: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 06:15:15.838: [INFO] OnDoneLoading sync enabled: 0
+2026-09-14 06:15:15.838: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-14 06:15:15.838: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-14 06:15:15.838: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 06:30:16.698: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 06:54:16.633: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 06:54:16.633: [INFO] Profiles total count: 1
+2026-09-14 06:54:16.633: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T06:28:10.661Z
+2026-09-14 06:54:16.633: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 06:54:16.633: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T06:28:10.661Z
+2026-09-14 06:54:16.633: [INFO] OnDoneLoading sync enabled: 0
+2026-09-14 06:54:16.633: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-14 06:54:16.633: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-14 06:54:16.633: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 07:04:22.111: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 07:19:52.500: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 07:19:52.500: [INFO] Profiles total count: 1
+2026-09-14 07:19:52.500: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T07:04:16.383Z
+2026-09-14 07:19:52.500: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 07:19:52.500: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T07:04:16.383Z
+2026-09-14 07:19:52.500: [INFO] OnDoneLoading sync enabled: 0
+2026-09-14 07:19:52.500: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-14 07:19:52.500: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-14 07:19:52.500: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 07:26:44.981: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 07:44:17.759: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 07:44:17.759: [INFO] Profiles total count: 1
+2026-09-14 07:44:17.759: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T07:26:30.757Z
+2026-09-14 07:44:17.759: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 07:44:17.759: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T07:26:30.757Z
+2026-09-14 07:44:17.759: [INFO] OnDoneLoading sync enabled: 0
+2026-09-14 07:44:17.759: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-14 07:44:17.759: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-14 07:44:17.759: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 07:48:16.524: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 08:11:19.246: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 08:11:19.246: [INFO] Profiles total count: 1
+2026-09-14 08:11:19.246: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T07:46:44.393Z
+2026-09-14 08:11:19.246: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 08:11:19.246: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T07:46:44.393Z
+2026-09-14 08:11:19.246: [INFO] OnDoneLoading sync enabled: 0
+2026-09-14 08:11:19.246: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-14 08:11:19.246: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-14 08:11:19.246: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 08:15:25.289: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 08:26:15.971: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 08:26:15.971: [INFO] Profiles total count: 1
+2026-09-14 08:26:15.971: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T08:15:18.850Z
+2026-09-14 08:26:15.971: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 08:26:15.971: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T08:15:18.850Z
+2026-09-14 08:26:15.971: [INFO] OnDoneLoading sync enabled: 0
+2026-09-14 08:26:15.971: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-14 08:26:15.971: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-14 08:26:15.971: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 08:28:15.934: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 08:57:14.628: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 08:57:14.628: [INFO] Profiles total count: 1
+2026-09-14 08:57:14.628: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T08:27:55.069Z
+2026-09-14 08:57:14.628: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 08:57:14.628: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T08:27:55.069Z
+2026-09-14 08:57:14.628: [INFO] OnDoneLoading sync enabled: 0
+2026-09-14 08:57:14.628: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-14 08:57:14.628: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-14 08:57:14.628: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 08:58:10.610: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 09:46:57.143: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 09:46:57.143: [INFO] Profiles total count: 1
+2026-09-14 09:46:57.143: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T08:57:14.719Z
+2026-09-14 09:46:57.143: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 09:46:57.143: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T08:57:14.719Z
+2026-09-14 09:46:57.143: [INFO] OnDoneLoading sync enabled: 0
+2026-09-14 09:46:57.143: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-14 09:46:57.143: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-14 09:46:57.143: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 10:04:56.990: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 10:16:21.676: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 10:16:21.676: [INFO] Profiles total count: 1
+2026-09-14 10:16:21.677: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T10:04:52.562Z
+2026-09-14 10:16:21.677: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-14 10:16:21.677: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T10:04:52.562Z
+2026-09-14 10:16:21.677: [INFO] OnDoneLoading sync enabled: 0
+2026-09-14 10:16:21.677: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-14 10:16:21.677: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-14 10:16:21.677: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-14 10:17:49.768: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 01:15:09.412: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 01:15:09.412: [INFO] Profiles total count: 1
+2026-09-15 01:15:09.412: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T10:17:27.174Z
+2026-09-15 01:15:09.412: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 01:15:09.412: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-14T10:17:27.174Z
+2026-09-15 01:15:09.412: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 01:15:09.412: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 01:15:09.412: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 01:15:09.412: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 01:25:48.254: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 01:39:18.238: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 01:39:18.238: [INFO] Profiles total count: 1
+2026-09-15 01:39:18.238: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T01:25:41.858Z
+2026-09-15 01:39:18.238: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 01:39:18.238: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T01:25:41.858Z
+2026-09-15 01:39:18.238: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 01:39:18.238: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 01:39:18.238: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 01:39:18.238: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 01:48:17.688: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 01:48:33.735: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 01:48:33.735: [INFO] Profiles total count: 1
+2026-09-15 01:48:33.735: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T01:48:13.608Z
+2026-09-15 01:48:33.735: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 01:48:33.735: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T01:48:13.608Z
+2026-09-15 01:48:33.735: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 01:48:33.735: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 01:48:33.735: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 01:48:33.735: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 01:52:30.493: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 01:57:08.543: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 01:57:08.543: [INFO] Profiles total count: 1
+2026-09-15 01:57:08.543: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T01:52:23.993Z
+2026-09-15 01:57:08.543: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 01:57:08.543: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T01:52:23.993Z
+2026-09-15 01:57:08.543: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 01:57:08.543: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 01:57:08.543: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 01:57:08.543: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 02:03:30.230: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 02:06:28.356: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 02:06:28.356: [INFO] Profiles total count: 1
+2026-09-15 02:06:28.356: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T02:03:22.241Z
+2026-09-15 02:06:28.356: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 02:06:28.356: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T02:03:22.241Z
+2026-09-15 02:06:28.356: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 02:06:28.356: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 02:06:28.356: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 02:06:28.356: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 02:09:57.373: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 02:10:11.757: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 02:10:11.757: [INFO] Profiles total count: 1
+2026-09-15 02:10:11.757: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T02:09:22.714Z
+2026-09-15 02:10:11.757: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 02:10:11.757: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T02:09:22.714Z
+2026-09-15 02:10:11.757: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 02:10:11.757: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 02:10:11.757: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 02:10:11.757: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 02:15:37.004: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 02:15:42.573: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 02:15:42.573: [INFO] Profiles total count: 1
+2026-09-15 02:15:42.573: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T02:15:27.984Z
+2026-09-15 02:15:42.573: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 02:15:42.573: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T02:15:27.984Z
+2026-09-15 02:15:42.573: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 02:15:42.573: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 02:15:42.573: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 02:15:42.573: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 02:20:52.435: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 02:26:40.433: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 02:26:40.433: [INFO] Profiles total count: 1
+2026-09-15 02:26:40.433: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T02:16:27.295Z
+2026-09-15 02:26:40.433: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 02:26:40.433: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T02:16:27.295Z
+2026-09-15 02:26:40.433: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 02:26:40.433: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 02:26:40.433: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 02:26:40.433: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 02:29:19.507: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 02:40:40.214: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 02:40:40.214: [INFO] Profiles total count: 1
+2026-09-15 02:40:40.214: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T02:29:14.470Z
+2026-09-15 02:40:40.214: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 02:40:40.214: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T02:29:14.470Z
+2026-09-15 02:40:40.214: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 02:40:40.214: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 02:40:40.214: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 02:40:40.214: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 02:44:47.175: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 03:29:53.658: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 03:29:53.658: [INFO] Profiles total count: 1
+2026-09-15 03:29:53.658: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T02:44:43.516Z
+2026-09-15 03:29:53.658: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 03:29:53.658: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T02:44:43.516Z
+2026-09-15 03:29:53.658: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 03:29:53.658: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 03:29:53.658: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 03:29:53.658: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 03:35:25.146: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 03:50:58.411: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 03:50:58.411: [INFO] Profiles total count: 1
+2026-09-15 03:50:58.411: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T03:35:06.337Z
+2026-09-15 03:50:58.411: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 03:50:58.411: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T03:35:06.337Z
+2026-09-15 03:50:58.411: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 03:50:58.411: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 03:50:58.411: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 03:50:58.411: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 03:58:17.749: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 05:33:37.004: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 05:33:37.004: [INFO] Profiles total count: 1
+2026-09-15 05:33:37.004: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T03:58:04.309Z
+2026-09-15 05:33:37.004: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 05:33:37.004: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T03:58:04.309Z
+2026-09-15 05:33:37.004: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 05:33:37.004: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 05:33:37.004: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 05:33:37.004: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 05:34:17.291: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 05:45:19.599: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 05:45:19.599: [INFO] Profiles total count: 1
+2026-09-15 05:45:19.599: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T05:34:09.701Z
+2026-09-15 05:45:19.599: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 05:45:19.599: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T05:34:09.701Z
+2026-09-15 05:45:19.599: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 05:45:19.599: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 05:45:19.599: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 05:45:19.599: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 05:46:24.593: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 05:49:50.197: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 05:49:50.197: [INFO] Profiles total count: 1
+2026-09-15 05:49:50.197: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T05:45:52.085Z
+2026-09-15 05:49:50.197: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 05:49:50.197: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T05:45:52.085Z
+2026-09-15 05:49:50.197: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 05:49:50.197: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 05:49:50.197: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 05:49:50.197: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 05:52:04.090: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 05:52:58.324: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 05:52:58.324: [INFO] Profiles total count: 1
+2026-09-15 05:52:58.324: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T05:51:58.980Z
+2026-09-15 05:52:58.324: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 05:52:58.324: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T05:51:58.980Z
+2026-09-15 05:52:58.324: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 05:52:58.324: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 05:52:58.324: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 05:52:58.324: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 05:54:30.550: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 05:55:48.613: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 05:55:48.613: [INFO] Profiles total count: 1
+2026-09-15 05:55:48.613: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T05:54:25.210Z
+2026-09-15 05:55:48.613: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 05:55:48.613: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T05:54:25.210Z
+2026-09-15 05:55:48.613: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 05:55:48.613: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 05:55:48.613: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 05:55:48.613: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 06:00:28.121: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 06:46:01.496: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 06:46:01.496: [INFO] Profiles total count: 1
+2026-09-15 06:46:01.496: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T05:59:48.705Z
+2026-09-15 06:46:01.496: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 06:46:01.496: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T05:59:48.705Z
+2026-09-15 06:46:01.496: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 06:46:01.496: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 06:46:01.496: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 06:46:01.496: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 06:49:54.781: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 07:02:47.336: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 07:02:47.336: [INFO] Profiles total count: 1
+2026-09-15 07:02:47.336: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T06:49:52.512Z
+2026-09-15 07:02:47.336: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 07:02:47.336: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T06:49:52.512Z
+2026-09-15 07:02:47.336: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 07:02:47.336: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 07:02:47.336: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 07:02:47.336: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 07:06:08.333: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 07:06:24.570: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 07:06:24.570: [INFO] Profiles total count: 1
+2026-09-15 07:06:24.570: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T07:05:52.726Z
+2026-09-15 07:06:24.570: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 07:06:24.570: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T07:05:52.726Z
+2026-09-15 07:06:24.570: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 07:06:24.570: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 07:06:24.570: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 07:06:24.570: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 07:09:18.913: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 07:10:27.890: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 07:10:27.890: [INFO] Profiles total count: 1
+2026-09-15 07:10:27.890: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T07:09:13.158Z
+2026-09-15 07:10:27.890: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 07:10:27.890: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T07:09:13.158Z
+2026-09-15 07:10:27.890: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 07:10:27.890: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 07:10:27.890: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 07:10:27.890: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 07:12:45.403: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 07:25:04.614: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 07:25:04.614: [INFO] Profiles total count: 1
+2026-09-15 07:25:04.614: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T07:12:42.621Z
+2026-09-15 07:25:04.614: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 07:25:04.614: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T07:12:42.621Z
+2026-09-15 07:25:04.614: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 07:25:04.614: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 07:25:04.614: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 07:25:04.614: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 07:34:21.128: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 08:28:33.246: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 08:28:33.246: [INFO] Profiles total count: 1
+2026-09-15 08:28:33.246: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T07:34:19.032Z
+2026-09-15 08:28:33.246: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 08:28:33.246: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T07:34:19.032Z
+2026-09-15 08:28:33.246: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 08:28:33.246: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 08:28:33.246: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 08:28:33.246: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 08:31:40.613: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 09:05:41.378: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 09:05:41.378: [INFO] Profiles total count: 1
+2026-09-15 09:05:41.378: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T08:31:37.034Z
+2026-09-15 09:05:41.378: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-15 09:05:41.378: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T08:31:37.034Z
+2026-09-15 09:05:41.378: [INFO] OnDoneLoading sync enabled: 0
+2026-09-15 09:05:41.378: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-15 09:05:41.378: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-15 09:05:41.378: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-15 09:09:21.551: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 01:08:32.903: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 01:08:32.903: [INFO] Profiles total count: 1
+2026-09-16 01:08:32.903: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T09:09:12.246Z
+2026-09-16 01:08:32.903: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 01:08:32.903: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-15T09:09:12.246Z
+2026-09-16 01:08:32.903: [INFO] OnDoneLoading sync enabled: 0
+2026-09-16 01:08:32.903: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-16 01:08:32.903: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-16 01:08:32.903: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 01:14:24.448: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 01:19:02.210: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 01:19:02.210: [INFO] Profiles total count: 1
+2026-09-16 01:19:02.210: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T01:14:19.805Z
+2026-09-16 01:19:02.210: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 01:19:02.210: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T01:14:19.805Z
+2026-09-16 01:19:02.210: [INFO] OnDoneLoading sync enabled: 0
+2026-09-16 01:19:02.210: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-16 01:19:02.210: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-16 01:19:02.210: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 01:20:21.228: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 02:27:30.608: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 02:27:30.608: [INFO] Profiles total count: 1
+2026-09-16 02:27:30.608: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T01:19:19.230Z
+2026-09-16 02:27:30.608: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 02:27:30.608: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T01:19:19.230Z
+2026-09-16 02:27:30.608: [INFO] OnDoneLoading sync enabled: 0
+2026-09-16 02:27:30.608: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-16 02:27:30.608: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-16 02:27:30.608: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 02:31:21.876: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 03:22:28.947: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 03:22:28.947: [INFO] Profiles total count: 1
+2026-09-16 03:22:28.947: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T02:31:19.682Z
+2026-09-16 03:22:28.947: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 03:22:28.947: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T02:31:19.682Z
+2026-09-16 03:22:28.947: [INFO] OnDoneLoading sync enabled: 0
+2026-09-16 03:22:28.947: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-16 03:22:28.947: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-16 03:22:28.947: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 03:24:50.876: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 03:38:59.895: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 03:38:59.895: [INFO] Profiles total count: 1
+2026-09-16 03:38:59.895: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T03:24:11.383Z
+2026-09-16 03:38:59.895: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 03:38:59.895: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T03:24:11.383Z
+2026-09-16 03:38:59.895: [INFO] OnDoneLoading sync enabled: 0
+2026-09-16 03:38:59.895: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-16 03:38:59.895: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-16 03:38:59.895: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 03:51:13.158: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 05:32:57.846: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 05:32:57.846: [INFO] Profiles total count: 1
+2026-09-16 05:32:57.846: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T03:51:05.788Z
+2026-09-16 05:32:57.846: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 05:32:57.846: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T03:51:05.788Z
+2026-09-16 05:32:57.846: [INFO] OnDoneLoading sync enabled: 0
+2026-09-16 05:32:57.846: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-16 05:32:57.846: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-16 05:32:57.846: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 05:35:30.780: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 05:42:56.763: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 05:42:56.763: [INFO] Profiles total count: 1
+2026-09-16 05:42:56.763: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T05:35:26.948Z
+2026-09-16 05:42:56.763: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 05:42:56.763: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T05:35:26.948Z
+2026-09-16 05:42:56.763: [INFO] OnDoneLoading sync enabled: 0
+2026-09-16 05:42:56.763: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-16 05:42:56.763: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-16 05:42:56.763: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 05:57:12.710: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 05:57:14.062: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 05:57:14.062: [INFO] Profiles total count: 1
+2026-09-16 05:57:14.062: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T05:55:41.977Z
+2026-09-16 05:57:14.062: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 05:57:14.062: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T05:55:41.977Z
+2026-09-16 05:57:14.062: [INFO] OnDoneLoading sync enabled: 0
+2026-09-16 05:57:14.062: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-16 05:57:14.062: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-16 05:57:14.062: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 05:57:44.160: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 05:57:45.371: [INFO] CurrentProfilePath: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 05:57:45.371: [INFO] Profiles total count: 1
+2026-09-16 05:57:45.371: [INFO] Profile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T05:57:27.090Z
+2026-09-16 05:57:45.371: [INFO] LastUsedProfileDir: D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default
+2026-09-16 05:57:45.371: [INFO] MostRecentlyActiveProfile: name=用户配置 1 path=D:\工作\无限画布\Infinite-Canvas\一键启动.exe.WebView2\EBWebView\Default lastActive=2026-09-16T05:57:27.090Z
+2026-09-16 05:57:45.371: [INFO] OnDoneLoading sync enabled: 0
+2026-09-16 05:57:45.371: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-09-16 05:57:45.371: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-09-16 05:57:45.371: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-09-16 05:58:04.826: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1

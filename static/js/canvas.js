@@ -664,14 +664,20 @@ function isRunningHubProvider(provider){
 function normalizeProviderId(value){
     return String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-').slice(0, 40);
 }
+function isProviderActive(p){
+    if(!p || p.enabled === false) return false;
+    if(p.id === 'modelscope' && !p.has_key) return false;
+    if(p.id === 'runninghub' && !p.has_key && !p.has_wallet_key) return false;
+    return true;
+}
 function imageApiProviders(){
     const providers = (apiProviders.length ? apiProviders : defaultApiProviders())
-        .filter(p => p.id !== 'modelscope' && p.enabled !== false && (p.image_models || []).length);
+        .filter(p => p.id !== 'modelscope' && isProviderActive(p) && (p.image_models || []).length);
     return providers;
 }
 function midjourneyApiProviders(){
     return (apiProviders.length ? apiProviders : [])
-        .filter(provider => provider.enabled !== false && (
+        .filter(provider => isProviderActive(provider) && (
             String(provider.protocol || '').toLowerCase() === 'apimart'
             || /(^|\.)apimart\.ai(?:\/|$)/i.test(String(provider.base_url || ''))
         ));
@@ -694,7 +700,7 @@ function resolveProviderId(id){
 }
 function chatApiProviders(){
     const providers = (apiProviders.length ? apiProviders : defaultApiProviders())
-        .filter(p => p.enabled !== false && (p.chat_models || []).length);
+        .filter(p => isProviderActive(p) && (p.chat_models || []).length);
     return providers.length ? providers : defaultApiProviders();
 }
 function resolveChatProviderId(id){

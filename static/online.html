@@ -313,9 +313,12 @@
             return (list || []).map(item => String(item || '').trim()).filter(item => item && !seen.has(item) && seen.add(item));
         }
         function imageProviders(){
-            const list = (apiProviders || []).filter(p => p.enabled !== false && (
-                (p.image_models || []).length || (p.rh_apps || []).length || (p.rh_workflows || []).length
-            ));
+            const list = (apiProviders || []).filter(p => {
+                if(p.enabled === false) return false;
+                if(p.id === 'modelscope') return false;
+                if(p.id === 'runninghub' && !p.has_key && !p.has_wallet_key) return false;
+                return (p.image_models || []).length || (p.rh_apps || []).length || (p.rh_workflows || []).length;
+            });
             return list.length ? list : [{id:'comfly', name:'Comfly', image_models:[models.gpt, models.nano]}];
         }
         function providerById(id){

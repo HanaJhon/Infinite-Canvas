@@ -12,7 +12,11 @@ dotnet publish $project -c Release -r win-x64 --self-contained true -p:PublishSi
 if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish failed with exit code $LASTEXITCODE."
 }
-$launcherName = ([char]0x4E00) + ([char]0x952E) + ([char]0x542F) + ([char]0x52A8) + '.exe'
-Copy-Item (Join-Path $output 'InfiniteCanvasLauncher.exe') (Join-Path $root $launcherName) -Force
-Write-Host "Publish complete: $output\InfiniteCanvasLauncher.exe"
-Write-Host "Launcher copy: $root\一键启动.exe"
+
+$launcherName = [System.Text.Encoding]::UTF8.GetString([byte[]]@(0xE4, 0xB8, 0x80, 0xE9, 0x94, 0xAE, 0xE5, 0x90, 0xAF, 0xE5, 0x8A, 0xA8, 0x2E, 0x65, 0x78, 0x65))
+$srcPath = Join-Path $output 'InfiniteCanvasLauncher.exe'
+$destPath = Join-Path $root $launcherName
+
+[System.IO.File]::Copy($srcPath, $destPath, $true)
+Write-Host "Publish complete: $srcPath"
+Write-Host "Launcher copy: $destPath"

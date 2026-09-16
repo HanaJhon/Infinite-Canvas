@@ -837,22 +837,6 @@ def default_api_providers():
     # 独立入口平台强制保留，其他平台均可自定义增删
     return [
         {
-            "id": "modelscope",
-            "name": "ModelScope",
-            "base_url": MODELSCOPE_CHAT_BASE_URL,
-            "protocol": "openai",
-            "image_request_mode": "openai",
-            "image_generation_endpoint": "",
-            "image_edit_endpoint": "",
-            "enabled": True,
-            "primary": False,
-            "image_models": MODELSCOPE_DEFAULT_IMAGE_MODELS,
-            "chat_models": MODELSCOPE_CHAT_MODELS,
-            "video_models": [],
-            "ms_loras": MODELSCOPE_DEFAULT_LORAS,
-            "ms_defaults_version": MODELSCOPE_DEFAULTS_VERSION,
-        },
-        {
             "id": "runninghub",
             "name": "RunningHub",
             "base_url": RUNNINGHUB_DEFAULT_BASE_URL,
@@ -892,25 +876,6 @@ def default_api_providers():
 
 def merge_default_api_providers(providers, inject_missing=True):
     merged = [dict(item) for item in providers]
-    # 强制保留独立入口平台（不再强制 comfly）
-    ms_default = next((d for d in default_api_providers() if d["id"] == "modelscope"), None)
-    if ms_default:
-        current = next((item for item in merged if item.get("id") == "modelscope"), None)
-        if not current:
-            if inject_missing:
-                merged.append(ms_default)
-        else:
-            if not current.get("base_url"):
-                current["base_url"] = ms_default["base_url"]
-            seeded_version = int(current.get("ms_defaults_version") or 0)
-            if seeded_version < MODELSCOPE_DEFAULTS_VERSION:
-                image_models = model_list_from_values([*MODELSCOPE_DEFAULT_IMAGE_MODELS, *(current.get("image_models") or [])])
-                chat_models = model_list_from_values([*MODELSCOPE_DEFAULT_CHAT_MODELS, *(current.get("chat_models") or [])])
-                loras = normalize_ms_loras([*MODELSCOPE_DEFAULT_LORAS, *(current.get("ms_loras") or [])])
-                current["image_models"] = image_models
-                current["chat_models"] = chat_models
-                current["ms_loras"] = loras
-                current["ms_defaults_version"] = MODELSCOPE_DEFAULTS_VERSION
     rh_default = load_static_runninghub_provider() or next((d for d in default_api_providers() if d["id"] == "runninghub"), None)
     if rh_default:
         current = next((item for item in merged if item.get("id") == "runninghub"), None)
@@ -1377,7 +1342,7 @@ def load_api_providers():
     if not os.path.exists(API_PROVIDERS_FILE):
         return merge_default_api_providers(defaults)
     try:
-        with open(API_PROVIDERS_FILE, "r", encoding="utf-8") as f:
+        with open(API_PROVIDERS_FILE, "r", encoding="utf-8-sig") as f:
             raw = json.load(f)
         providers = [normalize_provider(item) for item in raw if isinstance(item, dict)]
         return merge_default_api_providers(providers or defaults, inject_missing=not bool(providers))
@@ -1511,15 +1476,15 @@ def public_api_providers():
     return [public_provider(p) for p in load_api_providers()]
 
 def get_primary_provider_id(providers=None):
-    """返回当前首选 provider 的 id；优先 primary=True 的，否则取第一个非 modelscope 的，再次取第一个。"""
+    """返回当前首选 provider 的 id；优先 primary=True 的，否则取第一个启用的 provider，再次取第一个。"""
     providers = providers if providers is not None else load_api_providers()
     primary = next((p for p in providers if p.get("primary") and p.get("enabled", True)), None)
     if primary:
         return primary["id"]
-    non_ms = next((p for p in providers if p["id"] != "modelscope" and p.get("enabled", True)), None)
-    if non_ms:
-        return non_ms["id"]
-    return providers[0]["id"] if providers else "modelscope"
+    enabled = next((p for p in providers if p.get("enabled", True)), None)
+    if enabled:
+        return enabled["id"]
+    return providers[0]["id"] if providers else ""
 
 def get_api_provider(provider_id="comfly"):
     providers = load_api_providers()
@@ -3526,6 +3491,7 @@ class CanvasWorkflowExportRequest(BaseModel):
     library_id: str = ""
     category_id: str = ""
     name: str = ""
+    thumbnail: str = ""
 
 class SmartCanvasGroupExportItem(BaseModel):
     kind: str = ""
@@ -5170,7 +5136,7 @@ def provider_protocol(provider):
 # 单模型可覆盖的协议（仅 OpenAI / Gemini，二者可共用同一站点的 Base URL + Key）
 PER_MODEL_PROTOCOL_OPTIONS = {"openai", "gemini"}
 # 协议固定、不支持单模型覆盖的内置平台
-FIXED_PROTOCOL_PROVIDER_IDS = {"modelscope", "volcengine", "jimeng", "runninghub"}
+FIXED_PROTOCOL_PROVIDER_IDS = {"volcengine", "jimeng", "runninghub"}
 
 def normalize_model_protocols(value):
     """规整 {模型名: 协议} 覆盖表，仅保留 openai/gemini。"""
@@ -17294,6 +17260,8 @@ async def export_canvas_workflow_to_library(payload: CanvasWorkflowExportRequest
     lib = load_asset_library()
     _, cat = asset_library_workflow_category(lib, payload.library_id, payload.category_id)
     item = make_workflow_library_item_from_bytes(archive, filename, payload.name or os.path.splitext(filename)[0])
+    if payload.thumbnail:
+        item["thumbnail"] = payload.thumbnail
     item["node_count"] = meta.get("node_count") or len(payload.nodes or [])
     item["connection_count"] = meta.get("connection_count") or len(payload.connections or [])
     item["resource_count"] = len(meta.get("resources") or [])

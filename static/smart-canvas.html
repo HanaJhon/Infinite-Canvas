@@ -20,11 +20,12 @@
     <script src="/static/js/theme.js?v=2026.08.30.1788083492"></script>
     <script src="/static/js/touch-mouse.js?v=2026.08.30.1788083492"></script>
     <script src="/static/js/i18n.js?v=2026.08.30.1788083492"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.08.30.1788083492">
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.08.30.1789536960">
 </head>
 <body>
     <div id="shell" class="shell">
         <div id="world" class="world">
+            <button id="smartSaveWorkflowBtn" class="smart-save-workflow-btn" type="button" title="保存选中为工作流" aria-label="保存工作流" hidden><i data-lucide="bookmark-plus"></i><span>保存工作流</span></button>
             <div id="composer" class="composer">
                 <div class="composer-card">
                     <div class="composer-head">
@@ -32,9 +33,6 @@
                             <select id="engineSelect" class="engine-select">
                                 <option value="api" data-i18n="smart.engineApi">API生成</option>
                                 <option value="volcengine" data-i18n="smart.engineVolcengine">火山引擎</option>
-                                <option value="modelscope" data-i18n="smart.engineMs">MS生成</option>
-                                <option value="comfy" data-i18n="smart.engineComfy">ComfyUI生成</option>
-                                <option value="runninghub" data-i18n="smart.engineRh">RunningHub</option>
                             </select>
                             <div id="apiKindToggle" class="kind-toggle" style="display:none">
                                 <button type="button" data-kind="image" class="active"><i data-lucide="image"></i><span data-i18n="smart.kindImage">图片</span></button>
@@ -46,11 +44,34 @@
                     <div id="inputPromptPreview" class="input-prompt-preview"></div>
                     <div class="prompt-row">
                         <div id="promptInput" class="prompt-input" contenteditable="true" data-i18n-placeholder="smart.promptPlaceholder" data-placeholder="描述你想生成或编辑的图片..."></div>
-                        <button id="composerTemplateBtn" class="composer-template-btn" type="button" title="模板库" aria-label="模板库" data-i18n-title="smart.promptTemplateLibrary">
-                            <i data-lucide="library"></i><span data-i18n="smart.promptTemplateLibrary">模板库</span>
-                        </button>
+                        <div id="promptProcessingOverlay" class="prompt-processing-overlay" style="display:none">
+                            <i data-lucide="loader-2" class="prompt-processing-spinner"></i>
+                            <span class="prompt-processing-text">运行中</span>
+                        </div>
+                        <div class="composer-prompt-tools">
+                            <button id="composerTemplateBtn" class="composer-template-btn" type="button" title="模板库" aria-label="模板库" data-i18n-title="smart.promptTemplateLibrary">
+                                <i data-lucide="library"></i><span data-i18n="smart.promptTemplateLibrary">模板库</span>
+                            </button>
+                            <button id="composerHistoryBtn" class="composer-history-btn" type="button" title="提示词历史" aria-label="历史" data-i18n-title="smart.promptHistory">
+                                <i data-lucide="history"></i><span data-i18n="smart.promptHistory">历史</span>
+                            </button>
+                            <button id="composerLlmToggleBtn" class="composer-llm-toggle-btn" type="button" title="LLM 提示词扩展" aria-label="LLM">
+                                <i data-lucide="sparkles"></i><span>LLM</span>
+                            </button>
+                        </div>
+                        <div id="composerHistoryPanel" class="composer-history-panel" style="display:none"></div>
                         <div id="mentionPicker" class="mention-picker"></div>
                         <div id="promptResize" class="prompt-resize" data-i18n-title="smart.promptResize" title="拖拽调整文本框高度"></div>
+                    </div>
+                    <div id="composerLlmSection" class="composer-llm-section prompt-node-llm" style="display:none">
+                        <select id="composerLlmProvider" class="prompt-node-control prompt-llm-provider"></select>
+                        <select id="composerLlmModel" class="prompt-node-control prompt-llm-model"></select>
+                        <div id="composerLlmSystemPresetGroup" class="prompt-system-preset-group">
+                            <button type="button" class="prompt-node-pill prompt-system-mode-btn active" data-system-mode="custom">自定义系统提示词</button>
+                            <button type="button" class="prompt-node-pill prompt-system-mode-btn" data-system-mode="text2img">文生图优化</button>
+                            <button type="button" class="prompt-node-pill prompt-system-mode-btn" data-system-mode="img2img">图生图优化</button>
+                        </div>
+                        <textarea id="composerLlmSystemPrompt" class="prompt-node-control prompt-llm-system" placeholder="输入系统提示词..."></textarea>
                     </div>
                     <div class="param-row">
                         <div id="dynamicParams" class="dynamic-params"></div>
@@ -69,7 +90,7 @@
                 <button class="create-card" type="button" data-create-type="image">
                     <span class="create-card-icon"><i data-lucide="upload-cloud"></i></span>
                     <span>
-                        <div class="create-card-title">上传</div>
+                        <div class="create-card-title">快速生图</div>
                         <div class="create-card-sub" data-i18n="smart.createImportNodeSub">图片、音频、视频都能导入</div>
                     </span>
                 </button>
@@ -77,14 +98,7 @@
                     <span class="create-card-icon"><i data-lucide="group"></i></span>
                     <span>
                         <div class="create-card-title">分组</div>
-                        <div class="create-card-sub">把提示词、图片、循环收进同一组</div>
-                    </span>
-                </button>
-                <button class="create-card" type="button" data-create-type="prompt">
-                    <span class="create-card-icon"><i data-lucide="text-cursor-input"></i></span>
-                    <span>
-                        <div class="create-card-title">提示词</div>
-                        <div class="create-card-sub">手写或用 LLM 生成文本</div>
+                        <div class="create-card-sub">把图片、音视频、循环收进同一组</div>
                     </span>
                 </button>
                 <button class="create-card" type="button" data-create-type="loop">
@@ -92,13 +106,6 @@
                     <span>
                         <div class="create-card-title">循环</div>
                         <div class="create-card-sub">控制运行轮数、批次和变量</div>
-                    </span>
-                </button>
-                <button class="create-card" type="button" data-create-type="minimax">
-                    <span class="create-card-icon"><i data-lucide="clapperboard"></i></span>
-                    <span>
-                        <div class="create-card-title">MiniMax</div>
-                        <div class="create-card-sub">时间轴片段生成视频</div>
                     </span>
                 </button>
             </div>
@@ -154,13 +161,25 @@
         <button id="inspireToggle" class="inspire-toggle" type="button" title="灵感库：搜参考图、找提示词"><i data-lucide="sparkles"></i><span>灵感库</span></button>
         <aside id="smartWorkflowTransferModal" class="workflow-transfer-panel">
             <div class="workflow-transfer-head">
-                <div>
-                    <div class="workflow-transfer-title">导入导出工作流</div>
-                    <div id="smartWorkflowTransferSub" class="workflow-transfer-sub">导出选中节点，或把工作流导入到当前画布</div>
+                <div class="asset-title"><i data-lucide="package-open"></i><span>工作流</span></div>
+                <div class="workflow-tab-nav">
+                    <button id="smartWorkflowTabManage" class="workflow-tab-btn active" type="button" onclick="switchSmartWorkflowModalTab('manage')">工作流管理</button>
+                    <button id="smartWorkflowTabTransfer" class="workflow-tab-btn" type="button" onclick="switchSmartWorkflowModalTab('transfer')">导入导出</button>
                 </div>
                 <button class="asset-mini-btn" type="button" onclick="closeSmartWorkflowTransferModal()" title="关闭"><i data-lucide="x"></i></button>
             </div>
-            <div class="workflow-transfer-body">
+            <div id="smartWorkflowManageView" class="workflow-manage-view">
+                <div class="workflow-manage-toolbar">
+                    <div class="workflow-manage-meta" id="smartWorkflowManageMeta">工作流库 (0)</div>
+                    <div class="workflow-manage-actions">
+                        <button class="workflow-transfer-btn" type="button" onclick="loadAssetLibrary().then(() => renderSmartWorkflowModalManage())" title="刷新工作流列表"><i data-lucide="refresh-cw"></i><span>刷新</span></button>
+                        <button class="workflow-transfer-btn primary" type="button" onclick="saveSelectedSmartWorkflowToLibrary()" title="将画布中选中的节点保存为新工作流"><i data-lucide="plus"></i><span>保存选中</span></button>
+                    </div>
+                </div>
+                <div id="smartWorkflowManageGrid" class="workflow-manage-grid">
+                </div>
+            </div>
+            <div id="smartWorkflowTransferBody" class="workflow-transfer-body" style="display:none;">
                 <section class="workflow-transfer-card">
                     <div class="workflow-transfer-card-head"><i data-lucide="upload"></i><strong>导出工作流</strong></div>
                     <p>使用当前选中的节点和它们之间的连线生成工作流。</p>
@@ -186,10 +205,6 @@
             <div class="asset-head">
                 <div class="asset-title"><i data-lucide="library"></i><span data-i18n="smart.assetLibrary">资产库</span></div>
                 <button id="assetCloseBtn" class="asset-mini-btn" type="button" title="收起" data-i18n-title="common.close"><i data-lucide="chevron-right"></i></button>
-            </div>
-            <div class="asset-tabs">
-                <button class="asset-tab active" type="button" data-asset-tab="image" data-i18n="smart.assetImages">图片资产</button>
-                <button class="asset-tab" type="button" data-asset-tab="workflow" data-i18n="smart.assetWorkflows">工作流</button>
             </div>
             <div id="assetImageControls">
                 <select id="assetLibrarySelect" class="asset-category-select asset-library-select" title="选择资产库"></select>
@@ -603,6 +618,6 @@
         <div id="toast" class="toast"></div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
-    <script src="/static/js/smart-canvas.js?v=2026.08.30.1788320136"></script>
+    <script src="/static/js/smart-canvas.js?v=2026.08.30.1789536947"></script>
 </body>
 </html>
