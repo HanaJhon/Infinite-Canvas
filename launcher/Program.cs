@@ -216,8 +216,9 @@ sealed class LauncherHost : IDisposable
     private readonly NotifyIcon tray;
     private readonly string preferencePath;
     private readonly string apiProvidersPath;
-    private readonly string apiEnvPath;
-    private Process? server;
+        private readonly string apiEnvPath;
+        private static readonly HttpClient _pingHttpClient = new HttpClient();
+        private Process? server;
     private bool ownsServer;
     private bool forceExit;
     private bool disposed;
@@ -559,7 +560,7 @@ sealed class LauncherHost : IDisposable
                         result = new { created = true };
                         break;
                     case "TEST_PING":
-                        result = new { latency = new Random().Next(25, 45) };
+                        result = await HandleTestModelPingAsync(payload);
                         break;
                     default:
                         result = new { acknowledged = true };
@@ -744,6 +745,130 @@ sealed class LauncherHost : IDisposable
                 File.WriteAllText(apiProvidersPath, arr.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), utf8NoBom);
                 SendLog("✅ 已同步写入源项目 data/api_providers.json 与 API/.env 配置");
             }
+        }
+    }
+
+    // 对话模型测速：解析模型所属通道的 OpenAI 兼容地址（仅限 chat_models，落实「仅对话模型」）
+    private sealed class ChatTestEndpoint
+    {
+        public string Url = "";
+        public string ApiKey = "";
+        public string Model = "";
+    }
+
+    private ChatTestEndpoint? ResolveChatTestEndpoint(string model, string channel)
+    {
+        if (string.IsNullOrEmpty(model) || !File.Exists(apiProvidersPath)) return null;
+        try
+        {
+            var parsed = JsonNode.Parse(File.ReadAllText(apiProvidersPath, Encoding.UTF8));
+            if (parsed is not JsonArray arr) return null;
+            foreach (var item in arr)
+            {
+                if (item is not JsonObject p) continue;
+                // 只认 chat_models（对话模型），图像/视频模型不测速
+                bool isChat = false;
+                if (p["chat_models"] is JsonArray cms)
+                {
+                    foreach (var cm in cms)
+                    {
+                        if (string.Equals(cm?.GetValue<string>() ?? "", model, StringComparison.OrdinalIgnoreCase))
+                        {
+                            isChat = true;
+                            break;
+                        }
+                    }
+                }
+                if (!isChat) continue;
+
+                // 同名模型可能挂在多个通道，按通道名精确匹配（若前端传了 channel）
+                if (!string.IsNullOrEmpty(channel))
+                {
+                    var pName = p["name"]?.GetValue<string>() ?? "";
+                    var pId = p["id"]?.GetValue<string>() ?? "";
+                    if (!string.Equals(pName, channel, StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(pId, channel, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                }
+
+                var baseUrl = (p["base_url"]?.GetValue<string>() ?? "").Trim().TrimEnd('/');
+                if (string.IsNullOrEmpty(baseUrl)) return null;
+                var protocol = (p["protocol"]?.GetValue<string>() ?? "").ToLowerInvariant();
+                string chatBase;
+                if (protocol == "volcengine")
+                    chatBase = baseUrl.EndsWith("/api/v3") ? baseUrl : baseUrl + "/api/v3";
+                else if (protocol == "gemini")
+                    chatBase = baseUrl.EndsWith("/v1beta") ? baseUrl : baseUrl + "/v1beta";
+                else
+                    chatBase = baseUrl.EndsWith("/v1") ? baseUrl : baseUrl + "/v1";
+
+                var pIdForKey = p["id"]?.GetValue<string>() ?? "";
+                var apiKey = ReadEnvValue(GetEnvKeyForProvider(pIdForKey));
+                return new ChatTestEndpoint
+                {
+                    Url = chatBase + "/chat/completions",
+                    ApiKey = apiKey,
+                    Model = model
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            SendLog($"[测速] 解析通道配置失败: {ex.Message}");
+        }
+        return null;
+    }
+
+    // 对话模型测速：按 OpenAI 兼容格式向模型发送一条最小对话请求，以「请求发出→收到完整回复」的耗时作为结果
+    private async Task<object> HandleTestModelPingAsync(JsonElement payload)
+    {
+        var model = payload.TryGetProperty("model", out var mProp) ? (mProp.GetString() ?? "").Trim() : "";
+        var channel = payload.TryGetProperty("channel", out var cProp) ? (cProp.GetString() ?? "").Trim() : "";
+        if (string.IsNullOrEmpty(model))
+            return new { latency = 0, ok = false, error = "缺少模型名称" };
+
+        var endpoint = ResolveChatTestEndpoint(model, channel);
+        if (endpoint is null)
+            return new { latency = 0, ok = false, error = "未找到该对话模型对应的通道配置（仅对话模型支持测速）" };
+        if (string.IsNullOrEmpty(endpoint.ApiKey))
+            return new { latency = 0, ok = false, error = "该通道未配置 API Key，请先在 API 管理中填写" };
+
+        // 与启动器前端约定的参考请求一致：model / stream:false / 单条 user 消息
+        var body = new
+        {
+            model = endpoint.Model,
+            stream = false,
+            messages = new[] { new { role = "user", content = "你好" } }
+        };
+        var json = JsonSerializer.Serialize(body);
+        using var req = new HttpRequestMessage(HttpMethod.Post, endpoint.Url)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        };
+        req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + endpoint.ApiKey);
+        req.Headers.TryAddWithoutValidation("Accept", "application/json");
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(13));
+            using var resp = await _pingHttpClient.SendAsync(req, cts.Token);
+            // 必须读完响应体：模型「回复完成」这一刻才算计时结束（非流式，等完整回复）
+            var _ = await resp.Content.ReadAsStringAsync();
+            sw.Stop();
+            if (!resp.IsSuccessStatusCode)
+                return new { latency = 0, ok = false, error = $"模型返回错误 ({(int)resp.StatusCode})" };
+            return new { latency = (long)Math.Round(sw.Elapsed.TotalMilliseconds), ok = true };
+        }
+        catch (OperationCanceledException)
+        {
+            sw.Stop();
+            return new { latency = 0, ok = false, error = "测速超时（>13s）" };
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return new { latency = 0, ok = false, error = ex.Message };
         }
     }
 
