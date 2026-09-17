@@ -12577,6 +12577,34 @@ async def upload_image(files: List[UploadFile] = File(...)):
 
     return {"files": uploaded_files}
 
+def find_duplicate_upload(content: bytes, category: str = "input"):
+    """内容级去重：目标目录下若已有字节完全相同的文件，返回它的文件名，否则 None。
+
+    只对「文件大小相同」的候选做哈希，避免把整个目录读进内存。
+    背景：上传接口原本固定用 ai_ref_<随机> 命名，同一张参考图反复上传会各存一份，
+    assets/input 因此无限膨胀（实测同一张 17.5MB 图被存了 11 份）。
+    """
+    folder, _ = output_storage(category)
+    try:
+        target_size = len(content)
+        names = os.listdir(folder)
+    except OSError:
+        return None
+    digest = None
+    for name in names:
+        path = os.path.join(folder, name)
+        try:
+            if not os.path.isfile(path) or os.path.getsize(path) != target_size:
+                continue
+            if digest is None:
+                digest = hashlib.md5(content).hexdigest()
+            with open(path, "rb") as fh:
+                if hashlib.md5(fh.read()).hexdigest() == digest:
+                    return name
+        except OSError:
+            continue
+    return None
+
 @app.post("/api/ai/upload")
 async def upload_ai_reference(files: List[UploadFile] = File(...)):
     uploaded = []
@@ -12614,10 +12642,13 @@ async def upload_ai_reference(files: List[UploadFile] = File(...)):
             kind = "file"
             if not ext:
                 ext = ".bin"
-        filename = f"ai_ref_{uuid.uuid4().hex[:12]}{ext}"
-        path = output_path_for(filename, "input")
-        with open(path, "wb") as f:
-            f.write(content)
+        existing = find_duplicate_upload(content, "input")
+        if existing:
+            filename = existing
+        else:
+            filename = f"ai_ref_{uuid.uuid4().hex[:12]}{ext}"
+            with open(output_path_for(filename, "input"), "wb") as f:
+                f.write(content)
         uploaded.append({"url": output_url_for(filename, "input"), "name": file.filename or filename, "kind": kind, "mime": content_type})
     return {"files": uploaded}
 
@@ -12647,10 +12678,13 @@ async def upload_ai_base64(payload: Base64UploadRequest):
     kind, ext = _local_upload_kind_ext(payload.name or "", ct or "image/png")
     if kind is None:
         kind, ext = "image", ".png"
-    filename = f"ai_ref_{uuid.uuid4().hex[:12]}{ext}"
-    path = output_path_for(filename, "input")
-    with open(path, "wb") as f:
-        f.write(content)
+    existing = find_duplicate_upload(content, "input")
+    if existing:
+        filename = existing
+    else:
+        filename = f"ai_ref_{uuid.uuid4().hex[:12]}{ext}"
+        with open(output_path_for(filename, "input"), "wb") as f:
+            f.write(content)
     return {"files": [{"url": output_url_for(filename, "input"), "name": payload.name or filename, "kind": kind}]}
 
 @app.post("/api/comfyui/upload-base64")
