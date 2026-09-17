@@ -4,9 +4,20 @@ $project = Join-Path $root 'launcher\InfiniteCanvasLauncher.csproj'
 $output = Join-Path $root 'dist'
 $launcherWebSrc = 'E:\claude\skill\canvas-launcher\dist'
 
-if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+# Locate the dotnet CLI: prefer PATH, fall back to well-known install locations.
+$dotnetExe = (Get-Command dotnet -ErrorAction SilentlyContinue).Source
+if (-not $dotnetExe) {
+    $dotnetCandidates = @(
+        'C:\Program Files\dotnet\dotnet.exe',
+        'C:\Program Files (x86)\dotnet\dotnet.exe',
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet\dotnet.exe')
+    ) | Where-Object { $_ -and (Test-Path $_) }
+    $dotnetExe = $dotnetCandidates | Select-Object -First 1
+}
+if (-not $dotnetExe) {
     throw 'dotnet SDK was not found. Install the .NET 8 SDK and run this script again.'
 }
+Write-Host "Using dotnet: $dotnetExe"
 
 # Sync web assets to all target locations
 if (Test-Path $launcherWebSrc) {
@@ -23,7 +34,25 @@ if (Test-Path $launcherWebSrc) {
 }
 
 Write-Host 'Publishing InfiniteCanvasLauncher.exe ...'
-dotnet publish $project -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $output
+$publishArgs = @(
+    $project,
+    '-c', 'Release',
+    '-r', 'win-x64',
+    '--self-contained', 'true',
+    '-p:PublishSingleFile=true',
+    '-p:IncludeNativeLibrariesForSelfExtract=true',
+    '-o', $output
+)
+
+& $dotnetExe publish @publishArgs
+if ($LASTEXITCODE -ne 0) {
+    # Some .NET SDK builds fail restore with:
+    #   NuGet.targets(...): error : Value cannot be null. (Parameter 'path1')
+    # The existing obj/project.assets.json is still valid in that case, so retry without restore.
+    Write-Warning "dotnet publish failed with exit code $LASTEXITCODE; retrying with --no-restore ..."
+    & $dotnetExe publish @publishArgs --no-restore
+}
+
 if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish failed with exit code $LASTEXITCODE."
 }

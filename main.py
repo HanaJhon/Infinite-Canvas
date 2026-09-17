@@ -81,6 +81,11 @@ async def no_cache_html_middleware(request: Request, call_next):
     path = request.url.path.lower()
     if path.endswith(".html"):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    elif path.endswith((".js", ".css")):
+        # /static 是 StaticFiles 挂载，默认不带任何缓存头，浏览器会按 Last-Modified 做
+        # 启发式缓存：改了 JS/CSS 之后用户可能还在跑旧文件（i18n 词条就这么踩过坑）。
+        # 这里只要求每次回源校验——文件没变就是 304，开销很低。
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
 
 # --- WebSocket 状态管理器 ---
@@ -1697,6 +1702,24 @@ def fetch_update_notes_with_fallback(preferred_source: str, version: str, timeou
             }
     return best_notes, notes_by_source
 
+def static_asset_mtime(path: str) -> float:
+    """取静态资源的“内容版本时间”，用于拼 ?v=。
+
+    i18n.js 会在运行时动态加载 static/js/i18n/*.js 这些子包，子包不经过 HTML 的版本号
+    改写。所以用整个 i18n 目录的最新 mtime 代表它们——否则改了词条但 i18n.js 的 URL 不变，
+    浏览器会一直用缓存里的旧字典（表现为界面上直接显示 i18n key）。
+    """
+    mtime = os.path.getmtime(path)
+    if os.path.basename(path) == "i18n.js":
+        i18n_dir = os.path.join(os.path.dirname(path), "i18n")
+        try:
+            for name in os.listdir(i18n_dir):
+                if name.endswith(".js"):
+                    mtime = max(mtime, os.path.getmtime(os.path.join(i18n_dir, name)))
+        except Exception:
+            pass
+    return mtime
+
 def versioned_static_html(html: str) -> str:
     version = current_app_version()
     if not version:
@@ -1711,7 +1734,7 @@ def versioned_static_html(html: str) -> str:
             path = os.path.abspath(os.path.join(STATIC_DIR, rel))
             static_root = os.path.abspath(STATIC_DIR)
             if path.startswith(static_root + os.sep) and os.path.isfile(path):
-                cache_version = f"{safe_version}.{int(os.path.getmtime(path))}"
+                cache_version = f"{safe_version}.{int(static_asset_mtime(path))}"
         except Exception:
             pass
         return f"{match.group('prefix')}{url}?v={cache_version}"
@@ -3436,9 +3459,28 @@ class CanvasLLMRequest(BaseModel):
     images: List[str] = []   # 可以是 /output/*.png、/assets/*.png 本地路径 或 http(s) URL 或 data URL
     videos: List[str] = []   # 可以是 /output/*.mp4、/assets/*.mp4 本地路径 或 http(s) URL 或 data URL
 
+class Image2PsdLayerizeRequest(BaseModel):
+    """图片分层请求：把一张平面图拆成多个可编辑图层。"""
+    url: str = ""                                    # 源图地址（/output、/assets、/api/view、远程 http 均可）
+    name: str = ""                                   # 源图文件名，仅用于生成项目目录名
+    mode: str = "colors"                             # colors=颜色聚类 | regions=按区域拆
+    num_colors: int = 8
+    method: str = "quantize"                         # quantize | kmeans
+    ignore_color: str = ""                           # 例 "#ffffff"，命中的颜色不单独成层
+    ignore_tolerance: float = 24.0
+    regions: List[Dict[str, Any]] = []               # mode=regions 时使用：[{name,x,y,width,height}]
+    include_source: bool = True                      # regions 模式是否额外保留整张原图层
+    project: str = ""                                # 复用已有项目目录（重新分层时传入）
+
+class Image2PsdRenderRequest(BaseModel):
+    """分层编辑器状态：导出 PSD 或渲染合成图。layers 按自下而上排列。"""
+    project: str = ""
+    canvas: Dict[str, Any] = {}
+    layers: List[Dict[str, Any]] = []
+    scale: float = 1.0
+
 class ConversationCreateRequest(BaseModel):
     title: str = "新对话"
-
 class CanvasCreateRequest(BaseModel):
     title: str = "未命名画布"
     icon: str = "🧩"
@@ -16938,6 +16980,196 @@ async def canvas_llm(payload: CanvasLLMRequest):
     raw_data = unwrap_apimart_response(raw) if isinstance(raw, dict) else {}
     return {"text": text, "model": model, "raw_usage": raw_data.get("usage")}
 
+# --- 图片分层（图文分层编辑） ---
+#
+# 分层与 PSD 写出复用内置的 bggg-creator-image2psd 脚本（vendor/bggg-creator-image2psd），
+# 其余（项目目录、字体解析、图层栅格化、合成预览）在 image2psd_service 里实现。
+
+_image2psd_service = None
+
+def image2psd():
+    global _image2psd_service
+    if _image2psd_service is None:
+        # 不用普通 import：main.py 运行时 sys.path 未必包含项目根（例如被以绝对路径拉起
+        # 或 cwd 被改过），显式按文件路径装载更稳。
+        import importlib.util as _importlib_util
+        module_path = os.path.join(BASE_DIR, "image2psd_service.py")
+        if not os.path.isfile(module_path):
+            raise HTTPException(status_code=500, detail="图片分层服务模块缺失")
+        if BASE_DIR not in sys.path:
+            sys.path.insert(0, BASE_DIR)
+        spec = _importlib_util.spec_from_file_location("image2psd_service", module_path)
+        if spec is None or spec.loader is None:
+            raise HTTPException(status_code=500, detail="图片分层服务模块无法加载")
+        module = _importlib_util.module_from_spec(spec)
+        sys.modules["image2psd_service"] = module
+        spec.loader.exec_module(module)
+        _image2psd_service = module
+    return _image2psd_service
+
+def image2psd_source_path(url: str, name: str = "") -> str:
+    """把画布里的各种图片地址收敛成本地文件路径；远程地址会先落盘。"""
+    text = str(url or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="缺少源图地址")
+    path = output_file_from_url(text)
+    if not path:
+        path = local_media_file_by_basename(filename_from_media_url(text, name or ""))
+    if not path:
+        clean = urllib.parse.unquote(text.split("?", 1)[0]).replace("\\", "/")
+        if clean.startswith("/api/image2psd/asset/"):
+            rest = clean[len("/api/image2psd/asset/"):].lstrip("/")
+            project, _, filename = rest.partition("/")
+            try:
+                candidate = image2psd().asset_path(project, filename)
+                if os.path.isfile(candidate):
+                    path = candidate
+            except Exception:
+                path = None
+        elif clean.startswith("/api/view"):
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(text).query)
+            filename = (query.get("filename") or [""])[0]
+            if filename:
+                path = local_media_file_by_basename(filename)
+    if not path:
+        fetched = fetch_remote_media_bytes(text)
+        if fetched:
+            payload, content_type = fetched
+            suffix = mimetypes.guess_extension((content_type or "").split(";")[0].strip()) or ".png"
+            if suffix in (".jpe", ".jpeg"):
+                suffix = ".jpg"
+            temp_dir = os.path.join(DATA_DIR, "image2psd_sources")
+            os.makedirs(temp_dir, exist_ok=True)
+            base = sanitize_export_filename(os.path.splitext(filename_from_media_url(text, name or "source.png"))[0], "source")
+            target = os.path.join(temp_dir, f"{base}-{int(time.time() * 1000)}{suffix}")
+            with open(target, "wb") as handle:
+                handle.write(payload)
+            path = target
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="找不到源图，无法分层")
+    return path
+
+@app.get("/api/image2psd/info")
+def image2psd_info():
+    service = image2psd()
+    return {
+        "engine": service.bggg_info(),
+        "default_font": service.default_font_family(),
+        "fallback_families": list(service.FALLBACK_FAMILIES),
+    }
+
+@app.get("/api/image2psd/fonts")
+def image2psd_fonts(refresh: bool = False):
+    service = image2psd()
+    fonts = service.scan_fonts(force=bool(refresh))
+    return {
+        "fonts": [
+            {"family": item["family"], "style": item["style"], "cjk": bool(item["cjk"]),
+             "url": f"/api/image2psd/font?family={urllib.parse.quote(item['family'])}"}
+            for item in fonts
+        ],
+        "default": service.default_font_family(),
+        "count": len(fonts),
+    }
+
+@app.get("/api/image2psd/font")
+def image2psd_font_file(family: str):
+    """把系统字体文件回给浏览器，供 FontFace 预览文字层。"""
+    service = image2psd()
+    resolved = service.resolve_font(family)
+    path = resolved.get("path") or ""
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="找不到该字体")
+    return FileResponse(path, media_type=content_type_for_path(path))
+
+@app.post("/api/image2psd/layerize")
+def image2psd_layerize(payload: Image2PsdLayerizeRequest):
+    service = image2psd()
+    source_path = image2psd_source_path(payload.url, payload.name)
+    mode = str(payload.mode or "colors").lower()
+    project = payload.project.strip() or None
+    try:
+        if mode == "regions":
+            result = service.layerize_regions(
+                source_path, payload.regions, project=project,
+                include_source=bool(payload.include_source),
+            )
+        else:
+            result = service.layerize_colors(
+                source_path,
+                num_colors=payload.num_colors,
+                method=payload.method,
+                ignore_color=payload.ignore_color.strip() or None,
+                ignore_tolerance=payload.ignore_tolerance,
+                project=project,
+            )
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"分层失败：{exc}")
+    return result
+
+@app.post("/api/image2psd/export-psd")
+def image2psd_export_psd(payload: Image2PsdRenderRequest):
+    service = image2psd()
+    project = payload.project.strip()
+    if not project:
+        raise HTTPException(status_code=400, detail="缺少项目名")
+    spec = {
+        "canvas": payload.canvas,
+        "layers": [image2psd_resolve_layer_paths(item) for item in payload.layers],
+    }
+    try:
+        return service.export_psd(project, spec)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"导出 PSD 失败：{exc}")
+
+@app.post("/api/image2psd/render")
+def image2psd_render(payload: Image2PsdRenderRequest):
+    service = image2psd()
+    project = payload.project.strip()
+    if not project:
+        raise HTTPException(status_code=400, detail="缺少项目名")
+    spec = {
+        "canvas": payload.canvas,
+        "layers": [image2psd_resolve_layer_paths(item) for item in payload.layers],
+    }
+    try:
+        data, filename = service.render_preview(project, spec, scale=payload.scale)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"渲染失败：{exc}")
+    return Response(
+        content=data,
+        media_type="image/png",
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{urllib.parse.quote(filename)}"},
+    )
+
+def image2psd_resolve_layer_paths(item: Dict[str, Any]) -> Dict[str, Any]:
+    """把图层里的 url 换成本地路径，后端栅格化只认文件。"""
+    layer = dict(item or {})
+    if str(layer.get("type") or "image").lower() != "text":
+        raw = layer.get("path") or layer.get("url") or ""
+        if raw and not (isinstance(raw, str) and os.path.isfile(raw)):
+            try:
+                layer["path"] = image2psd_source_path(str(raw), str(layer.get("name") or ""))
+            except HTTPException:
+                layer["path"] = ""
+    return layer
+
+@app.get("/api/image2psd/asset/{project}/{filename}")
+def image2psd_asset(project: str, filename: str):
+    try:
+        path = image2psd().asset_path(project, filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return FileResponse(path, media_type=content_type_for_path(path))
+
 # --- 对话管理 ---
 
 @app.get("/api/conversations")
@@ -18177,12 +18409,36 @@ async def batch_crop_asset_library_items(payload: AssetLibraryBatchCropRequest):
 async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
     canvas = load_canvas(canvas_id)
     current_updated_at = int(canvas.get("updated_at") or 0)
-    if payload.base_updated_at and current_updated_at and int(payload.base_updated_at) < current_updated_at:
+    base_updated_at = int(payload.base_updated_at or 0)
+    if base_updated_at and current_updated_at and base_updated_at < current_updated_at:
         raise HTTPException(status_code=409, detail={
             "message": "画布已被其他页面更新，已拒绝旧版本覆盖。",
             "canvas": canvas,
             "updated_at": current_updated_at,
         })
+    # PUT 是全量替换（下面 canvas["nodes"] = payload.nodes），旧页面一旦提交就会把服务端
+    # 已有的节点整份抹掉。上面那道检查在 base 缺失（0）时会直接放行，所以这里再补一道
+    # 「静默丢节点」检查：只要这次写入会删掉服务端存在的节点，且客户端的 base 无法证明它
+    # 已见过当前版本，就按 409 处理，让前端走冲突合并（节点按 id 取并集）后重存。
+    if current_updated_at and base_updated_at != current_updated_at:
+        server_node_ids = {
+            str(node.get("id"))
+            for node in (canvas.get("nodes") or [])
+            if isinstance(node, dict) and node.get("id")
+        }
+        incoming_node_ids = {
+            str(node.get("id"))
+            for node in (payload.nodes or [])
+            if isinstance(node, dict) and node.get("id")
+        }
+        dropped_ids = server_node_ids - incoming_node_ids
+        if dropped_ids:
+            raise HTTPException(status_code=409, detail={
+                "message": f"本次保存会删除服务端已有的 {len(dropped_ids)} 个节点，已拒绝覆盖，请刷新后重试。",
+                "canvas": canvas,
+                "updated_at": current_updated_at,
+                "dropped_node_ids": sorted(dropped_ids)[:20],
+            })
     canvas["title"] = (payload.title or canvas.get("title") or "未命名画布")[:80]
     canvas["icon"] = (payload.icon or canvas.get("icon") or "layers")[:32]
     canvas["kind"] = normalize_canvas_kind(canvas.get("kind"))

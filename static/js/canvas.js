@@ -1480,6 +1480,36 @@ function serializableCanvasNode(node){
 function serializableCanvasNodes(list=nodes){
     return (list || []).map(serializableCanvasNode);
 }
+// 保存冲突时把远端的节点/连线/日志并进本地（按 id 取并集，本地已有 id 以本地为准）。
+// 只把对方的 updated_at 拿来当新 base 直接重试，等于用陈旧的本地列表把对方新建的节点静默抹掉。
+function mergeRemoteNodesIntoLocal(remote){
+    if(!remote) return 0;
+    const localIds = new Set(nodes.map(n => n.id));
+    const addedNodes = (Array.isArray(remote.nodes) ? remote.nodes : []).filter(n => n && n.id && !localIds.has(n.id));
+    if(addedNodes.length) nodes = nodes.concat(addedNodes.map(n => ({...n})));
+    const connKey = c => `${c.from}->${c.to}:${c.kind || 'flow'}`;
+    const seenConns = new Set(connections.map(connKey));
+    (Array.isArray(remote.connections) ? remote.connections : []).forEach(c => {
+        if(!c || seenConns.has(connKey(c))) return;
+        seenConns.add(connKey(c));
+        connections.push({...c});
+    });
+    const knownIds = new Set(nodes.map(n => n.id));
+    connections = connections.filter(c => knownIds.has(c.from) && knownIds.has(c.to));
+    const logKey = l => `${l.nodeId || ''}:${l.createdAt || 0}`;
+    const seenLogs = new Set((canvas.logs || []).map(logKey));
+    (Array.isArray(remote.logs) ? remote.logs : []).forEach(l => {
+        if(!l || seenLogs.has(logKey(l))) return;
+        seenLogs.add(logKey(l));
+        (canvas.logs = canvas.logs || []).push(l);
+    });
+    if(canvas.logs) canvas.logs = canvas.logs.slice(-500);
+    if(addedNodes.length){
+        sanitizeConnections();
+        render();
+    }
+    return addedNodes.length;
+}
 async function saveCanvas(){
     if(!canvas || applyingRemoteCanvas) return;
     if(savingCanvasNow){
@@ -1508,6 +1538,8 @@ async function saveCanvas(){
             const data = await res.json().catch(() => ({}));
             const remote = data.detail?.canvas || data.canvas;
             if(localCanvasDirty || saveCanvasAgain){
+                // 别人先保存了。先把对方的节点并进来再重试，否则这次重试会把对方新建的节点抹掉。
+                if(remote) mergeRemoteNodesIntoLocal(remote);
                 lastCanvasUpdatedAt = Number(data.detail?.updated_at || data.updated_at || remote?.updated_at || lastCanvasUpdatedAt || 0);
                 saveCanvasAgain = true;
                 setStatus('Saving...');
@@ -1993,11 +2025,10 @@ async function setCanvasIcon(id, icon, event){
     closeCanvasMetaPopover();
     renderCanvasList();
     try {
-        let target = canvas?.id === id ? canvas : null;
-        if(!target) {
-            const data = await fetch(`/api/canvases/${id}`).then(r => r.json());
-            target = data.canvas;
-        }
+        // PUT 是全量替换：必须拿服务端最新的一份来改，否则会用本地陈旧节点覆盖别人。
+        const fresh = await fetch(`/api/canvases/${id}`).then(r => r.json()).catch(() => ({}));
+        const target = fresh.canvas || (canvas?.id === id ? canvas : null);
+        if(!target) throw new Error('图标保存失败');
         target.icon = icon || 'layers';
         const res = await fetch(`/api/canvases/${id}`, {
             method:'PUT',
@@ -2007,7 +2038,11 @@ async function setCanvasIcon(id, icon, event){
                 icon:target.icon,
                 nodes:target.nodes || [],
                 connections:target.connections || [],
-                viewport:target.viewport || {x:0, y:0, scale:1}
+                viewport:target.viewport || {x:0, y:0, scale:1},
+                // 服务端对 logs / settings 也是无条件覆盖，不带上就会把它们清空。
+                logs:target.logs || [],
+                settings:target.settings || {},
+                base_updated_at:Number(target.updated_at || 0)
             })
         });
         if(!res.ok) throw new Error('图标保存失败');
@@ -2057,11 +2092,10 @@ async function setCanvasTitle(id, title){
     if(canvas?.id === id) canvas.title = title;
     renderCanvasList();
     try {
-        let target = canvas?.id === id ? canvas : null;
-        if(!target){
-            const data = await fetch(`/api/canvases/${id}`).then(r => r.json());
-            target = data.canvas;
-        }
+        // PUT 是全量替换：必须拿服务端最新的一份来改，否则会用本地陈旧节点覆盖别人。
+        const fresh = await fetch(`/api/canvases/${id}`).then(r => r.json()).catch(() => ({}));
+        const target = fresh.canvas || (canvas?.id === id ? canvas : null);
+        if(!target) throw new Error('重命名失败');
         target.title = title;
         const res = await fetch(`/api/canvases/${id}`, {
             method:'PUT',
@@ -2071,7 +2105,11 @@ async function setCanvasTitle(id, title){
                 icon:target.icon,
                 nodes:target.nodes || [],
                 connections:target.connections || [],
-                viewport:target.viewport || {x:0, y:0, scale:1}
+                viewport:target.viewport || {x:0, y:0, scale:1},
+                // 服务端对 logs / settings 也是无条件覆盖，不带上就会把它们清空。
+                logs:target.logs || [],
+                settings:target.settings || {},
+                base_updated_at:Number(target.updated_at || 0)
             })
         });
         if(!res.ok) throw new Error('重命名失败');
