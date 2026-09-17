@@ -59,6 +59,7 @@ const statusEl = document.getElementById('boardStatus');
 let projects = [];
 let canvases = [];          // all canvases across projects
 let deletedCanvases = [];
+let deletedProjects = [];   // projects in the recycle bin
 let currentProjectId = rememberedProjectId();
 let currentCanvasId = null;
 let pendingDeleteProjectId = null;
@@ -86,15 +87,18 @@ function projectCanvasCount(pid){
 
 async function loadAll(){
     try {
-        const [pRes, cRes] = await Promise.all([
+        const [pRes, cRes, tRes] = await Promise.all([
             fetch('/api/projects'),
-            fetch('/api/canvases')
+            fetch('/api/canvases'),
+            fetch('/api/projects/trash')
         ]);
         const pData = pRes.ok ? await pRes.json() : { projects: [] };
         const cData = cRes.ok ? await cRes.json() : { canvases: [] };
+        const tData = tRes.ok ? await tRes.json() : { projects: [] };
         projects = (pData.projects || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
         if(!projects.length) projects = [{ id: 'default', name: L('默认项目','Default'), order: 0, canvas_count: 0 }];
         canvases = cData.canvases || [];
+        deletedProjects = tData.projects || [];
 
         // pick first project (prefer default / order 0)
         if(!projects.find(p => p.id === currentProjectId)){
@@ -104,7 +108,7 @@ async function loadAll(){
         rememberProjectId(currentProjectId);
         renderProjects();
         await loadCanvasForProject(currentProjectId);
-        refreshTrashCount();
+        updateTrashBadge();
     } catch(e){
         console.error(e);
         setStatus(L('加载失败','Load failed'));
@@ -186,7 +190,7 @@ function renderProjects(){
             const box = document.createElement('div');
             box.className = 'ws-project-confirm';
             box.innerHTML = `
-                <div class="ws-project-confirm-title">${L('删除项目','Delete project')}「${escapeHtml(p.name)}」？${L('其画布将移回默认项目。','Canvases move back to Default.')}</div>
+                <div class="ws-project-confirm-title">${L('删除项目','Delete project')}「${escapeHtml(p.name)}」？${L('其下画布将一并移入回收站，30 天后自动清除。','Its canvases move to Trash and are cleared after 30 days.')}</div>
                 <div class="ws-project-confirm-actions">
                     <button class="ws-confirm-btn" type="button">${L('删除','Delete')}</button>
                     <button class="ws-cancel-btn" type="button">${L('取消','Cancel')}</button>
@@ -353,26 +357,38 @@ async function deleteProject(pid){
     try {
         const res = await fetch(`/api/projects/${encodeURIComponent(pid)}`, { method: 'DELETE' });
         if(!res.ok) throw new Error('delete project failed');
-        canvases.forEach(c => { if((c.project || 'default') === pid) c.project = 'default'; });
+        const data = await res.json();
+        // 从主列表移除，移入回收站
+        const del = projects.find(p => p.id === pid);
         projects = projects.filter(p => p.id !== pid);
+        if(del) deletedProjects.unshift(data.project || del);
+        // 该项目下画布已随项目一并软删除，从本地画布列表移除
+        canvases = canvases.filter(c => (c.project || 'default') !== pid);
         if(currentProjectId === pid) currentProjectId = 'default';
         rememberProjectId(currentProjectId);
         closeProjectMenu();
         renderProjects();
+        updateTrashBadge();
         loadCanvasForProject(currentProjectId);
+        setStatus(L('已移入回收站','Moved to Trash'));
     } catch(e){ console.error(e); setStatus(L('删除项目失败','Delete project failed')); loadAll(); }
 }
 
 /* ===== Trash / recycle bin ===== */
+function updateTrashBadge(){
+    const n = (deletedCanvases?.length || 0) + (deletedProjects?.length || 0);
+    trashBadge.textContent = String(n);
+    trashBadge.classList.toggle('visible', n > 0);
+}
 async function refreshTrashCount(){
     try {
-        const res = await fetch('/api/canvases/trash');
-        if(!res.ok) return;
-        const data = await res.json();
-        deletedCanvases = data.canvases || [];
-        const n = deletedCanvases.length;
-        trashBadge.textContent = String(n);
-        trashBadge.classList.toggle('visible', n > 0);
+        const [cRes, pRes] = await Promise.all([
+            fetch('/api/canvases/trash'),
+            fetch('/api/projects/trash')
+        ]);
+        if(cRes.ok){ const d = await cRes.json(); deletedCanvases = d.canvases || []; }
+        if(pRes.ok){ const d = await pRes.json(); deletedProjects = d.projects || []; }
+        updateTrashBadge();
     } catch(e){}
 }
 async function openTrashView(){
@@ -387,58 +403,119 @@ function closeTrashView(){
     trashEntryBtn.classList.remove('active');
     trashPanel.classList.remove('active');
 }
+async function reloadCanvases(){
+    try {
+        const res = await fetch('/api/canvases');
+        if(res.ok){
+            const data = await res.json();
+            canvases = data.canvases || [];
+        }
+    } catch(e){ console.error(e); }
+}
 async function loadTrash(){
     try {
-        const res = await fetch('/api/canvases/trash');
-        if(!res.ok) throw new Error('trash load failed');
-        const data = await res.json();
-        deletedCanvases = data.canvases || [];
+        const [cRes, pRes] = await Promise.all([
+            fetch('/api/canvases/trash'),
+            fetch('/api/projects/trash')
+        ]);
+        if(!cRes.ok && !pRes.ok) throw new Error('trash load failed');
+        if(cRes.ok){ const d = await cRes.json(); deletedCanvases = d.canvases || []; }
+        if(pRes.ok){ const d = await pRes.json(); deletedProjects = d.projects || []; }
         renderTrash();
-        const n = deletedCanvases.length;
-        trashBadge.textContent = String(n);
-        trashBadge.classList.toggle('visible', n > 0);
+        updateTrashBadge();
     } catch(e){ console.error(e); setStatus(L('加载回收站失败','Load trash failed')); }
 }
 function renderTrash(){
     trashListEl.innerHTML = '';
-    if(!deletedCanvases.length){
+    const hasProjects = deletedProjects.length > 0;
+    const hasCanvases = deletedCanvases.length > 0;
+    if(!hasProjects && !hasCanvases){
         const empty = document.createElement('div');
         empty.className = 'ws-trash-empty';
         empty.textContent = L('回收站为空','Trash is empty');
         trashListEl.appendChild(empty);
         return;
     }
-    deletedCanvases.forEach(c => {
-        const isSmart = (c.kind || 'classic') === 'smart';
-        const projName = (projects.find(p => p.id === (c.project || 'default')) || {}).name || L('默认项目','Default');
-        const card = document.createElement('div');
-        card.className = 'ws-trash-card';
-        card.dataset.canvasId = c.id;
-        card.innerHTML = `
-            <div class="ws-card-top">
-                <span class="ws-card-icon">${renderCanvasIcon(isSmart && /[^\x00-\x7F]/.test(c.icon || '') ? 'sparkles' : c.icon, 17)}</span>
-                <span class="ws-card-kind ${isSmart ? 'smart' : 'classic'}">${isSmart ? L('智能','Smart') : L('普通','Classic')}</span>
-            </div>
-            <div class="ws-card-title">${escapeHtml(c.title)}</div>
-            <div class="ws-card-meta"><span class="ws-card-nodes">${escapeHtml(projName)}</span><span class="ws-card-meta-dot"></span><span class="ws-card-time">${formatCanvasTime(c.deleted_at)}</span></div>
-            <div class="ws-card-actions">
-                <button class="ws-trash-act restore" type="button"><i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i><span>${L('恢复','Restore')}</span></button>
-                <button class="ws-trash-act purge" type="button"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i><span>${L('彻底删除','Delete')}</span></button>
-            </div>
-            <div class="ws-trash-confirm">
-                <div class="ws-trash-confirm-title">${L('彻底删除？不可恢复','Delete permanently?')}</div>
-                <div class="ws-trash-confirm-actions">
-                    <button class="ws-trash-confirm-yes" type="button">${L('删除','Delete')}</button>
-                    <button class="ws-trash-confirm-no" type="button">${L('取消','Cancel')}</button>
-                </div>
-            </div>`;
-        card.querySelector('.ws-trash-act.restore').onclick = () => restoreCanvas(c.id);
-        card.querySelector('.ws-trash-act.purge').onclick = () => card.classList.add('confirming');
-        card.querySelector('.ws-trash-confirm-yes').onclick = () => purgeCanvas(c.id);
-        card.querySelector('.ws-trash-confirm-no').onclick = () => card.classList.remove('confirming');
-        trashListEl.appendChild(card);
-    });
+    if(hasProjects){
+        const sec = document.createElement('div');
+        sec.className = 'ws-trash-section-title';
+        sec.textContent = L('项目','Projects');
+        trashListEl.appendChild(sec);
+        deletedProjects.forEach(p => {
+            const card = buildProjectTrashCard(p);
+            if(card) trashListEl.appendChild(card);
+        });
+    }
+    if(hasCanvases){
+        const sec = document.createElement('div');
+        sec.className = 'ws-trash-section-title';
+        sec.textContent = L('画布','Canvases');
+        trashListEl.appendChild(sec);
+        deletedCanvases.forEach(c => {
+            const card = buildCanvasTrashCard(c);
+            if(card) trashListEl.appendChild(card);
+        });
+    }
     refreshIcons();
+}
+function buildProjectTrashCard(p){
+    const cnt = p.canvas_count || 0;
+    const card = document.createElement('div');
+    card.className = 'ws-trash-card';
+    card.dataset.projectId = p.id;
+    card.innerHTML = `
+        <div class="ws-card-top">
+            <span class="ws-card-icon"><i data-lucide="folder-open" class="w-4 h-4"></i></span>
+            <span class="ws-card-kind classic">${L('项目','Project')}</span>
+        </div>
+        <div class="ws-card-title">${escapeHtml(p.name)}</div>
+        <div class="ws-card-meta"><span class="ws-card-nodes">${cnt > 0 ? cnt + L(' 个画布',' canvases') : L('无画布','No canvases')}</span><span class="ws-card-meta-dot"></span><span class="ws-card-time">${formatCanvasTime(p.deleted_at)}</span></div>
+        <div class="ws-card-actions">
+            <button class="ws-trash-act restore" type="button"><i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i><span>${L('恢复','Restore')}</span></button>
+            <button class="ws-trash-act purge" type="button"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i><span>${L('彻底删除','Delete')}</span></button>
+        </div>
+        <div class="ws-trash-confirm">
+            <div class="ws-trash-confirm-title">${L('彻底删除项目？其下画布一并清除，不可恢复','Delete project permanently? Its canvases are also removed.')}</div>
+            <div class="ws-trash-confirm-actions">
+                <button class="ws-trash-confirm-yes" type="button">${L('删除','Delete')}</button>
+                <button class="ws-trash-confirm-no" type="button">${L('取消','Cancel')}</button>
+            </div>
+        </div>`;
+    card.querySelector('.ws-trash-act.restore').onclick = () => restoreProject(p.id);
+    card.querySelector('.ws-trash-act.purge').onclick = () => card.classList.add('confirming');
+    card.querySelector('.ws-trash-confirm-yes').onclick = () => purgeProject(p.id);
+    card.querySelector('.ws-trash-confirm-no').onclick = () => card.classList.remove('confirming');
+    return card;
+}
+function buildCanvasTrashCard(c){
+    const isSmart = (c.kind || 'classic') === 'smart';
+    const projName = (projects.find(p => p.id === (c.project || 'default')) || {}).name || L('默认项目','Default');
+    const card = document.createElement('div');
+    card.className = 'ws-trash-card';
+    card.dataset.canvasId = c.id;
+    card.innerHTML = `
+        <div class="ws-card-top">
+            <span class="ws-card-icon">${renderCanvasIcon(isSmart && /[^\x00-\x7F]/.test(c.icon || '') ? 'sparkles' : c.icon, 17)}</span>
+            <span class="ws-card-kind ${isSmart ? 'smart' : 'classic'}">${isSmart ? L('智能','Smart') : L('普通','Classic')}</span>
+        </div>
+        <div class="ws-card-title">${escapeHtml(c.title)}</div>
+        <div class="ws-card-meta"><span class="ws-card-nodes">${escapeHtml(projName)}</span><span class="ws-card-meta-dot"></span><span class="ws-card-time">${formatCanvasTime(c.deleted_at)}</span></div>
+        <div class="ws-card-actions">
+            <button class="ws-trash-act restore" type="button"><i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i><span>${L('恢复','Restore')}</span></button>
+            <button class="ws-trash-act purge" type="button"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i><span>${L('彻底删除','Delete')}</span></button>
+        </div>
+        <div class="ws-trash-confirm">
+            <div class="ws-trash-confirm-title">${L('彻底删除？不可恢复','Delete permanently?')}</div>
+            <div class="ws-trash-confirm-actions">
+                <button class="ws-trash-confirm-yes" type="button">${L('删除','Delete')}</button>
+                <button class="ws-trash-confirm-no" type="button">${L('取消','Cancel')}</button>
+            </div>
+        </div>`;
+    card.querySelector('.ws-trash-act.restore').onclick = () => restoreCanvas(c.id);
+    card.querySelector('.ws-trash-act.purge').onclick = () => card.classList.add('confirming');
+    card.querySelector('.ws-trash-confirm-yes').onclick = () => purgeCanvas(c.id);
+    card.querySelector('.ws-trash-confirm-no').onclick = () => card.classList.remove('confirming');
+    return card;
 }
 async function restoreCanvas(id){
     try {
@@ -456,9 +533,40 @@ async function purgeCanvas(id){
         if(!res.ok) throw new Error('purge failed');
         deletedCanvases = deletedCanvases.filter(c => c.id !== id);
         renderTrash();
-        const n = deletedCanvases.length;
-        trashBadge.textContent = String(n);
-        trashBadge.classList.toggle('visible', n > 0);
+        updateTrashBadge();
+        setStatus(L('已彻底删除','Deleted'));
+    } catch(e){ console.error(e); setStatus(L('删除失败','Delete failed')); }
+}
+async function restoreProject(id){
+    try {
+        const res = await fetch(`/api/projects/${encodeURIComponent(id)}/restore`, { method: 'POST' });
+        if(!res.ok) throw new Error('restore project failed');
+        const data = await res.json();
+        const proj = data.project;
+        deletedProjects = deletedProjects.filter(p => p.id !== id);
+        if(proj){
+            projects.push(proj);
+            projects.sort((a, b) => (a.order || 0) - (b.order || 0));
+            currentProjectId = proj.id;
+            rememberProjectId(currentProjectId);
+        }
+        await reloadCanvases();
+        renderProjects();
+        renderTrash();
+        updateTrashBadge();
+        loadCanvasForProject(currentProjectId);
+        setStatus(L('已恢复项目','Project restored'));
+    } catch(e){ console.error(e); setStatus(L('恢复失败','Restore failed')); }
+}
+async function purgeProject(id){
+    try {
+        const res = await fetch(`/api/projects/${encodeURIComponent(id)}/purge`, { method: 'DELETE' });
+        if(!res.ok) throw new Error('purge project failed');
+        deletedProjects = deletedProjects.filter(p => p.id !== id);
+        // 该项目下画布也一并被永久删除，从回收站画布列表里移除
+        deletedCanvases = deletedCanvases.filter(c => (c.project || 'default') !== id);
+        renderTrash();
+        updateTrashBadge();
         setStatus(L('已彻底删除','Deleted'));
     } catch(e){ console.error(e); setStatus(L('删除失败','Delete failed')); }
 }

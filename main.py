@@ -287,6 +287,7 @@ RUNNINGHUB_WORKFLOW_STORE_FILE = os.path.join(DATA_DIR, "runninghub_workflows.js
 SHARED_FOLDERS_FILE = os.path.join(DATA_DIR, "shared_folders.json")
 GLOBAL_CONFIG_FILE = os.path.join(BASE_DIR, "global_config.json")
 CANVAS_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+PROJECT_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 LOCAL_IMAGE_IMPORT_MAX_BYTES = int(os.getenv("LOCAL_IMAGE_IMPORT_MAX_BYTES", str(50 * 1024 * 1024)))
 LOCAL_IMAGE_IMPORT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 RUNNINGHUB_THUMBNAIL_EXTS = (".jpg",)
@@ -4074,6 +4075,8 @@ def project_record(p):
         "order": int(p.get("order") or 0),
         "created_at": p.get("created_at", 0),
         "updated_at": p.get("updated_at", 0),
+        "deleted_at": int(p.get("deleted_at") or 0),
+        "canvas_count": int(p.get("canvas_count") or 0),
     }
 
 def ensure_default_project():
@@ -4099,7 +4102,9 @@ def new_project(name="新项目"):
     return proj
 
 def list_projects():
+    cleanup_expired_project_trash()
     projects = ensure_default_project()
+    projects = [p for p in projects if not p.get("deleted_at")]
     counts = {}
     for rec in iter_canvas_records(include_deleted=False):
         pid = rec.get("project") or DEFAULT_PROJECT_ID
@@ -4109,6 +4114,55 @@ def list_projects():
         rec = project_record(p)
         rec["canvas_count"] = counts.get(rec["id"], 0)
         out.append(rec)
+    return out
+
+def cleanup_expired_project_trash():
+    """回收站中的项目满 30 天自动删除（连同其下画布一并永久清除）。"""
+    cutoff = now_ms() - PROJECT_TRASH_RETENTION_MS
+    projects = load_projects()
+    expired = [p for p in projects if p.get("deleted_at") and int(p.get("deleted_at") or 0) < cutoff]
+    if not expired:
+        return
+    expired_ids = {str(p.get("id")) for p in expired}
+    projects = [p for p in projects if str(p.get("id")) not in expired_ids]
+    save_projects(projects)
+    with CANVAS_LOCK:
+        for filename in os.listdir(CANVAS_DIR):
+            if not filename.endswith(".json"):
+                continue
+            path = os.path.join(CANVAS_DIR, filename)
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if str(data.get("project") or "") in expired_ids:
+                    os.remove(path)
+            except Exception:
+                continue
+
+def list_deleted_projects():
+    cleanup_expired_project_trash()
+    projects = load_projects()
+    out = []
+    for p in projects:
+        if not p.get("deleted_at"):
+            continue
+        rec = project_record(p)
+        # 统计该项目在回收站中的画布数量
+        n = 0
+        with CANVAS_LOCK:
+            for filename in os.listdir(CANVAS_DIR):
+                if not filename.endswith(".json"):
+                    continue
+                try:
+                    with open(os.path.join(CANVAS_DIR, filename), 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                except Exception:
+                    continue
+                if str(data.get("project") or "") == str(p.get("id")) and data.get("deleted_at"):
+                    n += 1
+        rec["canvas_count"] = n
+        out.append(rec)
+    out.sort(key=lambda x: x.get("deleted_at", 0), reverse=True)
     return out
 
 def new_canvas(title="未命名画布", icon="layers", kind="classic", project=None, board_x=None, board_y=None):
@@ -16995,6 +17049,10 @@ async def canvases():
 async def get_projects():
     return {"projects": list_projects()}
 
+@app.get("/api/projects/trash")
+async def trashed_projects():
+    return {"projects": list_deleted_projects(), "retention_days": 30}
+
 @app.post("/api/projects")
 async def create_project(payload: ProjectCreateRequest):
     return {"project": project_record(new_project(payload.name))}
@@ -17015,15 +17073,17 @@ async def update_project(project_id: str, payload: ProjectUpdateRequest):
 
 @app.delete("/api/projects/{project_id}")
 async def delete_project(project_id: str):
-    """删除项目：默认项目不可删除；其余项目删除后，其下画布回归默认项目（不删画布）。"""
+    """删除项目（软删除，进入回收站）：默认项目不可删除；其余项目连同其下画布一并移入回收站，30 天后自动清除。"""
     if project_id == DEFAULT_PROJECT_ID:
         raise HTTPException(status_code=400, detail="默认项目不可删除")
     projects = ensure_default_project()
-    if not any(p.get("id") == project_id for p in projects):
+    target = next((p for p in projects if p.get("id") == project_id), None)
+    if not target:
         raise HTTPException(status_code=404, detail="项目不存在")
-    projects = [p for p in projects if p.get("id") != project_id]
+    ts = now_ms()
+    target["deleted_at"] = ts
     save_projects(projects)
-    # 把该项目下的画布迁回默认项目
+    # 把该项目下的画布一并移入回收站（软删除），恢复时随项目一起回来
     moved = 0
     with CANVAS_LOCK:
         for filename in os.listdir(CANVAS_DIR):
@@ -17035,12 +17095,61 @@ async def delete_project(project_id: str):
                     data = json.load(f)
             except Exception:
                 continue
-            if str(data.get("project") or "") == project_id:
-                data["project"] = DEFAULT_PROJECT_ID
+            if str(data.get("project") or "") == project_id and not data.get("deleted_at"):
+                data["deleted_at"] = ts
                 with open(path, 'w', encoding='utf-8') as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 moved += 1
-    return {"ok": True, "moved": moved}
+    return {"ok": True, "project": project_record(target), "moved": moved}
+
+@app.post("/api/projects/{project_id}/restore")
+async def restore_project(project_id: str):
+    """从回收站恢复项目：清掉 deleted_at，并恢复其下所有画布。"""
+    projects = ensure_default_project()
+    target = next((p for p in projects if p.get("id") == project_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    target.pop("deleted_at", None)
+    save_projects(projects)
+    with CANVAS_LOCK:
+        for filename in os.listdir(CANVAS_DIR):
+            if not filename.endswith(".json"):
+                continue
+            path = os.path.join(CANVAS_DIR, filename)
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if str(data.get("project") or "") == project_id and data.get("deleted_at"):
+                    data.pop("deleted_at", None)
+                    with open(path, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+            except Exception:
+                continue
+    return {"project": project_record(target)}
+
+@app.delete("/api/projects/{project_id}/purge")
+async def purge_project(project_id: str):
+    """永久删除项目：默认项目不可删除；移除项目记录并永久清除其下所有画布。"""
+    if project_id == DEFAULT_PROJECT_ID:
+        raise HTTPException(status_code=400, detail="默认项目不可删除")
+    projects = ensure_default_project()
+    if not any(p.get("id") == project_id for p in projects):
+        raise HTTPException(status_code=404, detail="项目不存在")
+    projects = [p for p in projects if p.get("id") != project_id]
+    save_projects(projects)
+    with CANVAS_LOCK:
+        for filename in os.listdir(CANVAS_DIR):
+            if not filename.endswith(".json"):
+                continue
+            path = os.path.join(CANVAS_DIR, filename)
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if str(data.get("project") or "") == project_id:
+                    os.remove(path)
+            except Exception:
+                continue
+    return {"ok": True}
 
 @app.get("/api/canvases/trash")
 async def trashed_canvases():
