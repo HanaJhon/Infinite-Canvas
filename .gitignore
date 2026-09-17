@@ -20,3 +20,14 @@ inspire_image_dims.json
 dist/
 launcher/bin/
 launcher/obj/
+
+# 启动器运行时的 WebView2 缓存（用户级运行状态，非源码）
+*.exe.WebView2/
+
+# 运行/验证产物：生成结果、分层 PSD、画布备份都在这里。
+# 都可由程序重新生成，且 output/backup/ 里含真实画布数据（个人内容），不入库。
+# 已跟踪的 output/step*.png 不受影响；确实要提交某个产物用 git add -f。
+output/
+
+# 一次性验证探针页（用完即删，别误提交）
+static/__*.html
