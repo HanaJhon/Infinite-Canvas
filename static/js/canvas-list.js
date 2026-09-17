@@ -427,35 +427,26 @@ async function loadTrash(){
 }
 function renderTrash(){
     trashListEl.innerHTML = '';
-    const hasProjects = deletedProjects.length > 0;
-    const hasCanvases = deletedCanvases.length > 0;
-    if(!hasProjects && !hasCanvases){
+    // 同一份画布不要重复展示：项目卡片上已经标了「N 个画布」，
+    // 它下面的画布就不再单独列出来了——避免「同一个画布在项目/画布两块各出一张卡」。
+    const trashedProjectIds = new Set(deletedProjects.map(p => p.id));
+    const standaloneCanvases = deletedCanvases.filter(c => !(c.project && trashedProjectIds.has(c.project)));
+    const hasItems = deletedProjects.length > 0 || standaloneCanvases.length > 0;
+    if(!hasItems){
         const empty = document.createElement('div');
         empty.className = 'ws-trash-empty';
         empty.textContent = L('回收站为空','Trash is empty');
         trashListEl.appendChild(empty);
         return;
     }
-    if(hasProjects){
-        const sec = document.createElement('div');
-        sec.className = 'ws-trash-section-title';
-        sec.textContent = L('项目','Projects');
-        trashListEl.appendChild(sec);
-        deletedProjects.forEach(p => {
-            const card = buildProjectTrashCard(p);
-            if(card) trashListEl.appendChild(card);
-        });
-    }
-    if(hasCanvases){
-        const sec = document.createElement('div');
-        sec.className = 'ws-trash-section-title';
-        sec.textContent = L('画布','Canvases');
-        trashListEl.appendChild(sec);
-        deletedCanvases.forEach(c => {
-            const card = buildCanvasTrashCard(c);
-            if(card) trashListEl.appendChild(card);
-        });
-    }
+    deletedProjects.forEach(p => {
+        const card = buildProjectTrashCard(p);
+        if(card) trashListEl.appendChild(card);
+    });
+    standaloneCanvases.forEach(c => {
+        const card = buildCanvasTrashCard(c);
+        if(card) trashListEl.appendChild(card);
+    });
     refreshIcons();
 }
 function buildProjectTrashCard(p){

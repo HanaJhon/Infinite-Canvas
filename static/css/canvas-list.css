@@ -224,7 +224,6 @@ html[data-studio-scale="off"].studio-scale-managed .workspace {
 .ws-trash-note { display:flex; align-items:center; gap:7px; margin:14px 18px 0; padding:10px 12px; border-radius:8px; background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent-line); font-size:12px; font-weight:700; }
 .ws-trash-list { flex:1; min-height:0; overflow:auto; padding:16px 18px 24px; display:grid; grid-template-columns:repeat(auto-fill, minmax(248px, 1fr)); gap:14px; align-content:start; }
 .ws-trash-empty { grid-column:1/-1; min-height:280px; display:flex; align-items:center; justify-content:center; text-align:center; color:var(--faint); font-size:14px; font-weight:750; }
-.ws-trash-section-title { grid-column:1/-1; margin:6px 2px 2px; padding:4px 2px 7px; font-size:12px; font-weight:850; letter-spacing:.04em; color:var(--muted); border-bottom:1px solid var(--line); }
 .ws-trash-card { position:relative; border-radius:8px; background:var(--card-solid); border:1px solid var(--line); padding:14px; display:flex; flex-direction:column; gap:12px; min-height:150px; box-shadow:0 6px 18px rgba(15,23,42,.06); overflow:hidden; }
 .ws-trash-card::before { display:none; }
 .ws-trash-card .ws-card-actions { display:flex; gap:6px; margin-top:auto; }
