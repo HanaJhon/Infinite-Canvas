@@ -856,19 +856,25 @@ sealed class LauncherHost : IDisposable
         var sw = Stopwatch.StartNew();
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(13));
+            // 上限 25s：部分通道（如 Grsai）模型回复较慢，需给足时间；前端 callNative 上限 30s
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
             using var resp = await _pingHttpClient.SendAsync(req, cts.Token);
             // 必须读完响应体：模型「回复完成」这一刻才算计时结束（非流式，等完整回复）
-            var _ = await resp.Content.ReadAsStringAsync();
+            var bodyText = await resp.Content.ReadAsStringAsync();
             sw.Stop();
             if (!resp.IsSuccessStatusCode)
-                return new { latency = 0, ok = false, error = $"模型返回错误 ({(int)resp.StatusCode})" };
+            {
+                // 带上游返回片段，便于区分「模型不存在」「Key 无效」等（如 Grsai 的 rix_api_error）
+                var snippet = (bodyText ?? "").Trim().Replace("\r", " ").Replace("\n", " ");
+                if (snippet.Length > 160) snippet = snippet.Substring(0, 160);
+                return new { latency = 0, ok = false, error = $"模型返回错误 ({(int)resp.StatusCode})" + (snippet.Length > 0 ? $"：{snippet}" : "") };
+            }
             return new { latency = (long)Math.Round(sw.Elapsed.TotalMilliseconds), ok = true };
         }
         catch (OperationCanceledException)
         {
             sw.Stop();
-            return new { latency = 0, ok = false, error = "测速超时（>13s）" };
+            return new { latency = 0, ok = false, error = "测速超时（>25s）" };
         }
         catch (Exception ex)
         {
@@ -884,9 +890,10 @@ sealed class LauncherHost : IDisposable
         public string ApiKey = "";
     }
 
-    // Grsai 专有服务没有 /models 接口（实测 GET/POST /v1/models、/v1/api/models 等全部 404），
-    // 只能返回内置官方模型清单。来源：项目 grsai-image-gen skill 的 references/api.md + scripts/generate.py
-    // （nano-banana 家族 11 个 + gpt-image-2 家族 2 个），其余为原启动器内置清单（与中转站真实模型名一致，如 gpt-5.6-terra / gpt-6-astra）。
+    // Grsai 专有服务没有 /models 接口（实测 GET/POST /v1/models、/v1/api/models 等全部 404），只能返回内置清单。
+    // 清单经实测校验：图像模型取自项目 grsai-image-gen skill 的 references/api.md；
+    // 文本模型逐个打 /v1/chat/completions 验证，只有返回 200 的才收录
+    // （gpt-5.5 / gpt-5.6-* / gpt-6-astra 与 gemini-*-image-* 实测返回 400，已剔除）。
     private static bool IsGrsaiProvider(string protocol, string baseUrl)
     {
         var p = (protocol ?? "").ToLowerInvariant();
@@ -916,24 +923,17 @@ sealed class LauncherHost : IDisposable
         "nano-banana-pro-cl",
         "nano-banana-pro-vip",
         "nano-banana-pro-4k-vip",
-        "gemini-3-pro-image-preview",
-        "gemini-3.1-flash-lite-image",
-        "gemini-3.1-flash-image-preview",
-        // Text / Chat
-        "gpt-6-astra",
-        "gpt-5.6-terra",
-        "gpt-5.6-sol",
-        "gpt-5.5",
+        // Text / Chat（以下均在 Grsai /v1/chat/completions 实测返回 200）
+        "gemini-3.1-pro",
+        "gemini-2.5-pro",
+        "gemini-3-flash",
+        "gemini-3-pro",
+        "gemini-2.5-flash",
         "gemini-3.5-flash",
         "gemini-3.1-flash-lite",
         "gemini-3.5-flash-lite",
         "gemini-3.7-flash",
         "gemini-3.8-flash",
-        "gemini-3.1-pro",
-        "gemini-3-flash",
-        "gemini-3-pro",
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
     };
 
     private ModelsEndpoint? ResolveModelsEndpoint(string baseUrl, string protocol, string? apiKey, string? providerId, string? providerName)
