@@ -53,6 +53,10 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
 .is-embedded .smart-back { display: none !important; }
 .smart-title { position:absolute; left:22px; top:72px; z-index:10; max-width:min(420px, calc(100vw - 44px)); color:var(--muted); font-size:12px; font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; pointer-events:none; }
 .is-embedded .smart-title { top:22px; font-size:13px; font-weight:800; color:var(--text); background:var(--panel); padding:0 14px; height:40px; display:inline-flex; align-items:center; border-radius:999px; border:1px solid var(--line); box-shadow:0 14px 34px var(--shadow); backdrop-filter:blur(16px); pointer-events:auto; }
+/* 嵌入模式下，标题胶囊由父页面（项目工作台 canvas-list）接管渲染 —— 因为项目数据与增删改逻辑都在父页面。
+   这里刻意用 visibility 而不是 display：保留布局盒，父页面才能实测它的位置/尺寸，
+   让自己的胶囊与画布内右侧那排浮动按钮保持同一视觉尺度。 */
+.is-embedded .smart-title { visibility:hidden; pointer-events:none; }
 .smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle { position:absolute; top:22px; z-index:56; width:96px; height:40px; padding:0 15px; border-radius:999px; background:var(--panel); color:var(--text); border:1px solid var(--line); box-shadow:0 14px 34px var(--shadow); backdrop-filter:blur(16px); display:flex; align-items:center; justify-content:center; gap:8px; font-size:12px; font-weight:750; white-space:nowrap; transition:transform .14s ease, border-color .14s ease; }
 .smart-log-toggle { right:130px; }
 .smart-shortcut-toggle { right:238px; }

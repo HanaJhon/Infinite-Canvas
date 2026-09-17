@@ -64,13 +64,8 @@ html[data-studio-scale="off"].studio-scale-managed .workspace {
     zoom: var(--studio-ui-scale, 1);
 }
 
-/* ===== LEFT sidebar ===== */
-.ws-sidebar { flex:0 0 272px; width:272px; display:flex; flex-direction:column; background:var(--panel); border-right:1px solid var(--line); border-left:0; backdrop-filter:blur(14px); box-shadow:none; }
-.ws-side-head { display:flex; align-items:center; justify-content:space-between; padding:18px 16px 12px; }
-.ws-side-title { font-size:15px; font-weight:850; letter-spacing:0; color:var(--text); }
-.ws-side-add { width:32px; height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:var(--muted); background:var(--panel-solid); border:1px solid var(--line); transition:all .15s var(--ease); cursor:pointer; }
-.ws-side-add:hover { color:var(--text); border-color:var(--line-2); background:var(--soft); box-shadow:0 6px 14px var(--shadow); }
-.ws-side-add:focus-visible,.ws-icon-btn:focus-visible,.ws-primary-btn:focus-visible,.ws-paste-btn:focus-visible,.ws-trash-act:focus-visible,.ws-pop-item:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+/* ===== 项目列表（原左侧栏，现渲染在顶部胶囊浮窗内） ===== */
+.ws-icon-btn:focus-visible,.ws-primary-btn:focus-visible,.ws-paste-btn:focus-visible,.ws-trash-act:focus-visible,.ws-pop-item:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 
 .ws-newproj-row { display:none; align-items:center; gap:4px; margin:0 12px 8px; padding:4px; border:1px solid var(--line); border-radius:8px; background:var(--card-solid); box-shadow:0 8px 18px var(--shadow); }
 .ws-newproj-row.active { display:flex; }
@@ -111,10 +106,6 @@ html[data-studio-scale="off"].studio-scale-managed .workspace {
 .ws-confirm-btn:hover { background:#b91c1c; }
 .ws-cancel-btn { background:var(--soft); color:var(--text); border:1px solid var(--line); }
 
-.ws-side-foot { padding:10px 12px; border-top:1px solid var(--line); background:linear-gradient(180deg, transparent, rgba(100,116,139,.04)); }
-.ws-trash-entry { width:100%; display:flex; align-items:center; gap:9px; min-height:40px; padding:8px 10px; border-radius:8px; color:var(--muted); background:transparent; border:1px solid transparent; cursor:pointer; transition:all .14s var(--ease); font-size:13px; font-weight:750; }
-.ws-trash-entry:hover { color:var(--text); background:var(--soft); }
-.ws-trash-entry.active { color:var(--text); background:var(--danger-soft); border-color:rgba(220,38,38,.22); }
 .ws-trash-label { flex:1; text-align:left; }
 .ws-trash-badge { min-width:18px; height:18px; padding:0 6px; border-radius:999px; display:none; align-items:center; justify-content:center; background:#475569; color:#fff; font-size:10px; font-weight:800; }
 .ws-trash-badge.visible { display:inline-flex; }
@@ -252,6 +243,41 @@ html[data-studio-scale="off"].studio-scale-managed .workspace {
 .ws-status { position:absolute; left:50%; bottom:18px; transform:translateX(-50%); z-index:30; padding:8px 16px; border-radius:999px; background:var(--strong); color:var(--strong-text); font-size:12px; font-weight:700; box-shadow:0 10px 30px var(--shadow); opacity:0; pointer-events:none; transition:opacity .2s var(--ease); }
 .ws-status.show { opacity:1; }
 
+/* ===== 项目胶囊（画布页顶部） =====
+   左侧项目栏已并入这里：新建 / 切换 / 重命名 / 删除 / 回收站全在浮窗内。
+   胶囊挂在 body 下（不在 .workspace 里），所以这里用的是真实视觉像素，
+   --pc-* 由 canvas-list.js 实测 iframe 内 .smart-title 的布局盒后写入，
+   保证与画布内右侧那排浮动按钮同一视觉尺度。 */
+.ws-proj-capsule { position:fixed; left:var(--pc-x,22px); top:var(--pc-y,22px); z-index:40; display:flex; flex-direction:column; align-items:flex-start; }
+.ws-proj-capsule[hidden] { display:none; }
+.trash-open .ws-proj-capsule { visibility:hidden; pointer-events:none; }
+
+.ws-proj-capsule-btn { display:inline-flex; align-items:center; gap:calc(var(--pc-h,40px) * .18); height:var(--pc-h,40px); padding:0 var(--pc-padx,14px); border-radius:999px; background:var(--panel); color:var(--text); border:1px solid var(--line); box-shadow:0 14px 34px var(--shadow); backdrop-filter:blur(16px); font-family:inherit; font-size:var(--pc-fs,13px); font-weight:800; line-height:1; letter-spacing:0; cursor:pointer; transition:transform .14s var(--ease), border-color .14s var(--ease), background .14s var(--ease); }
+.ws-proj-capsule-btn:hover { border-color:var(--line-2); }
+.ws-proj-capsule-btn:active { transform:scale(.96); }
+.ws-proj-capsule-btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.ws-proj-capsule.open .ws-proj-capsule-btn { border-color:var(--line-2); background:var(--panel-solid); }
+.ws-pc-icon,.ws-pc-caret { width:calc(var(--pc-h,40px) * .40); height:calc(var(--pc-h,40px) * .40); flex:0 0 auto; }
+.ws-pc-icon { color:var(--muted); }
+.ws-pc-caret { color:var(--faint); transition:transform .16s var(--ease); }
+.ws-proj-capsule.open .ws-pc-caret { transform:rotate(180deg); }
+.ws-pc-name { max-width:min(200px,38vw); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.ws-proj-menu { margin-top:6px; width:268px; max-width:calc(100vw - 32px); padding:6px; border-radius:16px; background:var(--card-solid); color:var(--text); border:1px solid var(--line); box-shadow:0 24px 60px var(--shadow-strong), 0 2px 8px var(--shadow); display:flex; flex-direction:column; gap:1px; transform-origin:top left; opacity:0; visibility:hidden; transform:translateY(-6px); pointer-events:none; transition:opacity .16s var(--ease), transform .16s var(--ease), visibility .16s var(--ease); }
+.ws-proj-capsule.open .ws-proj-menu { opacity:1; visibility:visible; transform:none; pointer-events:auto; }
+
+/* 同心圆角：外层 16px / 内边距 6px → 内层 10px */
+.ws-proj-menu .ws-pop-item { border-radius:10px; }
+.ws-proj-menu .ws-project-list { flex:none; max-height:min(42vh,300px); padding:2px; gap:2px; }
+.ws-proj-menu .ws-project-row { min-height:38px; padding:7px 9px; border-radius:10px; }
+.ws-proj-menu .ws-project-count { font-variant-numeric:tabular-nums; }
+.ws-proj-menu .ws-project-confirm { border-radius:10px; }
+.ws-proj-menu .ws-newproj-row { display:none; margin:2px 0 2px; padding:4px; border-radius:12px; box-shadow:none; }
+.ws-proj-menu .ws-newproj-row.active { display:flex; }
+.ws-proj-new { color:var(--muted); }
+.ws-proj-new:hover { color:var(--text); }
+.ws-proj-new svg,.ws-proj-new i { flex:0 0 auto; }
+
 /* ===== Dark theme adjustments ===== */
 .theme-dark .ws-trash-note { background:var(--accent-soft); color:#bfdbfe; border-color:var(--accent-line); }
 .theme-dark .ws-project-row.active,
@@ -275,8 +301,6 @@ html[data-studio-scale="off"].studio-scale-managed .workspace {
 /* ===== Responsive ===== */
 @media (max-width:760px) {
     .workspace { flex-direction:column; }
-    .ws-sidebar { flex:0 0 auto; width:100%; max-height:42vh; border-right:none; border-bottom:1px solid var(--line); }
-    .ws-side-head { padding:12px 12px 8px; }
     .ws-project-list { padding:4px 8px 8px; }
     .ws-main { min-height:0; }
     .ws-topbar { align-items:flex-start; gap:10px; padding:10px 12px; }
@@ -302,13 +326,6 @@ html[data-studio-scale="off"].studio-scale-managed .ws-primary-btn span {
 }
 html[data-studio-scale="off"].studio-scale-managed .workspace {
     flex-direction:row;
-}
-html[data-studio-scale="off"].studio-scale-managed .ws-sidebar {
-    flex:0 0 272px;
-    width:272px;
-    max-height:none;
-    border-right:1px solid var(--line);
-    border-bottom:none;
 }
 html[data-studio-scale="off"].studio-scale-managed .ws-main {
     min-width:0;

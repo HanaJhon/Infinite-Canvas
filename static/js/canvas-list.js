@@ -220,9 +220,11 @@ function renderProjects(){
         projectListEl.appendChild(row);
     });
     refreshIcons();
+    updateCapsuleLabel();
 }
 
 function selectProject(pid){
+    closeProjectMenu();
     if(pid === currentProjectId && !trashPanel.classList.contains('active')) return;
     currentProjectId = pid;
     rememberProjectId(pid);
@@ -308,6 +310,7 @@ async function createProject(){
             projects.sort((a, b) => (a.order || 0) - (b.order || 0));
             currentProjectId = proj.id;
             rememberProjectId(currentProjectId);
+            closeProjectMenu();
             renderProjects();
             if(newCanvas){
                 setFrameCanvas(newCanvas.id, proj.id);
@@ -354,6 +357,7 @@ async function deleteProject(pid){
         projects = projects.filter(p => p.id !== pid);
         if(currentProjectId === pid) currentProjectId = 'default';
         rememberProjectId(currentProjectId);
+        closeProjectMenu();
         renderProjects();
         loadCanvasForProject(currentProjectId);
     } catch(e){ console.error(e); setStatus(L('删除项目失败','Delete project failed')); loadAll(); }
@@ -372,11 +376,14 @@ async function refreshTrashCount(){
     } catch(e){}
 }
 async function openTrashView(){
+    closeProjectMenu();
+    document.body.classList.add('trash-open');
     trashEntryBtn.classList.add('active');
     trashPanel.classList.add('active');
     await loadTrash();
 }
 function closeTrashView(){
+    document.body.classList.remove('trash-open');
     trashEntryBtn.classList.remove('active');
     trashPanel.classList.remove('active');
 }
@@ -473,6 +480,7 @@ trashCloseBtn.addEventListener('click', closeTrashView);
 
 document.addEventListener('keydown', e => {
     if(e.key !== 'Escape') return;
+    if(capsuleIsOpen()){ closeProjectMenu(); return; }
     if(trashPanel.classList.contains('active')) closeTrashView();
 });
 
@@ -483,12 +491,122 @@ window.addEventListener('message', event => {
         if(event.data.lang && window.StudioI18n) StudioI18n.set(event.data.lang);
         window.StudioI18n?.apply?.();
         renderProjects();
+        refreshCapsuleTexts();
         if(trashPanel.classList.contains('active')) renderTrash();
         refreshIcons();
     }
 });
 
+/* ===== 项目胶囊（接管原左侧项目栏） =====
+   项目数据与新建/重命名/删除/切换逻辑都在本页，画布只是 iframe，所以胶囊由本页渲染。
+   胶囊挂在 body 下（不在 .workspace 里），因此用的是真实视觉像素；
+   位置与尺度由 syncProjectCapsule() 实测 iframe 内 .smart-title 的布局盒得到 ——
+   父页面用 zoom 缩放、画布页内部用另一套 scale，两者系数不同（实测 0.805 vs 0.951），
+   硬编码 22px 一定会错位。 */
+const projectCapsule = document.getElementById('projectCapsule');
+const projectCapsuleBtn = document.getElementById('projectCapsuleBtn');
+const projectCapsuleName = document.getElementById('projectCapsuleName');
+const projectMenuTitle = document.getElementById('projectMenuTitle');
+const newProjectLabel = document.getElementById('newProjectLabel');
+const trashLabelEl = trashEntryBtn ? trashEntryBtn.querySelector('.ws-trash-label') : null;
+
+function currentProjectName(){
+    const p = currentProject();
+    return p ? p.name : L('默认项目','Default');
+}
+
+function updateCapsuleLabel(){
+    if(projectCapsuleName) projectCapsuleName.textContent = currentProjectName();
+}
+
+function refreshCapsuleTexts(){
+    if(projectMenuTitle) projectMenuTitle.textContent = L('项目','Projects');
+    if(newProjectLabel) newProjectLabel.textContent = L('新建项目','New project');
+    if(trashLabelEl) trashLabelEl.textContent = L('回收站','Trash');
+    if(newProjectInput) newProjectInput.placeholder = L('项目名称','Project name');
+    updateCapsuleLabel();
+}
+
+function syncProjectCapsule(){
+    if(!projectCapsule) return;
+    let x = 22, y = 22, h = 40, fs = 13, padx = 14;
+    try {
+        const idoc = canvasFrame && canvasFrame.contentDocument;
+        const pill = idoc && idoc.getElementById ? idoc.getElementById('smartTitle') : null;
+        const r = pill && pill.getBoundingClientRect ? pill.getBoundingClientRect() : null;
+        if(r && r.width > 0 && r.height > 0){
+            const view = idoc.defaultView || window;
+            const ps = view.getComputedStyle(pill);
+            const cssH = parseFloat(ps.height) || 40;
+            const k = cssH > 0 ? (r.height / cssH) : 1;   // 画布内视觉缩放系数
+            x = r.left; y = r.top; h = r.height;
+            fs = (parseFloat(ps.fontSize) || 13) * k;
+            padx = (parseFloat(ps.paddingLeft) || 14) * k;
+        }
+    } catch(e){}
+    projectCapsule.style.setProperty('--pc-x', x + 'px');
+    projectCapsule.style.setProperty('--pc-y', y + 'px');
+    projectCapsule.style.setProperty('--pc-h', h + 'px');
+    projectCapsule.style.setProperty('--pc-fs', fs + 'px');
+    projectCapsule.style.setProperty('--pc-padx', padx + 'px');
+    projectCapsule.hidden = false;
+    updateCapsuleLabel();
+}
+
+// 画布是 iframe，点在画布上的事件不会冒泡到本页，得直接挂到它的 document 上才能收起浮窗。
+function bindFrameOutsideClick(){
+    try {
+        const idoc = canvasFrame && canvasFrame.contentDocument;
+        if(!idoc || idoc.__capsuleOutsideBound) return;
+        idoc.__capsuleOutsideBound = true;
+        idoc.addEventListener('mousedown', () => { if(capsuleIsOpen()) closeProjectMenu(); }, true);
+    } catch(e){}
+}
+
+function capsuleIsOpen(){
+    return !!projectCapsule && projectCapsule.classList.contains('open');
+}
+function openProjectMenu(){
+    if(!projectCapsule || capsuleIsOpen()) return;
+    closeNewProject();
+    pendingDeleteProjectId = null;
+    renderProjects();
+    projectCapsule.classList.add('open');
+    projectCapsuleBtn.setAttribute('aria-expanded','true');
+    refreshIcons();
+}
+function closeProjectMenu(){
+    if(!capsuleIsOpen()) return;
+    projectCapsule.classList.remove('open');
+    projectCapsuleBtn.setAttribute('aria-expanded','false');
+    pendingDeleteProjectId = null;
+    closeNewProject();
+    renderProjects();
+}
+function toggleProjectMenu(){ capsuleIsOpen() ? closeProjectMenu() : openProjectMenu(); }
+
+if(projectCapsuleBtn){
+    projectCapsuleBtn.addEventListener('click', e => { e.stopPropagation(); toggleProjectMenu(); });
+}
+document.addEventListener('click', e => {
+    if(!capsuleIsOpen()) return;
+    if(projectCapsule && projectCapsule.contains(e.target)) return;
+    closeProjectMenu();
+});
+window.addEventListener('resize', syncProjectCapsule);
+window.addEventListener('studio-ui-scale-change', () => setTimeout(syncProjectCapsule, 160));
+
 /* ===== Boot ===== */
 window.StudioI18n?.apply?.();
+refreshCapsuleTexts();
+if(canvasFrame){
+    canvasFrame.addEventListener('load', () => {
+        // 画布页加载后还会再套一层自身 scale，晚一点补测两次把位置钉准
+        syncProjectCapsule();
+        bindFrameOutsideClick();
+        setTimeout(() => { syncProjectCapsule(); bindFrameOutsideClick(); }, 260);
+        setTimeout(syncProjectCapsule, 900);
+    });
+}
 loadAll();
 refreshIcons();

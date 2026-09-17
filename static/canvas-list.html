@@ -26,30 +26,7 @@
 </head>
 <body>
     <div id="workspace" class="workspace">
-        <!-- LEFT: project sidebar -->
-        <aside id="sidebar" class="ws-sidebar">
-            <div class="ws-side-head">
-                <div class="ws-side-title">项目</div>
-                <button id="newProjectBtn" class="ws-side-add" type="button" title="新建项目" aria-label="新建项目">
-                    <i data-lucide="plus" class="w-4 h-4"></i>
-                </button>
-            </div>
-            <div id="newProjectRow" class="ws-newproj-row">
-                <input id="newProjectInput" class="ws-newproj-input" type="text" maxlength="60" placeholder="项目名称">
-                <button id="newProjectConfirm" class="ws-mini-btn primary" type="button" title="确定" aria-label="确定"><i data-lucide="check" class="w-3.5 h-3.5"></i></button>
-                <button id="newProjectCancel" class="ws-mini-btn" type="button" title="取消" aria-label="取消"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>
-            </div>
-            <div id="projectList" class="ws-project-list"></div>
-            <div class="ws-side-foot">
-                <button id="trashEntry" class="ws-trash-entry" type="button">
-                    <i data-lucide="trash-2" class="w-4 h-4"></i>
-                    <span class="ws-trash-label">回收站</span>
-                    <span id="trashBadge" class="ws-trash-badge">0</span>
-                </button>
-            </div>
-        </aside>
-
-        <!-- RIGHT: smart canvas view -->
+        <!-- 单栏：画布铺满。项目的新建/切换/重命名/删除/回收站全部收进顶部胶囊浮窗 -->
         <main class="ws-main">
             <iframe id="canvasFrame" class="ws-canvas-frame" src="about:blank" allow="clipboard-read; clipboard-write"></iframe>
 
@@ -66,6 +43,35 @@
             <div id="boardStatus" class="ws-status"></div>
         </main>
     </div>
+
+    <!-- 项目胶囊：父页面渲染，位置实测对齐 iframe 内 .smart-title 的布局盒（该元素在嵌入模式下不可见） -->
+    <div id="projectCapsule" class="ws-proj-capsule" hidden>
+        <button id="projectCapsuleBtn" class="ws-proj-capsule-btn" type="button" aria-haspopup="menu" aria-expanded="false">
+            <i data-lucide="folder" class="ws-pc-icon"></i>
+            <span id="projectCapsuleName" class="ws-pc-name">默认项目</span>
+            <i data-lucide="chevron-down" class="ws-pc-caret"></i>
+        </button>
+
+        <div id="projectMenu" class="ws-proj-menu" role="menu">
+            <div id="projectMenuTitle" class="ws-pop-sub-title">项目</div>
+            <div id="projectList" class="ws-project-list ws-proj-menu-list"></div>
+            <div id="newProjectRow" class="ws-newproj-row">
+                <input id="newProjectInput" class="ws-newproj-input" type="text" maxlength="60" placeholder="项目名称">
+                <button id="newProjectConfirm" class="ws-mini-btn primary" type="button" title="确定" aria-label="确定"><i data-lucide="check" class="w-3.5 h-3.5"></i></button>
+                <button id="newProjectCancel" class="ws-mini-btn" type="button" title="取消" aria-label="取消"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>
+            </div>
+            <button id="newProjectBtn" class="ws-pop-item ws-proj-new" type="button">
+                <i data-lucide="plus" class="w-3.5 h-3.5"></i><span id="newProjectLabel">新建项目</span>
+            </button>
+            <div class="ws-pop-sep"></div>
+            <button id="trashEntry" class="ws-pop-item" type="button">
+                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                <span class="ws-trash-label">回收站</span>
+                <span id="trashBadge" class="ws-trash-badge">0</span>
+            </button>
+        </div>
+    </div>
+
     <script src="/static/js/canvas-list.js?v=2026.08.30.1789373910"></script>
 </body>
 </html>
