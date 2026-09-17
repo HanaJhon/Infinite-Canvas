@@ -599,6 +599,9 @@ window.addEventListener('studio-ui-scale-change', () => setTimeout(syncProjectCa
 /* ===== Boot ===== */
 window.StudioI18n?.apply?.();
 refreshCapsuleTexts();
+// 先立即显示一次：不等 iframe 的 load 事件。否则画布页加载慢、或 load 因任何原因
+// 未触发时，胶囊会一直停在 HTML 上的 hidden 状态，表现为「项目功能整个不见了」。
+syncProjectCapsule();
 if(canvasFrame){
     canvasFrame.addEventListener('load', () => {
         // 画布页加载后还会再套一层自身 scale，晚一点补测两次把位置钉准
@@ -607,6 +610,8 @@ if(canvasFrame){
         setTimeout(() => { syncProjectCapsule(); bindFrameOutsideClick(); }, 260);
         setTimeout(syncProjectCapsule, 900);
     });
+    // 兜底：load 事件没来时也补测一次
+    setTimeout(syncProjectCapsule, 1500);
 }
 loadAll();
 refreshIcons();
