@@ -562,6 +562,9 @@ sealed class LauncherHost : IDisposable
                     case "TEST_PING":
                         result = await HandleTestModelPingAsync(payload);
                         break;
+                    case "FETCH_MODELS":
+                        result = await HandleFetchModelsAsync(payload);
+                        break;
                     default:
                         result = new { acknowledged = true };
                         break;
@@ -847,6 +850,8 @@ sealed class LauncherHost : IDisposable
         };
         req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + endpoint.ApiKey);
         req.Headers.TryAddWithoutValidation("Accept", "application/json");
+        // 显式 UA：避免部分网关（如 Cloudflare 前置）对无 UA / Python-urllib 类客户端返回 1010 拦截
+        req.Headers.TryAddWithoutValidation("User-Agent", "InfiniteCanvasLauncher/1.0");
 
         var sw = Stopwatch.StartNew();
         try
@@ -869,6 +874,139 @@ sealed class LauncherHost : IDisposable
         {
             sw.Stop();
             return new { latency = 0, ok = false, error = ex.Message };
+        }
+    }
+
+    // 拉取并自动归类模型：向通道真实的 /models 接口发起 GET，取回模型 id 列表（替换原前端 mock）
+    private sealed class ModelsEndpoint
+    {
+        public string Url = "";
+        public string ApiKey = "";
+    }
+
+    private ModelsEndpoint? ResolveModelsEndpoint(string baseUrl, string protocol, string? apiKey, string? providerId, string? providerName)
+    {
+        string? resolvedKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+
+        // 表单未填 Key 时，尝试从已保存的 api_providers.json + API/.env 按 id/name 解析（编辑既有通道场景）
+        if (resolvedKey is null && !string.IsNullOrEmpty(providerId) && File.Exists(apiProvidersPath))
+        {
+            try
+            {
+                var parsed = JsonNode.Parse(File.ReadAllText(apiProvidersPath, Encoding.UTF8));
+                if (parsed is JsonArray arr)
+                {
+                    foreach (var item in arr)
+                    {
+                        if (item is not JsonObject p) continue;
+                        var pId = p["id"]?.GetValue<string>() ?? "";
+                        var pName = p["name"]?.GetValue<string>() ?? "";
+                        if (!string.Equals(pId, providerId, StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(pName, providerName ?? "", StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        resolvedKey = ReadEnvValue(GetEnvKeyForProvider(pId));
+                        var fromJson = p["base_url"]?.GetValue<string>() ?? "";
+                        if (string.IsNullOrWhiteSpace(baseUrl) && !string.IsNullOrWhiteSpace(fromJson))
+                            baseUrl = fromJson;
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex) { SendLog($"[拉取模型] 解析通道配置失败: {ex.Message}"); }
+        }
+
+        if (string.IsNullOrWhiteSpace(baseUrl)) return null;
+        var baseNorm = baseUrl.Trim().TrimEnd('/');
+        var protocolLower = (protocol ?? "").ToLowerInvariant();
+        string modelsBase;
+        if (protocolLower == "volcengine")
+            modelsBase = baseNorm.EndsWith("/api/v3") ? baseNorm : baseNorm + "/api/v3";
+        else if (protocolLower == "gemini")
+            modelsBase = baseNorm.EndsWith("/v1beta") ? baseNorm : baseNorm + "/v1beta";
+        else
+            modelsBase = baseNorm.EndsWith("/v1") ? baseNorm : baseNorm + "/v1";
+
+        return new ModelsEndpoint { Url = modelsBase + "/models", ApiKey = resolvedKey ?? "" };
+    }
+
+    private async Task<object> HandleFetchModelsAsync(JsonElement payload)
+    {
+        var baseUrl = payload.TryGetProperty("baseUrl", out var bProp) ? (bProp.GetString() ?? "").Trim() : "";
+        var protocol = payload.TryGetProperty("protocol", out var pProp) ? (pProp.GetString() ?? "").Trim() : "";
+        var apiKey = payload.TryGetProperty("apiKey", out var kProp) ? (kProp.GetString() ?? "").Trim() : "";
+        var providerId = payload.TryGetProperty("id", out var idProp) ? (idProp.GetString() ?? "").Trim() : "";
+        var providerName = payload.TryGetProperty("name", out var nProp) ? (nProp.GetString() ?? "").Trim() : "";
+
+        var endpoint = ResolveModelsEndpoint(baseUrl, protocol, apiKey, providerId, providerName);
+        if (endpoint is null)
+            return new { ok = false, error = "缺少接口地址（baseUrl）" };
+        if (string.IsNullOrEmpty(endpoint.ApiKey))
+            return new { ok = false, error = "缺少 API Key，请在接口表单中填写，或确认该通道已在 API 管理中配置" };
+
+        using var req = new HttpRequestMessage(HttpMethod.Get, endpoint.Url);
+        req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + endpoint.ApiKey);
+        req.Headers.TryAddWithoutValidation("Accept", "application/json");
+        // 显式 UA：避免部分网关（如 Cloudflare 前置）对无 UA / Python-urllib 类客户端返回 1010 拦截
+        req.Headers.TryAddWithoutValidation("User-Agent", "InfiniteCanvasLauncher/1.0");
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+            using var resp = await _pingHttpClient.SendAsync(req, cts.Token);
+            var bodyText = await resp.Content.ReadAsStringAsync();
+            if (!resp.IsSuccessStatusCode)
+                return new { ok = false, error = $"接口返回错误 ({(int)resp.StatusCode})，请检查地址与 Key" };
+
+            // 解析多种 OpenAI 兼容 / Anthropic / Gemini 模型列表格式
+            var ids = new List<string>();
+            try
+            {
+                var node = JsonNode.Parse(bodyText);
+                if (node is JsonObject root)
+                {
+                    if (root["data"] is JsonArray dataArr)
+                    {
+                        foreach (var d in dataArr)
+                        {
+                            var id = d?["id"]?.GetValue<string>();
+                            if (!string.IsNullOrEmpty(id)) ids.Add(id);
+                        }
+                    }
+                    // data 为空时回退到 Gemini 风格的 models[] 列表
+                    if (ids.Count == 0 && root["models"] is JsonArray modelsArr)
+                    {
+                        foreach (var m in modelsArr)
+                        {
+                            var id = m?["id"]?.GetValue<string>();
+                            if (string.IsNullOrEmpty(id))
+                            {
+                                var name = m?["name"]?.GetValue<string>() ?? "";
+                                if (name.StartsWith("models/", StringComparison.OrdinalIgnoreCase))
+                                    name = name.Substring("models/".Length);
+                                id = string.IsNullOrEmpty(name) ? null : name;
+                            }
+                            if (!string.IsNullOrEmpty(id) && !ids.Contains(id)) ids.Add(id);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                return new { ok = false, error = "无法解析接口返回的模型列表: " + ex.Message };
+            }
+
+            if (ids.Count == 0)
+                return new { ok = false, error = "接口未返回任何模型（data/models 为空），可能该接口不支持 /models 列表" };
+
+            return new { ok = true, models = ids.ToArray() };
+        }
+        catch (OperationCanceledException)
+        {
+            return new { ok = false, error = "拉取超时（>12s）" };
+        }
+        catch (Exception ex)
+        {
+            return new { ok = false, error = ex.Message };
         }
     }
 
