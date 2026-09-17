@@ -8939,7 +8939,6 @@ function smartNodeToolbarHtml(node){
         {key:'mask', icon:'brush', label:'遮罩', enabled:canEditImage},
         {key:'brush', icon:'paintbrush', label:'画笔', enabled:canEditImage},
         {key:'grid', icon:'grid-3x3', label:gridLabel, enabled:canEditImage},
-        {key:'layerize', icon:'layers', label:tr('smart.layerizeAction'), enabled:canEditImage},
         ...(jimengImageProviderId() ? [{key:'upscale', icon:'maximize-2', label:tr('smart.jimengUpscaleAction'), enabled:canEditImage}] : []),
         {key:'download', icon:'download', label:'下载', enabled:true}
     ];
@@ -9012,12 +9011,6 @@ function runSmartNodeToolbarAction(nodeId, action){
     }
     if(action === 'upscale'){
         runJimengUpscale(node, index);
-        return;
-    }
-    if(action === 'layerize'){
-        // 图文分层编辑：调用内置的 bggg-creator-image2psd 做分层，再进编辑器
-        if(typeof openImage2PsdEditor === 'function') openImage2PsdEditor(nodeId, index);
-        else toast(tr('i2p.layerizeNotLoaded'));
         return;
     }
     const modeMap = {crop:'crop', outpaint:'outpaint', mask:'mask', brush:'brush', grid:'grid'};
