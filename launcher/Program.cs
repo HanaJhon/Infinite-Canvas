@@ -884,6 +884,58 @@ sealed class LauncherHost : IDisposable
         public string ApiKey = "";
     }
 
+    // Grsai 专有服务没有 /models 接口（实测 GET/POST /v1/models、/v1/api/models 等全部 404），
+    // 只能返回内置官方模型清单。来源：项目 grsai-image-gen skill 的 references/api.md + scripts/generate.py
+    // （nano-banana 家族 11 个 + gpt-image-2 家族 2 个），其余为原启动器内置清单（与中转站真实模型名一致，如 gpt-5.6-terra / gpt-6-astra）。
+    private static bool IsGrsaiProvider(string protocol, string baseUrl)
+    {
+        var p = (protocol ?? "").ToLowerInvariant();
+        var b = (baseUrl ?? "").ToLowerInvariant();
+        return p.Contains("grsai") || b.Contains("grsai");
+    }
+
+    private static string[] GrsaiCuratedModels() => new[]
+    {
+        // Video
+        "minimax-h3",
+        // Image
+        "gpt-image-2.5",
+        "gpt-image-2.5-sunburst",
+        "gpt-image-2.5-flare",
+        "gpt-image-2-vip",
+        "gpt-image-2",
+        "nano-banana",
+        "nano-banana-fast",
+        "nano-banana-2",
+        "nano-banana-2-lite",
+        "nano-banana-2-cl",
+        "nano-banana-2-2k-cl",
+        "nano-banana-2-4k-cl",
+        "nano-banana-pro",
+        "nano-banana-pro-vt",
+        "nano-banana-pro-cl",
+        "nano-banana-pro-vip",
+        "nano-banana-pro-4k-vip",
+        "gemini-3-pro-image-preview",
+        "gemini-3.1-flash-lite-image",
+        "gemini-3.1-flash-image-preview",
+        // Text / Chat
+        "gpt-6-astra",
+        "gpt-5.6-terra",
+        "gpt-5.6-sol",
+        "gpt-5.5",
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-3.7-flash",
+        "gemini-3.8-flash",
+        "gemini-3.1-pro",
+        "gemini-3-flash",
+        "gemini-3-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+    };
+
     private ModelsEndpoint? ResolveModelsEndpoint(string baseUrl, string protocol, string? apiKey, string? providerId, string? providerName)
     {
         string? resolvedKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
@@ -938,6 +990,11 @@ sealed class LauncherHost : IDisposable
         var providerName = payload.TryGetProperty("name", out var nProp) ? (nProp.GetString() ?? "").Trim() : "";
 
         var endpoint = ResolveModelsEndpoint(baseUrl, protocol, apiKey, providerId, providerName);
+
+        // Grsai 专有服务没有 /models 接口，直接返回内置官方清单（用解析后的 URL 一并判断，兼容 baseUrl 从配置回填的情况）
+        if (IsGrsaiProvider(protocol, baseUrl) || (endpoint is not null && IsGrsaiProvider("", endpoint.Url)))
+            return new { ok = true, models = GrsaiCuratedModels(), source = "curated", note = "Grsai 未提供 /models 接口，返回内置官方模型清单" };
+
         if (endpoint is null)
             return new { ok = false, error = "缺少接口地址（baseUrl）" };
         if (string.IsNullOrEmpty(endpoint.ApiKey))
