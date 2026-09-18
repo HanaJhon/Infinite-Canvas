@@ -51,7 +51,7 @@
 - **查看器**：`smart3DViewers: Map<nodeId, viewer>`，动态 `import('/static/vendor/js/three-0.160.0.module.js')`，自写环绕（pointerdown/move/up + wheel，无 OrbitControls 依赖），rAF 脏标记渲染，`render()` 后由 `sync3DViewers()` 把 canvas 搬回新舞台。**上限 6 个同时存活**，节点删除即 `dispose3DViewer()`。
 - **下游取图**：`outputImagesForNode()` 的 `smart-3d` 分支返回 `node.scene3dSnapshotUrl`；该 URL 由「场景建好后 + 拖拽/滚轮停下后（防抖 520ms）」调 `snapshot3DNode()` → `/api/ai/upload-base64` 刷新。截图 `preserveDrawingBuffer:true`。
 - ⚠️ **三个已修的坑**：① 场景字段缺失会让 `spec.rotation[0]` 抛错并拖垮整个查看器 → 应用前必须 `normalize3DScene()` 规范化并写回节点；② `persist3DCamera()` 若直接读 `camera.position`，在环绕角刚改、渲染循环还没跑到时是旧值 → 落盘前先 `apply3DCamera(viewer)`；③ **验证探针里手动 `nodes.push()` 会被异步 `loadCanvas` 覆盖**（onload 后约 3s 才完成 fetch+赋值）→ 注入前必须 `await sleep(3000+)`，或用真实 `create3DNode()` + `scheduleSave()` 让节点走服务端重载。
-- **视觉风格（2026-09-18 当前）**：**纯白 `#ffffff` 视口 + 灰白石膏白模 + 默认环境光**；查看器保留 PMREM `scene.environment`，使用默认 `AmbientLight(0.60) + DirectionalLight(0.85)`，方向光继续接收阴影；所有图元统一使用灰白 `#d9dce1` 材质，地面使用 `ShadowMaterial` 接触阴影。场景 JSON 只保留几何与相机，模型输出的颜色/灯光/地面字段不影响视觉；FOV 滑块与相机姿态持久化保留。
+- **视觉风格（2026-09-18 当前）**：**纯白 `#ffffff` 视口 + 灰白石膏白模 + 原工作室环境光**；查看器保留 PMREM `scene.environment`，使用 `HemisphereLight(0.34)` 和主/辅/轮廓三盏 `DirectionalLight(1.35/0.46/0.60)`，主光继续接收阴影；所有图元统一使用灰白 `#d9dce1` 材质，地面使用 `ShadowMaterial` 接触阴影。场景 JSON 只保留几何与相机，模型输出的颜色/灯光/地面字段不影响视觉；FOV 滑块与相机姿态持久化保留。
 - **无头 Edge 验证（2026-09-18 落地）**：必须 `--enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader`（`--disable-gpu` 会让 WebGL 兜底直接失效，`hasScene` 假）。虚拟时间三分钟，跑 3D 节点必须用真实 `create3DNode()` 而非手动 push。完整探针写法见 `infinite-canvas-verify`。
 
 ## 六、本地服务（main.py / uvicorn）

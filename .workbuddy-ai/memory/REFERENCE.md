@@ -125,25 +125,21 @@ Gemini 家族 10 个：`gemini-3.1-pro`、`gemini-2.5-pro`、`gemini-3-flash`、
 - **不要动**：`get-pip.py`（`Program.cs` 引用）、`inspire_image_dims.json`（`main.py` 引用）、`history.json`、`python/`、`packages/`、`static/`、`data/`、`workflows/`、`tools/`、`CLI/.../*-arm64-*.tgz`、`output/backup/`。
 - 删通道 ≠ API key 消失（`api_providers.json` **不存 key**，真身在 `API/.env`）。逐处核对清单见本文档 D。
 
-## H. 3D 预览：白模与默认环境光（2026-09-18）
+## H. 3D 预览：恢复原工作室环境光（2026-09-18）
 
-按老板最新要求：**纯白 `#ffffff` 视口 + 灰白白模 + 默认环境光**。只切换光照，不移除环境光或其他白模视觉能力。
+按老板最新要求：**纯白 `#ffffff` 视口 + 灰白白模 + 原工作室环境光**。保留环境贴图与接触阴影，仅恢复工作室灯光配置。
 
 ### H.1 当前实现
 
 - 环境：每个 WebGL 查看器独立创建 PMREM 摄影棚环境贴图，并绑定 `scene.environment`；销毁查看器时释放环境目标，避免跨 WebGL 上下文复用。
-- 灯光：默认 `AmbientLight(0.60)` + `DirectionalLight(0.85)`；方向光位置 `[4, 8, 5]` 并开启阴影，保证白模有明暗层次和接触阴影。
+- 灯光：`HemisphereLight(0.34)` + 主/辅/轮廓三盏 `DirectionalLight(1.35 / 0.46 / 0.60)`；主光位置 `[5.5, 9, 6.5]` 并开启阴影，辅光和轮廓光位置保持原工作室参数。
 - 地面：`ShadowMaterial({opacity:0.2})` 平面，只接收柔和接触阴影；背景固定纯白。
 - 对象材质：所有图元统一灰白石膏材质 `#d9dce1`、roughness `0.62`，plane 使用双面材质克隆。
 - `normalize3DScene()` 对旧场景做几何字段兼容，返回值只保留相机和图元；FOV 滑块与相机姿态持久化继续保留。
 
-### H.2 历史场景驱动方案（已撤回）
+### H.2 已撤回方案
 
-此前的场景自带 `background/lights/ground` 和对象材质方案已从运行代码移除；详细历史实现保留在提交 `ca4cd1a` 与当日工作日志中。
-
-### H.3 历史摄影棚三点布光方案（已替换）
-
-此前的半球光、三点方向光与工作室环境贴图方案保留作调参记录；当前运行代码仅使用默认 AmbientLight + DirectionalLight，但仍保留 PMREM 环境贴图与接触阴影。
+默认 `AmbientLight + DirectionalLight` 方案已撤回；场景自带 `background/lights/ground` 和对象材质方案仍保留在历史提交 `ca4cd1a` 中。
 
 <!--
 ### H.1 旧版常量（历史记录）

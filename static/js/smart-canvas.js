@@ -9039,9 +9039,9 @@ function load3DThree(){
     }
     return smart3DThreePromise;
 }
-// 3D 预览视觉（固定材质与背景，不受模型输出影响）：
-//   纯白背景 + 灰白石膏（clay）白模 + 默认 AmbientLight/DirectionalLight + 接触阴影。
-// 场景 JSON 只提供几何，颜色与光照一律由查看器接管，保证模型始终可见。
+// 工作室视觉（固定风格，不受模型输出影响）：
+//   纯白背景 + 灰白石膏（clay）白模 + 半球环境光 + 主/辅/轮廓三点柔光 + 柔和接触阴影。
+// 场景 JSON 只提供几何，颜色与光照一律由查看器接管，保证任何模型输出都是同一套观感。
 const SMART_3D_STUDIO = {
     background: '#ffffff',
     clay: '#d9dce1',
@@ -9049,8 +9049,10 @@ const SMART_3D_STUDIO = {
     clayMetalness: 0,
     envIntensity: 0.50,
     groundShadow: 0.2,
-    ambient: {color:'#ffffff', intensity:0.60},
-    directional: {color:'#ffffff', intensity:0.85, position:[4, 8, 5]}
+    hemisphere: {sky:'#ffffff', ground:'#e9ecf1', intensity:0.34},
+    key:  {color:'#ffffff', intensity:1.35, position:[5.5, 9, 6.5]},
+    fill: {color:'#ffffff', intensity:0.46, position:[-6.5, 4.2, 3.5]},
+    rim:  {color:'#ffffff', intensity:0.60, position:[-2.5, 5.5, -7.5]}
 };
 // 手搭一个「白色摄影棚」环境（浅灰房间 + 三块纯白柔光板），经 PMREM 卷积后作为 scene.environment。
 // 三块板用 Color.setScalar(>1) 提高亮度：PMREM 内部用半浮点目标，可以保留 >1 的光源强度。
@@ -9188,33 +9190,34 @@ function apply3DSceneToViewer(viewer, node){
     viewer.scene.background = new THREE.Color(SMART_3D_STUDIO.background);
     if(!scene){ viewer.dirty = true; return; }
     const group = new THREE.Group();
-    // ---- 默认环境光：AmbientLight + DirectionalLight ----
-    // 保留一盏方向光投射接触阴影，确保灰白白模仍有体积和明暗层次。
-    const ambient = new THREE.AmbientLight(
-        new THREE.Color(SMART_3D_STUDIO.ambient.color),
-        SMART_3D_STUDIO.ambient.intensity
+    // ---- 光照：固定工作室布光（半球环境光 + 主/辅/轮廓三点柔光）----
+    const hemisphere = new THREE.HemisphereLight(
+        new THREE.Color(SMART_3D_STUDIO.hemisphere.sky),
+        new THREE.Color(SMART_3D_STUDIO.hemisphere.ground),
+        SMART_3D_STUDIO.hemisphere.intensity
     );
-    group.add(ambient);
-    const directionalSpec = SMART_3D_STUDIO.directional;
-    const directional = new THREE.DirectionalLight(
-        new THREE.Color(directionalSpec.color),
-        directionalSpec.intensity
-    );
-    directional.position.set(
-        directionalSpec.position[0],
-        directionalSpec.position[1],
-        directionalSpec.position[2]
-    );
-    directional.castShadow = true;
-    directional.shadow.mapSize.set(1024, 1024);
-    directional.shadow.bias = -0.0006;
-    directional.shadow.normalBias = 0.022;
-    directional.shadow.radius = 3;
-    const frustum = directional.shadow.camera;
-    frustum.left = -6; frustum.right = 6; frustum.top = 6; frustum.bottom = -6;
-    frustum.near = 0.5; frustum.far = 44;
-    frustum.updateProjectionMatrix();
-    group.add(directional);
+    hemisphere.position.set(0, 8, 0);
+    group.add(hemisphere);
+    const addStudioLight = (spec, castShadow) => {
+        const light = new THREE.DirectionalLight(new THREE.Color(spec.color), spec.intensity);
+        light.position.set(spec.position[0], spec.position[1], spec.position[2]);
+        if(castShadow){
+            light.castShadow = true;
+            light.shadow.mapSize.set(1024, 1024);
+            light.shadow.bias = -0.0006;
+            light.shadow.normalBias = 0.022;
+            light.shadow.radius = 3;
+            const frustum = light.shadow.camera;
+            frustum.left = -6; frustum.right = 6; frustum.top = 6; frustum.bottom = -6;
+            frustum.near = 0.5; frustum.far = 44;
+            frustum.updateProjectionMatrix();
+        }
+        group.add(light);
+        return light;
+    };
+    addStudioLight(SMART_3D_STUDIO.key, true);
+    addStudioLight(SMART_3D_STUDIO.fill, false);
+    addStudioLight(SMART_3D_STUDIO.rim, false);
     // ---- 地面：纯白背景下的接触阴影接收面 ----
     const groundMesh = new THREE.Mesh(
         new THREE.PlaneGeometry(80, 80),
