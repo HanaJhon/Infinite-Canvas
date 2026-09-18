@@ -2077,20 +2077,34 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart3d-raw { flex:0 0 auto; max-height:118px; overflow:auto; border-radius:10px; border:1px solid var(--line); background:var(--soft); padding:6px 8px; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent; }
 .smart3d-raw summary { cursor:pointer; color:var(--faint); font-size:9.5px; font-weight:900; letter-spacing:.03em; }
 .smart3d-raw pre { margin:6px 0 0; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:9px; line-height:1.5; color:var(--text); }
-.smart3d-node .node-hint { color:var(--faint); }
 
 /* 全局规则 `.image-node:not(.empty-node) .node-head/.node-hint { display:none }` 会隐藏标题栏与提示，
    但 3D 节点没有自己的内部标题行，必须把标题（3D预览）和拖拽提示显示出来，
    否则用户既看不到节点名，也找不到除标题栏以外的拖动把手。 */
 .image-node.smart3d-node { display:flex; flex-direction:column; padding-top:0; }
-.image-node.smart3d-node .node-head { display:flex; flex:0 0 auto; }
+/* 3D 是唯一会显示标题栏的非空节点，所以标题栏必须按「内容列」对齐：
+   ① 横向内边距归零（默认 12/10 会让标题比舞台多缩进 12px）——标题左边缘与舞台左边缘齐，
+      删除按钮右边缘与舞台右边缘齐；
+   ② 去掉 border-bottom —— 舞台自己有一圈 1px 边框，标题栏与舞台间距为 0，
+      两条线会叠成 2px 双线（实测 #e8edf3 + rgba(148,163,184,.32) 各 1px）。 */
+.image-node.smart3d-node .node-head { display:flex; flex:0 0 auto; padding:0; border-bottom:0; }
 /* 操作说明已移到标题栏内，作为节点名后面的灰色小字（.node-head-sub）；底部不再渲染
    .node-hint，腾出的高度由 .node-body 的 flex:1 自动吸收，3D 视口随之变高。 */
 .image-node.smart3d-node .node-title { display:block; flex:0 0 auto; }
 .node-head-sub { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--faint); font-size:10px; font-weight:700; line-height:normal; }
 .image-node.smart3d-node .node-body { flex:1 1 auto; height:auto; min-height:0; }
 .smart3d-node .node-head { cursor:move; }
-.smart3d-fovrow { flex:0 0 auto; display:flex; align-items:center; gap:8px; height:26px; padding:0 2px; }
+/* 标题栏里的删除按钮：`.mini-x` 的 `box-shadow` + `backdrop-filter` 是给「浮在图片上的浮动按钮」
+   设计的，而全局 `.image-node:not(.empty-node) .node-delete` 只把它的背景置为 transparent，
+   阴影留在实心标题栏里就是一块悬空灰晕。这里去掉阴影与背景模糊，
+   并把 hover 反馈补回来 —— 那条全局规则是 3 个类，优先级高于 `.mini-x:hover`（2 个类），
+   不显式覆盖的话 hover 既不变色也不加底色，只剩 1px 位移。 */
+.image-node.smart3d-node .node-head .node-delete { box-shadow:none; backdrop-filter:none; }
+.image-node.smart3d-node .node-head .node-delete:hover { color:#dc2626; background:#fee2e2; }
+.theme-dark .image-node.smart3d-node .node-head .node-delete:hover { color:#fca5a5; background:rgba(239,68,68,.18); }
+/* 焦距行的左右内边距归零：默认 0 2px 会让左侧图标与上方「已识别 N 个对象」的左边、
+   右侧「45° · 29mm」与上方「重新生成」按钮的右边各错开 2px。 */
+.smart3d-fovrow { flex:0 0 auto; display:flex; align-items:center; gap:8px; height:26px; padding:0; }
 .smart3d-fovicon { width:13px; height:13px; flex:0 0 auto; color:var(--muted); stroke-width:1.8; }
 .smart3d-fov { flex:1 1 auto; min-width:0; height:4px; margin:0; padding:0; -webkit-appearance:none; appearance:none; background:transparent; cursor:pointer; }
 .smart3d-fov::-webkit-slider-runnable-track { height:4px; border-radius:3px; background:var(--line); }

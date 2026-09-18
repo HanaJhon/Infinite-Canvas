@@ -187,3 +187,49 @@ const SMART_3D_STUDIO = {
 - 当前用 `PCFSoftShadowMap`（`shadowMapType: 2`）。推断 `shadow.radius` 在该分支**不生效**（`WebGLProgram` 注入 `PCF_SOFT_SHADOWMAP` define，固定 9 次偏移采样，`shadowRadius = shadowMapSize.x`），薄几何（如 `plane` 图元）可能有**漏光条带**。若老板反馈阴影脏 → 改 `THREE.BasicShadowMap` 或调大 `shadowMapSize`。
 - 探针实测数据（774×636 画布，4 图元合成场景）：`background "#ffffff"`、四角 `[255,255,255]`；`lights 4`（hemi 0.34 + 1.35/0.46/0.60）、`shadowCastingLights 1`、`shadowMapEnabled true`、`toneMapping 0`、`outputColorSpace "srgb"`、`envMap true`；`children 9`（4 灯 + ShadowMaterial 地面 + 4 网格）、`gridHelpers 0`、`groundUsesShadowMaterial true`；`clayColor "#d9dce1"`；`pureWhitePct 87.53%`、`midGrey 0`、`dark 0`、`subjectBBox {x:281,y:94,w:231,h:366}`；`reuse {sameCanvas:true, viewers:1}`。
 - 截图：`output/3d-white-clay.png`（浅色主题）、`output/3d-white-clay-dark.png`（深色主题）。
+
+## I. 保存接口语义与 logs 坑（从 MEMORY.md 下沉）
+
+- **`PUT /api/canvases/{id}` 是全量替换**：`nodes`/`connections`/`logs`/`settings` 无条件覆盖，**不传等于清空**。
+- **必须传 `base_updated_at`**。两道守卫：①旧 base → 409；②「静默丢节点」守卫（base 不一致且本次写入会删服务端已有节点）→ 409。前端收 409 会按 id 取并集合并后用服务端 `updated_at` 重存，不死循环。
+- 只改标题/图标另有 `POST /api/canvases/{id}/meta`（不 bump `updated_at`）。
+- **`GET /api/canvases/{id}` 返回 `{"canvas": {...}}`**（包了一层）。
+- ⚠️ **清空 `logs`**：走 PUT 并**全量回传** `title/icon/nodes/connections/viewport/settings`，只把 `logs` 置 `[]`；少传 `settings` 会一起清掉几十项设置。
+- ⚠️ **「旧页面把 logs 写回来」的坑**：`applyMergedServerCanvas()`（`smart-canvas.js:6122`）409 时只合并 nodes/connections、不合并 logs；随后 `saveCanvas` 重试（`:6837`）带旧 logs 且 base 已更新 → 守卫放行、日志被写回。**清完 logs 必须让用户刷新页面。**
+
+## J. 前端要点（从 MEMORY.md 下沉）
+
+- `static/` 下全项目只有一份 `smart-canvas.html/js/css`。`canvas.html` **不带 `?id=` 会跳选画布页**。
+- 节点根元素 `.image-node[data-id="<nodeId>"]`（不是 `[data-node-id]`）。提示词节点 `.prompt-node-card`/`.prompt-node-text`/`.prompt-llm-toggle`。
+- lucide 名在 `static/vendor/js/lucide.js` 存 **PascalCase**，kebab-case 是运行时派生 → `includes('clapperboard')` 判存在会误报。
+- 改 i18n 必跑 `node static/js/i18n/validate-i18n.js`（未解析 key 就 exit 1）。**约定**：JS 动态文案要监听 `studio-lang-change` 重画；`t()` **不做 `{name}` 插值**；后端提示除中文原文再回一份 `warning_codes`。
+- **静态资源缓存**：`/static` 默认无缓存头，已加中间件对 `.js`/`.css` 加 `no-cache, must-revalidate`；`i18n.js` 从自身 script 的 `?v=` 取版本。**验证前端改动务必用全新 `--user-data-dir`**。
+- 节点类型 `smart-image`（=「快速生图」）/`smart-group`/`smart-prompt`/`smart-loop`/`smart-minimax`/`smart-3d`（3D预览）/`smart-container`（legacy）。连接 `canvas.connections=[{from,to,kind}]`，`kind` ∈ `input`/`flow`；`node.inputNodeIds` 同步维护。
+- ⚠️ **非空节点的 `.node-head`/`.node-title`/`.node-hint` 被全局隐藏**（CSS 574/575/702 行）。**新增非图片节点类型必须显式重新显示**，否则节点名、提示、拖动把手都看不到。同理 `.image-node.selected:not(...)` 长 `:not` 链要补新型号。
+- ⚠️ **节点拖拽在 `beginNodeDrag`（`el.onmousedown`）里用「排除选择器」判断**。节点内任何需自吃鼠标事件的区域（如 3D 舞台）必须加进排除列表，否则会被节点拖拽抢走。
+- **视觉识别管线已通、无需后端改动**：`POST /api/canvas-llm`（`main.py:3453`）的 `images` 支持 `/output/*.png`、`/assets/*.png`、http(s)、data URL，最多 8 张。
+- **three.js 已内置**：`static/vendor/js/three-0.160.0.module.js`（r160）；`static/angle.html` 有现成 importmap 写法。
+- **`render()`（`smart-canvas.js:9166`）是节点渲染主入口，147 处调用、无节流** → WebGL 查看器 DOM 必须复用（浏览器上限约 16 个上下文）。
+
+## K. 3D 预览节点界面约定（从 MEMORY.md 下沉）
+
+- **定位**：上游只能是「快速生图」（`smart-image`），下游也只能是「快速生图」；与 prompt/loop/group 双向都拒绝（`canAutoConnectDraggedNode()` + `connectInputNode()` 双处硬校验，两处都要改）。
+- **生成路线**：上游图片 → `POST /api/canvas-llm`（系统提示词 `SMART_3D_SYSTEM_PROMPT`，`smart-canvas.js:8909`）→ `smart3DParseSceneJson()`（含围栏与尾随逗号容错）→ `normalize3DScene()` → 存进 `node.scene3d`。7 种图元：box/sphere/cylinder/cone/torus/capsule/plane。
+- **节点字段**：`scene3d`、`scene3dRaw`（截 20k）、`scene3dError`、`camera`（`{position,target,fov}`，跨刷新恢复）、`scene3dSnapshotUrl`、`model`/`provider`。截图 dataURL 只放内存 `smart3DSnapshotData`，**不进画布 JSON**。
+- **FOV 滑块（2026-09-18 加上）**：`.smart3d-bar` 里 `[data-3d-fov]` 范围 20°–90° 步进 1，读数同步显示「XX° · XXmm」（35mm 全画幅等效：`f = 12 / tan(fov/2)`，由 `smart3DFocalMm()` 计算）。滑块 `input` 实时改 `viewer.camera.fov` + `updateProjectionMatrix()` + 脏标记；`change` 写 `node.camera.fov` + `scheduleSave()`（点 `change` 才落盘，避免拖动过程每次 200ms 触发 debounce 风暴）。`apply3DSceneToViewer` 优先用 `node.camera.fov`（覆盖场景默认）；`persist3DCamera` 把 `fov` 一并写入 `node.camera`（拖拽改角后也会落）。绑定事件里要 `stopPropagation` 防节点拖拽抢走；`el.querySelectorAll('[data-3d-provider],...')` 排除链要补 `[data-3d-fov]`。
+- **查看器**：`smart3DViewers: Map<nodeId, viewer>`，动态 `import('/static/vendor/js/three-0.160.0.module.js')`，自写环绕（pointerdown/move/up + wheel，无 OrbitControls 依赖），rAF 脏标记渲染，`render()` 后由 `sync3DViewers()` 把 canvas 搬回新舞台。**上限 6 个同时存活**，节点删除即 `dispose3DViewer()`。
+- **下游取图**：`outputImagesForNode()` 的 `smart-3d` 分支返回 `node.scene3dSnapshotUrl`；该 URL 由「场景建好后 + 拖拽/滚轮停下后（防抖 520ms）」调 `snapshot3DNode()` → `/api/ai/upload-base64` 刷新。截图 `preserveDrawingBuffer:true`。
+- ⚠️ **三个已修的坑**：① 场景字段缺失会让 `spec.rotation[0]` 抛错并拖垮整个查看器 → 应用前必须 `normalize3DScene()` 规范化并写回节点；② `persist3DCamera()` 若直接读 `camera.position`，在环绕角刚改、渲染循环还没跑到时是旧值 → 落盘前先 `apply3DCamera(viewer)`；③ **验证探针里手动 `nodes.push()` 会被异步 `loadCanvas` 覆盖**（onload 后约 3s 才完成 fetch+赋值）→ 注入前必须 `await sleep(3000+)`，或用真实 `create3DNode()` + `scheduleSave()` 让节点走服务端重载。
+- **无头 Edge 验证**：必须 `--enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader`（`--disable-gpu` 会让 WebGL 兜底直接失效，`hasScene` 假）。虚拟时间三分钟，跑 3D 节点必须用真实 `create3DNode()` 而非手动 push。完整探针写法见 `infinite-canvas-verify` 技能。
+
+### K.1 节点外框布局约定（2026-09-18 定稿）
+
+① `.image-node.smart3d-node` 加 `padding-top:0`，让标题栏贴齐节点顶部（其他节点内缩 12px，3D 节点标题栏必须顶到边）；② **3D 节点必须跳过 `.floating-node-actions` 浮动删除按钮**（渲染模板里加 `&& !is3D`）——标题栏被专门显示后两者会重叠，浮动按钮落在覆盖层下方不可点击；③ **交互说明放在标题栏内，3D 节点不渲染底部 `.node-hint`**：`render()` 里用 `headSub` 把 `<span class="node-head-sub">` 插到 `.node-head` 中、紧跟 `.node-title` 之后，同时把 `hint` 置空并改成条件渲染 `${hint ? '<div class="node-hint">…</div>' : ''}`。⚠️ **`headSub` 必须以 `is3D && smart3DHasScene(node)` 为条件**——空场景/生成失败时那句话（`smart.3dEmptyHint`「连接快速生图后点生成」）已由舞台中央占位层显示，再放进标题栏就是重复，且生成失败时会显示错误引导。`.node-head-sub` 是 `--faint` 灰色小字（`font-size:10px; font-weight:700; line-height:normal`，与 `.smart3d-meta`/`.smart3d-select`/`.smart3d-run`/`.smart3d-fovval` 同规格），`flex:1 1 auto` 负责顶开右侧删除按钮；对应地 3D 的 `.node-title` 由 `flex:1 1 auto` 改为 `flex:0 0 auto`。腾出的约 25px 高度由 `.node-body{flex:1 1 auto}` 自动吸收，3D 视口随之变高，节点总高不变。
+
+## L. 本地服务与 git 红线补充（从 MEMORY.md 下沉）
+
+- ⚠️ **启动时 `sync_static_html_versions()`（`main.py:1743`）把 `static/*.html` 的 `?v=` 重写为 `<VERSION>.<资源mtime>` 并写回磁盘** → 每次重启让十几个 html 变 modified。**这是缓存破坏参数，必须保持最新，不要为 git 干净去 `git checkout` 还原** —— 踩过：还原后浏览器继续用缓存旧 JS，而新 CSS 已隐藏 iframe 内原胶囊 → 两个胶囊都不显示，表现为「项目功能整个消失」。
+- ⚠️ **本机「删除即入回收站」→ 清理不释放磁盘空间**（`shutil.rmtree`、`SHFileOperationW`、`git gc` 删旧 pack 都只是搬进回收站）。**真正释放 = 清空回收站**，汇报成果必须同时给回收站占用。
+- ⚠️ **绝不要用 `git rm <文件>`** —— 实测让**整个父目录消失**（`packages/` 41 文件、`tests/` 两次复现）。恢复用 `git checkout HEAD -- <目录>/`；**正确做法**是 Python `os.remove` / ctypes `DeleteFileW` 删文件再 `git add -A <目录>/`。
+- **裸 `git` 不可用**（RTK hook 改写成 `rtk git`，rtk 解析不到）。真身：`C:/Users/Administrator/.workbuddy-ai/binaries/PortableGit/versions/1.2.0/mingw64/bin/git.exe`。`git status --cached` 非法，看暂存用 `git diff --cached --name-status`。
+- ⚠️ **工具会话内 `git push` 会无限挂起**：系统级 `credential.helper=helper-selector`（GUI 助手）无界面时静默挂起；`git credential fill` → `could not read Username ... terminal prompts disabled`。**`ls-remote` 成功是假信号**（公开仓库匿名可读）。已排除直连出口、代理、HTTP/1.1、postBuffer、数据量（仅 138 对象）。结论：**推送必须由老板本人终端执行**。
