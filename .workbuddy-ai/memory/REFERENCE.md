@@ -125,11 +125,24 @@ Gemini 家族 10 个：`gemini-3.1-pro`、`gemini-2.5-pro`、`gemini-3-flash`、
 - **不要动**：`get-pip.py`（`Program.cs` 引用）、`inspire_image_dims.json`（`main.py` 引用）、`history.json`、`python/`、`packages/`、`static/`、`data/`、`workflows/`、`tools/`、`CLI/.../*-arm64-*.tgz`、`output/backup/`。
 - 删通道 ≠ API key 消失（`api_providers.json` **不存 key**，真身在 `API/.env`）。逐处核对清单见本文档 D。
 
-## H. 3D 预览：纯白工作室 + 灰白白模配方（2026-09-18 定稿）
+## H. 3D 预览：恢复首版场景驱动渲染（2026-09-18）
 
-老板要求：「3D预览的视图场景用纯白色，3D模型材质用灰白色的白模，加入标准工作室环境光。」
+此前曾短暂试用「纯白工作室 + 灰白白模」方案，现按老板要求恢复首版样式：深色 `#12161f` 视口、场景自带背景/灯光/地面/网格和对象颜色。查看器不再创建 `SMART_3D_STUDIO`、PMREM 环境贴图、半球光、三点方向光或 `ShadowMaterial` 接触阴影。
 
-### H.1 常量（`smart-canvas.js` 的 `SMART_3D_STUDIO`）
+### H.1 当前实现
+
+- 默认灯光：`AmbientLight(0.6)` + `DirectionalLight(0.85)`，方向光位置 `[4, 8, 5]`。
+- 地面：可见 `MeshStandardMaterial` 平面；网格：`GridHelper`，颜色和显示状态读取 `scene.ground`。
+- 对象材质：读取 `spec.color` / `roughness` / `metalness`，不再统一覆写为灰白白模。
+- `normalize3DScene()` 保留并规范化 `background/lights/ground` 与对象材质字段；旧画布缺字段时回退默认值。
+- FOV 滑块和相机姿态持久化继续保留。
+
+### H.2 历史工作室方案（已撤回）
+
+此前的 `SMART_3D_STUDIO`、PMREM、半球光、三点方向光与接触阴影方案已从运行代码移除；详情保留在提交 `86b30ce` 与当日工作日志中。
+
+<!--
+### H.1 旧版常量（历史记录）
 
 ```js
 const SMART_3D_STUDIO = {

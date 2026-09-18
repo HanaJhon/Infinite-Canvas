@@ -8930,7 +8930,8 @@ const SMART_3D_SYSTEM_PROMPT = [
     '- "position" and "rotation" are [x, y, z]; rotation is in degrees.',
     '- Build the subject from 4 to 24 primitives. Approximate complex shapes with several primitives, never with one oversized blob.',
     '- The bottom of the subject must rest on y = 0.',
-    '- Geometry only. The viewer renders every primitive as a uniform light-grey clay model on a pure white background under fixed studio lighting, so do NOT output colours, materials, lights, ground, grid or background.',
+    '- Include the scene background, simple lights, ground/grid settings, and a representative colour for each primitive when they help match the reference image.',
+    '- Keep materials simple and lightweight. Do not use textures, external assets, or complex shader data.',
     '- Every [x, y, z] array must contain exactly 3 finite numbers. Output strictly valid JSON.'
 ].join('\n');
 
@@ -8973,7 +8974,10 @@ function normalize3DScene(input){
             type,
             name: String(item.name || `${type}-${index + 1}`).slice(0, 60),
             position: smart3DNumArray(item.position, 3, [0, 0, 0]),
-            rotation: smart3DNumArray(item.rotation, 3, [0, 0, 0])
+            rotation: smart3DNumArray(item.rotation, 3, [0, 0, 0]),
+            color: typeof item.color === 'string' && item.color.trim() ? item.color.trim() : '#d9dce1',
+            roughness: Number.isFinite(Number(item.roughness)) ? Math.min(1, Math.max(0, Number(item.roughness))) : 0.72,
+            metalness: Number.isFinite(Number(item.metalness)) ? Math.min(1, Math.max(0, Number(item.metalness))) : 0
         };
         if(type === 'box' || type === 'plane'){
             const fallback = type === 'plane' ? [1, 1, 0] : [1, 1, 1];
@@ -9000,10 +9004,26 @@ function normalize3DScene(input){
     if(!objects.length) return null;
     const camera = (input.camera && typeof input.camera === 'object') ? input.camera : {};
     const fov = Number(camera.fov);
-    // 背景、光照、地面、材质全部由查看器接管（纯白工作室 + 灰白白模），
-    // 场景 JSON 只保留几何与相机，因此这里不再产出 background/lights/ground/material 字段。
+    const fallbackLights = [
+        {type:'ambient', color:'#ffffff', intensity:0.6},
+        {type:'directional', color:'#ffffff', intensity:0.85, position:[4, 8, 5]}
+    ];
+    const lights = (Array.isArray(input.lights) ? input.lights : fallbackLights).map(light => ({
+        type: String(light?.type || 'ambient').toLowerCase() === 'directional' ? 'directional' : 'ambient',
+        color: typeof light?.color === 'string' && light.color.trim() ? light.color.trim() : '#ffffff',
+        intensity: Number.isFinite(Number(light?.intensity)) ? Math.max(0, Number(light.intensity)) : 0.6,
+        position: smart3DNumArray(light?.position, 3, [4, 8, 5])
+    })).slice(0, 4);
+    const ground = input.ground && typeof input.ground === 'object' ? input.ground : {};
+    // 恢复首版场景驱动渲染：背景、灯光、地面与网格继续来自场景 JSON。
     return {
-        background: SMART_3D_STUDIO.background,
+        background: typeof input.background === 'string' && input.background.trim() ? input.background : '#12161f',
+        lights: lights.length ? lights : fallbackLights,
+        ground: {
+            show: ground.show !== false,
+            grid: ground.grid !== false,
+            color: typeof ground.color === 'string' && ground.color.trim() ? ground.color.trim() : '#1a2030'
+        },
         camera: {
             position: smart3DNumArray(camera.position, 3, [3, 2.4, 4.2]),
             target: smart3DNumArray(camera.target, 3, [0, 0.6, 0]),
@@ -9039,55 +9059,7 @@ function load3DThree(){
     }
     return smart3DThreePromise;
 }
-// 工作室视觉（固定风格，不受模型输出影响）：
-//   纯白背景 + 灰白石膏（clay）白模 + 半球环境光 + 主/辅/轮廓三点柔光 + 柔和接触阴影。
-// 场景 JSON 只提供几何，颜色与光照一律由查看器接管，保证任何模型输出都是同一套观感。
-const SMART_3D_STUDIO = {
-    background: '#ffffff',
-    clay: '#d9dce1',
-    clayRoughness: 0.62,
-    clayMetalness: 0,
-    envIntensity: 0.50,
-    groundShadow: 0.2,
-    hemisphere: {sky:'#ffffff', ground:'#e9ecf1', intensity:0.34},
-    key:  {color:'#ffffff', intensity:1.35, position:[5.5, 9, 6.5]},
-    fill: {color:'#ffffff', intensity:0.46, position:[-6.5, 4.2, 3.5]},
-    rim:  {color:'#ffffff', intensity:0.60, position:[-2.5, 5.5, -7.5]}
-};
-// 手搭一个「白色摄影棚」环境（浅灰房间 + 三块纯白柔光板），经 PMREM 卷积后作为 scene.environment。
-// 三块板用 Color.setScalar(>1) 提高亮度：PMREM 内部用半浮点目标，可以保留 >1 的光源强度。
-// ⚠️ 必须按渲染器创建：贴图绑定在各自的 WebGL 上下文上，跨查看器复用会失效。
-function build3DStudioEnvironment(THREE, renderer){
-    try{
-        const envScene = new THREE.Scene();
-        const room = new THREE.Mesh(
-            new THREE.BoxGeometry(14, 14, 14),
-            new THREE.MeshBasicMaterial({color:new THREE.Color().setScalar(0.82), side:THREE.BackSide})
-        );
-        envScene.add(room);
-        const addPanel = (width, height, position, rotation, gain) => {
-            const material = new THREE.MeshBasicMaterial({color:new THREE.Color().setScalar(gain)});
-            material.side = THREE.DoubleSide;
-            const panel = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
-            panel.position.set(position[0], position[1], position[2]);
-            panel.rotation.set(rotation[0], rotation[1], 0);
-            envScene.add(panel);
-        };
-        addPanel(7, 7, [0, 6.2, 0], [-Math.PI / 2, 0], 2.0);      // 顶光柔光箱（水平，朝下）
-        addPanel(6, 5, [5.6, 3.4, 2.6], [0, -1.05], 1.6);         // 主光柔光箱（右前上）
-        addPanel(6, 5, [-5.6, 2.8, 1.8], [0, 1.05], 1.1);         // 辅光柔光箱（左前）
-        const pmrem = new THREE.PMREMGenerator(renderer);
-        const target = pmrem.fromScene(envScene, 0.04);
-        pmrem.dispose();
-        envScene.traverse(child => {
-            try{ child.geometry?.dispose?.(); }catch(e) {}
-            try{ child.material?.dispose?.(); }catch(e) {}
-        });
-        return target;
-    }catch(error){
-        return null;
-    }
-}
+// 原始 3D 预览使用场景数据自带的背景、灯光、地面与材质，不额外叠加工作室环境光。
 function smart3DGeometryFor(THREE, spec){
     switch(spec.type){
         case 'box': return new THREE.BoxGeometry(spec.size[0], spec.size[1], spec.size[2]);
@@ -9187,63 +9159,47 @@ function apply3DSceneToViewer(viewer, node){
             scene = normalized;
         }
     }
-    viewer.scene.background = new THREE.Color(SMART_3D_STUDIO.background);
+    viewer.scene.background = new THREE.Color(scene?.background || '#12161f');
     if(!scene){ viewer.dirty = true; return; }
     const group = new THREE.Group();
-    // ---- 光照：固定工作室布光（半球环境光 + 主/辅/轮廓三点柔光）----
-    const hemisphere = new THREE.HemisphereLight(
-        new THREE.Color(SMART_3D_STUDIO.hemisphere.sky),
-        new THREE.Color(SMART_3D_STUDIO.hemisphere.ground),
-        SMART_3D_STUDIO.hemisphere.intensity
-    );
-    hemisphere.position.set(0, 8, 0);
-    group.add(hemisphere);
-    const addStudioLight = (spec, castShadow) => {
-        const light = new THREE.DirectionalLight(new THREE.Color(spec.color), spec.intensity);
-        light.position.set(spec.position[0], spec.position[1], spec.position[2]);
-        if(castShadow){
-            light.castShadow = true;
-            light.shadow.mapSize.set(1024, 1024);
-            light.shadow.bias = -0.0006;
-            light.shadow.normalBias = 0.022;
-            light.shadow.radius = 3;
-            const frustum = light.shadow.camera;
-            frustum.left = -6;
-            frustum.right = 6;
-            frustum.top = 6;
-            frustum.bottom = -6;
-            frustum.near = 0.5;
-            frustum.far = 44;
-            frustum.updateProjectionMatrix();
+    // ---- 原始环境光：场景自带的环境光 + 主方向光 ----
+    (scene.lights || []).forEach(lightSpec => {
+        const color = new THREE.Color(lightSpec.color || '#ffffff');
+        if(lightSpec.type === 'directional'){
+            const light = new THREE.DirectionalLight(color, Number(lightSpec.intensity) || 0.85);
+            const position = Array.isArray(lightSpec.position) ? lightSpec.position : [4, 8, 5];
+            light.position.set(Number(position[0]) || 0, Number(position[1]) || 0, Number(position[2]) || 0);
+            group.add(light);
+        } else {
+            group.add(new THREE.AmbientLight(color, Number(lightSpec.intensity) || 0.6));
         }
-        group.add(light);
-        return light;
-    };
-    addStudioLight(SMART_3D_STUDIO.key, true);
-    addStudioLight(SMART_3D_STUDIO.fill, false);
-    addStudioLight(SMART_3D_STUDIO.rim, false);
-    // ---- 地面：纯白背景下的接触阴影接收面 ----
-    // 用 ShadowMaterial（只在被遮挡处着色），地面本身透明，背景因此仍是纯白。
-    const groundMesh = new THREE.Mesh(
-        new THREE.PlaneGeometry(80, 80),
-        new THREE.ShadowMaterial({opacity:SMART_3D_STUDIO.groundShadow})
-    );
-    groundMesh.rotation.x = -Math.PI / 2;
-    groundMesh.receiveShadow = true;
-    group.add(groundMesh);
-    // ---- 白模材质：所有图元共用同一份灰白石膏材质 ----
-    const clay = new THREE.MeshStandardMaterial({
-        color:new THREE.Color(SMART_3D_STUDIO.clay),
-        roughness:SMART_3D_STUDIO.clayRoughness,
-        metalness:SMART_3D_STUDIO.clayMetalness,
-        envMapIntensity:SMART_3D_STUDIO.envIntensity
     });
-    const clayTwoSided = clay.clone();
-    clayTwoSided.side = THREE.DoubleSide;
+    // ---- 原始地面与网格 ----
+    const groundSpec = scene.ground || {};
+    if(groundSpec.show !== false){
+        const groundMesh = new THREE.Mesh(
+            new THREE.PlaneGeometry(20, 20),
+            new THREE.MeshStandardMaterial({color:new THREE.Color(groundSpec.color || '#1a2030'), roughness:0.88, metalness:0})
+        );
+        groundMesh.rotation.x = -Math.PI / 2;
+        group.add(groundMesh);
+    }
+    if(groundSpec.grid !== false){
+        const gridColor = new THREE.Color(groundSpec.color || '#1a2030');
+        const grid = new THREE.GridHelper(12, 12, gridColor.clone().offsetHSL(0, 0, 0.16), gridColor.clone().offsetHSL(0, 0, 0.06));
+        grid.position.y = 0.006;
+        group.add(grid);
+    }
     scene.objects.forEach(spec => {
         const geometry = smart3DGeometryFor(THREE, spec);
         if(!geometry) return;
-        const mesh = new THREE.Mesh(geometry, spec.type === 'plane' ? clayTwoSided : clay);
+        const material = new THREE.MeshStandardMaterial({
+            color:new THREE.Color(spec.color || '#d9dce1'),
+            roughness:Number.isFinite(Number(spec.roughness)) ? Number(spec.roughness) : 0.72,
+            metalness:Number.isFinite(Number(spec.metalness)) ? Number(spec.metalness) : 0
+        });
+        if(spec.type === 'plane') material.side = THREE.DoubleSide;
+        const mesh = new THREE.Mesh(geometry, material);
         const position = Array.isArray(spec.position) ? spec.position : [0, 0, 0];
         const rotation = Array.isArray(spec.rotation) ? spec.rotation : [0, 0, 0];
         mesh.position.set(Number(position[0]) || 0, Number(position[1]) || 0, Number(position[2]) || 0);
@@ -9354,17 +9310,9 @@ async function create3DViewer(nodeId){
         // 纯白背景必须原样输出：关掉色调映射，否则白色会被压灰。
         renderer.outputColorSpace = THREE.SRGBColorSpace;
         renderer.toneMapping = THREE.NoToneMapping;
-        renderer.shadowMap.enabled = true;
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 400);
-        const viewer = {nodeId, THREE, renderer, scene, camera, canvas, content:null, sceneRef:null, orbit:null, hasScene:false, dirty:true, frame:0, disposed:false, bufferW:0, bufferH:0, envTarget:null};
-        // 摄影棚环境贴图按渲染器创建（贴图绑定各自的 WebGL 上下文，不能跨查看器共用）。
-        const envTarget = build3DStudioEnvironment(THREE, renderer);
-        if(envTarget){
-            viewer.envTarget = envTarget;
-            scene.environment = envTarget.texture;
-        }
+        const viewer = {nodeId, THREE, renderer, scene, camera, canvas, content:null, sceneRef:null, orbit:null, hasScene:false, dirty:true, frame:0, disposed:false, bufferW:0, bufferH:0};
         smart3DViewers.set(nodeId, viewer);
         const stage = smart3DNodeElement(nodeId)?.querySelector('[data-3d-stage]');
         if(stage) stage.appendChild(canvas);
@@ -9393,9 +9341,6 @@ function dispose3DViewer(nodeId){
     viewer.disposed = true;
     if(viewer.frame) cancelAnimationFrame(viewer.frame);
     if(viewer.content) dispose3DObject(viewer.content);
-    try{ viewer.scene.environment = null; }catch(e) {}
-    try{ viewer.envTarget?.dispose?.(); }catch(e) {}
-    viewer.envTarget = null;
     try{
         viewer.renderer.dispose?.();
         viewer.renderer.forceContextLoss?.();
