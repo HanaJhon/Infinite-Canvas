@@ -19,7 +19,7 @@
 - ⚠️ 非空节点的 `.node-head`/`.node-title`/`.node-hint` 被全局隐藏（CSS 574/575/702）→ **新增非图片节点类型必须显式重显**；`.image-node.selected:not(...)` 长 `:not` 链要补新型号。
 - ⚠️ 节点拖拽靠 `beginNodeDrag` 的「排除选择器」判断，自吃鼠标事件的区域（如 3D 舞台）必须加进排除列表。
 - 改 i18n 必跑 `validate-i18n.js`；`t()` **不做 `{name}` 插值**；动态文案要监听 `studio-lang-change` 重画。
-- **验证前端改动务必用全新 `--user-data-dir`**；`render()`（`smart-canvas.js:9166`）无节流 → WebGL 查看器 DOM 必须复用。其余见 J。
+- **验证前端改动务必用全新 `--user-data-dir`**；`render()` 无节流 → WebGL 查看器 DOM 必须复用。其余见 J。
 
 ## 四、模型下拉与 Grsai
 
@@ -31,16 +31,16 @@
 
 - 上下游都只能接「快速生图」，与 prompt/loop/group 双向拒绝（`canAutoConnectDraggedNode()` + `connectInputNode()` **两处都要改**）。视觉风格见 H。
 - **three.js 本地 r160（2023-12）、官方最新 r186（2026-09）**；升级清单见 M。
-- 外框 / 标题栏 / 窄节点折叠 / 四态约定全部见 K。最易踩的三条：
+- 外框 / 标题栏 / 窄节点折叠 / 四态约定全部见 K。最易踩的两条：
   ① 🚨 **折叠阈值必须按实测文案宽度算**（`smart3DBarNeedWidth`），**不能写死像素** —— 英文比中文宽 20~30px；模型名完整显示需 select ≥104px（原生箭头占 19px，DOM 量不出截断）。
   ② ⚠️ 失败态必须加 `.is-error`，否则与中性空态同色；`.smart3d-nomodel` 是阻断性告警必须读得全（`nowrap`+`overflow:hidden` 会硬切，已改允许换行）。
-  ③ 🚨 **舞台深浅两主题下都是纯白，白底区域不要按主题切色**。
-- **两主题取色方向相反**：挂在**节点面板**上的元素（`.smart3d-nomodel`）**必须**按主题取色；挂在**恒白舞台**上的（`.smart3d-placeholder.is-error`）**绝不能**按主题切（深色换 `#f87171` 掉到 2.76:1）。10px 小字按 AA 4.5:1。基线表见 K.9。
+- **取色方向随挂载面而定**：挂在**节点面板**（随主题变色）的**必须**按主题取色；挂在**恒白舞台**的（如 `.smart3d-placeholder.is-error`）**绝不能**按主题切。10px 小字按 AA **4.5:1**。基线表 K.9。
+- **键盘焦点必须可见**（WCAG 2.4.7 AA）：`outline:none` 必配替代环；写法 `:focus` 给环 + `:focus:not(:focus-visible)` 撤环（只写后者在个别浏览器会退回「无指示」），色取 `var(--strong)`。见 K.10。
 
 ## 六、本地服务
 
-- 启动：`./python/python.exe main.py`（端口 3000，**必须后台 Bash 任务方式启动**，日志 `output/server.log`；本机 `curl` 不可用，改用 Python `socket`/`urllib`）。
-- ⚠️ 启动会重写 `static/*.html` 的 `?v=`，**不要为 git 干净去还原**（否则浏览器继续用旧 JS，表现为「项目功能整个消失」）。
+- 启动 `./python/python.exe main.py`（端口 3000，**必须后台 Bash 任务**，日志 `output/server.log`；本机 `curl` 不可用，改用 Python `urllib`）。
+- ⚠️ 启动会重写 `static/*.html` 的 `?v=`，**不要为 git 干净去还原**（否则浏览器用旧 JS，表现为「功能整个消失」）。
 
 ## 七、磁盘与 git 硬红线
 

@@ -364,7 +364,7 @@ window.__orig = chatApiProviders; chatApiProviders = function(){ return []; }; r
 // 量完后：chatApiProviders = window.__orig; render();
 ```
 
-### K.9 深色主题验证（2026-09-18 第八轮，commit a082fad）
+### K.9 深色主题验证（2026-09-18 第八轮，commit d346199 / 原 a082fad）
 
 **主题机制**：`.theme-dark`（`smart-canvas.css:7`）重定义 11 个变量
 （`--text:#e5e9f0 / --muted:#8f9aab / --faint:#657286 / --line:#2a3444 / --soft:#111722
@@ -423,6 +423,55 @@ window.__orig = chatApiProviders; chatApiProviders = function(){ return []; }; r
 `scene3dSnapshotUrl`（`assets/input/ai_ref_8c91feac569b.png`）写入时间 19:24:33，
 前后 19:24:26~33 有一簇上传，正是「拖拽/滚轮停下后防抖 520ms 截图」的产物。
 **判据**：先看 `assets/input/` 最近文件时间是否落在窗口内，再决定是不是事故。
+
+### K.10 键盘焦点可见性（2026-09-18 第九轮，commit d2625de）
+
+**发现的唯一真实缺陷**：`.smart3d-fov`（焦距滑块）原本只有 `.smart3d-fov:focus { outline:none }`，
+抹掉了 UA 焦点环却没有任何替代指示 → 键盘用户看不出焦点停在哪，**WCAG 2.4.7（焦点可见，AA）违规**。
+实测该元素 `focusable=True`、`:focus-visible=True`，但 `hasIndicator=NO`
+（focus 前后 outline / border / box-shadow 全无变化）；而节点内另外 5 个可 Tab 元素
+（两个下拉、生成按钮、raw 摘要、删除按钮）都有指示 —— 只有这一个漏了。
+
+**改法**（`static/css/smart-canvas.css` 约 2144 行）：
+```css
+.smart3d-fov:focus { outline:2px solid var(--strong); outline-offset:3px; border-radius:6px; }
+.smart3d-fov:focus:not(:focus-visible) { outline:none; }
+```
+- 取色 `var(--strong)`（浅 `#111827` / 深 `#d8dee9`），与同节点
+  `.smart3d-select:focus { border-color:var(--strong) }` 用同一个焦点色，对各自面板都远超非文本对比 3:1。
+- ⚠️ **不要只用 `:focus-visible` 单写**：个别浏览器/脚本聚焦下它不匹配，会退回「完全没有指示」。
+  用「`:focus` 给环 + `:focus:not(:focus-visible)` 撤环」两条规则的**并集**，保证键盘一定有环、
+  鼠标点进来拖动滑块不会闪环。
+- ⚠️ 项目里 `.smart-video-play:focus-visible` 的蓝 `rgba(59,130,246,.72)` 在浅色面板只有
+  **2.48:1**，**不能照抄到节点内**。
+
+**验证**：浅色 `outline none → solid 2px rgb(17,24,39)`、深色 `none → solid 2px rgb(216,222,233)`，
+`outlineOffset` 均 `0 → 3px`；截图像素扫到 y425~438 两条约 **445px** 宽的横向环边
+（与滑块宽度吻合），深浅两主题下环均完整可见、未被裁切。
+
+**⚠️ 探针报「无焦点指示」的两个非缺陷**：`.smart3d-stage`（`div`，`tabIndex=-1`）与
+`.smart3d-canvas` 都**不可 Tab**，报 `missing` 属正常，不用管。
+
+### K.11 提交信息被 bash 吞掉的事故与修复（2026-09-18）
+
+**事故**：用外层 bash 的 `python -c "..."` 传**含反引号**的提交信息 → bash 先做命令替换，
+反引号内的整段文字被删除（stderr 报 `:focus: command not found`、
+`syntax error near unexpected token '('`）。`a082fad`、`85a8b34` 两条提交信息因此缺字
+（**代码改动本身无误**，只有 message 受损）。
+
+**修复**：只改 message、不动树 —— 用 `git commit-tree` 重建 commit 对象：
+```
+用 GIT_AUTHOR_* / GIT_COMMITTER_* 环境变量还原原作者与提交时间
+NEW=$(git commit-tree <原 tree> -p <新父提交> -F <msg 文件>)
+git update-ref refs/heads/main $NEW
+```
+`a082fad → d346199`、`bee62fa → e1ab191`、`85a8b34 → d2625de`。
+校验：`git diff 85a8b34 d2625de` **输出为空**（树逐字一致）、`git status` 干净、
+`git fsck` 无异常。当时本地尚未 push，无远端冲突。
+
+**教训（通用）**：**任何含反引号 / `$` / `!` 的文本，一律先 Write 成文件再用 `-F` 引用，
+绝不通过 shell 字符串传递。** 重写历史前必须 `git bundle create ../repo-<日期>.bundle --all` 留底
+（本次 452.7 MB，`bundle verify` 通过）。
 
 ## L. 本地服务与 git 红线补充（从 MEMORY.md 下沉）
 
