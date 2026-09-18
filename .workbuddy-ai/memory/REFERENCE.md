@@ -313,7 +313,7 @@ function smart3DBarNeedWidth(metaText, runText){
 - 写入 200×150 的节点会被 `smart3DLayoutSize()` 钳到 **320×280**（`SMART_3D_MIN_W/H`），窄态是真实可达的边界。
 - 320×280 + 超长上游报错 + 展开 raw 时 `.smart3d-placeholder` 156/156 无溢出。
 
-### K.6 `<select>` 截断的检测与定标（2026-09-18 第六轮）
+### K.5 `<select>` 截断的检测与定标（2026-09-18 第六轮）
 
 🚨 **`<select>` 的文字截断无法用 DOM 检测**：`sel.scrollWidth === sel.clientWidth` **恒成立**（92~130px 全扫过）。用 `need > clientWidth - padding - border` 判定会得出**错误结论**（实测：报「英文 480px 未截断」，截图却是 `gemini-3.1…`）。
 
@@ -328,13 +328,41 @@ function smart3DBarNeedWidth(metaText, runText){
 
 **DOM 侧的等价判据**：`selW < textW + 12 + 2 + 19`（textW 用 canvas 2D 按实际字体量）。用它做全量扫描比逐张截图快得多。
 
-### K.5 选中态（2026-09-18 第五轮同批验证）
-
-### K.5 选中态（2026-09-18 第五轮同批验证）
+### K.6 选中态（2026-09-18 第五轮同批验证）
 
 `.image-node.smart3d-node.selected` 走全局规则 `border-color:var(--strong); box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow)`，实测 `borderTopColor` 由 `rgb(232,237,243)` → **`rgb(17,24,39)`**、`boxShadow` → **`rgb(17,24,39) 0 0 0 1px, rgba(15,23,42,.08) 0 14px 36px`**，正常。
 
 ⚠️ **探针坑**：选中会触发 `render()` **重建节点 DOM**，之前缓存的元素引用立刻脱离文档 —— 表现为 `document.querySelectorAll('.selected').length === 1` 但 `cachedEl.classList.contains('selected') === false`、`getComputedStyle(cachedEl)` 返回**空串**。探针里一律用 `const q = (id) => d.querySelector(...)` **每次现取**。
+
+### K.7 未配置读图模型的告警（2026-09-18 第七轮，commit 39a0495）
+
+`smart3DModelControlsHtml()` 在 `chatApiProviders().length === 0` 时渲染 `.smart3d-nomodel` 红条，替代两个下拉。**这是阻断性告警，是「为什么点生成没反应」的唯一解释，必须读得全。**
+
+🚨 **原实现会把它从中间硬切且无省略号**：`height:26px` + `white-space:nowrap` + `overflow:hidden`，且**没写 `text-overflow`**（默认 `clip`）。实测：
+
+| 语言 | 文案宽 | 320px（可用 224px） | 560px 默认（可用 285px） |
+|---|---|---|---|
+| 中文 | 224px | 刚好卡住、**零余量** | 够 |
+| 英文 | 303px | **切掉 79px** | **仍切掉 18px** |
+
+→ **英文用户在任何尺寸下都看不全**。
+
+**改法**：允许换行（`height:auto; min-height:26px; padding:4px 8px; white-space:normal; line-height:1.35; overflow-wrap:anywhere`）。罕见错误态，且此时舞台本来就是空的，让位给文案合理。
+**验收锚点**：中英 × 320/560px 四组 `scrollWidth == clientWidth`（`clippedPx = 0`）；英文 chip 高 **37px**（两行）、中文 320px 两行 / 560px **26px**（一行）；控件行高 28 → 37px，舞台矮 0~11px。
+
+### K.8 其余已验分支的锚点（2026-09-18 第七轮同批）
+
+| 分支 | 触发 | 验收锚点 |
+|---|---|---|
+| 生成中 | `node.running = true` | 320px 折叠后按钮 **28px**、560px **79.6px**（中）/ **111.2px**（英）；`disabled=true`、`is-running` 类、`animation: smart3d-spin` 均生效 |
+| 空场景（英文长文案） | `scene3d: null`、无 error | `Connect a Quick Image node, then generate` 宽 236.9px，320px 下 `ovX=False`、`ovY=False`（`.smart3d-placeholder` 会换行，不溢出） |
+| FOV 行（最小尺寸） | 任意 | 320px 下 `input` 203px + 读数 62px（`45° · 29mm`），`scrollW == clientW`，无横向溢出 |
+
+**探针技巧**：要触发「未配置模型」分支，**不要改 `data/api_providers.json`**（真实用户数据）。`chatApiProviders` 是函数声明、**可写**，直接打桩：
+```js
+window.__orig = chatApiProviders; chatApiProviders = function(){ return []; }; render();
+// 量完后：chatApiProviders = window.__orig; render();
+```
 
 ## L. 本地服务与 git 红线补充（从 MEMORY.md 下沉）
 

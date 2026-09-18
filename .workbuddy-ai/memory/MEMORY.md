@@ -4,7 +4,7 @@
 
 ## 一、画布数据安全（最高优先级）
 
-- `data/canvases/<32hex>.json` **无回收站、无历史版本、未纳入 git**；删节点是硬删（整份覆盖 PUT），撤销栈只在内存。已发生「陈旧页面抹掉 45 个节点」事故。
+- `data/canvases/<32hex>.json` **无回收站、无历史版本、未纳入 git**；删节点是硬删（整份覆盖 PUT），撤销栈只在内存。
 - 写画布前：停服务 / 确认无画布页开着 → 备份 + 记 `md5sum` → 测试一律用一次性画布（`POST /api/canvases` → 收尾 `DELETE .../purge`）。
 - 收尾三件事：删 `static/__*.html`、purge 一次性画布、`md5sum -c` 比对真实画布哈希；中途报错时 `POST` 可能已建好画布，按标题扫 `data/canvases/` 找孤儿。流程见技能 `infinite-canvas-verify`。
 
@@ -19,7 +19,7 @@
 - ⚠️ 非空节点的 `.node-head`/`.node-title`/`.node-hint` 被全局隐藏（CSS 574/575/702）→ **新增非图片节点类型必须显式重显**；`.image-node.selected:not(...)` 长 `:not` 链要补新型号。
 - ⚠️ 节点拖拽靠 `beginNodeDrag` 的「排除选择器」判断，自吃鼠标事件的区域（如 3D 舞台）必须加进排除列表。
 - 改 i18n 必跑 `node static/js/i18n/validate-i18n.js`；`t()` **不做 `{name}` 插值**；JS 动态文案要监听 `studio-lang-change` 重画。
-- **验证前端改动务必用全新 `--user-data-dir`**；`render()`（`smart-canvas.js:9166`）是渲染主入口、147 处调用无节流 → WebGL 查看器 DOM 必须复用。其余（lucide PascalCase、canvas-llm 视觉管线、three.js 路径）见 `REFERENCE.md` J。
+- **验证前端改动务必用全新 `--user-data-dir`**；`render()`（`smart-canvas.js:9166`）是渲染主入口、147 处调用无节流 → WebGL 查看器 DOM 必须复用。其余见 `REFERENCE.md` J。
 
 ## 四、模型下拉与 Grsai
 
@@ -31,18 +31,18 @@
 
 - 定位：上游只能「快速生图」、下游也只能「快速生图」，与 prompt/loop/group 双向拒绝（`canAutoConnectDraggedNode()` + `connectInputNode()` 两处都要改）。
 - 视觉风格：纯白视口 + 灰白石膏白模 + 固定工作室光；详见 `REFERENCE.md` H。
-- **外框布局约定**：① `padding-top:0` 让标题栏顶到边；② **跳过 `.floating-node-actions` 浮动删除按钮**（模板加 `&& !is3D`）；③ **交互说明入标题栏**（`headSub` → `.node-head-sub`，条件 `is3D && smart3DHasScene(node)`，底部不渲染 `.node-hint`）；④ **标题栏 `padding:0; border-bottom:0`**，且 `.node-delete` 必须显式去 `box-shadow`/`backdrop-filter` 并补 `:hover`（全局 3 类规则压过 `.mini-x:hover`）。验收锚点见 `REFERENCE.md` K.1/K.2。
-- **窄节点折叠**：`is-narrow` 隐藏 `.smart3d-meta > span` 与 `.smart3d-run > span`（只留图标，文案留 `title`；两者内部都必须有 `<span>` 作钩子）。🚨 **阈值必须按实测文案宽度算**（`smart3DBarNeedWidth`），**不能写死像素** —— meta/run 都是 `flex:0 0 auto`+`nowrap`，英文比中文宽 20~30px，写死 420 会让英文 420px 比中文 320px 还挤。翻转点实测中文 ~450 / 英文 ~510；模型名完整显示需 select ≥104px（原生箭头占 19px，DOM 量不出截断）。见 `REFERENCE.md` K.4/K.6。
-- **四个状态要分别验**：成功 / 解析失败 / 请求失败 / 空场景。⚠️ 失败态必须加 `.is-error`，否则与中性空态**同色**（`#8b95a8`）看不出报错；🚨 **舞台在深浅两主题下都是纯白，固定白底区域不要按主题切色**（统一 `#dc2626` = 4.85:1）；`.smart3d-raw` 收起态要退化成一行小字（默认面板吃 36px 视口）。字段/查看器/坑位见 `REFERENCE.md` K。
+- **外框布局约定**：① `padding-top:0` 让标题栏顶到边；② **跳过 `.floating-node-actions` 浮动删除按钮**（模板加 `&& !is3D`）；③ **交互说明入标题栏**（`headSub` → `.node-head-sub`，条件 `is3D && smart3DHasScene(node)`，底部不渲染 `.node-hint`）；④ **标题栏 `padding:0; border-bottom:0`**，且 `.node-delete` 必须显式去 `box-shadow`/`backdrop-filter` 并补 `:hover`。验收锚点见 `REFERENCE.md` K.1/K.2。
+- **窄节点折叠**：`is-narrow` 隐藏 `.smart3d-meta > span` 与 `.smart3d-run > span`（只留图标，文案留 `title`；两者内部都必须有 `<span>` 作钩子）。🚨 **阈值必须按实测文案宽度算**（`smart3DBarNeedWidth`），**不能写死像素** —— meta/run 都是 `flex:0 0 auto`+`nowrap`，英文比中文宽 20~30px，写死 420 会让英文 420px 比中文 320px 还挤。模型名完整显示需 select ≥104px（原生箭头占 19px，DOM 量不出截断）。见 `REFERENCE.md` K.4/K.5。
+- **四个状态要分别验**：成功 / 解析失败 / 请求失败 / 空场景。⚠️ 失败态必须加 `.is-error`，否则与中性空态**同色**（`#8b95a8`）看不出报错；🚨 **舞台在深浅两主题下都是纯白，固定白底区域不要按主题切色**（统一 `#dc2626` = 4.85:1）；`.smart3d-raw` 收起态要退化成一行小字（默认面板吃 36px 视口）。另：**`.smart3d-nomodel`（未配置读图模型）是阻断性告警，必须读得全** —— 原 `nowrap`+`overflow:hidden` 且无 `text-overflow` 会把它硬切（英文 303px，560px 默认节点都差 18px），已改为允许换行。字段/查看器/坑位见 `REFERENCE.md` K。
 
 ## 六、本地服务
 
-- 启动：`./python/python.exe main.py`（cwd = 项目根，端口 3000，单进程无 reload）。⚠️ **必须用后台 Bash 任务方式启动**。日志 `output/server.log`；本机 `curl` 不可用（假 502），改用 Python `socket`/`urllib`。
-- ⚠️ 启动时 `sync_static_html_versions()` 会重写 `static/*.html` 的 `?v=`（缓存破坏参数），**不要为 git 干净去还原**，否则浏览器继续用旧 JS，表现为「项目功能整个消失」。
+- 启动：`./python/python.exe main.py`（端口 3000，**必须后台 Bash 任务方式启动**，日志 `output/server.log`；本机 `curl` 不可用，改用 Python `socket`/`urllib`）。
+- ⚠️ 启动会重写 `static/*.html` 的 `?v=`，**不要为 git 干净去还原**（否则浏览器继续用旧 JS，表现为「项目功能整个消失」）。完整流程见技能 `infinite-canvas-verify`。
 
 ## 七、磁盘与 git 硬红线
 
 - ⚠️ 本机「删除即入回收站」→ 清理不释放空间；**真正释放 = 清空回收站**，汇报成果必须同时给回收站占用。
 - ⚠️ **绝不要 `git rm <文件>`**（实测整个父目录消失）；用 Python `os.remove` + `git add -A <目录>/`。
 - 🚨 `.git` 曾于 2026-09-17 被递归搬进回收站（已完整还原）。防护：维护前 `git bundle create ../repo-<日期>.bundle --all`；瘦身在项目外副本做。
-- ⚠️ **工具会话内 `git push` 会无限挂起**（GUI 凭据助手；`ls-remote` 成功是假信号）→ 推送必须由老板本人终端执行。裸 `git` 不可用（RTK 改写），真身在 PortableGit 1.2.0。详见 `REFERENCE.md` B/L。
+- ⚠️ **工具会话内 `git push` 会无限挂起**（GUI 凭据助手；`ls-remote` 成功是假信号）→ 推送必须由老板本人终端执行（裸 `git` 不可用，真身在 PortableGit 1.2.0）。详见 `REFERENCE.md` B/L。
