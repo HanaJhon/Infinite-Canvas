@@ -2087,7 +2087,13 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
    原来 height:26px + nowrap + overflow:hidden 会把它从中间硬切且无省略号（text-overflow 默认 clip）：
    英文文案实测 303px，320px 节点可用 224px（切掉 79px）、560px 默认节点可用 285px（仍切 18px）——
    英文用户在任何尺寸下都看不全。改成允许换行：这一行最多变两行，罕见状态、且此时舞台本来就是空的。 */
-.smart3d-nomodel { flex:1 1 auto; min-width:0; display:inline-flex; align-items:center; gap:5px; height:auto; min-height:26px; padding:4px 8px; border-radius:9px; background:rgba(239,68,68,.1); border:1px solid rgba(239,68,68,.34); color:#ef4444; font-size:10px; font-weight:750; line-height:1.35; white-space:normal; overflow-wrap:anywhere; overflow:hidden; }
+/* 红色也要按主题取：Tailwind red-500(#ef4444) 在浅色下（10% 红底叠白）只有 3.29:1、
+   深色下 4.13:1，两档都低于 AA 的 4.5:1 —— 而这句话是「为什么点生成没反应」的唯一解释，
+   恰恰是最不能被读糊的一条。改用 red-700 / red-400：浅色 #b91c1c → 5.66:1，深色 #f87171 → 5.56:1。
+   注意：这条告警挂在节点面板上（随主题变色），所以**必须**按主题取色；
+   而舞台里的 `.smart3d-placeholder.is-error` 挂在恒白舞台上，那里反而不能按主题切。 */
+.smart3d-nomodel { flex:1 1 auto; min-width:0; display:inline-flex; align-items:center; gap:5px; height:auto; min-height:26px; padding:4px 8px; border-radius:9px; background:rgba(239,68,68,.1); border:1px solid rgba(239,68,68,.34); color:#b91c1c; font-size:10px; font-weight:750; line-height:1.35; white-space:normal; overflow-wrap:anywhere; overflow:hidden; }
+.theme-dark .smart3d-nomodel { color:#f87171; }
 .smart3d-nomodel i, .smart3d-nomodel svg { width:12px; height:12px; flex:0 0 auto; }
 .smart3d-run { flex:0 0 auto; height:26px; padding:0 11px; border-radius:9px; display:inline-flex; align-items:center; justify-content:center; gap:5px; background:var(--strong); color:var(--strong-text); font-size:10px; font-weight:850; white-space:nowrap; transition:transform .14s ease, opacity .14s ease; }
 .smart3d-run i, .smart3d-run svg { width:12px; height:12px; }
@@ -2138,4 +2144,6 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart3d-fov:focus { outline:none; }
 .smart3d-fov:disabled { opacity:.5; cursor:default; }
 .smart3d-fovval { flex:0 0 auto; min-width:62px; text-align:right; color:var(--muted); font-size:10px; font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; }
-.theme-dark .smart3d-fovval { color:var(--faint); }
+/* ⚠️ 不要再给 .smart3d-fovval 加深色覆盖（曾经有过 `.theme-dark { color:var(--faint) }`）。
+   实测：--faint 在深色面板上只有 3.49:1，低于 AA 的 4.5:1；--muted 是 5.93:1。
+   焦距读数是功能性信息，浅色下本来就是 --muted（4.74:1），深色必须同档，否则「深色反而更难读」。 */

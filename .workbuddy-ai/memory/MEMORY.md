@@ -6,44 +6,44 @@
 
 - `data/canvases/<32hex>.json` **无回收站、无历史版本、未纳入 git**；删节点是硬删（整份覆盖 PUT），撤销栈只在内存。
 - 写画布前：停服务 / 确认无画布页开着 → 备份 + 记 `md5sum` → 测试一律用一次性画布（`POST /api/canvases` → 收尾 `DELETE .../purge`）。
-- 收尾三件事：删 `static/__*.html`、purge 一次性画布、`md5sum -c` 比对真实画布哈希；中途报错时 `POST` 可能已建好画布，按标题扫 `data/canvases/` 找孤儿。流程见技能 `infinite-canvas-verify`。
+- 收尾三件事：删 `static/__*.html`、purge 一次性画布、`md5sum -c` 比对哈希。流程见技能 `infinite-canvas-verify`。
 
 ## 二、保存接口（`PUT /api/canvases/{id}`）
 
 - **全量替换**：`nodes`/`connections`/`logs`/`settings` 不传等于清空；**必须传 `base_updated_at`**，两道 409 守卫（旧 base / 静默丢节点）。`GET` 返回 `{"canvas": {...}}`；只改标题走 `POST .../meta`。
-- ⚠️ 清 `logs` 要全量回传其余字段（少传 `settings` 会连设置一起清）；清完**必须让用户刷新页面**，否则旧页面会把 logs 写回。详见 `REFERENCE.md` I。
+- ⚠️ 清 `logs` 要全量回传其余字段（少传 `settings` 会连设置一起清）；清完**必须让用户刷新页面**。详见 I。
 
 ## 三、前端要点
 
 - 全项目只有一份 `static/smart-canvas.html/js/css`；`canvas.html` 不带 `?id=` 会跳选画布页。节点根元素 `.image-node[data-id]`。
 - ⚠️ 非空节点的 `.node-head`/`.node-title`/`.node-hint` 被全局隐藏（CSS 574/575/702）→ **新增非图片节点类型必须显式重显**；`.image-node.selected:not(...)` 长 `:not` 链要补新型号。
 - ⚠️ 节点拖拽靠 `beginNodeDrag` 的「排除选择器」判断，自吃鼠标事件的区域（如 3D 舞台）必须加进排除列表。
-- 改 i18n 必跑 `node static/js/i18n/validate-i18n.js`；`t()` **不做 `{name}` 插值**；JS 动态文案要监听 `studio-lang-change` 重画。
-- **验证前端改动务必用全新 `--user-data-dir`**；`render()`（`smart-canvas.js:9166`）是渲染主入口、147 处调用无节流 → WebGL 查看器 DOM 必须复用。其余见 `REFERENCE.md` J。
+- 改 i18n 必跑 `node static/js/i18n/validate-i18n.js`；`t()` **不做 `{name}` 插值**；动态文案要监听 `studio-lang-change` 重画。
+- **验证前端改动务必用全新 `--user-data-dir`**；`render()`（`smart-canvas.js:9166`）无节流 → WebGL 查看器 DOM 必须复用。其余见 J。
 
 ## 四、模型下拉与 Grsai
 
-- 下拉唯一数据源是 `chatApiProviders()`（`smart-canvas.js:3049`），**只认 `chat_models`**；生图/视频模型不会出现在对话下拉里。3D 节点用 `chatModelOptions()`，不做视觉过滤。
-- **Grsai 对话模型 = GPT 4 + Gemini 10 = 14 个**，4 个 GPT 全支持读图。⚠️ 命名 = **OpenAI 官方模型 ID**（`gpt-6-astra`/`gpt-5.6-terra`/`gpt-5.6-sol`/`gpt-5.5`），**别自己编后缀**。清单见 `REFERENCE.md` F。
-- ⚠️ 探测三坑（详见 `REFERENCE.md` F.4）：① 别按通用命名猜（`gpt-4o`/`gpt-5` 全 400 就误判「没有 GPT」，被老板纠正两次）；② **禁止并发扫**（限流会把已知可用的扫成失败）→ 串行 + 间隔 1~1.5s；③ **判「存在」看 200，判「不存在」必须看到 `model not found`**。Grsai 无 `/v1/models` 只能手填，后端不校验模型是否存在。
+- 下拉唯一数据源是 `chatApiProviders()`（`smart-canvas.js:3049`），**只认 `chat_models`**；3D 节点用 `chatModelOptions()`，不做视觉过滤。
+- **Grsai 对话模型 14 个**（GPT 4 + Gemini 10），4 个 GPT 全支持读图；命名 = **OpenAI 官方模型 ID**，别自己编后缀。清单见 F。
+- ⚠️ 探测三坑（F.4）：① 别按通用命名猜；② **禁止并发扫** → 串行 + 间隔 1~1.5s；③ **判「不存在」必须看到 `model not found`**。Grsai 无 `/v1/models` 只能手填。
 
 ## 五、3D 预览节点（`smart-3d`）
 
-- 定位：上游只能「快速生图」、下游也只能「快速生图」，与 prompt/loop/group 双向拒绝（`canAutoConnectDraggedNode()` + `connectInputNode()` 两处都要改）。
-- 视觉风格：纯白视口 + 灰白石膏白模 + 固定工作室光；详见 `REFERENCE.md` H。
-- **three.js 本地 r160（2023-12）、官方最新 r186（2026-09）**；升级清单（换 2 个文件 + 改 2 处代码）见 `REFERENCE.md` M。
-- **外框布局约定**：① `padding-top:0` 让标题栏顶到边；② **跳过 `.floating-node-actions` 浮动删除按钮**（模板加 `&& !is3D`）；③ **交互说明入标题栏**（`headSub` → `.node-head-sub`，条件 `is3D && smart3DHasScene(node)`，底部不渲染 `.node-hint`）；④ **标题栏 `padding:0; border-bottom:0`**，且 `.node-delete` 必须显式去 `box-shadow`/`backdrop-filter` 并补 `:hover`。验收锚点见 `REFERENCE.md` K.1/K.2。
-- **窄节点折叠**：`is-narrow` 隐藏 `.smart3d-meta > span` 与 `.smart3d-run > span`（只留图标，文案留 `title`；两者内部都必须有 `<span>` 作钩子）。🚨 **阈值必须按实测文案宽度算**（`smart3DBarNeedWidth`），**不能写死像素** —— meta/run 都是 `flex:0 0 auto`+`nowrap`，英文比中文宽 20~30px，写死 420 会让英文 420px 比中文 320px 还挤。模型名完整显示需 select ≥104px（原生箭头占 19px，DOM 量不出截断）。见 `REFERENCE.md` K.4/K.5。
-- **四个状态要分别验**：成功 / 解析失败 / 请求失败 / 空场景。⚠️ 失败态必须加 `.is-error`，否则与中性空态**同色**（`#8b95a8`）看不出报错；🚨 **舞台在深浅两主题下都是纯白，固定白底区域不要按主题切色**（统一 `#dc2626` = 4.85:1）；`.smart3d-raw` 收起态要退化成一行小字（默认面板吃 36px 视口）。另：**`.smart3d-nomodel`（未配置模型）是阻断性告警，必须读得全** —— 原 `nowrap`+`overflow:hidden` 无 `text-overflow` 会硬切（英文 303px，560px 默认节点也差 18px），已改允许换行。字段/查看器/坑位见 `REFERENCE.md` K。
+- 上下游都只能接「快速生图」，与 prompt/loop/group 双向拒绝（`canAutoConnectDraggedNode()` + `connectInputNode()` **两处都要改**）。视觉风格见 H。
+- **three.js 本地 r160（2023-12）、官方最新 r186（2026-09）**；升级清单见 M。
+- 外框 / 标题栏 / 窄节点折叠 / 四态约定全部见 K。最易踩的三条：
+  ① 🚨 **折叠阈值必须按实测文案宽度算**（`smart3DBarNeedWidth`），**不能写死像素** —— 英文比中文宽 20~30px；模型名完整显示需 select ≥104px（原生箭头占 19px，DOM 量不出截断）。
+  ② ⚠️ 失败态必须加 `.is-error`，否则与中性空态同色；`.smart3d-nomodel` 是阻断性告警必须读得全（`nowrap`+`overflow:hidden` 会硬切，已改允许换行）。
+  ③ 🚨 **舞台深浅两主题下都是纯白，白底区域不要按主题切色**。
 
 ## 六、本地服务
 
 - 启动：`./python/python.exe main.py`（端口 3000，**必须后台 Bash 任务方式启动**，日志 `output/server.log`；本机 `curl` 不可用，改用 Python `socket`/`urllib`）。
-- ⚠️ 启动会重写 `static/*.html` 的 `?v=`，**不要为 git 干净去还原**（否则浏览器继续用旧 JS，表现为「项目功能整个消失」）。完整流程见技能 `infinite-canvas-verify`。
+- ⚠️ 启动会重写 `static/*.html` 的 `?v=`，**不要为 git 干净去还原**（否则浏览器继续用旧 JS，表现为「项目功能整个消失」）。
 
 ## 七、磁盘与 git 硬红线
 
 - ⚠️ 本机「删除即入回收站」→ 清理不释放空间；**真正释放 = 清空回收站**，汇报成果必须同时给回收站占用。
 - ⚠️ **绝不要 `git rm <文件>`**（实测整个父目录消失）；用 Python `os.remove` + `git add -A <目录>/`。
-- 🚨 `.git` 曾于 2026-09-17 被递归搬进回收站（已完整还原）。防护：维护前 `git bundle create ../repo-<日期>.bundle --all`；瘦身在项目外副本做。
-- ⚠️ **工具会话内 `git push` 会无限挂起**（GUI 凭据助手；`ls-remote` 成功是假信号）→ 推送必须由老板本人终端执行（裸 `git` 不可用，真身在 PortableGit 1.2.0）。详见 `REFERENCE.md` B/L。
+- 🚨 `.git` 曾于 2026-09-17 被递归搬进回收站（已还原）。防护：维护前 `git bundle create ../repo-<日期>.bundle --all`；瘦身在项目外副本做。
+- ⚠️ **工具会话内 `git push` 会无限挂起** → 推送必须由老板本人终端执行（裸 `git` 不可用，真身在 PortableGit 1.2.0）。详见 B/L。
