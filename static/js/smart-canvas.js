@@ -9159,7 +9159,7 @@ function apply3DSceneToViewer(viewer, node){
             scene = normalized;
         }
     }
-    viewer.scene.background = new THREE.Color(scene?.background || '#12161f');
+    viewer.scene.background = new THREE.Color('#ffffff');
     if(!scene){ viewer.dirty = true; return; }
     const group = new THREE.Group();
     // ---- 原始环境光：场景自带的环境光 + 主方向光 ----
