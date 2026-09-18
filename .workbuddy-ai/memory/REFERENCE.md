@@ -245,6 +245,22 @@ const SMART_3D_STUDIO = {
 
 **遗留待定项**：`.node-head-sub` 用 `--faint`，浅色对比度只有 2.55:1（`#94a3b8` on ~`#feffff`）、深色 3.47:1，10px 小字低于 WCAG AA 4.5:1。老板明确要求「灰色小字」，故保留；若要提升可换 `--muted`（浅色 4.76:1）。
 
+### K.3 状态文案与「查看模型输出」（2026-09-18 第四轮打磨，commit 4b14e8b）
+
+**4 个状态必须分别造数据验证**（`smart3DBodyHtml` 里 `emptyText = errorText || tr('smart.3dEmptyHint')`，两者共用 `.smart3d-placeholder`，很容易做成一模一样）：
+
+| 状态 | 触发 | 表现 |
+|---|---|---|
+| 成功 | `scene3d` 有 objects | 舞台渲染白模；`scene3dRaw` **也会被写入**（`:9628`），所以「查看模型输出」常驻 |
+| 解析失败 | `normalize3DScene(smart3DParseSceneJson(raw))` 返回 null → `smart.3dInvalid` | 占位层显示错误文案 + `triangle-alert` |
+| 请求失败 | fetch/HTTP 失败 → `error.message.slice(0,200)`（可能是长上游报错）+ `toast()` | 同上 |
+| 空场景 | `scene3d: null`、无 error | 占位层显示 `smart.3dEmptyHint` + `rotate-3d` |
+
+- ⚠️ **失败态必须加 `is-error`**，否则与中性空态**同色**（实测两者都是 `#8b95a8`），上游报错几乎看不出来。`.smart3d-placeholder.is-error` 走 `#dc2626` + `pointer-events:auto; user-select:text`（长报错要能选中复制）；空态保持 `pointer-events:none`，不抢舞台拖拽（`beginNodeDrag` 的排除链本来就含 `.smart3d-stage`，放开命中不改拖拽行为）。
+- 🚨 **不要给「永远白底」的表面按主题切色**：`.theme-dark .smart3d-stage { background:#ffffff }` 是既定白模工作室风格，深色主题下舞台仍是纯白。第一版写的 `.theme-dark .smart3d-placeholder.is-error { color:#f87171 }` 在白底只有 **2.76:1**，比浅色 `#dc2626`（**4.85:1**）更差。**规律：`--faint`/`--muted` 这类随主题变色的 token 只适用于背景也跟着变色的表面；固定白底区域一律按白底算对比度。**
+- **「查看模型输出」`.smart3d-raw` 收起态要退化成一行小字**：默认面板形态（`border`+`background`+`padding:6px 8px`）高 28px，加 `.smart3d-body` 的 8px gap 共吃 **36px 视口高度**（比把操作说明挪进标题栏省下的 25px 还多）。改法是把面板样式挪到 `.smart3d-raw[open]`，收起态只剩 summary 的 14px 行盒；实测舞台高 312 → **326**。
+- 验收锚点：失败态 `.smart3d-placeholder` 的 computed color 为 `rgb(220,38,38)`（两主题一致）；空态为 `rgb(139,149,168)`；`.smart3d-raw` 收起 `h=14`、展开 `h≈47.5` 且 `borderTopWidth=1px`、`backgroundColor=rgb(248,250,252)`；`stage.h` 有 raw=326 / 无 raw=348；节点高恒为 470。
+
 ## L. 本地服务与 git 红线补充（从 MEMORY.md 下沉）
 
 - ⚠️ **启动时 `sync_static_html_versions()`（`main.py:1743`）把 `static/*.html` 的 `?v=` 重写为 `<VERSION>.<资源mtime>` 并写回磁盘** → 每次重启让十几个 html 变 modified。**这是缓存破坏参数，必须保持最新，不要为 git 干净去 `git checkout` 还原** —— 踩过：还原后浏览器继续用缓存旧 JS，而新 CSS 已隐藏 iframe 内原胶囊 → 两个胶囊都不显示，表现为「项目功能整个消失」。
