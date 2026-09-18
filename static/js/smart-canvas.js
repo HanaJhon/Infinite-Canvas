@@ -9014,15 +9014,22 @@ function normalize3DScene(input){
         intensity: Number.isFinite(Number(light?.intensity)) ? Math.max(0, Number(light.intensity)) : 0.6,
         position: smart3DNumArray(light?.position, 3, [4, 8, 5])
     })).slice(0, 4);
+    // 白色视口使用固定默认环境光；旧场景或模型缺少/覆盖灯光时也必须可见。
+    const hasAmbient = lights.some(light => light.type === 'ambient');
+    const hasDirectional = lights.some(light => light.type === 'directional');
+    const defaultLights = [
+        ...(hasAmbient ? [] : [fallbackLights[0]]),
+        ...(hasDirectional ? [] : [fallbackLights[1]])
+    ];
     const ground = input.ground && typeof input.ground === 'object' ? input.ground : {};
-    // 恢复首版场景驱动渲染：背景、灯光、地面与网格继续来自场景 JSON。
+    // 视口与地面统一白色，网格仅保留浅灰辅助线，避免旧版深色 ground.color 污染白色背景。
     return {
-        background: typeof input.background === 'string' && input.background.trim() ? input.background : '#12161f',
-        lights: lights.length ? lights : fallbackLights,
+        background: '#ffffff',
+        lights: [...lights, ...defaultLights].slice(0, 4),
         ground: {
             show: ground.show !== false,
-            grid: ground.grid !== false,
-            color: typeof ground.color === 'string' && ground.color.trim() ? ground.color.trim() : '#1a2030'
+            grid: ground.grid === true,
+            color: '#ffffff'
         },
         camera: {
             position: smart3DNumArray(camera.position, 3, [3, 2.4, 4.2]),
@@ -9162,7 +9169,7 @@ function apply3DSceneToViewer(viewer, node){
     viewer.scene.background = new THREE.Color('#ffffff');
     if(!scene){ viewer.dirty = true; return; }
     const group = new THREE.Group();
-    // ---- 原始环境光：场景自带的环境光 + 主方向光 ----
+    // ---- 默认环境光：AmbientLight + DirectionalLight ----
     (scene.lights || []).forEach(lightSpec => {
         const color = new THREE.Color(lightSpec.color || '#ffffff');
         if(lightSpec.type === 'directional'){
@@ -9174,18 +9181,18 @@ function apply3DSceneToViewer(viewer, node){
             group.add(new THREE.AmbientLight(color, Number(lightSpec.intensity) || 0.6));
         }
     });
-    // ---- 原始地面与网格 ----
+    // ---- 白色地面与浅灰网格 ----
     const groundSpec = scene.ground || {};
     if(groundSpec.show !== false){
         const groundMesh = new THREE.Mesh(
             new THREE.PlaneGeometry(20, 20),
-            new THREE.MeshStandardMaterial({color:new THREE.Color(groundSpec.color || '#1a2030'), roughness:0.88, metalness:0})
+            new THREE.MeshStandardMaterial({color:new THREE.Color('#ffffff'), roughness:0.88, metalness:0})
         );
         groundMesh.rotation.x = -Math.PI / 2;
         group.add(groundMesh);
     }
-    if(groundSpec.grid !== false){
-        const gridColor = new THREE.Color(groundSpec.color || '#1a2030');
+    if(groundSpec.grid === true){
+        const gridColor = new THREE.Color('#d7dde7');
         const grid = new THREE.GridHelper(12, 12, gridColor.clone().offsetHSL(0, 0, 0.16), gridColor.clone().offsetHSL(0, 0, 0.06));
         grid.position.y = 0.006;
         group.add(grid);

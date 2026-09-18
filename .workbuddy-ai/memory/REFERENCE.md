@@ -131,10 +131,10 @@ Gemini 家族 10 个：`gemini-3.1-pro`、`gemini-2.5-pro`、`gemini-3-flash`、
 
 ### H.1 当前实现
 
-- 默认灯光：`AmbientLight(0.6)` + `DirectionalLight(0.85)`，方向光位置 `[4, 8, 5]`。
-- 地面：可见 `MeshStandardMaterial` 平面；网格：`GridHelper`，颜色和显示状态读取 `scene.ground`。
+- 默认灯光：`AmbientLight(0.6)` + `DirectionalLight(0.85)`，方向光位置 `[4, 8, 5]`；若旧场景缺少任一灯光类型，查看器自动补齐。
+- 地面：固定白色 `MeshStandardMaterial` 平面；网格：浅灰 `GridHelper`，由 `ground.grid === true` 控制。旧场景的深色 `ground.color` 不再直接用于地面。
 - 对象材质：读取 `spec.color` / `roughness` / `metalness`，不再统一覆写为灰白白模。
-- `normalize3DScene()` 保留并规范化 `background/lights/ground` 与对象材质字段；旧画布缺字段时回退默认值。
+- `normalize3DScene()` 保留并规范化场景字段；查看器最终固定白色背景 `#ffffff`、白色地面和默认灯光兜底，避免旧画布深色字段污染新视觉要求。
 - FOV 滑块和相机姿态持久化继续保留。
 
 ### H.2 历史工作室方案（已撤回）
