@@ -2082,9 +2082,11 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 /* 全局规则 `.image-node:not(.empty-node) .node-head/.node-hint { display:none }` 会隐藏标题栏与提示，
    但 3D 节点没有自己的内部标题行，必须把标题（3D预览）和拖拽提示显示出来，
    否则用户既看不到节点名，也找不到除标题栏以外的拖动把手。 */
-.image-node.smart3d-node { display:flex; flex-direction:column; }
+.image-node.smart3d-node { display:flex; flex-direction:column; padding-top:0; }
 .image-node.smart3d-node .node-head { display:flex; flex:0 0 auto; }
-.image-node.smart3d-node .node-hint { display:block; flex:0 0 auto; padding-right:32px; }
+/* 说明文字与节点内其他文字（.smart3d-meta / .smart3d-select / .smart3d-run / .smart3d-fovval）
+   保持同一字号 10px 与行高 normal，避免与上方控制条文字大小、行距不一致。 */
+.image-node.smart3d-node .node-hint { display:flex; align-items:center; flex:0 0 auto; min-height:24px; padding:5px 32px 5px 12px; font-size:10px; line-height:normal; }
 .image-node.smart3d-node .node-body { flex:1 1 auto; height:auto; min-height:0; }
 .smart3d-node .node-head { cursor:move; }
 .image-node.smart3d-node .node-title { display:block; flex:1 1 auto; }
