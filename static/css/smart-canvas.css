@@ -2070,11 +2070,16 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart3d-bar { flex:0 0 auto; display:flex; align-items:center; gap:6px; min-height:28px; }
 .smart3d-meta { flex:0 0 auto; display:inline-flex; align-items:center; gap:5px; height:26px; padding:0 8px; border-radius:9px; background:var(--soft); border:1px solid var(--line); color:var(--muted); font-size:10px; font-weight:800; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .smart3d-meta i, .smart3d-meta svg { width:12px; height:12px; }
-/* 窄节点（<420px）：把「已识别 N 个对象」压成纯图标（文案仍在 title 里），把宽度让给两个模型下拉。
-   实测最小尺寸 320px 时控件行总宽 294px，这条次级信息独占 107px，两个下拉只剩 45px（"G.."/"g.."）；
-   折叠后 45 → 约 84px，足以区分 gemini-3.1-pro / gemini-2.5-pro。 */
+/* 窄节点：把「已识别 N 个对象」与「生成 3D / 重新生成」都压成纯图标（文案仍在 title 里），
+   把宽度让给两个模型下拉。实测最小尺寸 320px 时控件行总宽 294px，meta 独占 107px（中文）/139px（英文），
+   两个下拉只剩 45~70px，连 gemini-3.1-pro（需 104px）都显示不全。
+   ⚠️ 折叠与否由 JS 按**实测文案宽度**决定（smart3DBarNeedWidth），CSS 只负责折叠后的样子 ——
+   meta / run 都是 flex:0 0 auto + nowrap，英文比中文宽 20~30px，写死阈值会让英文界面
+   在某个宽度区间反而比最小尺寸更挤。折叠后 meta/run 只剩图标，两语言宽度一致。 */
 .smart3d-body.is-narrow .smart3d-meta { padding:0 7px; }
 .smart3d-body.is-narrow .smart3d-meta > span { display:none; }
+.smart3d-body.is-narrow .smart3d-run { padding:0 8px; }
+.smart3d-body.is-narrow .smart3d-run > span { display:none; }
 .smart3d-select { flex:1 1 0; min-width:0; height:26px; padding:0 6px; border-radius:9px; border:1px solid rgba(148,163,184,.34); background:rgba(255,255,255,.62); color:var(--text); font-size:10px; font-weight:700; outline:none; cursor:pointer; text-overflow:ellipsis; }
 .theme-dark .smart3d-select { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.24); }
 .smart3d-select:focus { border-color:var(--strong); }

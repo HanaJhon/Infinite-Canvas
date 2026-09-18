@@ -9020,6 +9020,34 @@ function smart3DCurrentFov(node){
     if(Number.isFinite(sf) && sf >= 20 && sf <= 90) return sf;
     return 45;
 }
+// ── 控件行「窄节点折叠」的阈值计算 ──────────────────────────────────────────────
+// .smart3d-select 实测：低于 104px 时 "gemini-3.1-pro" 会被截断（原生下拉箭头独占约 19px，
+// DOM 量不出来 —— select 的 scrollWidth 恒等于 clientWidth）。取 110 留 6px 余量。
+const SMART3D_SELECT_MIN_W = 110;
+let _smart3DTextCtx = null;
+let _smart3DTextFont = '';
+// 用 canvas 2D 量文本宽度。字体必须与 .smart3d-meta / .smart3d-run 实际继承的一致
+// （body 的 'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif），
+// 否则算出的阈值在不同机器上会偏小。只在首次调用时读一次 computedStyle。
+function smart3DTextWidth(text, weight){
+    if(!_smart3DTextCtx) _smart3DTextCtx = document.createElement('canvas').getContext('2d');
+    if(!_smart3DTextFont){
+        let fam = 'sans-serif';
+        try { fam = getComputedStyle(document.body).fontFamily || fam; } catch(e) {}
+        _smart3DTextFont = fam;
+    }
+    _smart3DTextCtx.font = weight + ' 10px ' + _smart3DTextFont;
+    return _smart3DTextCtx.measureText(String(text || '')).width;
+}
+// 控件行在不折叠时所需的节点宽度：meta(图标12+间距5+文案+内边距16+边框2)
+// + run(图标12+间距5+文案+内边距22) + 3 个 gap + 两个下拉的最小宽度。
+// ⚠️ 必须实测文案：meta / run 都是 flex:0 0 auto + nowrap，英文比中文宽 20~30px，
+// 写死阈值会让英文界面在某个宽度区间反而比最小尺寸更挤。
+function smart3DBarNeedWidth(metaText, runText){
+    const metaW = 12 + 5 + smart3DTextWidth(metaText, '800') + 16 + 2;
+    const runW = 12 + 5 + smart3DTextWidth(runText, '850') + 22;
+    return metaW + runW + 18 + SMART3D_SELECT_MIN_W * 2;
+}
 // 把垂直 FOV 折算成 35mm 全画幅等效焦距（传感器高 24mm，half=12mm）：f = 12 / tan(fov/2)。
 function smart3DFocalMm(fov){
     const rad = (fov / 2) * Math.PI / 180;
@@ -9506,11 +9534,14 @@ function smart3DBodyHtml(node){
     const runLabel = node.running ? tr('smart.3dGenerating') : (objects.length ? tr('smart.3dRerun') : tr('smart.3dRun'));
     const fovVal = smart3DCurrentFov(node);
     const focalMm = smart3DFocalMm(fovVal);
-    // 节点窄时（最小尺寸 320px）把「已识别 N 个对象」压成纯图标：实测 320px 宽下控件行总宽 294px，
-    // 这条次级信息独占 107px（36%），两个模型下拉只剩 45px，只能显示 "G.."/"g.."，
-    // 读不出选的是哪个模型。折叠后下拉恢复到约 84px。文案保留在 title 里。
-    const narrow = smart3DLayoutSize(node).width < 420;
     const objectsText = trf('smart.3dObjects', {n:objects.length});
+    // 节点窄时把「已识别 N 个对象」和「生成 3D」压成纯图标（文案保留在 title 里），把宽度让给两个模型下拉。
+    // 阈值按真实文案宽度实测，不写死像素 —— 理由见 smart3DBarNeedWidth 的注释。
+    // run 的三种文案宽度不同（生成 3D / 重新生成 / 识别中…），取最宽的那个算阈值，
+    // 否则节点在「开始生成」的一瞬间会因阈值变化而闪一下布局。
+    const runWidest = [tr('smart.3dRun'), tr('smart.3dRerun'), tr('smart.3dGenerating')]
+        .reduce((a, b) => (smart3DTextWidth(b, '850') > smart3DTextWidth(a, '850') ? b : a), runLabel);
+    const narrow = smart3DLayoutSize(node).width - 24 < smart3DBarNeedWidth(objectsText, runWidest);
     return `<div class="smart3d-body${narrow ? ' is-narrow' : ''}" data-3d-root="1">
         <div class="smart3d-stage" data-3d-stage="1" data-3d-node="${escapeAttr(node.id)}">${placeholder}</div>
         <div class="smart3d-bar">
