@@ -364,6 +364,66 @@ window.__orig = chatApiProviders; chatApiProviders = function(){ return []; }; r
 // 量完后：chatApiProviders = window.__orig; render();
 ```
 
+### K.9 深色主题验证（2026-09-18 第八轮，commit a082fad）
+
+**主题机制**：`.theme-dark`（`smart-canvas.css:7`）重定义 11 个变量
+（`--text:#e5e9f0 / --muted:#8f9aab / --faint:#657286 / --line:#2a3444 / --soft:#111722
+/ --strong:#d8dee9 / --strong-text:#10141d`）。`applyTheme()`（`smart-canvas.js:1766`）把
+`theme-dark` + `studio-theme-dark` 同时加在 `documentElement` 与 `body`；
+`smart-canvas.html` 头部内联脚本在 CSS 前就按 `localStorage.studio_theme` 加类（防闪白）。
+探针拿深色初始态的最简方式：**在 iframe 加载前写 `localStorage.studio_theme='dark'`**。
+
+**对比度怎么量**（canvas 2D 量不出颜色）：解析 `getComputedStyle(el).color`，
+再沿 `parentElement` 链把每层 `backgroundColor` 按 alpha **从外到内**合成成实际背景
+（`over(fg,bg)` 递归），最后 `(Lmax+.05)/(Lmin+.05)`。舞台内元素会在 `.smart3d-stage`
+的 `#ffffff` 处终止，天然得到白底。
+
+**修复后的两主题对比度基线**（10px 小字按 AA 4.5:1）：
+
+| 元素 | 深色 | 浅色 |
+|---|---|---|
+| `.node-title` | 5.98 | 4.74 |
+| `.smart3d-meta` / `.smart3d-meta > span` | 6.31 | 4.55 |
+| `.smart3d-select`（两个下拉） | 14.27 | 17.71 |
+| `.smart3d-run` / `> span` | 13.64 | 17.74 |
+| `.smart3d-fovicon` | 5.98 | 4.74 |
+| `.smart3d-fovval` | **5.98**（修前 3.49） | 4.74 |
+| `.node-delete` | 16.26 | 17.66 |
+| `.smart3d-nomodel` | **5.62**（修前 4.13） | **5.66**（修前 3.29） |
+| `.smart3d-placeholder`（空态） | 3.02 | 3.02 |
+| `.smart3d-placeholder.is-error` | 4.83 | 4.83 |
+| `.node-head-sub` / `.smart3d-raw > summary` | 3.49 | 2.55 |
+
+**取色方向的两条相反规则（务必别搞混）**：
+- `.smart3d-nomodel` 挂在**随主题变色的节点面板**上 → **必须**按主题取色
+  （浅 `#b91c1c` / 深 `#f87171`）。原来的 `#ef4444` 两档都不达标。
+- `.smart3d-placeholder.is-error` 挂在**恒白舞台**上 → **绝不能**按主题切色
+  （深色换 `#f87171` 会掉到 2.76:1；`#dc2626` 在白底是 4.85:1）。
+- `.smart3d-fovval` 曾有一条 `.theme-dark { color:var(--faint) }` 覆盖，**是反的**
+  （深色 3.49 < 浅色 4.74）—— 已删除，两主题统一走 `--muted`。
+
+**未处理（等老板拍板）**：`.node-head-sub`、`.smart3d-raw > summary`、`.smart3d-placeholder`
+三项都在 2.55~3.49:1。它们都用 `--faint`（空态是写死的 `#8b95a8`），是「灰色小字」的既定风格。
+若要达标：前两者换 `--muted`（浅 4.55 / 深 5.93），空态换 `#6b7280`（白底 4.83:1）。
+
+**深色下的两项像素检查（均通过，勿再折腾）**：
+- `<select>` 原生箭头：`color-scheme` 计算值是 `normal`，但 Chrome 实际画的是**浅色箭头** ——
+  实测右侧 22px 条带里 `rgb(176,176,184)` 14px + `rgb(224,232,240)` 8px，对比下拉底色
+  `rgb(19,27,41)` 为 8.01:1 / 13.95:1。**可见**。
+- FOV 滑块拇指：最亮像素 `rgb(255,255,255)`，对轨道 `rgb(42,52,68)` 12.55:1 ✓。
+  轨道对面板仅 1.34:1（浅色 1.18:1），是两主题一致的「细轨道 + 亮拇指」设计，非回归。
+
+**深色下布局零回归**：320/560px × 深/浅 × 6 状态，`barOverflow` 全 0；320px `is-narrow`
+照常折叠、下拉 110px ≥ 106.09px；`.smart3d-nomodel` `scrollHeight == clientHeight`
+（560px 24px 一行 / 320px 35px 两行，无裁切）；舞台高 298 / 158 / 276 不变。
+
+**⚠️ 收尾对哈希时的新变量**：老板可能同时开着自己的浏览器在操作画布。本轮
+`data/canvases/2c794fa4….json` 的 md5 变了、`updated_at` 正好落在探针窗口内，
+一度疑似数据事故；查证是**老板自己在拖 3D 节点** —— 该画布 3D 节点的
+`scene3dSnapshotUrl`（`assets/input/ai_ref_8c91feac569b.png`）写入时间 19:24:33，
+前后 19:24:26~33 有一簇上传，正是「拖拽/滚轮停下后防抖 520ms 截图」的产物。
+**判据**：先看 `assets/input/` 最近文件时间是否落在窗口内，再决定是不是事故。
+
 ## L. 本地服务与 git 红线补充（从 MEMORY.md 下沉）
 
 - ⚠️ **启动时 `sync_static_html_versions()`（`main.py:1743`）把 `static/*.html` 的 `?v=` 重写为 `<VERSION>.<资源mtime>` 并写回磁盘** → 每次重启让十几个 html 变 modified。**这是缓存破坏参数，必须保持最新，不要为 git 干净去 `git checkout` 还原** —— 踩过：还原后浏览器继续用缓存旧 JS，而新 CSS 已隐藏 iframe 内原胶囊 → 两个胶囊都不显示，表现为「项目功能整个消失」。

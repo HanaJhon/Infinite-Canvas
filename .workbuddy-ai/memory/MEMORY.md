@@ -1,12 +1,12 @@
 # 项目长期记忆 · Infinite-Canvas
 
-> 索引式硬规则，细节下沉 `REFERENCE.md`（A 启动器 / B `.git` 事故 / C 胶囊 / D API Key / E 磁盘 / F Grsai 模型 / G 磁盘补充 / H 3D 白模 / I 保存接口 / J 前端 / K 3D 界面 / L 服务与 git / M three.js 版本）；过程见 `YYYY-MM-DD.md`。
+> 索引式硬规则，细节下沉 `REFERENCE.md`（A 启动器 / B `.git` / C 胶囊 / D Key / E 磁盘 / F Grsai / G 磁盘 / H 3D 白模 / I 保存 / J 前端 / K 3D 界面 / L 服务与 git / M three.js）；过程见 `YYYY-MM-DD.md`。
 
 ## 一、画布数据安全（最高优先级）
 
 - `data/canvases/<32hex>.json` **无回收站、无历史版本、未纳入 git**；删节点是硬删（整份覆盖 PUT），撤销栈只在内存。
 - 写画布前：停服务 / 确认无画布页开着 → 备份 + 记 `md5sum` → 测试一律用一次性画布（`POST /api/canvases` → 收尾 `DELETE .../purge`）。
-- 收尾三件事：删 `static/__*.html`、purge 一次性画布、`md5sum -c` 比对哈希。流程见技能 `infinite-canvas-verify`。
+- 收尾三件事：删 `static/__*.html`、purge 一次性画布、`md5sum -c` 比对哈希。⚠️ 哈希不符时**先排除「老板自己开着画布页」**（看 `assets/input/` 最近文件时间是否落在窗口内，3D 节点拖拽后会防抖截图），再判事故。流程见技能 `infinite-canvas-verify`。
 
 ## 二、保存接口（`PUT /api/canvases/{id}`）
 
@@ -18,7 +18,7 @@
 - 全项目只有一份 `static/smart-canvas.html/js/css`；`canvas.html` 不带 `?id=` 会跳选画布页。节点根元素 `.image-node[data-id]`。
 - ⚠️ 非空节点的 `.node-head`/`.node-title`/`.node-hint` 被全局隐藏（CSS 574/575/702）→ **新增非图片节点类型必须显式重显**；`.image-node.selected:not(...)` 长 `:not` 链要补新型号。
 - ⚠️ 节点拖拽靠 `beginNodeDrag` 的「排除选择器」判断，自吃鼠标事件的区域（如 3D 舞台）必须加进排除列表。
-- 改 i18n 必跑 `node static/js/i18n/validate-i18n.js`；`t()` **不做 `{name}` 插值**；动态文案要监听 `studio-lang-change` 重画。
+- 改 i18n 必跑 `validate-i18n.js`；`t()` **不做 `{name}` 插值**；动态文案要监听 `studio-lang-change` 重画。
 - **验证前端改动务必用全新 `--user-data-dir`**；`render()`（`smart-canvas.js:9166`）无节流 → WebGL 查看器 DOM 必须复用。其余见 J。
 
 ## 四、模型下拉与 Grsai
@@ -35,6 +35,7 @@
   ① 🚨 **折叠阈值必须按实测文案宽度算**（`smart3DBarNeedWidth`），**不能写死像素** —— 英文比中文宽 20~30px；模型名完整显示需 select ≥104px（原生箭头占 19px，DOM 量不出截断）。
   ② ⚠️ 失败态必须加 `.is-error`，否则与中性空态同色；`.smart3d-nomodel` 是阻断性告警必须读得全（`nowrap`+`overflow:hidden` 会硬切，已改允许换行）。
   ③ 🚨 **舞台深浅两主题下都是纯白，白底区域不要按主题切色**。
+- **两主题取色方向相反**：挂在**节点面板**上的元素（`.smart3d-nomodel`）**必须**按主题取色；挂在**恒白舞台**上的（`.smart3d-placeholder.is-error`）**绝不能**按主题切（深色换 `#f87171` 掉到 2.76:1）。10px 小字按 AA 4.5:1。基线表见 K.9。
 
 ## 六、本地服务
 
