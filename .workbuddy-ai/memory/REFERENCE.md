@@ -55,10 +55,50 @@
 - `...\Code Cache`/`Cache_Data`；Local/Session Storage、IndexedDB（实测干净）
 - `%LOCALAPPDATA%\InfiniteCanvasLauncher\preferences.json`（无 key）
 - 用户级环境变量（`GRSAI_API_KEY`/`MEDIA_API_KEY`，Bash 读不到，用 `[Environment]::GetEnvironmentVariable(name,'User')`）
-- **git 历史**（`API/.env` 已于 `18b4dcd` 取消跟踪，但 `9bdb54c` 有 Grsai key、`74b5c8c`/`3041576` 有 ModelScope key；已推 GitHub → 只能轮换）
+- **git 历史**（`API/.env` 已于 `18b4dcd` 取消跟踪；加入跟踪是 `b36ab39`、`67e7b89`。⚠️ 2026-09-18 复核修正：历史里**唯一的真 key 是 `API_PROVIDER_GRSAI_KEY`（11 位纯数字，blob `b76dd86274`，提交 `74b5c8c` / `9bdb54c`）**；`MODELSCOPE_API_KEY` 在历史里一直是**掩码占位符** `ms-token-***`，不是真 key。这些 blob **均已在 `origin/main`** → 只能轮换）
 
 - `CleanOrphanedEnvKeys()`（`Program.cs:1351`）删通道时**只置空孤立 key 的值、不删整行**，且只处理 `API_PROVIDER_` 前缀 → **内置通道 key 不会被清**。
 - 清 WebView2 残留前确认进程归属：`Get-CimInstance Win32_Process` 看 `--user-data-dir`（`wmic` 被安全策略拉黑）；在跑的 `msedgewebview2.exe` 往往属于别的程序。
+
+### D.1 2026-09-18 全量排查结果（删通道后）
+
+**真残留三处**：
+1. 🔴 **git 历史**：`API_PROVIDER_GRSAI_KEY` = 11 位纯数字（blob `b76dd86274`，提交 `74b5c8c`/`9bdb54c`），已推送 → 轮换。
+2. 🟠 **WebView2 自动填充**：`Lochou启动器.exe.WebView2/EBWebView/Default/Web Data` 的
+   `autofill_edge_field_values` 有 4 行（`domain=launcher.local`），label 分别是
+   「通道名称 / 接口协议类型 / 接口基础地址 / **API 密钥 (API Key / Token)**」；
+   值依次为 `Grsai`、`grsai`、`https://grsai.dakka.com.cn`、**20 位纯数字（`is_masked=1`）**。
+   注意 `autofill` 表是 **0 行**、`Login Data` **0 条**、`Cookies` **0 条** —— 别只看这几张表就下结论。
+3. 🟠 **用户级环境变量 4 个**：`GRSAI_API_KEY`(35, `sk-2b6`)、`MEDIA_API_KEY`(51, `sk-pkc`)、
+   `GPT_IMAGE_API_KEY`(67, `sk-0ae`)、`AMAZON_IMAGE_STUDIO_PLANNER_API_KEY`(67, `sk-7c3`)。
+   系统级（Machine）**无**。
+
+**已确认干净**：`data/api_providers.json` = `[]`；当前 `API/.env` 所有 `API_PROVIDER_*_KEY` 全空
+且 `MODELSCOPE_API_KEY` 仅占位符；`data/api_providers.json.bak-20260918`（备份）字段只有
+`id/name/base_url/protocol/enabled/primary/*_models`，**无 key 字段**；源码 608 文件扫描 61 处
+命中全是误报；WebView2 `Local State`/`Preferences` 0 命中；`%LOCALAPPDATA%\InfiniteCanvasLauncher\preferences.json`
+(56 B) 无 key；`data/conversations/` 空；7 个画布 JSON 含 `logs` 全扫干净；`output/backup/`、
+`output/server.log`、`data/media_previews/`、`asset_library.json`/`projects.json`/`prompt_libraries.json` 0 命中；
+`static/runninghub/api_providers.json` 是预设模板无 key；git **HEAD 不跟踪任何** `WebView2`/`API/`/`.env`，
+`.gitignore` 已含 `API/.env`、`*.exe.WebView2/`；历史 `.workbuddy-ai/memory/` 唯一命中
+`sk-ant-api03-xxxxxxxxxxxxxxxxxxxx` 是**文档化的占位符**（原文标注「非真 key」）。
+
+**项目外同源两处**（顺带发现）：`~/.workbuddy-ai/secrets/media-api.env` 的 `MEDIA_API_KEY`(51, `sk-pkc`)；
+`~/.codex/config.toml` 的 `experimental_bearer_token`(51, `sk-WD`)。
+
+**方法论四坑（都踩过）**：
+- 🚨 **别用 `\s*` 匹配 `.env` 的 `=` 两侧** —— `\s` 含换行，会把「空值 + 下一行变量名」误判成值
+  （本次一度误报 `ARK_API_KEY = RUNNINGHUB_API_KEY`）。**必须逐行按 `=` 切分后只看本行右侧**。
+- **识别掩码占位符**：含 `*` 的（`ms-token-***`）不是 key。报「长度 + 是否含 `*` + 字符构成」即可区分。
+- **`ms-` 前缀在 ModelScope 语境下大量误报**：模型 ID（`ms-custom-*`/`ms-lora-*`）、CSS 类名
+  （`ms-custom-model-select`）都会命中。
+- ⚠️ **全库 `git log --all --diff-filter=A` / 全 blob 遍历会超时**（被 SIGTERM 杀过两次），
+  且 `git cat-file --batch` 一次性写全部 sha 到 stdin 会**管道死锁**。改用**定向 pathspec**
+  （`API/.env`、`.workbuddy-ai`、`*WebView2*`）+「先 `--batch-check` 拿大小、再从文件喂 `--batch`」。
+- **判断 blob 是否已公开**：`git log origin/main --oneline --find-object=<blob>`，有输出即已推送 → 只能轮换。
+
+完整报告：`output/API-Key残留排查报告-2026-09-18.md`。
+
 
 ## E. 磁盘清理历史（2026-09-17）
 

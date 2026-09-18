@@ -1,6 +1,6 @@
 # 项目长期记忆 · Infinite-Canvas
 
-> 索引式硬规则，细节下沉 `REFERENCE.md`（A 启动器 / B `.git` / C 胶囊 / D Key / E 磁盘 / F Grsai / G 磁盘 / H 3D 白模 / I 保存 / J 前端 / K 3D 界面 / L 服务与 git / M three.js）；过程见 `YYYY-MM-DD.md`。
+> 索引式硬规则，细节下沉 `REFERENCE.md`（A 启动器 / B `.git` / C 胶囊 / D Key 残留 / E 磁盘 / F Grsai / G 磁盘 / H 3D 白模 / I 保存 / J 前端 / K 3D 界面 / L 服务与 git / M three.js）；过程见 `YYYY-MM-DD.md`。
 
 ## 一、画布数据安全（最高优先级）
 
