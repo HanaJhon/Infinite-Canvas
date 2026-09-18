@@ -208,6 +208,54 @@ Gemini 家族 10 个：`gemini-3.1-pro`、`gemini-2.5-pro`、`gemini-3-flash`、
 
 报告：`output/可精简文件分析报告-2026-09-18.md`。
 
+### G.2 零风险批 + 孤儿清理执行（2026-09-18，commit `bbb7ab1`）
+
+老板批准后落地。**363 路径 / 82.67 MB** 全部走回收站，逐组残留 **0**。
+
+| 组 | 目标 | 体积 |
+|---|---|---|
+| A1 | `data/media_previews/` | 5.84 MB |
+| A2 | `python/**/__pycache__/`（152 目录 / 1309 文件） | 11.87 MB |
+| A3 | `.git.broken-20260917/`（1 字节空壳，2 个跟踪文件） | 1 B |
+| A4 | `nuget.temp.config` | 197 B |
+| B1 | `Lochou启动器.exe.WebView2/` | 40.20 MB |
+| B2 | `launcher/obj/` | 9.99 MB |
+| B3 | `dist/` | 1.83 MB |
+| C1 | `output/` 探针产物 94 项 | 8.57 MB |
+| D1 | `assets/input/` 孤儿图 111 个 | 4.37 MB |
+
+**两处前置验证（都很关键）**
+
+1. **`dist/` 是启动器 UI 的「第 1 顺位」资源目录**，不是纯构建垃圾。候选链见 A 节；
+   删前逐文件比对 `dist/launcher` 与 `launcher/dist` **各 7 文件 md5 全同**（含
+   `index-Bm2vKWq7.js` / `index-Nr2NHwCT.css`）→ 删后命中第 3 顺位兜底副本，UI 零差异。
+   根 `dist` 另有 4 个非 web 产物（`InfiniteCanvasLauncher.pdb` + 3 个 WebView2 `.xml`）。
+2. **`assets/input` 引用统计口径**：G.1 只扫 `history.json` → 「4 个被引用 / 112 孤儿」；
+   本次改扫**全项目 119 个文本文件**（含 `data/canvases/*.json` 与记忆文档）→ 实为
+   **5 个被引用 / 111 孤儿**。少删的 1 个是 `ai_ref_8c91feac569b.png`（被记忆文档引用）。
+   **教训：判「孤儿」必须把画布 JSON 与文档一起纳入扫描范围，只扫 `history.json` 会误删。**
+
+**验证（8 项全过）**：7 个画布 md5 逐一不变；5 个受保护图片 md5 不变；`launcher/dist` 兜底在；
+`/api/canvases` HTTP 200（7 画布）；fastapi/uvicorn/PIL 可导入（删 `__pycache__` 无影响）；
+`/api/media-preview` 请求 200 / 4336 字节且 `data/media_previews` **按需自建**。
+
+**回收站**：执行前 **721 条目 / 0.011 GB** → 执行后 **3121 条目 / 0.092 GB**
+（**+2400 条目 / +82.7 MB**，与计划 82.67 MB 吻合 → 证明真入回收站而非硬删）。
+⚠️ **磁盘未释放**，需清空回收站才真释放。D: 可用 3726.01 GB。
+
+**正向副作用**：`Lochou启动器.exe.WebView2/` 的 `Web Data` 里 `autofill_edge_field_values`
+4 行（`domain=launcher.local`，其中「API 密钥」= 20 位纯数字、`is_masked=1`）随该目录删除一并消失
+→ D 节残留清单中的「WebView2 自动填充」一项**已消除**。
+
+**方法**：`SHFileOperationW` + `FOF_ALLOWUNDO|FOF_NOCONFIRMATION|FOF_SILENT|FOF_NOERRORUI`，
+`pFrom` 用 NUL 分隔、双 NUL 结尾，每 40 个一批。⚠️ 返回码可能报 `2`（`ERROR_FILE_NOT_FOUND`），
+但**判成功要看「回收站增量 = 计划体积」+「逐路径存在性复查」**，不要被返回码误导。
+已跟踪文件（`.git.broken-20260917` 2 个 + `nuget.temp.config` + 4 个早于 `.gitignore` 被跟踪的
+`output/step*.png`）用 **`git add -u`** 暂存后提交 —— `output/` 被 gitignore，
+`git add -A output/...` 会直接报 ignored 并 exit 1。
+
+报告：`output/零风险清理执行报告-2026-09-18.md`。
+
 ## H. 3D 预览：恢复修改前基础白模工作室方案（2026-09-18）
 
 当前按老板要求固定为修改前已验证的视觉方案：**纯白 `#ffffff` 视口 + 灰白基础白模 + 原工作室环境光 + 隐藏坐标网格**。

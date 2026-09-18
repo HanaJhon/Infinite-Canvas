@@ -1,6 +1,6 @@
 # 项目长期记忆 · Infinite-Canvas
 
-> 索引式硬规则，细节下沉 `REFERENCE.md`（A 启动器 / B `.git` / C 胶囊 / D Key 残留 / E 磁盘 / F Grsai / G 磁盘 / H 3D 白模 / I 保存 / J 前端 / K 3D 界面 / L 服务与 git / M three.js）；过程见 `YYYY-MM-DD.md`。
+> 索引式硬规则，细节下沉 `REFERENCE.md`（A 启动器 / B `.git` / C 胶囊 / D Key 残留 / E+G 磁盘清理 / F Grsai / H 3D 白模 / I 保存 / J 前端 / K 3D 界面 / L 服务与 git / M three.js）；过程见 `YYYY-MM-DD.md`。
 
 ## 一、画布数据安全（最高优先级）
 
@@ -41,10 +41,14 @@
 
 - 启动 `./python/python.exe main.py`（端口 3000，**必须后台 Bash 任务**，日志 `output/server.log`；本机 `curl` 不可用，改用 Python `urllib`）。
 - ⚠️ 启动会重写 `static/*.html` 的 `?v=`，**不要为 git 干净去还原**（否则浏览器用旧 JS，表现为「功能整个消失」）。
+- **启动器 UI 资源候选链**（`launcher/Program.cs:456-466`，取第一个含 `index.html` 的目录）：`dist\launcher` → `BaseDir\dist\launcher` → `launcher\dist` → `BaseDir\launcher\dist` → `dist` → `BaseDir\dist`。**exe 不内嵌网页资源** → 只改前端无需重编 exe。根 `dist\` 可删（落到 `launcher\dist` 兜底，两处 7 文件 md5 一致），但**清完要重跑 `sync_verify.py sync` 恢复「四处一致」**。仓库里只有 `Lochou启动器.exe` 一个 exe（`一键启动.exe`/`dist\*.exe` 已不存在）。见 A / 技能 `launcher-web-sync`。
 
 ## 七、磁盘与 git 硬红线
 
 - ⚠️ 本机「删除即入回收站」→ 清理不释放空间；**真正释放 = 清空回收站**，汇报成果必须同时给回收站占用。
+- **清理走回收站**：`SHFileOperationW` + `FOF_ALLOWUNDO|FOF_NOCONFIRMATION|FOF_SILENT|FOF_NOERRORUI`，`pFrom` 用 NUL 分隔 / 双 NUL 结尾，每 40 个一批（返回码可能是 2，但**以「回收站增量 = 计划体积」为成功判据**）。删除前先跑安全白名单（路径必须在项目根下、不得命中 `python/ data/ static/ assets/ launcher/ output/ API/ .git/` 与项目根本身）。
+- ⚠️ **`git add -A <被 gitignore 的目录>/...` 会报 ignored 而失败** → 删已跟踪文件用 **`git add -u`**（`output/` 被 gitignore，其下 4 个 `step*.png` 却是跟踪状态）。
+- 2026-09-18 已执行零风险清理（363 路径 / 82.67 MB，commit `bbb7ab1`）；回收站 3121 条目 / 0.092 GB。清单与判据见 E+G。
 - ⚠️ **绝不要 `git rm <文件>`**（实测整个父目录消失）；用 Python `os.remove` + `git add -A <目录>/`。
 - 🚨 `.git` 曾于 2026-09-17 被递归搬进回收站（已还原）。防护：维护前 `git bundle create ../repo-<日期>.bundle --all`；瘦身在项目外副本做。
 - ⚠️ **工具会话内 `git push` 会无限挂起** → 推送必须由老板本人终端执行（裸 `git` 不可用，真身在 PortableGit 1.2.0）。详见 B/L。
