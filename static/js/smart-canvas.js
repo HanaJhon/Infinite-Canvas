@@ -9047,13 +9047,12 @@ const SMART_3D_STUDIO = {
     clay: '#d9dce1',
     clayRoughness: 0.62,
     clayMetalness: 0,
-    // 柔光参数：提高环境填充，降低直射光和接触阴影对比度。
-    envIntensity: 0.38,
-    groundShadow: 0.10,
-    hemisphere: {sky:'#ffffff', ground:'#eef1f5', intensity:0.46},
-    key:  {color:'#ffffff', intensity:0.92, position:[5.5, 9, 6.5]},
-    fill: {color:'#ffffff', intensity:0.38, position:[-6.5, 4.2, 3.5]},
-    rim:  {color:'#ffffff', intensity:0.42, position:[-2.5, 5.5, -7.5]}
+    envIntensity: 0.50,
+    groundShadow: 0.2,
+    hemisphere: {sky:'#ffffff', ground:'#e9ecf1', intensity:0.34},
+    key:  {color:'#ffffff', intensity:1.35, position:[5.5, 9, 6.5]},
+    fill: {color:'#ffffff', intensity:0.46, position:[-6.5, 4.2, 3.5]},
+    rim:  {color:'#ffffff', intensity:0.60, position:[-2.5, 5.5, -7.5]}
 };
 // 手搭一个「白色摄影棚」环境（浅灰房间 + 三块纯白柔光板），经 PMREM 卷积后作为 scene.environment。
 // 三块板用 Color.setScalar(>1) 提高亮度：PMREM 内部用半浮点目标，可以保留 >1 的光源强度。
@@ -9207,7 +9206,7 @@ function apply3DSceneToViewer(viewer, node){
             light.shadow.mapSize.set(1024, 1024);
             light.shadow.bias = -0.0006;
             light.shadow.normalBias = 0.022;
-            light.shadow.radius = 6;
+            light.shadow.radius = 3;
             const frustum = light.shadow.camera;
             frustum.left = -6; frustum.right = 6; frustum.top = 6; frustum.bottom = -6;
             frustum.near = 0.5; frustum.far = 44;
