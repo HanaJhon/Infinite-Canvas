@@ -25,13 +25,13 @@
 
 - 下拉唯一数据源是 `chatApiProviders()`（`smart-canvas.js:3049`），**只认 `chat_models`**；生图/视频模型不会出现在对话下拉里。3D 节点用 `chatModelOptions()`，不做视觉过滤。
 - **Grsai 对话模型 = GPT 4 + Gemini 10 = 14 个**，4 个 GPT 全支持读图。⚠️ 命名 = **OpenAI 官方模型 ID**（`gpt-6-astra`/`gpt-5.6-terra`/`gpt-5.6-sol`/`gpt-5.5`），**别自己编后缀**。清单见 `REFERENCE.md` F。
-- ⚠️ 探测三坑：① 按通用命名试 `gpt-4o`/`gpt-5` 全 400 就误判「没有 GPT」（被老板连续纠正两次）；② **禁止并发扫模型名**（限流会把已知可用的扫成失败），必须串行 + 间隔 1~1.5s；③ **判「存在」看 200，判「不存在」必须看到 `model not found`**。Grsai 无 `/v1/models`（全 404），只能手填；后端不校验模型是否存在。老板另有 Aizzz 网关（`~/.codex/config.toml`，≥2000 token 门槛）**仅备选**。
+- ⚠️ 探测三坑：① 按通用命名试 `gpt-4o`/`gpt-5` 全 400 就误判「没有 GPT」（被老板纠正两次）；② **禁止并发扫模型名**（限流会把已知可用的扫成失败）→ 串行 + 间隔 1~1.5s；③ **判「存在」看 200，判「不存在」必须看到 `model not found`**。Grsai 无 `/v1/models`（全 404）只能手填，后端不校验模型是否存在。老板另有 Aizzz 网关（`~/.codex/config.toml`，≥2000 token 门槛）**仅备选**。
 
 ## 五、3D 预览节点（`smart-3d`）
 
 - 定位：上游只能「快速生图」、下游也只能「快速生图」，与 prompt/loop/group 双向拒绝（`canAutoConnectDraggedNode()` + `connectInputNode()` 两处都要改）。
-- 视觉风格：纯白 `#ffffff` 视口 + 灰白石膏白模 `#d9dce1` + 固定工作室光，无 GridHelper，地面仅 `ShadowMaterial`；详见 `REFERENCE.md` H。
-- **外框布局约定**：① `padding-top:0` 让标题栏顶到边；② **跳过 `.floating-node-actions` 浮动删除按钮**（模板加 `&& !is3D`）；③ **交互说明入标题栏**（`headSub` → `.node-head-sub`，条件 `is3D && smart3DHasScene(node)`，底部不渲染 `.node-hint`）；④ **标题栏 `padding:0; border-bottom:0`**（与舞台同列对齐，否则 12px 缩进 + 2px 双线）；⑤ **标题栏内 `.node-delete` 必须显式去掉 `.mini-x` 的 `box-shadow`/`backdrop-filter` 并补 `:hover`**（全局 3 类规则压过 `.mini-x:hover`）。
+- 视觉风格：纯白 `#ffffff` 视口 + 灰白石膏白模 `#d9dce1` + 固定工作室光，无 GridHelper；详见 `REFERENCE.md` H。
+- **外框布局约定**：① `padding-top:0` 让标题栏顶到边；② **跳过 `.floating-node-actions` 浮动删除按钮**（模板加 `&& !is3D`）；③ **交互说明入标题栏**（`headSub` → `.node-head-sub`，条件 `is3D && smart3DHasScene(node)`，底部不渲染 `.node-hint`）；④ **标题栏 `padding:0; border-bottom:0`**，且 `.node-delete` 必须显式去 `box-shadow`/`backdrop-filter` 并补 `:hover`（全局 3 类规则压过 `.mini-x:hover`）。验收锚点见 `REFERENCE.md` K.1/K.2。
 - **窄节点（`smart3DLayoutSize(node).width < 420`）给 `.smart3d-body` 加 `is-narrow`**，CSS 隐藏 `.smart3d-meta > span`（计数压成纯图标，文案留 `title`）—— 否则 320px 下模型下拉只剩 45px（`G..`/`g..`），折叠后 84.5px。`.smart3d-meta` 内部必须用 `<span>` 包文案作钩子。
 - **四个状态要分别验**：成功 / 解析失败 / 请求失败 / 空场景。⚠️ 失败态必须加 `.is-error`，否则与中性空态**同色**（`#8b95a8`）看不出报错；🚨 **舞台在深浅两主题下都是纯白，固定白底区域不要按主题切色**（统一 `#dc2626` = 4.85:1）；`.smart3d-raw` 收起态要退化成一行小字（默认面板吃 36px 视口）。字段/查看器/坑位见 `REFERENCE.md` K。
 
