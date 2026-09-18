@@ -9495,7 +9495,10 @@ function smart3DBodyHtml(node){
     const objects = smart3DSceneObjects(node);
     const errorText = String(node.scene3dError || '');
     const emptyText = errorText || tr('smart.3dEmptyHint');
-    const placeholder = objects.length ? '' : `<div class="smart3d-placeholder" data-3d-placeholder="1">
+    // 生成失败时不能和中性空态提示一个长相：实测两者文案颜色完全相同（都是 #8b95a8），
+    // 上游报错几乎看不出来。加 is-error 走红色文案 + 放开 pointer-events 让长报错可被选中复制
+    //（空态仍是 pointer-events:none，不抢舞台拖拽）。
+    const placeholder = objects.length ? '' : `<div class="smart3d-placeholder${errorText ? ' is-error' : ''}" data-3d-placeholder="1">
             <i data-lucide="${errorText ? 'triangle-alert' : 'rotate-3d'}"></i>
             <span>${escapeHtml(emptyText)}</span>
         </div>`;

@@ -2060,6 +2060,13 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart3d-canvas { display:block; width:100%; height:100%; touch-action:none; outline:none; }
 .smart3d-placeholder { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:9px; padding:18px; text-align:center; color:#8b95a8; font-size:11px; font-weight:750; line-height:1.55; pointer-events:none; }
 .smart3d-placeholder i, .smart3d-placeholder svg { width:26px; height:26px; stroke-width:1.6; }
+/* 生成失败态：错误文案必须与中性空态提示区分开（实测两者同色 #8b95a8，失败几乎看不出）。
+   纯白舞台是既定视觉风格，所以只染文案与图标，不给舞台加底色。
+   同时放开 pointer-events —— 长上游报错用户通常要选中复制；空态保持 none，不抢舞台拖拽。
+   ⚠️ 不要按主题切换颜色：`.smart3d-stage` 在深浅两色主题下都是 #ffffff，文案永远落在白底上，
+   深色主题若换成 #f87171 反而掉到 2.76:1（#dc2626 在白底是 4.85:1）。 */
+.smart3d-placeholder.is-error { color:#dc2626; pointer-events:auto; cursor:default; user-select:text; }
+.smart3d-placeholder.is-error i, .smart3d-placeholder.is-error svg { color:#dc2626; stroke-width:1.9; }
 .smart3d-bar { flex:0 0 auto; display:flex; align-items:center; gap:6px; min-height:28px; }
 .smart3d-meta { flex:0 0 auto; display:inline-flex; align-items:center; gap:5px; height:26px; padding:0 8px; border-radius:9px; background:var(--soft); border:1px solid var(--line); color:var(--muted); font-size:10px; font-weight:800; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .smart3d-meta i, .smart3d-meta svg { width:12px; height:12px; }
@@ -2074,7 +2081,10 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart3d-run:disabled { opacity:.62; cursor:default; }
 .smart3d-run.is-running i, .smart3d-run.is-running svg { animation:smart3d-spin 1s linear infinite; }
 @keyframes smart3d-spin { to { transform:rotate(360deg); } }
-.smart3d-raw { flex:0 0 auto; max-height:118px; overflow:auto; border-radius:10px; border:1px solid var(--line); background:var(--soft); padding:6px 8px; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent; }
+/* 「查看模型输出」是排障用的次级信息，收起时不该占着 36px 视口高度（28px 面板 + 8px gap，
+   比把操作说明挪进标题栏省下的 25px 还多）。收起态退化成一行灰色小字，展开时才还原成面板。 */
+.smart3d-raw { flex:0 0 auto; max-height:118px; overflow:auto; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent; }
+.smart3d-raw[open] { border:1px solid var(--line); background:var(--soft); border-radius:10px; padding:6px 8px; }
 .smart3d-raw summary { cursor:pointer; color:var(--faint); font-size:9.5px; font-weight:900; letter-spacing:.03em; }
 .smart3d-raw pre { margin:6px 0 0; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:9px; line-height:1.5; color:var(--text); }
 
