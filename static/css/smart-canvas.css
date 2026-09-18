@@ -98,18 +98,18 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity:0 !impo
 .image-node.history-group-node { border-color:rgba(148,163,184,.34); background:rgba(248,250,252,.66); }
 .theme-dark .image-node.history-group-node { border-color:rgba(148,163,184,.28); background:rgba(30,41,59,.28); }
 .image-node.selected { outline:0; }
-.image-node.selected:not(.empty-node):not(.group-node):not(.prompt-smart-node):not(.loop-smart-node):not(.minimax-smart-node):not(.smart-group-node) { box-shadow:none; border-radius:12px; }
+.image-node.selected:not(.empty-node):not(.group-node):not(.prompt-smart-node):not(.loop-smart-node):not(.minimax-smart-node):not(.smart-group-node):not(.smart3d-node) { box-shadow:none; border-radius:12px; }
 .image-node.selected:not(.empty-node):not(.group-node) .image-wrap > img, .image-node.selected:not(.empty-node):not(.group-node) .image-wrap > .node-img { border-color:var(--strong); box-shadow:0 0 0 1px var(--strong); }
 .image-node.group-node:hover, .image-node.group-node.selected { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
 .image-node.group-node.selected { box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow); }
 .image-node.empty-node:hover { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
 .image-node.empty-node.selected { border-color:var(--strong); box-shadow:0 0 0 1px var(--strong), 0 12px 34px var(--shadow); }
-.image-node.prompt-smart-node, .image-node.loop-smart-node, .image-node.minimax-smart-node { padding:12px; background:var(--panel); border:1px solid var(--line); box-shadow:0 20px 56px var(--shadow); backdrop-filter:blur(20px); overflow:visible; }
+.image-node.prompt-smart-node, .image-node.loop-smart-node, .image-node.minimax-smart-node, .image-node.smart3d-node { padding:12px; background:var(--panel); border:1px solid var(--line); box-shadow:0 20px 56px var(--shadow); backdrop-filter:blur(20px); overflow:visible; }
 .image-node.loop-smart-node { padding-top:14px; padding-bottom:12px; }
-.theme-dark .image-node.prompt-smart-node, .theme-dark .image-node.loop-smart-node, .theme-dark .image-node.minimax-smart-node { background:var(--panel); border-color:var(--line); }
-.image-node.prompt-smart-node:hover, .image-node.loop-smart-node:hover, .image-node.minimax-smart-node:hover, .image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
-.image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected { box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow); }
-.prompt-smart-node .node-body, .loop-smart-node .node-body, .minimax-smart-node .node-body { align-items:stretch; justify-content:stretch; padding:0; height:100%; min-height:0; }
+.theme-dark .image-node.prompt-smart-node, .theme-dark .image-node.loop-smart-node, .theme-dark .image-node.minimax-smart-node, .theme-dark .image-node.smart3d-node { background:var(--panel); border-color:var(--line); }
+.image-node.prompt-smart-node:hover, .image-node.loop-smart-node:hover, .image-node.minimax-smart-node:hover, .image-node.smart3d-node:hover, .image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected, .image-node.smart3d-node.selected { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
+.image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected, .image-node.smart3d-node.selected { box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow); }
+.prompt-smart-node .node-body, .loop-smart-node .node-body, .minimax-smart-node .node-body, .smart3d-node .node-body { align-items:stretch; justify-content:stretch; padding:0; height:100%; min-height:0; }
 .image-node.smart-group-member-node { padding:0; border-radius:12px; overflow:hidden; background:var(--card); border:1px solid rgba(148,163,184,.34); box-shadow:none; backdrop-filter:none; }
 .theme-dark .image-node.smart-group-member-node { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.24); }
 .image-node.smart-group-member-node:hover,
@@ -317,13 +317,13 @@ body.smart-prompt-split-resize .prompt-node-llm select { pointer-events:none !im
 .loop-smart-run i,.loop-smart-run svg { width:15px !important; height:15px !important; }
 .loop-smart-run:disabled { opacity:.45; cursor:not-allowed; }
 
-.image-node.selected:not(.empty-node):not(.group-node):not(.prompt-smart-node):not(.loop-smart-node):not(.minimax-smart-node):not(.smart-group-node) { box-shadow:none; border-radius:12px; }
-.image-node.prompt-smart-node, .image-node.loop-smart-node, .image-node.minimax-smart-node { padding:12px; background:var(--panel); border:1px solid var(--line); box-shadow:0 20px 56px var(--shadow); backdrop-filter:blur(20px); overflow:visible; }
+.image-node.selected:not(.empty-node):not(.group-node):not(.prompt-smart-node):not(.loop-smart-node):not(.minimax-smart-node):not(.smart-group-node):not(.smart3d-node) { box-shadow:none; border-radius:12px; }
+.image-node.prompt-smart-node, .image-node.loop-smart-node, .image-node.minimax-smart-node, .image-node.smart3d-node { padding:12px; background:var(--panel); border:1px solid var(--line); box-shadow:0 20px 56px var(--shadow); backdrop-filter:blur(20px); overflow:visible; }
 .image-node.loop-smart-node { padding-top:14px; padding-bottom:12px; }
-.theme-dark .image-node.prompt-smart-node, .theme-dark .image-node.loop-smart-node, .theme-dark .image-node.minimax-smart-node { background:var(--panel); border-color:var(--line); }
-.image-node.prompt-smart-node:hover, .image-node.loop-smart-node:hover, .image-node.minimax-smart-node:hover, .image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
-.image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected { box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow); }
-.prompt-smart-node .node-body, .loop-smart-node .node-body, .minimax-smart-node .node-body { align-items:stretch; justify-content:stretch; padding:0; height:100%; min-height:0; }
+.theme-dark .image-node.prompt-smart-node, .theme-dark .image-node.loop-smart-node, .theme-dark .image-node.minimax-smart-node, .theme-dark .image-node.smart3d-node { background:var(--panel); border-color:var(--line); }
+.image-node.prompt-smart-node:hover, .image-node.loop-smart-node:hover, .image-node.minimax-smart-node:hover, .image-node.smart3d-node:hover, .image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected, .image-node.smart3d-node.selected { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
+.image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected, .image-node.smart3d-node.selected { box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow); }
+.prompt-smart-node .node-body, .loop-smart-node .node-body, .minimax-smart-node .node-body, .smart3d-node .node-body { align-items:stretch; justify-content:stretch; padding:0; height:100%; min-height:0; }
 .image-node.minimax-smart-node .node-head, .image-node.minimax-smart-node .node-title { display:none; }
 .minimax-card { width:100%; height:100%; min-height:0; display:flex; flex-direction:column; gap:10px; color:var(--text); overflow:hidden; }
 .minimax-top,.minimax-track,.minimax-lane,.minimax-media { cursor:grab; }
@@ -2049,3 +2049,53 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart-group-summary i,.smart-group-summary svg { width:13px; height:13px; }
 .smart-group-empty { flex:1 1 auto; min-height:74px; display:flex; align-items:center; justify-content:center; gap:6px; color:var(--faint); font-size:10px; font-weight:700; text-align:center; border-radius:10px; border:1px dashed var(--line); background:var(--soft); }
 .smart-group-empty i,.smart-group-empty svg { width:14px; height:14px; }
+
+
+/* ===================== 3D 预览节点（three.js） ===================== */
+/* 舞台底色固定为深色：three.js 场景背景与地面网格都按深色调校，浅色主题下也保持"视口"观感。 */
+.smart3d-body { width:100%; height:100%; min-height:0; display:flex; flex-direction:column; gap:8px; }
+.smart3d-stage { position:relative; flex:1 1 auto; min-height:110px; border-radius:12px; overflow:hidden; border:1px solid rgba(148,163,184,.32); background:#ffffff; cursor:grab; touch-action:none; }
+.theme-dark .smart3d-stage { border-color:rgba(148,163,184,.26); background:#ffffff; }
+.smart3d-stage:active { cursor:grabbing; }
+.smart3d-canvas { display:block; width:100%; height:100%; touch-action:none; outline:none; }
+.smart3d-placeholder { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:9px; padding:18px; text-align:center; color:#8b95a8; font-size:11px; font-weight:750; line-height:1.55; pointer-events:none; }
+.smart3d-placeholder i, .smart3d-placeholder svg { width:26px; height:26px; stroke-width:1.6; }
+.smart3d-bar { flex:0 0 auto; display:flex; align-items:center; gap:6px; min-height:28px; }
+.smart3d-meta { flex:0 0 auto; display:inline-flex; align-items:center; gap:5px; height:26px; padding:0 8px; border-radius:9px; background:var(--soft); border:1px solid var(--line); color:var(--muted); font-size:10px; font-weight:800; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.smart3d-meta i, .smart3d-meta svg { width:12px; height:12px; }
+.smart3d-select { flex:1 1 0; min-width:0; height:26px; padding:0 6px; border-radius:9px; border:1px solid rgba(148,163,184,.34); background:rgba(255,255,255,.62); color:var(--text); font-size:10px; font-weight:700; outline:none; cursor:pointer; text-overflow:ellipsis; }
+.theme-dark .smart3d-select { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.24); }
+.smart3d-select:focus { border-color:var(--strong); }
+.smart3d-nomodel { flex:1 1 auto; min-width:0; display:inline-flex; align-items:center; gap:5px; height:26px; padding:0 8px; border-radius:9px; background:rgba(239,68,68,.1); border:1px solid rgba(239,68,68,.34); color:#ef4444; font-size:10px; font-weight:750; white-space:nowrap; overflow:hidden; }
+.smart3d-nomodel i, .smart3d-nomodel svg { width:12px; height:12px; flex:0 0 auto; }
+.smart3d-run { flex:0 0 auto; height:26px; padding:0 11px; border-radius:9px; display:inline-flex; align-items:center; justify-content:center; gap:5px; background:var(--strong); color:var(--strong-text); font-size:10px; font-weight:850; white-space:nowrap; transition:transform .14s ease, opacity .14s ease; }
+.smart3d-run i, .smart3d-run svg { width:12px; height:12px; }
+.smart3d-run:hover:not(:disabled) { transform:translateY(-1px); }
+.smart3d-run:disabled { opacity:.62; cursor:default; }
+.smart3d-run.is-running i, .smart3d-run.is-running svg { animation:smart3d-spin 1s linear infinite; }
+@keyframes smart3d-spin { to { transform:rotate(360deg); } }
+.smart3d-raw { flex:0 0 auto; max-height:118px; overflow:auto; border-radius:10px; border:1px solid var(--line); background:var(--soft); padding:6px 8px; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent; }
+.smart3d-raw summary { cursor:pointer; color:var(--faint); font-size:9.5px; font-weight:900; letter-spacing:.03em; }
+.smart3d-raw pre { margin:6px 0 0; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:9px; line-height:1.5; color:var(--text); }
+.smart3d-node .node-hint { color:var(--faint); }
+
+/* 全局规则 `.image-node:not(.empty-node) .node-head/.node-hint { display:none }` 会隐藏标题栏与提示，
+   但 3D 节点没有自己的内部标题行，必须把标题（3D预览）和拖拽提示显示出来，
+   否则用户既看不到节点名，也找不到除标题栏以外的拖动把手。 */
+.image-node.smart3d-node { display:flex; flex-direction:column; }
+.image-node.smart3d-node .node-head { display:flex; flex:0 0 auto; }
+.image-node.smart3d-node .node-hint { display:block; flex:0 0 auto; padding-right:32px; }
+.image-node.smart3d-node .node-body { flex:1 1 auto; height:auto; min-height:0; }
+.smart3d-node .node-head { cursor:move; }
+.image-node.smart3d-node .node-title { display:block; flex:1 1 auto; }
+.smart3d-fovrow { flex:0 0 auto; display:flex; align-items:center; gap:8px; height:26px; padding:0 2px; }
+.smart3d-fovicon { width:13px; height:13px; flex:0 0 auto; color:var(--muted); stroke-width:1.8; }
+.smart3d-fov { flex:1 1 auto; min-width:0; height:4px; margin:0; padding:0; -webkit-appearance:none; appearance:none; background:transparent; cursor:pointer; }
+.smart3d-fov::-webkit-slider-runnable-track { height:4px; border-radius:3px; background:var(--line); }
+.smart3d-fov::-moz-range-track { height:4px; border-radius:3px; background:var(--line); }
+.smart3d-fov::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:14px; height:14px; margin-top:-5px; border-radius:50%; background:var(--strong); border:2px solid #fff; box-shadow:0 1px 3px rgba(15,23,42,.28); }
+.smart3d-fov::-moz-range-thumb { width:14px; height:14px; border:2px solid #fff; border-radius:50%; background:var(--strong); box-shadow:0 1px 3px rgba(15,23,42,.28); }
+.smart3d-fov:focus { outline:none; }
+.smart3d-fov:disabled { opacity:.5; cursor:default; }
+.smart3d-fovval { flex:0 0 auto; min-width:62px; text-align:right; color:var(--muted); font-size:10px; font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.theme-dark .smart3d-fovval { color:var(--faint); }

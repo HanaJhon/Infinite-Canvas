@@ -1563,8 +1563,11 @@ function isSmartImageNode(node){
 function isSmartGroupNode(node){
     return Boolean(node && node.type === 'smart-group');
 }
+function isSmart3DNode(node){
+    return Boolean(node && node.type === 'smart-3d');
+}
 function isSmartRunnableNode(node){
-    return Boolean(isSmartImageNode(node) || isSmartGroupNode(node) || node?.type === 'smart-minimax');
+    return Boolean(isSmartImageNode(node) || isSmartGroupNode(node) || node?.type === 'smart-minimax' || isSmart3DNode(node));
 }
 function isHistoryGroupNode(node){
     return Boolean(isSmartImageNode(node) && (node.isHistoryGroup || node.historyFor));
@@ -2447,6 +2450,7 @@ function imageLayout(images, scale=1, node=null){
     }
     if(node?.type === 'smart-prompt') return {cols:1, rows:1, ...promptNodeLayoutSize(node), thumb:96, single:true};
     if(node?.type === 'smart-minimax') return {cols:1, rows:1, ...smartMinimaxLayoutSize(node), thumb:96, single:true};
+    if(node?.type === 'smart-3d') return {cols:1, rows:1, ...smart3DLayoutSize(node), thumb:96, single:true};
     if(node?.type === 'smart-loop'){
         const explicitW = Number(node.w);
         const explicitH = Number(node.h);
@@ -6900,6 +6904,48 @@ function createLoopNode(x, y, options={}){
     scheduleSave();
     return node;
 }
+const SMART_3D_DEFAULT_W = 560;
+const SMART_3D_DEFAULT_H = 470;
+const SMART_3D_MIN_W = 320;
+const SMART_3D_MIN_H = 280;
+const SMART_3D_STAGE_RATIO = 0.62;
+
+function smart3DSceneObjects(node){
+    return Array.isArray(node?.scene3d?.objects) ? node.scene3d.objects : [];
+}
+function smart3DHasScene(node){
+    return smart3DSceneObjects(node).length > 0;
+}
+function smart3DLayoutSize(node){
+    const w = Math.max(SMART_3D_MIN_W, Math.round(Number(node?.w) || SMART_3D_DEFAULT_W));
+    const h = Math.max(SMART_3D_MIN_H, Math.round(Number(node?.h) || SMART_3D_DEFAULT_H));
+    return {cols:1, rows:1, width:w, height:h};
+}
+function create3DNode(x, y, options={}){
+    if(!options.skipUndo) pushUndo();
+    const node = {
+        id:uid('3d'),
+        type:'smart-3d',
+        x,
+        y,
+        w:SMART_3D_DEFAULT_W,
+        h:SMART_3D_DEFAULT_H,
+        title:'3D预览',
+        model:'',
+        provider:'',
+        scene3d:null,
+        scene3dRaw:'',
+        scene3dError:'',
+        camera:null,
+        running:false,
+        created_at:Date.now()
+    };
+    nodes.push(node);
+    if(options.select !== false) selectedId = node.id;
+    render();
+    scheduleSave();
+    return node;
+}
 function createMinimaxNode(x, y, options={}){
     if(!options.skipUndo) pushUndo();
     const duration = 8;
@@ -8848,7 +8894,767 @@ function smartMinimaxBodyHtml(node){
     </div>`;
 }
 
+// ===================== 3D 预览节点（three.js） =====================
+// 数据流：上游「快速生图」的图片 → /api/canvas-llm 视觉识别 → 场景 JSON → three.js 实时渲染。
+// 场景 JSON 存在节点数据里（scene3d），刷新页面无需重跑模型即可复原；相机姿态存 node.camera。
+// 下游「快速生图」取的是查看器实时截图（node.scene3dSnapshotUrl）。
+const SMART_3D_MAX_VIEWERS = 6;
+const SMART_3D_SNAPSHOT_DEBOUNCE = 520;
+const smart3DViewers = new Map();          // nodeId -> viewer
+const smart3DViewerPending = new Set();    // 正在动态加载 three.js 的节点
+const smart3DSnapshotData = new Map();     // nodeId -> 最近一次截图的 dataURL（仅内存，不进画布 JSON）
+const smart3DSnapshotTimers = new Map();
+let smart3DThreePromise = null;
+
+const SMART_3D_SYSTEM_PROMPT = [
+    'You are a 3D reconstruction engine for a three.js viewer.',
+    'Look at the reference image(s) and rebuild the main subject as a simple primitive-based 3D scene.',
+    'Reply with ONE JSON object only. No markdown fences, no comments, no prose.',
+    'Schema:',
+    '{',
+    '  "camera": {"position": [3, 2.4, 4.2], "target": [0, 0.6, 0], "fov": 45},',
+    '  "objects": [',
+    '    {"name": "body", "type": "box", "size": [1.2, 1.6, 0.8], "position": [0, 0.8, 0], "rotation": [0, 0, 0]}',
+    '  ]',
+    '}',
+    'Allowed "type" values and their extra fields:',
+    '  box -> "size": [x, y, z]',
+    '  sphere -> "radius": number',
+    '  cylinder -> "radiusTop": number, "radiusBottom": number, "height": number',
+    '  cone -> "radius": number, "height": number',
+    '  torus -> "radius": number, "tube": number',
+    '  capsule -> "radius": number, "length": number',
+    '  plane -> "size": [x, y] (flat panel facing +Z)',
+    'Rules:',
+    '- Units are roughly metres. Keep the whole subject inside a 4 x 4 x 4 box centred on the origin.',
+    '- "position" and "rotation" are [x, y, z]; rotation is in degrees.',
+    '- Build the subject from 4 to 24 primitives. Approximate complex shapes with several primitives, never with one oversized blob.',
+    '- The bottom of the subject must rest on y = 0.',
+    '- Geometry only. The viewer renders every primitive as a uniform light-grey clay model on a pure white background under fixed studio lighting, so do NOT output colours, materials, lights, ground, grid or background.',
+    '- Every [x, y, z] array must contain exactly 3 finite numbers. Output strictly valid JSON.'
+].join('\n');
+
+function smart3DParseSceneJson(text){
+    let raw = String(text || '').trim();
+    if(!raw) return null;
+    const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if(fence) raw = fence[1].trim();
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if(start < 0 || end <= start) return null;
+    raw = raw.slice(start, end + 1);
+    try { return JSON.parse(raw); } catch(e) {}
+    // 模型常见瑕疵：尾随逗号
+    try { return JSON.parse(raw.replace(/,\s*([}\]])/g, '$1')); } catch(e) {}
+    return null;
+}
+function smart3DNumArray(value, length, fallback){
+    const arr = Array.isArray(value) ? value : [];
+    return Array.from({length}, (_, i) => {
+        const n = Number(arr[i]);
+        return Number.isFinite(n) ? n : fallback[i];
+    });
+}
+function smart3DPositive(value, fallback, allowZero=false){
+    const n = Math.abs(Number(value));
+    if(!Number.isFinite(n) || n <= 0) return allowZero ? 0 : fallback;
+    return allowZero ? n : Math.max(0.01, n);
+}
+const SMART_3D_PRIMITIVES = new Set(['box', 'sphere', 'cylinder', 'cone', 'torus', 'capsule', 'plane']);
+function normalize3DScene(input){
+    if(!input || typeof input !== 'object' || Array.isArray(input)) return null;
+    const list = Array.isArray(input.objects) ? input.objects : null;
+    if(!list) return null;
+    const objects = list.map((item, index) => {
+        if(!item || typeof item !== 'object') return null;
+        const type = String(item.type || '').trim().toLowerCase();
+        if(!SMART_3D_PRIMITIVES.has(type)) return null;
+        const spec = {
+            type,
+            name: String(item.name || `${type}-${index + 1}`).slice(0, 60),
+            position: smart3DNumArray(item.position, 3, [0, 0, 0]),
+            rotation: smart3DNumArray(item.rotation, 3, [0, 0, 0])
+        };
+        if(type === 'box' || type === 'plane'){
+            const fallback = type === 'plane' ? [1, 1, 0] : [1, 1, 1];
+            spec.size = smart3DNumArray(item.size, 3, fallback).map((v, i) => (type === 'plane' && i === 2) ? 0 : smart3DPositive(v, fallback[i]));
+        } else if(type === 'sphere'){
+            spec.radius = smart3DPositive(item.radius, 0.5);
+        } else if(type === 'cylinder'){
+            spec.radiusTop = smart3DPositive(item.radiusTop, 0.4, true);
+            spec.radiusBottom = smart3DPositive(item.radiusBottom, 0.4, true);
+            spec.height = smart3DPositive(item.height, 1);
+            if(spec.radiusTop <= 0 && spec.radiusBottom <= 0) spec.radiusTop = spec.radiusBottom = 0.4;
+        } else if(type === 'cone'){
+            spec.radius = smart3DPositive(item.radius, 0.5);
+            spec.height = smart3DPositive(item.height, 1);
+        } else if(type === 'torus'){
+            spec.radius = smart3DPositive(item.radius, 0.5);
+            spec.tube = smart3DPositive(item.tube, 0.15);
+        } else if(type === 'capsule'){
+            spec.radius = smart3DPositive(item.radius, 0.3);
+            spec.length = smart3DPositive(item.length, 0.8, true);
+        }
+        return spec;
+    }).filter(Boolean).slice(0, 240);
+    if(!objects.length) return null;
+    const camera = (input.camera && typeof input.camera === 'object') ? input.camera : {};
+    const fov = Number(camera.fov);
+    // 背景、光照、地面、材质全部由查看器接管（纯白工作室 + 灰白白模），
+    // 场景 JSON 只保留几何与相机，因此这里不再产出 background/lights/ground/material 字段。
+    return {
+        background: SMART_3D_STUDIO.background,
+        camera: {
+            position: smart3DNumArray(camera.position, 3, [3, 2.4, 4.2]),
+            target: smart3DNumArray(camera.target, 3, [0, 0.6, 0]),
+            fov: Number.isFinite(fov) ? Math.min(90, Math.max(20, fov)) : 45
+        },
+        objects
+    };
+}
+// 当前应显示的焦距（FOV，度）：优先用用户拖滑块存下的 node.camera.fov，其次用模型场景里的 fov，再回退 45。
+function smart3DCurrentFov(node){
+    const fv = Number(node?.camera?.fov);
+    if(Number.isFinite(fv) && fv >= 20 && fv <= 90) return fv;
+    const sf = Number(node?.scene3d?.camera?.fov);
+    if(Number.isFinite(sf) && sf >= 20 && sf <= 90) return sf;
+    return 45;
+}
+// 把垂直 FOV 折算成 35mm 全画幅等效焦距（传感器高 24mm，half=12mm）：f = 12 / tan(fov/2)。
+function smart3DFocalMm(fov){
+    const rad = (fov / 2) * Math.PI / 180;
+    const tan = Math.tan(rad);
+    if(!Number.isFinite(tan) || tan <= 0) return 50;
+    return Math.max(1, Math.round(12 / tan));
+}
+function smart3DNodeElement(nodeId){
+    return world.querySelector(`.smart3d-node[data-id="${CSS.escape(String(nodeId || ''))}"]`);
+}
+function load3DThree(){
+    if(!smart3DThreePromise){
+        smart3DThreePromise = import('/static/vendor/js/three-0.160.0.module.js').catch(error => {
+            smart3DThreePromise = null;
+            throw error;
+        });
+    }
+    return smart3DThreePromise;
+}
+// 工作室视觉（固定风格，不受模型输出影响）：
+//   纯白背景 + 灰白石膏（clay）白模 + 半球环境光 + 主/辅/轮廓三点柔光 + 柔和接触阴影。
+// 场景 JSON 只提供几何，颜色与光照一律由查看器接管，保证任何模型输出都是同一套观感。
+const SMART_3D_STUDIO = {
+    background: '#ffffff',
+    clay: '#d9dce1',
+    clayRoughness: 0.62,
+    clayMetalness: 0,
+    envIntensity: 0.50,
+    groundShadow: 0.2,
+    hemisphere: {sky:'#ffffff', ground:'#e9ecf1', intensity:0.34},
+    key:  {color:'#ffffff', intensity:1.35, position:[5.5, 9, 6.5]},
+    fill: {color:'#ffffff', intensity:0.46, position:[-6.5, 4.2, 3.5]},
+    rim:  {color:'#ffffff', intensity:0.60, position:[-2.5, 5.5, -7.5]}
+};
+// 手搭一个「白色摄影棚」环境（浅灰房间 + 三块纯白柔光板），经 PMREM 卷积后作为 scene.environment。
+// 三块板用 Color.setScalar(>1) 提高亮度：PMREM 内部用半浮点目标，可以保留 >1 的光源强度。
+// ⚠️ 必须按渲染器创建：贴图绑定在各自的 WebGL 上下文上，跨查看器复用会失效。
+function build3DStudioEnvironment(THREE, renderer){
+    try{
+        const envScene = new THREE.Scene();
+        const room = new THREE.Mesh(
+            new THREE.BoxGeometry(14, 14, 14),
+            new THREE.MeshBasicMaterial({color:new THREE.Color().setScalar(0.82), side:THREE.BackSide})
+        );
+        envScene.add(room);
+        const addPanel = (width, height, position, rotation, gain) => {
+            const material = new THREE.MeshBasicMaterial({color:new THREE.Color().setScalar(gain)});
+            material.side = THREE.DoubleSide;
+            const panel = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
+            panel.position.set(position[0], position[1], position[2]);
+            panel.rotation.set(rotation[0], rotation[1], 0);
+            envScene.add(panel);
+        };
+        addPanel(7, 7, [0, 6.2, 0], [-Math.PI / 2, 0], 2.0);      // 顶光柔光箱（水平，朝下）
+        addPanel(6, 5, [5.6, 3.4, 2.6], [0, -1.05], 1.6);         // 主光柔光箱（右前上）
+        addPanel(6, 5, [-5.6, 2.8, 1.8], [0, 1.05], 1.1);         // 辅光柔光箱（左前）
+        const pmrem = new THREE.PMREMGenerator(renderer);
+        const target = pmrem.fromScene(envScene, 0.04);
+        pmrem.dispose();
+        envScene.traverse(child => {
+            try{ child.geometry?.dispose?.(); }catch(e) {}
+            try{ child.material?.dispose?.(); }catch(e) {}
+        });
+        return target;
+    }catch(error){
+        return null;
+    }
+}
+function smart3DGeometryFor(THREE, spec){
+    switch(spec.type){
+        case 'box': return new THREE.BoxGeometry(spec.size[0], spec.size[1], spec.size[2]);
+        case 'sphere': return new THREE.SphereGeometry(spec.radius, 30, 20);
+        case 'cylinder': return new THREE.CylinderGeometry(spec.radiusTop, spec.radiusBottom, spec.height, 30);
+        case 'cone': return new THREE.ConeGeometry(spec.radius, spec.height, 30);
+        case 'torus': return new THREE.TorusGeometry(spec.radius, spec.tube, 18, 44);
+        case 'capsule': return new THREE.CapsuleGeometry(spec.radius, spec.length, 10, 22);
+        case 'plane': return new THREE.PlaneGeometry(spec.size[0], spec.size[1]);
+        default: return null;
+    }
+}
+function dispose3DObject(root){
+    if(!root?.traverse) return;
+    root.traverse(child => {
+        try{ child.geometry?.dispose?.(); }catch(e) {}
+        const materials = Array.isArray(child.material) ? child.material : (child.material ? [child.material] : []);
+        materials.forEach(material => {
+            Object.keys(material).forEach(key => {
+                const value = material[key];
+                if(value && value.isTexture) { try{ value.dispose?.(); }catch(e) {} }
+            });
+            try{ material.dispose?.(); }catch(e) {}
+        });
+    });
+}
+function smart3DOrbitFromCamera(THREE, camera){
+    const target = new THREE.Vector3(camera.target[0], camera.target[1], camera.target[2]);
+    const position = new THREE.Vector3(camera.position[0], camera.position[1], camera.position[2]);
+    const offset = position.clone().sub(target);
+    const radius = Math.max(0.35, offset.length() || 5);
+    const phi = Math.acos(Math.min(1, Math.max(-1, offset.y / radius)));
+    const theta = Math.atan2(offset.x, offset.z);
+    return {target, radius, theta, phi: Math.min(Math.PI - 0.08, Math.max(0.08, phi))};
+}
+function apply3DCamera(viewer){
+    const orbit = viewer.orbit;
+    if(!orbit) return;
+    const {THREE, camera} = viewer;
+    const sinPhi = Math.sin(orbit.phi);
+    camera.position.set(
+        orbit.target.x + orbit.radius * sinPhi * Math.sin(orbit.theta),
+        orbit.target.y + orbit.radius * Math.cos(orbit.phi),
+        orbit.target.z + orbit.radius * sinPhi * Math.cos(orbit.theta)
+    );
+    camera.lookAt(orbit.target);
+}
+function resize3DViewer(viewer){
+    const stage = viewer.canvas.parentElement;
+    if(!stage) return;
+    const layoutW = stage.clientWidth, layoutH = stage.clientHeight;
+    if(layoutW < 2 || layoutH < 2) return;
+    const rect = stage.getBoundingClientRect();
+    const scale = rect.width > 1 ? rect.width / layoutW : 1;
+    const width = Math.max(2, Math.round(layoutW * scale));
+    const height = Math.max(2, Math.round(layoutH * scale));
+    if(viewer.bufferW === width && viewer.bufferH === height) return;
+    viewer.bufferW = width;
+    viewer.bufferH = height;
+    viewer.renderer.setSize(width, height, false);
+    viewer.camera.aspect = layoutW / layoutH;
+    viewer.camera.updateProjectionMatrix();
+    viewer.dirty = true;
+}
+function start3DRenderLoop(viewer){
+    const step = () => {
+        if(viewer.disposed) return;
+        viewer.frame = requestAnimationFrame(step);
+        if(!viewer.dirty) return;
+        viewer.dirty = false;
+        try{
+            resize3DViewer(viewer);
+            apply3DCamera(viewer);
+            viewer.renderer.render(viewer.scene, viewer.camera);
+        }catch(e) {}
+    };
+    viewer.frame = requestAnimationFrame(step);
+}
+function apply3DSceneToViewer(viewer, node){
+    const THREE = viewer.THREE;
+    if(viewer.content){
+        viewer.scene.remove(viewer.content);
+        dispose3DObject(viewer.content);
+        viewer.content = null;
+    }
+    viewer.hasScene = false;
+    let scene = node?.scene3d;
+    // 兜底：画布里存着的场景可能来自旧版本或被手工改过，字段缺失会让渲染期抛错。
+    // 应用前统一规范化一次，并把结果写回节点，使 sceneRef 身份稳定、不会每帧重算。
+    if(scene){
+        const normalized = normalize3DScene(scene);
+        if(!normalized){
+            node.scene3dError = tr('smart.3dInvalid');
+            scene = null;
+        } else if(normalized !== scene){
+            node.scene3d = normalized;
+            scene = normalized;
+        }
+    }
+    viewer.scene.background = new THREE.Color(SMART_3D_STUDIO.background);
+    if(!scene){ viewer.dirty = true; return; }
+    const group = new THREE.Group();
+    // ---- 光照：固定工作室布光（半球环境光 + 主/辅/轮廓三点柔光）----
+    const hemisphere = new THREE.HemisphereLight(
+        new THREE.Color(SMART_3D_STUDIO.hemisphere.sky),
+        new THREE.Color(SMART_3D_STUDIO.hemisphere.ground),
+        SMART_3D_STUDIO.hemisphere.intensity
+    );
+    hemisphere.position.set(0, 8, 0);
+    group.add(hemisphere);
+    const addStudioLight = (spec, castShadow) => {
+        const light = new THREE.DirectionalLight(new THREE.Color(spec.color), spec.intensity);
+        light.position.set(spec.position[0], spec.position[1], spec.position[2]);
+        if(castShadow){
+            light.castShadow = true;
+            light.shadow.mapSize.set(1024, 1024);
+            light.shadow.bias = -0.0006;
+            light.shadow.normalBias = 0.022;
+            light.shadow.radius = 3;
+            const frustum = light.shadow.camera;
+            frustum.left = -6;
+            frustum.right = 6;
+            frustum.top = 6;
+            frustum.bottom = -6;
+            frustum.near = 0.5;
+            frustum.far = 44;
+            frustum.updateProjectionMatrix();
+        }
+        group.add(light);
+        return light;
+    };
+    addStudioLight(SMART_3D_STUDIO.key, true);
+    addStudioLight(SMART_3D_STUDIO.fill, false);
+    addStudioLight(SMART_3D_STUDIO.rim, false);
+    // ---- 地面：纯白背景下的接触阴影接收面 ----
+    // 用 ShadowMaterial（只在被遮挡处着色），地面本身透明，背景因此仍是纯白。
+    const groundMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(80, 80),
+        new THREE.ShadowMaterial({opacity:SMART_3D_STUDIO.groundShadow})
+    );
+    groundMesh.rotation.x = -Math.PI / 2;
+    groundMesh.receiveShadow = true;
+    group.add(groundMesh);
+    // ---- 白模材质：所有图元共用同一份灰白石膏材质 ----
+    const clay = new THREE.MeshStandardMaterial({
+        color:new THREE.Color(SMART_3D_STUDIO.clay),
+        roughness:SMART_3D_STUDIO.clayRoughness,
+        metalness:SMART_3D_STUDIO.clayMetalness,
+        envMapIntensity:SMART_3D_STUDIO.envIntensity
+    });
+    const clayTwoSided = clay.clone();
+    clayTwoSided.side = THREE.DoubleSide;
+    scene.objects.forEach(spec => {
+        const geometry = smart3DGeometryFor(THREE, spec);
+        if(!geometry) return;
+        const mesh = new THREE.Mesh(geometry, spec.type === 'plane' ? clayTwoSided : clay);
+        const position = Array.isArray(spec.position) ? spec.position : [0, 0, 0];
+        const rotation = Array.isArray(spec.rotation) ? spec.rotation : [0, 0, 0];
+        mesh.position.set(Number(position[0]) || 0, Number(position[1]) || 0, Number(position[2]) || 0);
+        mesh.rotation.set(
+            (Number(rotation[0]) || 0) * Math.PI / 180,
+            (Number(rotation[1]) || 0) * Math.PI / 180,
+            (Number(rotation[2]) || 0) * Math.PI / 180
+        );
+        mesh.name = spec.name;
+        mesh.castShadow = true;
+        mesh.receiveShadow = false;
+        group.add(mesh);
+    });
+    viewer.scene.add(group);
+    viewer.content = group;
+    viewer.hasScene = true;
+    viewer.sceneRef = scene;
+    // 焦距优先用用户拖滑块存下的 node.camera.fov（覆盖模型场景默认值），否则回退场景 fov。
+    const nodeFov = Number(node?.camera?.fov);
+    viewer.camera.fov = (Number.isFinite(nodeFov) && nodeFov >= 20 && nodeFov <= 90) ? nodeFov : scene.camera.fov;
+    viewer.camera.updateProjectionMatrix();
+    const saved = (node.camera && Array.isArray(node.camera.position) && Array.isArray(node.camera.target)) ? node.camera : null;
+    viewer.orbit = smart3DOrbitFromCamera(THREE, saved || scene.camera);
+    viewer.dirty = true;
+}
+function attach3DOrbit(viewer){
+    const canvas = viewer.canvas;
+    let dragging = false, pointerId = null, lastX = 0, lastY = 0, travelled = 0;
+    canvas.addEventListener('pointerdown', e => {
+        if(e.button !== 0 && e.button !== 1) return;
+        if(!viewer.hasScene) return;
+        dragging = true;
+        travelled = 0;
+        pointerId = e.pointerId;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        try{ canvas.setPointerCapture(e.pointerId); }catch(err) {}
+        canvas.classList.add('is-orbiting');
+        e.preventDefault();
+        e.stopPropagation();
+    }, true);
+    canvas.addEventListener('pointermove', e => {
+        if(!dragging || e.pointerId !== pointerId || !viewer.orbit) return;
+        const dx = e.clientX - lastX, dy = e.clientY - lastY;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        travelled += Math.abs(dx) + Math.abs(dy);
+        if(!dx && !dy) return;
+        viewer.orbit.theta -= dx * 0.0062;
+        viewer.orbit.phi = Math.min(Math.PI - 0.08, Math.max(0.08, viewer.orbit.phi - dy * 0.0062));
+        viewer.dirty = true;
+        e.preventDefault();
+        e.stopPropagation();
+    }, true);
+    const endOrbit = e => {
+        if(!dragging) return;
+        dragging = false;
+        try{ canvas.releasePointerCapture(e.pointerId); }catch(err) {}
+        canvas.classList.remove('is-orbiting');
+        if(travelled > 2){
+            persist3DCamera(viewer.nodeId);
+            queue3DSnapshot(viewer.nodeId);
+        }
+        e.stopPropagation();
+    };
+    canvas.addEventListener('pointerup', endOrbit, true);
+    canvas.addEventListener('pointercancel', endOrbit, true);
+    canvas.addEventListener('wheel', e => {
+        if(!viewer.hasScene || !viewer.orbit) return;
+        e.preventDefault();
+        e.stopPropagation();
+        viewer.orbit.radius = Math.min(90, Math.max(0.4, viewer.orbit.radius * Math.exp((e.deltaY > 0 ? 1 : -1) * 0.12)));
+        viewer.dirty = true;
+        persist3DCamera(viewer.nodeId);
+        queue3DSnapshot(viewer.nodeId, 200);
+    }, {passive:false});
+    canvas.addEventListener('dblclick', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        const node = nodes.find(n => n.id === viewer.nodeId);
+        if(!node?.scene3d || !viewer.hasScene) return;
+        delete node.camera;
+        viewer.orbit = smart3DOrbitFromCamera(viewer.THREE, node.scene3d.camera);
+        viewer.dirty = true;
+        scheduleSave();
+        queue3DSnapshot(viewer.nodeId, 200);
+    }, true);
+    canvas.addEventListener('mousedown', e => e.stopPropagation(), true);
+    canvas.addEventListener('click', e => e.stopPropagation(), true);
+    canvas.addEventListener('contextmenu', e => e.stopPropagation());
+}
+async function create3DViewer(nodeId){
+    if(smart3DViewers.has(nodeId) || smart3DViewerPending.has(nodeId)) return smart3DViewers.get(nodeId) || null;
+    smart3DViewerPending.add(nodeId);
+    try{
+        const THREE = await load3DThree();
+        const node = nodes.find(n => n.id === nodeId);
+        if(!node || !isSmart3DNode(node) || smart3DViewers.has(nodeId)) return null;
+        while(smart3DViewers.size >= SMART_3D_MAX_VIEWERS){
+            const oldest = smart3DViewers.keys().next().value;
+            if(oldest === undefined) break;
+            dispose3DViewer(oldest);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.className = 'smart3d-canvas';
+        const renderer = new THREE.WebGLRenderer({canvas, antialias:true, preserveDrawingBuffer:true});
+        renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+        // 纯白背景必须原样输出：关掉色调映射，否则白色会被压灰。
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.toneMapping = THREE.NoToneMapping;
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 400);
+        const viewer = {nodeId, THREE, renderer, scene, camera, canvas, content:null, sceneRef:null, orbit:null, hasScene:false, dirty:true, frame:0, disposed:false, bufferW:0, bufferH:0, envTarget:null};
+        // 摄影棚环境贴图按渲染器创建（贴图绑定各自的 WebGL 上下文，不能跨查看器共用）。
+        const envTarget = build3DStudioEnvironment(THREE, renderer);
+        if(envTarget){
+            viewer.envTarget = envTarget;
+            scene.environment = envTarget.texture;
+        }
+        smart3DViewers.set(nodeId, viewer);
+        const stage = smart3DNodeElement(nodeId)?.querySelector('[data-3d-stage]');
+        if(stage) stage.appendChild(canvas);
+        attach3DOrbit(viewer);
+        apply3DSceneToViewer(viewer, node);
+        start3DRenderLoop(viewer);
+        return viewer;
+    }catch(error){
+        const node = nodes.find(n => n.id === nodeId);
+        if(node && isSmart3DNode(node) && !node.scene3dError){
+            node.scene3dError = tr('smart.3dFailed');
+            render();
+        }
+        return null;
+    } finally {
+        smart3DViewerPending.delete(nodeId);
+    }
+}
+function dispose3DViewer(nodeId){
+    const viewer = smart3DViewers.get(nodeId);
+    const timer = smart3DSnapshotTimers.get(nodeId);
+    if(timer){ clearTimeout(timer); smart3DSnapshotTimers.delete(nodeId); }
+    smart3DSnapshotData.delete(nodeId);
+    if(!viewer) return;
+    smart3DViewers.delete(nodeId);
+    viewer.disposed = true;
+    if(viewer.frame) cancelAnimationFrame(viewer.frame);
+    if(viewer.content) dispose3DObject(viewer.content);
+    try{ viewer.scene.environment = null; }catch(e) {}
+    try{ viewer.envTarget?.dispose?.(); }catch(e) {}
+    viewer.envTarget = null;
+    try{
+        viewer.renderer.dispose?.();
+        viewer.renderer.forceContextLoss?.();
+    }catch(e) {}
+    viewer.canvas.remove();
+}
+// render() 每次都重建节点 DOM，这里把查看器画布搬回新舞台，避免反复重建 WebGL 上下文。
+function sync3DViewers(){
+    const alive = new Set();
+    world.querySelectorAll('.smart3d-node').forEach(el => {
+        const nodeId = el.dataset.id;
+        const node = nodes.find(n => n.id === nodeId);
+        if(!node) return;
+        alive.add(nodeId);
+        const stage = el.querySelector('[data-3d-stage]');
+        if(!stage) return;
+        const viewer = smart3DViewers.get(nodeId);
+        if(viewer){
+            if(viewer.canvas.parentElement !== stage) stage.appendChild(viewer.canvas);
+            if(viewer.sceneRef !== node.scene3d) apply3DSceneToViewer(viewer, node);
+            const placeholder = stage.querySelector('[data-3d-placeholder]');
+            if(placeholder && viewer.hasScene) placeholder.remove();
+            resize3DViewer(viewer);
+            viewer.dirty = true;
+            return;
+        }
+        if(smart3DHasScene(node)) create3DViewer(nodeId);
+    });
+    [...smart3DViewers.keys()].forEach(nodeId => {
+        if(!alive.has(nodeId)) dispose3DViewer(nodeId);
+    });
+}
+function snapshot3DNode(nodeId){
+    const viewer = smart3DViewers.get(nodeId);
+    if(!viewer || !viewer.hasScene) return '';
+    try{
+        resize3DViewer(viewer);
+        apply3DCamera(viewer);
+        viewer.renderer.render(viewer.scene, viewer.camera);
+        return viewer.canvas.toDataURL('image/png');
+    }catch(e) { return ''; }
+}
+function persist3DCamera(nodeId){
+    const viewer = smart3DViewers.get(nodeId);
+    const node = nodes.find(n => n.id === nodeId);
+    if(!viewer?.orbit || !node) return;
+    // 环绕角刚被改动、渲染循环还没跑到时 camera.position 是旧值，先按 orbit 重算一次再落盘。
+    apply3DCamera(viewer);
+    viewer.dirty = true;
+    const round = value => Number(Number(value).toFixed(3));
+    node.camera = {
+        position: [round(viewer.camera.position.x), round(viewer.camera.position.y), round(viewer.camera.position.z)],
+        target: [round(viewer.orbit.target.x), round(viewer.orbit.target.y), round(viewer.orbit.target.z)],
+        fov: round(viewer.camera.fov)
+    };
+    scheduleSave();
+}
+function queue3DSnapshot(nodeId, delay=SMART_3D_SNAPSHOT_DEBOUNCE){
+    const timer = smart3DSnapshotTimers.get(nodeId);
+    if(timer) clearTimeout(timer);
+    smart3DSnapshotTimers.set(nodeId, setTimeout(() => {
+        smart3DSnapshotTimers.delete(nodeId);
+        upload3DSnapshot(nodeId);
+    }, Math.max(0, delay)));
+}
+async function upload3DSnapshot(nodeId, force=false){
+    const node = nodes.find(n => n.id === nodeId);
+    if(!node || !isSmart3DNode(node)) return '';
+    const dataUrl = snapshot3DNode(nodeId);
+    if(!dataUrl) return node.scene3dSnapshotUrl || '';
+    if(!force && smart3DSnapshotData.get(nodeId) === dataUrl && node.scene3dSnapshotUrl) return node.scene3dSnapshotUrl;
+    smart3DSnapshotData.set(nodeId, dataUrl);
+    try{
+        const result = await fetch('/api/ai/upload-base64', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({data:dataUrl, name:`3d-preview-${String(nodeId).slice(-6)}.png`, content_type:'image/png'})
+        }).then(async response => {
+            if(!response.ok) throw new Error(await response.text());
+            return response.json();
+        });
+        const url = result?.files?.[0]?.url || '';
+        if(!url) throw new Error('empty url');
+        const live = nodes.find(n => n.id === nodeId) || node;
+        if(live.scene3dSnapshotUrl !== url){
+            live.scene3dSnapshotUrl = url;
+            scheduleSave();
+        }
+        return url;
+    }catch(error){
+        return node.scene3dSnapshotUrl || '';
+    }
+}
+function smart3DModelControlsHtml(node){
+    if(!chatApiProviders().length){
+        return `<span class="smart3d-nomodel" title="${escapeAttr(tr('smart.3dNoVisionModel'))}"><i data-lucide="triangle-alert"></i>${escapeHtml(tr('smart.3dNoVisionModel'))}</span>`;
+    }
+    const providerId = resolveChatProviderId(node.provider || '');
+    return `<select class="smart3d-select" data-3d-provider="1" title="${escapeAttr(tr('smart.3dModelLabel'))}">${chatProviderOptions(node.provider || '')}</select>
+            <select class="smart3d-select smart3d-model" data-3d-model="1" title="${escapeAttr(tr('smart.3dSelectModel'))}">${chatModelOptions(node.model || '', providerId)}</select>`;
+}
+function smart3DBodyHtml(node){
+    const objects = smart3DSceneObjects(node);
+    const errorText = String(node.scene3dError || '');
+    const emptyText = errorText || tr('smart.3dEmptyHint');
+    const placeholder = objects.length ? '' : `<div class="smart3d-placeholder" data-3d-placeholder="1">
+            <i data-lucide="${errorText ? 'triangle-alert' : 'rotate-3d'}"></i>
+            <span>${escapeHtml(emptyText)}</span>
+        </div>`;
+    const raw = String(node.scene3dRaw || '').trim();
+    const runLabel = node.running ? tr('smart.3dGenerating') : (objects.length ? tr('smart.3dRerun') : tr('smart.3dRun'));
+    const fovVal = smart3DCurrentFov(node);
+    const focalMm = smart3DFocalMm(fovVal);
+    return `<div class="smart3d-body" data-3d-root="1">
+        <div class="smart3d-stage" data-3d-stage="1" data-3d-node="${escapeAttr(node.id)}">${placeholder}</div>
+        <div class="smart3d-bar">
+            <span class="smart3d-meta"><i data-lucide="boxes"></i>${escapeHtml(trf('smart.3dObjects', {n:objects.length}))}</span>
+            ${smart3DModelControlsHtml(node)}
+            <button class="smart3d-run${node.running ? ' is-running' : ''}" type="button" data-3d-run="1" ${node.running ? 'disabled' : ''} title="${escapeAttr(runLabel)}">
+                <i data-lucide="${node.running ? 'loader-2' : 'play'}"></i><span>${escapeHtml(runLabel)}</span>
+            </button>
+        </div>
+        <div class="smart3d-fovrow">
+            <i data-lucide="focus" class="smart3d-fovicon"></i>
+            <input type="range" class="smart3d-fov" data-3d-fov="1" min="20" max="90" step="1" value="${fovVal}" title="${escapeAttr(tr('smart.3dFov'))}">
+            <span class="smart3d-fovval" data-3d-fovval="1">${fovVal}° · ${focalMm}mm</span>
+        </div>
+        ${raw ? `<details class="smart3d-raw"><summary>${escapeHtml(tr('smart.3dShowRaw'))}</summary><pre>${escapeHtml(raw.slice(0, 6000))}</pre></details>` : ''}
+    </div>`;
+}
+function bind3DNodeControls(el, node){
+    const stage = el.querySelector('[data-3d-stage]');
+    if(stage){
+        stage.addEventListener('wheel', e => e.stopPropagation(), {passive:false});
+        stage.addEventListener('mousedown', e => e.stopPropagation(), true);
+    }
+    el.querySelectorAll('[data-3d-run]').forEach(btn => {
+        btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+        btn.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            run3DNode(node.id);
+        });
+    });
+    el.querySelectorAll('[data-3d-provider], [data-3d-model], [data-3d-fov], .smart3d-raw').forEach(control => {
+        control.addEventListener('mousedown', e => e.stopPropagation(), true);
+        control.addEventListener('click', e => e.stopPropagation(), true);
+        control.addEventListener('wheel', e => e.stopPropagation(), {passive:false});
+    });
+    const providerSelect = el.querySelector('[data-3d-provider]');
+    if(providerSelect){
+        providerSelect.addEventListener('change', () => {
+            pushUndo();
+            node.provider = providerSelect.value;
+            node.model = '';
+            render();
+            scheduleSave();
+        });
+    }
+    const modelSelect = el.querySelector('[data-3d-model]');
+    if(modelSelect){
+        modelSelect.addEventListener('change', () => {
+            pushUndo();
+            node.model = modelSelect.value;
+            scheduleSave();
+        });
+    }
+    const fovInput = el.querySelector('[data-3d-fov]');
+    if(fovInput){
+        const stop = e => { e.preventDefault(); e.stopPropagation(); };
+        fovInput.addEventListener('mousedown', stop, true);
+        fovInput.addEventListener('click', stop, true);
+        fovInput.addEventListener('wheel', e => e.stopPropagation(), {passive:false});
+        const applyFov = () => {
+            const fov = Number(fovInput.value);
+            const valEl = el.querySelector('[data-3d-fovval]');
+            if(valEl) valEl.textContent = `${fov}° · ${smart3DFocalMm(fov)}mm`;
+            const viewer = smart3DViewers.get(node.id);
+            if(viewer){
+                viewer.camera.fov = fov;
+                viewer.camera.updateProjectionMatrix();
+                viewer.dirty = true;
+            }
+        };
+        fovInput.addEventListener('input', applyFov);
+        fovInput.addEventListener('change', () => {
+            applyFov();
+            node.camera = Object.assign({}, node.camera || {}, {fov: Number(fovInput.value)});
+            scheduleSave();
+        });
+    }
+}
+async function run3DNode(nodeId){
+    const node = nodes.find(n => n.id === nodeId);
+    if(!node || !isSmart3DNode(node) || node.running) return;
+    if(!inputNodesFor(node).length){ toast(tr('smart.3dNeedUpstream')); return; }
+    const refs = imageRefsOnly(inputImagesFor(node));
+    if(!refs.length){ toast(tr('smart.3dNoImage')); return; }
+    if(!chatApiProviders().length){ toast(tr('smart.3dNoVisionModel')); return; }
+    const provider = resolveChatProviderId(node.provider || '');
+    const model = resolveChatModel(node.model || '', provider);
+    pushUndo();
+    node.provider = provider;
+    node.model = model;
+    node.running = true;
+    node.scene3dError = '';
+    render();
+    const runLogStart = nowMs();
+    const runLog = {nodeId:node.id, kind:'3d', prompt:tr('smart.3dTitle'), startedAt:Date.now()};
+    try{
+        const result = await fetch('/api/canvas-llm', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+                message:tr('smart.3dRunPrompt'),
+                messages:[],
+                images:refs.map(ref => ref.url).filter(Boolean),
+                videos:[],
+                model,
+                provider,
+                ms_model: provider === 'modelscope' ? model : '',
+                system_prompt:SMART_3D_SYSTEM_PROMPT
+            })
+        }).then(async response => {
+            if(!response.ok) throw new Error(await response.text());
+            return response.json();
+        });
+        const raw = String(result?.text || '').trim();
+        const scene = normalize3DScene(smart3DParseSceneJson(raw));
+        if(!scene) throw new Error(tr('smart.3dInvalid'));
+        const live = nodes.find(n => n.id === nodeId) || node;
+        live.scene3d = scene;
+        live.scene3dRaw = raw.slice(0, 20000);
+        live.scene3dError = '';
+        delete live.camera;
+        delete live.scene3dSnapshotUrl;
+        smart3DSnapshotData.delete(nodeId);
+        render();
+        await nextAnimationFrame();
+        await upload3DSnapshot(nodeId, true);
+        addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStart});
+    }catch(error){
+        const live = nodes.find(n => n.id === nodeId) || node;
+        const detail = (error?.message || tr('smart.3dFailed')).slice(0, 200);
+        live.scene3dError = detail;
+        toast(detail);
+        if(!live?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStart, error:detail});
+    } finally {
+        const live = nodes.find(n => n.id === nodeId) || node;
+        live.running = false;
+        render();
+        scheduleSave();
+    }
+}
+function nextAnimationFrame(){
+    return new Promise(resolve => requestAnimationFrame(() => resolve()));
+}
 function nodeBodyHtml(node, layout){
+    if(node.type === 'smart-3d') return smart3DBodyHtml(node);
     if(node.type === 'smart-minimax') return smartMinimaxBodyHtml(node);
     if(node.type === 'smart-group') return smartGroupBodyHtml(node);
     if(node.type === 'smart-prompt') return promptNodeBodyHtml(node);
@@ -9185,12 +9991,13 @@ function render(){
         .sort((a, b) => (isSmartGroupNode(a) ? 0 : 1) - (isSmartGroupNode(b) ? 0 : 1))
         .map(node => {
         const imgs = node.images || [];
-        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : node.type === 'smart-minimax' ? 'MiniMax H3' : (imgs.length > 1 ? 'Group' : imgs.length ? 'Image' : escapeHtml(tr('smart.createImportNode')));
+        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : node.type === 'smart-minimax' ? 'MiniMax H3' : isSmart3DNode(node) ? escapeHtml(tr('smart.3dTitle')) : (imgs.length > 1 ? 'Group' : imgs.length ? 'Image' : escapeHtml(tr('smart.createImportNode')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
         const isLoop = node.type === 'smart-loop';
         const isMinimax = node.type === 'smart-minimax';
+        const is3D = isSmart3DNode(node);
         const isSmartGroup = node.type === 'smart-group';
         const isCompactMember = isSmartGroupCompactMember(node);
         const isImageNode = node.type === 'smart-image' || !node.type;
@@ -9202,8 +10009,8 @@ function render(){
         const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
         const deleteBtn = (isGroup || isMinimax) ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
-        const hint = isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
+        const hint = is3D ? (smart3DHasScene(node) ? escapeHtml(tr('smart.3dDragHint')) : escapeHtml(tr('smart.3dEmptyHint'))) : isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${is3D ? 'smart3d-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
 
             <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
             ${!isEmpty && !isGroup && !isMinimax ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
@@ -9212,7 +10019,7 @@ function render(){
             <div class="node-body">${body}</div>
             ${isCompactMember && (isPrompt || isLoop) ? '<div class="smart-group-member-grab" title="拖动移出分组"></div>' : ''}
             <div class="node-hint">${hint}</div>
-            ${imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isMinimax || isSmartGroup ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
+            ${imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isMinimax || is3D || isSmartGroup ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
             <div class="node-port port-in" data-port="in" title="input"></div>
             <div class="node-port port-out" data-port="out" title="output"></div>
         </div>`;
@@ -9251,6 +10058,7 @@ function render(){
     });
     restoreMediaPlaybackStates(mediaStates);
     bindNodeEvents();
+    sync3DViewers();
     bindConnectionEvents();
     updateComposer();
     updateSmartSaveWorkflowPosition();
@@ -10406,6 +11214,7 @@ function bindNodeEvents(){
         if(nodeForControls?.type === 'smart-prompt') bindPromptNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-loop') bindLoopNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-minimax') bindMinimaxNodeControls(el, nodeForControls);
+        if(nodeForControls?.type === 'smart-3d') bind3DNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-group') {
             el.ondblclick = e => {
                 e.preventDefault();
@@ -10679,7 +11488,7 @@ function bindNodeEvents(){
             capturePendingUndo();
         });
         const beginNodeDrag = e => {
-            if(e.button !== 0 || e.target.closest('.mini-x, .smart-node-floating-menu, .node-resize-handle, .thumb-item, .node-port, .prompt-node-control, select, input, textarea, button')) return;
+            if(e.button !== 0 || e.target.closest('.mini-x, .smart-node-floating-menu, .node-resize-handle, .thumb-item, .node-port, .prompt-node-control, .smart3d-stage, .smart3d-bar, .smart3d-raw, select, input, textarea, button')) return;
             if(e.target.closest('.prompt-node-pill, textarea:not(.prompt-node-text)')) return;
             e.preventDefault(); e.stopPropagation();
             window.getSelection?.()?.removeAllRanges?.();
@@ -10755,7 +11564,8 @@ function canAutoConnectDraggedNode(sourceNode, targetNode){
     if(!sourceNode || !targetNode || sourceNode.id === targetNode.id) return false;
     if(isHistoryGroupNode(sourceNode) || isHistoryGroupNode(targetNode)) return false;
     if(isSmartGroupNode(targetNode)) return false;
-    if(isSmartImageNode(sourceNode)) return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || targetNode.type === 'smart-prompt';
+    if(isSmartImageNode(sourceNode)) return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || targetNode.type === 'smart-prompt' || isSmart3DNode(targetNode);
+    if(isSmart3DNode(sourceNode)) return isSmartImageNode(targetNode);
     if(sourceNode.type === 'smart-prompt') return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop';
     if(sourceNode.type === 'smart-loop') return isSmartImageNode(targetNode);
     if(sourceNode.type === 'smart-group') return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop';
@@ -14654,6 +15464,9 @@ function connectInputNode(fromId, toId){
     const from = nodes.find(n => n.id === fromId);
     const to = nodes.find(n => n.id === toId);
     if(!from || !to || from.id === to.id) return false;
+    // 3D预览 只与「快速生图」双向相连：上游只能是快速生图，下游也只能是快速生图。
+    if(isSmart3DNode(to) && !isSmartImageNode(from)) return false;
+    if(isSmart3DNode(from) && !isSmartImageNode(to)) return false;
     if(to.type === 'smart-loop'){
         const groupImages = isSmartGroupNode(from) ? imagesForNode(from).filter(img => img?.url) : [];
         const groupPrompts = isSmartGroupNode(from) ? promptTextItemsForNode(from).filter(Boolean) : [];
@@ -14850,6 +15663,15 @@ function smartLoopPreviewImages(node){
     }).filter(img => img?.url);
 }
 function outputImagesForNode(node, consume=false, ctx=smartLoopContext){
+    // 3D 预览节点对外输出的是查看器实时截图：下游快速生图连上后即取到当前画面。
+    if(node?.type === 'smart-3d'){
+        const url = String(node.scene3dSnapshotUrl || '');
+        if(!url){
+            if(smart3DHasScene(node)) queue3DSnapshot(node.id, 0);
+            return [];
+        }
+        return [{url, name:tr('smart.3dSnapshotName'), kind:'image', nodeId:node.id, imageIndex:0}];
+    }
     if(node?.type === 'smart-group') return imagesForNode(node).filter(img => img?.url);
     if(node?.type === 'smart-loop') return smartLoopInputImages(node, ctx);
     const roundOutputs = ctx?.roundOutputs;
@@ -16891,6 +17713,7 @@ function runSmartCascadeFromLoop(loopId){
 async function runGeneration(){
     const node = selectedNode();
     if(node?.type === 'smart-minimax') return runMinimaxNode(node.id);
+    if(node?.type === 'smart-3d') return run3DNode(node.id);
     const request = buildPromptRequest(node, null, true, smartLoopContext);
     let prompt = request.prompt.trim();
     if(!node) return;
@@ -18549,6 +19372,7 @@ function createNodeFromMenu(type){
     if(type === 'prompt') created = createPromptNode(p.x - 158, p.y - 97);
     else if(type === 'loop') created = createLoopNode(p.x - 135, p.y - 95);
     else if(type === 'minimax') created = createMinimaxNode(p.x - 520, p.y - 320);
+    else if(type === '3d') created = create3DNode(p.x - 280, p.y - 235);
     else created = createImageNodeAt(p);
     createMenuGroupId = groupId;
     addCreatedNodeToMenuGroup(created);

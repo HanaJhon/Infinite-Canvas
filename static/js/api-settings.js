@@ -174,7 +174,7 @@ const RECOMMENDED_APIS = [
   summaryKey: 'Grsai超性价比图像模型，推荐优先使用nano-banana-pro',
   advantages: ['Grsai 性价比生图 + LLM', 'nano-banana 模型直连', '支持 Grsai 生图接口'],
   image_models: ['nano-banana-pro'],
-  chat_models: ['gpt-5.6-terra'],
+  chat_models: ['gpt-6-astra', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.5'],
   video_models: []
 },
 {
