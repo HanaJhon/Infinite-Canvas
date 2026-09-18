@@ -9565,9 +9565,12 @@ function bind3DNodeControls(el, node){
     }
     const fovInput = el.querySelector('[data-3d-fov]');
     if(fovInput){
-        const stop = e => { e.preventDefault(); e.stopPropagation(); };
-        fovInput.addEventListener('mousedown', stop, true);
-        fovInput.addEventListener('click', stop, true);
+        // 只阻止冒泡（防 beginNodeDrag 抢节点拖拽），不能 preventDefault——
+        // range input 的 mousedown 默认行为是「开始拖动设值」，preventDefault 会废掉原生滑块交互。
+        // 节点拖拽的拦截靠 beginNodeDrag 排除链里的 `input` 选择器（:11491）已经够了。
+        const stopBubble = e => e.stopPropagation();
+        fovInput.addEventListener('mousedown', stopBubble, true);
+        fovInput.addEventListener('click', stopBubble);
         fovInput.addEventListener('wheel', e => e.stopPropagation(), {passive:false});
         const applyFov = () => {
             const fov = Number(fovInput.value);
