@@ -2084,12 +2084,12 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
    否则用户既看不到节点名，也找不到除标题栏以外的拖动把手。 */
 .image-node.smart3d-node { display:flex; flex-direction:column; padding-top:0; }
 .image-node.smart3d-node .node-head { display:flex; flex:0 0 auto; }
-/* 说明文字与节点内其他文字（.smart3d-meta / .smart3d-select / .smart3d-run / .smart3d-fovval）
-   保持同一字号 10px 与行高 normal，避免与上方控制条文字大小、行距不一致。 */
-.image-node.smart3d-node .node-hint { display:flex; align-items:center; flex:0 0 auto; min-height:24px; padding:5px 32px 5px 12px; font-size:10px; line-height:normal; }
+/* 操作说明已移到标题栏内，作为节点名后面的灰色小字（.node-head-sub）；底部不再渲染
+   .node-hint，腾出的高度由 .node-body 的 flex:1 自动吸收，3D 视口随之变高。 */
+.image-node.smart3d-node .node-title { display:block; flex:0 0 auto; }
+.node-head-sub { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--faint); font-size:10px; font-weight:700; line-height:normal; }
 .image-node.smart3d-node .node-body { flex:1 1 auto; height:auto; min-height:0; }
 .smart3d-node .node-head { cursor:move; }
-.image-node.smart3d-node .node-title { display:block; flex:1 1 auto; }
 .smart3d-fovrow { flex:0 0 auto; display:flex; align-items:center; gap:8px; height:26px; padding:0 2px; }
 .smart3d-fovicon { width:13px; height:13px; flex:0 0 auto; color:var(--muted); stroke-width:1.8; }
 .smart3d-fov { flex:1 1 auto; min-width:0; height:4px; margin:0; padding:0; -webkit-appearance:none; appearance:none; background:transparent; cursor:pointer; }

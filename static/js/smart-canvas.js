@@ -10006,16 +10006,18 @@ function render(){
         const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
         const deleteBtn = (isGroup || isMinimax) ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
-        const hint = is3D ? (smart3DHasScene(node) ? escapeHtml(tr('smart.3dDragHint')) : escapeHtml(tr('smart.3dEmptyHint'))) : isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
+        // 3D 节点的操作说明移到标题栏内（节点名后面的灰色小字），底部不再有说明行。
+        const headSub = is3D ? `<span class="node-head-sub">${escapeHtml(smart3DHasScene(node) ? tr('smart.3dDragHint') : tr('smart.3dEmptyHint'))}</span>` : '';
+        const hint = is3D ? '' : isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
         const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${is3D ? 'smart3d-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
 
-            <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
+            <div class="node-head"><div class="node-title">${title}</div>${headSub}<div class="node-actions">${deleteBtn}</div></div>
             ${!isEmpty && !isGroup && !isMinimax && !is3D ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
             ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}
             ${runTimePillHtml(node)}
             <div class="node-body">${body}</div>
             ${isCompactMember && (isPrompt || isLoop) ? '<div class="smart-group-member-grab" title="拖动移出分组"></div>' : ''}
-            <div class="node-hint">${hint}</div>
+            ${hint ? `<div class="node-hint">${hint}</div>` : ''}
             ${imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isMinimax || is3D || isSmartGroup ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
             <div class="node-port port-in" data-port="in" title="input"></div>
             <div class="node-port port-out" data-port="out" title="output"></div>
@@ -10077,6 +10079,7 @@ function render(){
         const isPrompt = node.type === 'smart-prompt';
         const isLoop = node.type === 'smart-loop';
         const isMinimax = node.type === 'smart-minimax';
+        const is3D = isSmart3DNode(node);
         const isImageNode = node.type === 'smart-image' || !node.type;
         const isQueued = Boolean(node.queued && imgs.length === 0 && !node.pending);
         const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isQueued;
