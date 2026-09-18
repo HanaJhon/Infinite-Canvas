@@ -2083,7 +2083,11 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart3d-select { flex:1 1 0; min-width:0; height:26px; padding:0 6px; border-radius:9px; border:1px solid rgba(148,163,184,.34); background:rgba(255,255,255,.62); color:var(--text); font-size:10px; font-weight:700; outline:none; cursor:pointer; text-overflow:ellipsis; }
 .theme-dark .smart3d-select { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.24); }
 .smart3d-select:focus { border-color:var(--strong); }
-.smart3d-nomodel { flex:1 1 auto; min-width:0; display:inline-flex; align-items:center; gap:5px; height:26px; padding:0 8px; border-radius:9px; background:rgba(239,68,68,.1); border:1px solid rgba(239,68,68,.34); color:#ef4444; font-size:10px; font-weight:750; white-space:nowrap; overflow:hidden; }
+/* 「未配置读图模型」是阻断性告警，是「为什么点生成没反应」的唯一解释，必须读得全。
+   原来 height:26px + nowrap + overflow:hidden 会把它从中间硬切且无省略号（text-overflow 默认 clip）：
+   英文文案实测 303px，320px 节点可用 224px（切掉 79px）、560px 默认节点可用 285px（仍切 18px）——
+   英文用户在任何尺寸下都看不全。改成允许换行：这一行最多变两行，罕见状态、且此时舞台本来就是空的。 */
+.smart3d-nomodel { flex:1 1 auto; min-width:0; display:inline-flex; align-items:center; gap:5px; height:auto; min-height:26px; padding:4px 8px; border-radius:9px; background:rgba(239,68,68,.1); border:1px solid rgba(239,68,68,.34); color:#ef4444; font-size:10px; font-weight:750; line-height:1.35; white-space:normal; overflow-wrap:anywhere; overflow:hidden; }
 .smart3d-nomodel i, .smart3d-nomodel svg { width:12px; height:12px; flex:0 0 auto; }
 .smart3d-run { flex:0 0 auto; height:26px; padding:0 11px; border-radius:9px; display:inline-flex; align-items:center; justify-content:center; gap:5px; background:var(--strong); color:var(--strong-text); font-size:10px; font-weight:850; white-space:nowrap; transition:transform .14s ease, opacity .14s ease; }
 .smart3d-run i, .smart3d-run svg { width:12px; height:12px; }
