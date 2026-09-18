@@ -32,7 +32,7 @@
 - 定位：上游只能「快速生图」、下游也只能「快速生图」，与 prompt/loop/group 双向拒绝（`canAutoConnectDraggedNode()` + `connectInputNode()` 两处都要改）。
 - 视觉风格：纯白 `#ffffff` 视口 + 灰白石膏白模 `#d9dce1` + 固定工作室光，无 GridHelper；详见 `REFERENCE.md` H。
 - **外框布局约定**：① `padding-top:0` 让标题栏顶到边；② **跳过 `.floating-node-actions` 浮动删除按钮**（模板加 `&& !is3D`）；③ **交互说明入标题栏**（`headSub` → `.node-head-sub`，条件 `is3D && smart3DHasScene(node)`，底部不渲染 `.node-hint`）；④ **标题栏 `padding:0; border-bottom:0`**，且 `.node-delete` 必须显式去 `box-shadow`/`backdrop-filter` 并补 `:hover`（全局 3 类规则压过 `.mini-x:hover`）。验收锚点见 `REFERENCE.md` K.1/K.2。
-- **窄节点（`smart3DLayoutSize(node).width < 420`）给 `.smart3d-body` 加 `is-narrow`**，CSS 隐藏 `.smart3d-meta > span`（计数压成纯图标，文案留 `title`）—— 否则 320px 下模型下拉只剩 45px（`G..`/`g..`），折叠后 84.5px。`.smart3d-meta` 内部必须用 `<span>` 包文案作钩子。
+- **窄节点折叠**：`is-narrow` 隐藏 `.smart3d-meta > span` 与 `.smart3d-run > span`（只留图标，文案留 `title`；两者内部都必须有 `<span>` 作钩子）。🚨 **阈值必须按实测文案宽度算**（`smart3DBarNeedWidth`），**不能写死像素** —— meta/run 都是 `flex:0 0 auto`+`nowrap`，英文比中文宽 20~30px，写死 420 会让英文 420px 比中文 320px 还挤。翻转点实测中文 ~450 / 英文 ~510；模型名完整显示需 select ≥104px（原生箭头占 19px，DOM 量不出截断）。见 `REFERENCE.md` K.4/K.6。
 - **四个状态要分别验**：成功 / 解析失败 / 请求失败 / 空场景。⚠️ 失败态必须加 `.is-error`，否则与中性空态**同色**（`#8b95a8`）看不出报错；🚨 **舞台在深浅两主题下都是纯白，固定白底区域不要按主题切色**（统一 `#dc2626` = 4.85:1）；`.smart3d-raw` 收起态要退化成一行小字（默认面板吃 36px 视口）。字段/查看器/坑位见 `REFERENCE.md` K。
 
 ## 六、本地服务

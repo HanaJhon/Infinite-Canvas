@@ -261,35 +261,74 @@ const SMART_3D_STUDIO = {
 - **「查看模型输出」`.smart3d-raw` 收起态要退化成一行小字**：默认面板形态（`border`+`background`+`padding:6px 8px`）高 28px，加 `.smart3d-body` 的 8px gap 共吃 **36px 视口高度**（比把操作说明挪进标题栏省下的 25px 还多）。改法是把面板样式挪到 `.smart3d-raw[open]`，收起态只剩 summary 的 14px 行盒；实测舞台高 312 → **326**。
 - 验收锚点：失败态 `.smart3d-placeholder` 的 computed color 为 `rgb(220,38,38)`（两主题一致）；空态为 `rgb(139,149,168)`；`.smart3d-raw` 收起 `h=14`、展开 `h≈47.5` 且 `borderTopWidth=1px`、`backgroundColor=rgb(248,250,252)`；`stage.h` 有 raw=326 / 无 raw=348；节点高恒为 470。
 
-### K.4 窄节点控件行折叠（2026-09-18 第五轮打磨，commit 21a00ed）
+### K.4 窄节点控件行折叠（2026-09-18 第五轮 commit 21a00ed / 第六轮 commit 2147bca）
 
-**问题**：节点缩到最小尺寸 320×280 时，`.smart3d-bar` 总宽只有 294px。`.smart3d-meta`（「已识别 N 个对象」）是 `flex:0 0 auto` + `white-space:nowrap`，独占 **106.8px（36%）**，把 `flex:1 1 0` 的两个 `.smart3d-select` 压到各 **45.1px** —— 下拉里只能看到 `"G.."` / `"g.."`，完全读不出选的是 `gemini-3.1-pro` 还是 `gemini-2.5-pro`。
+**问题**：节点缩到最小尺寸 320×280 时，`.smart3d-bar` 总宽只有 294px。`.smart3d-meta`（「已识别 N 个对象」）是 `flex:0 0 auto` + `white-space:nowrap`，独占 **106.8px（36%）**，把 `flex:1 1 0` 的两个 `.smart3d-select` 压到各 **45.1px** —— 下拉里只能看到 `"G.."` / `"g.."`，读不出选的是 `gemini-3.1-pro` 还是 `gemini-2.5-pro`。
 
-**改法**：`smart3DBodyHtml()` 里用 `smart3DLayoutSize(node).width < 420` 判断，给 `.smart3d-body` 加 `is-narrow`；CSS 侧隐藏 `.smart3d-meta > span`（只留 `boxes` 图标），文案移进 `title` 属性保留可达性，并把 padding 从 `0 8px` 收到 `0 7px`。
+**改法**：`smart3DBodyHtml()` 给 `.smart3d-body` 加 `is-narrow`，CSS 隐藏 `.smart3d-meta > span` 与 `.smart3d-run > span`（都只留图标），文案移进 `title` 保留可达性。
 
-```js
-const narrow = smart3DLayoutSize(node).width < 420;
-const objectsText = trf('smart.3dObjects', {n:objects.length});
-return `<div class="smart3d-body${narrow ? ' is-narrow' : ''}" data-3d-root="1">`;
-```
 ```css
 .smart3d-body.is-narrow .smart3d-meta { padding:0 7px; }
 .smart3d-body.is-narrow .smart3d-meta > span { display:none; }
+.smart3d-body.is-narrow .smart3d-run { padding:0 8px; }
+.smart3d-body.is-narrow .smart3d-run > span { display:none; }
 ```
+⚠️ **`.smart3d-meta` / `.smart3d-run` 内部必须各包一层 `<span>`**（原来是裸文本 + `<i>`），否则没有可隐藏的钩子。`title` 属性是折叠后唯一的文案出口，不能省。
 
-⚠️ **`.smart3d-meta` 内部必须包一层 `<span>`**（原来是裸文本 + `<i>`），否则没有可隐藏的钩子。`title` 属性是折叠后唯一的文案出口，不能省。
+🚨 **阈值绝不能写死像素**（第五轮写死 420 是错的，第六轮已修）。`.smart3d-meta` / `.smart3d-run` 都是 `flex:0 0 auto` + `nowrap`，**自然宽度随语言变化**：
 
-**阈值 420 的由来**：440px 宽时控件行总宽约 414px，`.smart3d-meta` 占 107.1px 但两个下拉仍有 107.1px（能显示完整模型名），不必折叠；380px 时折叠收益明显（116.5px > 440px 的 107.1px）。取 420 让 440 保持展开、380 折叠。
+| 元素 | 中文 | 英文 |
+|---|---|---|
+| `.smart3d-meta` | 106.8px | 139.3px |
+| `.smart3d-run` | 79px | 95.9px |
 
-**验收锚点（真实 DOM）**：
-| 节点宽 | `body.className` | `.smart3d-meta > span` display | `.smart3d-select` 宽 |
-|---|---|---|---|
-| 320 | `smart3d-body is-narrow` | `none` | **84.5px**（改前 45.1px） |
-| 380 | `smart3d-body is-narrow` | `none` | 116.5px |
-| 440 | `smart3d-body` | `block` | 107.1px |
+写死 420 会让英文界面出现**「越宽越挤」的反常区间**：英文 420px 未折叠 → 下拉只剩 **70.4px**，比中文 320px 已折叠的 84.5px 还差。
 
-- 写入 200×150 的节点会被 `smart3DLayoutSize()` 钳到 **320×280**（`SMART_3D_MIN_W/H`），所以窄态是真实可达的，不是理论边界。
-- 320×280 + 超长上游报错 + 展开 raw 时，`.smart3d-placeholder` 156/156 无溢出；8 个节点同时存在时 `.smart3d-bar` 无横向溢出（`scrollWidth <= clientWidth`）。
+**正确做法：按实测文案宽度算阈值**（`smart3DTextWidth` / `smart3DBarNeedWidth`，`smart-canvas.js` 紧随 `smart3DFocalMm` 之后）：
+
+```js
+const SMART3D_SELECT_MIN_W = 110;   // 实测 <104px 时 "gemini-3.1-pro" 被截断
+function smart3DTextWidth(text, weight){ /* canvas 2D + getComputedStyle(document.body).fontFamily */ }
+function smart3DBarNeedWidth(metaText, runText){
+    const metaW = 12 + 5 + smart3DTextWidth(metaText, '800') + 16 + 2;
+    const runW  = 12 + 5 + smart3DTextWidth(runText, '850') + 22;
+    return metaW + runW + 18 + SMART3D_SELECT_MIN_W * 2;
+}
+// narrow = smart3DLayoutSize(node).width - 24 < smart3DBarNeedWidth(objectsText, runWidest)
+```
+- **字体必须取 `getComputedStyle(document.body).fontFamily`**（`'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif`）。用「Microsoft YaHei」量同一串会得 76px vs 实际 71.1px，定标偏大。
+- **run 的三种文案宽度不同**（生成 3D / 重新生成 / 识别中…），取最宽的算阈值，否则点「生成」瞬间阈值变化会让节点闪一下布局。
+
+**验收锚点（320~560px 共 9 档 × 中英双语 × 有/无场景）**：
+
+| 断言 | 结果 |
+|---|---|
+| 下拉截断（判定式 `selW < textW + 33`） | **0 处** |
+| `.smart3d-bar` 横向溢出 | **0 处** |
+| 折叠翻转点 | 中文 445~460px、英文 502~520px（**随语言自动变化**） |
+| 英文 480px（修复前截断） | 折叠 → 下拉 190px，`gemini-3.1-pro` 完整显示 |
+| 中文 480px（展开） | 下拉 125.1px 完整 + `已识别 0 个对象` + `生成 3D` |
+| 560px 默认节点 | 下拉 165.1px，meta / run 文案均显示（无回归） |
+
+- 写入 200×150 的节点会被 `smart3DLayoutSize()` 钳到 **320×280**（`SMART_3D_MIN_W/H`），窄态是真实可达的边界。
+- 320×280 + 超长上游报错 + 展开 raw 时 `.smart3d-placeholder` 156/156 无溢出。
+
+### K.6 `<select>` 截断的检测与定标（2026-09-18 第六轮）
+
+🚨 **`<select>` 的文字截断无法用 DOM 检测**：`sel.scrollWidth === sel.clientWidth` **恒成立**（92~130px 全扫过）。用 `need > clientWidth - padding - border` 判定会得出**错误结论**（实测：报「英文 480px 未截断」，截图却是 `gemini-3.1…`）。
+
+真因：**原生下拉箭头独占约 19px**，既不算 padding 也不算 border。
+
+**定标方法（可复用）**：单独造一页，同规格 `<select>` 宽度 96→120 步进 2（每行一个），`--force-device-scale-factor=3` 截图，按「**墨迹右边缘是否随宽度增长**」判定：
+- 未截断 → 墨迹右边缘**恒定**（= 左内边距 + 文本宽）；
+- 截断 → 省略号贴住文本区右缘，墨迹右边缘**随宽度线性增长**。
+
+⚠️ 判据里要**排除箭头**：箭头是 `rgba(148,163,184,.34)` 叠白 ≈ (219,227,235)，用 `r<150 and g<150 and b<150` 阈值即可只取文字（`#111827`）。
+定标结果：文本 71.1px 时 **104px 起完整显示**（104 − 2 边框 − 12 内边距 − 71.1 = **18.9 ≈ 箭头宽**）。代码取 110。
+
+**DOM 侧的等价判据**：`selW < textW + 12 + 2 + 19`（textW 用 canvas 2D 按实际字体量）。用它做全量扫描比逐张截图快得多。
+
+### K.5 选中态（2026-09-18 第五轮同批验证）
 
 ### K.5 选中态（2026-09-18 第五轮同批验证）
 
