@@ -2141,7 +2141,18 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart3d-fov::-moz-range-track { height:4px; border-radius:3px; background:var(--line); }
 .smart3d-fov::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:14px; height:14px; margin-top:-5px; border-radius:50%; background:var(--strong); border:2px solid #fff; box-shadow:0 1px 3px rgba(15,23,42,.28); }
 .smart3d-fov::-moz-range-thumb { width:14px; height:14px; border:2px solid #fff; border-radius:50%; background:var(--strong); box-shadow:0 1px 3px rgba(15,23,42,.28); }
-.smart3d-fov:focus { outline:none; }
+/* 键盘焦点必须看得见 —— 原来只有 `outline:none`，没有任何替代指示：
+   实测 `.smart3d-fov` 可 Tab 到、`:focus-visible` 也成立，但 outline/border/box-shadow 全部无变化，
+   键盘用户完全看不出焦点停在这个滑块上（WCAG 2.4.7 焦点可见，AA）。
+   取色用 var(--strong)：与同节点 `.smart3d-select:focus { border-color:var(--strong) }` 保持同一个焦点色，
+   浅色 #111827 / 深色 #d8dee9，对各自面板都远超非文本对比要求的 3:1。
+   ⚠️ 项目里 `.smart-video-play:focus-visible` 用的蓝色 rgba(59,130,246,.72) 在浅色面板上只有 2.48:1，
+   不能照抄到节点内。
+   写法用「:focus 给环 + :focus:not(:focus-visible) 撤环」而不是只用 :focus-visible：
+   后者在个别浏览器/脚本聚焦下不匹配，会退回「完全没有指示」；这样两条规则的并集保证键盘一定有环，
+   而鼠标点进来（拖动滑块）不会闪一下。 */
+.smart3d-fov:focus { outline:2px solid var(--strong); outline-offset:3px; border-radius:6px; }
+.smart3d-fov:focus:not(:focus-visible) { outline:none; }
 .smart3d-fov:disabled { opacity:.5; cursor:default; }
 .smart3d-fovval { flex:0 0 auto; min-width:62px; text-align:right; color:var(--muted); font-size:10px; font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; }
 /* ⚠️ 不要再给 .smart3d-fovval 加深色覆盖（曾经有过 `.theme-dark { color:var(--faint) }`）。
