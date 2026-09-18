@@ -4,10 +4,10 @@
 
 ## 一、画布数据安全（最高优先级）
 
-- `data/canvases/<32hex>.json` **无回收站、无历史版本、未纳入 git**；删节点是硬删（`deleteNode()` → 整份覆盖 PUT），撤销栈只在内存。已发生「陈旧页面抹掉 45 个节点」事故。
-- 写画布前：停服务 / 确认无画布页开着 → 备份 + `md5sum` 记哈希 → 测试一律用一次性画布（`POST /api/canvases` → 收尾 `DELETE .../purge`）。
+- `data/canvases/<32hex>.json` **无回收站、无历史版本、未纳入 git**；删节点是硬删（整份覆盖 PUT），撤销栈只在内存。已发生「陈旧页面抹掉 45 个节点」事故。
+- 写画布前：停服务 / 确认无画布页开着 → 备份 + 记 `md5sum` → 测试一律用一次性画布（`POST /api/canvases` → 收尾 `DELETE .../purge`）。
 - 收尾三件事：删 `static/__*.html`、purge 一次性画布、`md5sum -c` 比对真实画布哈希。命令中途报错时 `POST` 可能已建好画布，要按标题扫 `data/canvases/` 找孤儿。
-- 详细流程见技能 `infinite-canvas-verify`。
+- 流程见技能 `infinite-canvas-verify`。
 
 ## 二、保存接口（`PUT /api/canvases/{id}`）
 
@@ -20,7 +20,7 @@
 - ⚠️ 非空节点的 `.node-head`/`.node-title`/`.node-hint` 被全局隐藏（CSS 574/575/702）→ **新增非图片节点类型必须显式重显**；`.image-node.selected:not(...)` 长 `:not` 链要补新型号。
 - ⚠️ 节点拖拽靠 `beginNodeDrag` 的「排除选择器」判断，自吃鼠标事件的区域（如 3D 舞台）必须加进排除列表。
 - 改 i18n 必跑 `node static/js/i18n/validate-i18n.js`；`t()` **不做 `{name}` 插值**；JS 动态文案要监听 `studio-lang-change` 重画。
-- **验证前端改动务必用全新 `--user-data-dir`**（静态资源缓存）；`render()`（`smart-canvas.js:9166`）是渲染主入口、147 处调用无节流 → WebGL 查看器 DOM 必须复用。
+- **验证前端改动务必用全新 `--user-data-dir`**；`render()`（`smart-canvas.js:9166`）是渲染主入口、147 处调用无节流 → WebGL 查看器 DOM 必须复用。
 - 其余（lucide PascalCase、canvas-llm 视觉管线、three.js 内置路径等）见 `REFERENCE.md` J。
 
 ## 四、模型下拉与 Grsai
@@ -28,23 +28,22 @@
 - 下拉唯一数据源是 `chatApiProviders()`（`smart-canvas.js:3049`），**只认 `chat_models`**；生图/视频模型不会出现在对话下拉里。3D 节点用 `chatModelOptions()`，不做视觉过滤。
 - **Grsai 对话模型 = GPT 4 + Gemini 10 = 14 个**，4 个 GPT 全支持读图。⚠️ 命名 = **OpenAI 官方模型 ID**（`gpt-6-astra`/`gpt-5.6-terra`/`gpt-5.6-sol`/`gpt-5.5`），**别自己编后缀**。
 - ⚠️ 探测三坑：① 按通用命名试 `gpt-4o`/`gpt-5` 全 400 就误判「没有 GPT」（被老板连续纠正两次）；② **禁止并发扫模型名**（限流会把已知可用的扫成失败），必须串行 + 间隔 1~1.5s；③ **判「存在」看 200，判「不存在」必须看到 `model not found`**，慢或偶发 400 ≠ 不存在。
-- Grsai 无 `/v1/models`（全 404），只能手填；后端不校验模型是否存在，加错名字只在调用时 400。清单见 `REFERENCE.md` F。
-- 老板另有 Aizzz 网关（`~/.codex/config.toml`，有 ≥2000 token 门槛），**仅备选**。
+- Grsai 无 `/v1/models`（全 404），只能手填；后端不校验模型是否存在。清单见 `REFERENCE.md` F。老板另有 Aizzz 网关（`~/.codex/config.toml`，有 ≥2000 token 门槛），**仅备选**。
 
 ## 五、3D 预览节点（`smart-3d`）
 
 - 定位：上游只能「快速生图」、下游也只能「快速生图」，与 prompt/loop/group 双向拒绝（`canAutoConnectDraggedNode()` + `connectInputNode()` 两处都要改）。
 - 视觉风格：纯白 `#ffffff` 视口 + 灰白石膏白模 `#d9dce1` + 固定工作室光（hemi 0.34 + 三盏 directional 1.35/0.46/0.60），无 GridHelper，地面仅 `ShadowMaterial(opacity 0.20)`；场景 JSON 只留几何与相机。
-- **节点外框布局约定**：① `padding-top:0` 让标题栏顶到边；② **跳过 `.floating-node-actions` 浮动删除按钮**（模板加 `&& !is3D`，否则与标题栏重叠且不可点）；③ **交互说明入标题栏**（`headSub` → `.node-head-sub` 灰色小字，`is3D && smart3DHasScene(node)` 为条件，底部不渲染 `.node-hint`，腾出高度由 `.node-body{flex:1}` 吸收）；④ **标题栏 `padding:0; border-bottom:0`**（3D 是唯一显示标题栏的非空节点，必须与舞台同列对齐；舞台自带 1px 边框，标题栏再留 border 会叠成 2px 双线）；⑤ **标题栏内的 `.node-delete` 必须显式去掉 `.mini-x` 的 `box-shadow`/`backdrop-filter` 并补 `:hover` 反馈**（全局 3 类规则优先级高于 `.mini-x:hover` 2 类）。完整字段/查看器/坑位见 `REFERENCE.md` K。
+- **外框布局约定**：① `padding-top:0` 让标题栏顶到边；② **跳过 `.floating-node-actions` 浮动删除按钮**（模板加 `&& !is3D`，否则与标题栏重叠且不可点）；③ **交互说明入标题栏**（`headSub` → `.node-head-sub` 灰色小字，`is3D && smart3DHasScene(node)` 为条件，底部不渲染 `.node-hint`）；④ **标题栏 `padding:0; border-bottom:0`**（3D 是唯一显示标题栏的非空节点，必须与舞台同列对齐；舞台自带 1px 边框，再留 border 会叠成 2px 双线）；⑤ **标题栏内 `.node-delete` 必须显式去掉 `.mini-x` 的 `box-shadow`/`backdrop-filter` 并补 `:hover`**（全局 3 类规则优先级高于 `.mini-x:hover` 2 类）。字段/查看器/坑位见 `REFERENCE.md` K。
 
 ## 六、本地服务
 
-- 启动：`./python/python.exe main.py`（cwd = 项目根，端口 3000，单进程无 reload）。⚠️ **必须用后台 Bash 任务方式启动**，`Popen(DETACHED_PROCESS)` 会被沙箱回收。日志 `output/server.log`；本机 `curl` 不可用（假 502），改用 Python `socket`/`urllib`。
+- 启动：`./python/python.exe main.py`（cwd = 项目根，端口 3000，单进程无 reload）。⚠️ **必须用后台 Bash 任务方式启动**。日志 `output/server.log`；本机 `curl` 不可用（假 502），改用 Python `socket`/`urllib`。
 - ⚠️ 启动时 `sync_static_html_versions()` 会重写 `static/*.html` 的 `?v=`（缓存破坏参数），**不要为 git 干净去还原**，否则浏览器继续用旧 JS，表现为「项目功能整个消失」。
 
 ## 七、磁盘与 git 硬红线
 
 - ⚠️ 本机「删除即入回收站」→ 清理不释放空间；**真正释放 = 清空回收站**，汇报成果必须同时给回收站占用。
 - ⚠️ **绝不要 `git rm <文件>`**（实测整个父目录消失）；用 Python `os.remove` + `git add -A <目录>/`。
-- 🚨 `.git` 曾于 2026-09-17 被递归搬进回收站（已完整还原）。防护：维护前 `git bundle create ../repo-<日期>.bundle --all`；瘦身在项目外副本做；优先 `git push` 当备份。取证见 `REFERENCE.md` B。
-- ⚠️ **工具会话内 `git push` 会无限挂起**（GUI 凭据助手；`ls-remote` 成功是假信号）→ 推送必须由老板本人终端执行。裸 `git` 不可用（RTK 改写），真身在 PortableGit 1.2.0。详见 `REFERENCE.md` L。
+- 🚨 `.git` 曾于 2026-09-17 被递归搬进回收站（已完整还原）。防护：维护前 `git bundle create ../repo-<日期>.bundle --all`；瘦身在项目外副本做；优先 `git push` 当备份。
+- ⚠️ **工具会话内 `git push` 会无限挂起**（GUI 凭据助手；`ls-remote` 成功是假信号）→ 推送必须由老板本人终端执行。裸 `git` 不可用（RTK 改写），真身在 PortableGit 1.2.0。详见 `REFERENCE.md` B/L。
