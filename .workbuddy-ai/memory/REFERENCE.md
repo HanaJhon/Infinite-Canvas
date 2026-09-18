@@ -371,3 +371,36 @@ window.__orig = chatApiProviders; chatApiProviders = function(){ return []; }; r
 - ⚠️ **绝不要用 `git rm <文件>`** —— 实测让**整个父目录消失**（`packages/` 41 文件、`tests/` 两次复现）。恢复用 `git checkout HEAD -- <目录>/`；**正确做法**是 Python `os.remove` / ctypes `DeleteFileW` 删文件再 `git add -A <目录>/`。
 - **裸 `git` 不可用**（RTK hook 改写成 `rtk git`，rtk 解析不到）。真身：`C:/Users/Administrator/.workbuddy-ai/binaries/PortableGit/versions/1.2.0/mingw64/bin/git.exe`。`git status --cached` 非法，看暂存用 `git diff --cached --name-status`。
 - ⚠️ **工具会话内 `git push` 会无限挂起**：系统级 `credential.helper=helper-selector`（GUI 助手）无界面时静默挂起；`git credential fill` → `could not read Username ... terminal prompts disabled`。**`ls-remote` 成功是假信号**（公开仓库匿名可读）。已排除直连出口、代理、HTTP/1.1、postBuffer、数据量（仅 138 对象）。结论：**推送必须由老板本人终端执行**。
+
+## M. three.js 版本与升级清单（2026-09-18 核查）
+
+| 项 | 值 |
+|---|---|
+| 本地 | `static/vendor/js/three-0.160.0.module.js`，`REVISION = '160'`，1,272,972 bytes |
+| r160 发布 | **2023-12-22** |
+| 官方最新 | **r186（0.186.0）**，**2026-09-08** |
+| 差距 | 落后 26 个版本 / 约 2 年 9 个月 |
+
+引用点 3 处：`static/angle.html:29`（importmap `?v=2026.08.30`）、`smart-canvas.js:9063`（3D 节点，**无 `?v=`**）、`smart-canvas.js:12382`（全景，`?v=2026.05.30` **已过期**）。⚠️ 同一文件两个动态 import 的 `?v=` 不一致，替换文件时全景路径可能继续吃旧缓存。
+
+### 升级必须改的 2 处代码
+
+1. 🚨 **`envMapIntensity` 语义变化（r163）**：`scene.environment` 的强度不再受 `MeshStandardMaterial.envMapIntensity` 控制，改用 `Scene.environmentIntensity`。本项目 `smart-canvas.js:9262` 用 `envMapIntensity: SMART_3D_STUDIO.envIntensity`（**0.50**）衰减工作室环境光 → 升级后**失效、环境照明近似翻倍、白模变亮失去石膏质感**。修法：`scene.environmentIntensity = SMART_3D_STUDIO.envIntensity`（`:9388` 附近）。
+2. ⚠️ **`PCFSoftShadowMap` 在 WebGLRenderer 下废弃（r182）** → 改 `THREE.PCFShadowMap`。位置 `smart-canvas.js:9381`。
+
+### 升级必然带来的观感偏移（需重调参）
+
+**r181 PBR 材质能量守恒 + PMREM 反射改进** → 粗糙材质（`clayRoughness: 0.62`）更亮更物理正确，`SMART_3D_STUDIO` 的灯光/环境数值需要重新调，并重跑七轮视觉验收。
+
+### 经核对**不受影响**的
+
+- `new THREE.CapsuleGeometry(spec.radius, spec.length, 10, 22)`（`:9126`）—— r176 只改**形参名** `length`→`height`，**位置顺序未变**，按位置传参不受影响。
+- `outputColorSpace` / `toneMapping` / `PMREMGenerator` / `ShadowMaterial` / `MeshBasicMaterial` / 三盏灯 / `SRGBColorSpace` / `NoToneMapping` / `DoubleSide`/`BackSide` / 其余几何体 / `GridHelper` / `TextureLoader` —— r161~r186 无破坏性变更。
+- 未用 `THREE.Source`（r186 改名 `TextureSource`）、未用 `useLegacyLights`、未用 OrbitControls / GLTFLoader / 后处理 / WebGPU。
+- r163 起不再支持 WebGL 1 —— 现代浏览器均可，影响可忽略。
+
+### 工程变化：单文件 → 双文件
+
+r186 的 `build/` 已拆分，**不能单文件 vendoring**：`three.core.js`（1,458,113 B，含 `REVISION='186'`）+ `three.module.js`（662,772 B，**`import ... from './three.core.js'`**），合计 **2.02 MB（+67%）**。两文件须同目录，**importmap 条目本身不用改**。
+
+**结论**：值得升、但不紧急，**不建议在 3D 节点打磨中途升**（r160 无安全问题、功能够用；升级必然改观感）。等告一段落再一次性完成「换 2 个文件 + 改 2 处代码 + 重调 `SMART_3D_STUDIO` + 重跑视觉验收」。

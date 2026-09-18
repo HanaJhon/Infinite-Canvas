@@ -1,6 +1,6 @@
 # 项目长期记忆 · Infinite-Canvas
 
-> 索引式硬规则，细节下沉 `REFERENCE.md`（A 启动器 / B `.git` 事故 / C 胶囊 / D API Key / E 磁盘 / F Grsai 模型 / G 磁盘补充 / H 3D 白模 / I 保存接口 / J 前端 / K 3D 界面 / L 服务与 git）；过程见 `YYYY-MM-DD.md`。
+> 索引式硬规则，细节下沉 `REFERENCE.md`（A 启动器 / B `.git` 事故 / C 胶囊 / D API Key / E 磁盘 / F Grsai 模型 / G 磁盘补充 / H 3D 白模 / I 保存接口 / J 前端 / K 3D 界面 / L 服务与 git / M three.js 版本）；过程见 `YYYY-MM-DD.md`。
 
 ## 一、画布数据安全（最高优先级）
 
@@ -25,15 +25,16 @@
 
 - 下拉唯一数据源是 `chatApiProviders()`（`smart-canvas.js:3049`），**只认 `chat_models`**；生图/视频模型不会出现在对话下拉里。3D 节点用 `chatModelOptions()`，不做视觉过滤。
 - **Grsai 对话模型 = GPT 4 + Gemini 10 = 14 个**，4 个 GPT 全支持读图。⚠️ 命名 = **OpenAI 官方模型 ID**（`gpt-6-astra`/`gpt-5.6-terra`/`gpt-5.6-sol`/`gpt-5.5`），**别自己编后缀**。清单见 `REFERENCE.md` F。
-- ⚠️ 探测三坑（详见 `REFERENCE.md` F.4）：① 别按通用命名猜（`gpt-4o`/`gpt-5` 全 400 就误判「没有 GPT」，被老板纠正两次）；② **禁止并发扫**（限流会把已知可用的扫成失败）→ 串行 + 间隔 1~1.5s；③ **判「存在」看 200，判「不存在」必须看到 `model not found`**。Grsai 无 `/v1/models` 只能手填，后端不校验模型是否存在。老板另有 Aizzz 网关（`~/.codex/config.toml`，≥2000 token 门槛）**仅备选**。
+- ⚠️ 探测三坑（详见 `REFERENCE.md` F.4）：① 别按通用命名猜（`gpt-4o`/`gpt-5` 全 400 就误判「没有 GPT」，被老板纠正两次）；② **禁止并发扫**（限流会把已知可用的扫成失败）→ 串行 + 间隔 1~1.5s；③ **判「存在」看 200，判「不存在」必须看到 `model not found`**。Grsai 无 `/v1/models` 只能手填，后端不校验模型是否存在。
 
 ## 五、3D 预览节点（`smart-3d`）
 
 - 定位：上游只能「快速生图」、下游也只能「快速生图」，与 prompt/loop/group 双向拒绝（`canAutoConnectDraggedNode()` + `connectInputNode()` 两处都要改）。
 - 视觉风格：纯白视口 + 灰白石膏白模 + 固定工作室光；详见 `REFERENCE.md` H。
+- **three.js 本地 r160（2023-12）、官方最新 r186（2026-09）**；升级清单（换 2 个文件 + 改 2 处代码）见 `REFERENCE.md` M。
 - **外框布局约定**：① `padding-top:0` 让标题栏顶到边；② **跳过 `.floating-node-actions` 浮动删除按钮**（模板加 `&& !is3D`）；③ **交互说明入标题栏**（`headSub` → `.node-head-sub`，条件 `is3D && smart3DHasScene(node)`，底部不渲染 `.node-hint`）；④ **标题栏 `padding:0; border-bottom:0`**，且 `.node-delete` 必须显式去 `box-shadow`/`backdrop-filter` 并补 `:hover`。验收锚点见 `REFERENCE.md` K.1/K.2。
 - **窄节点折叠**：`is-narrow` 隐藏 `.smart3d-meta > span` 与 `.smart3d-run > span`（只留图标，文案留 `title`；两者内部都必须有 `<span>` 作钩子）。🚨 **阈值必须按实测文案宽度算**（`smart3DBarNeedWidth`），**不能写死像素** —— meta/run 都是 `flex:0 0 auto`+`nowrap`，英文比中文宽 20~30px，写死 420 会让英文 420px 比中文 320px 还挤。模型名完整显示需 select ≥104px（原生箭头占 19px，DOM 量不出截断）。见 `REFERENCE.md` K.4/K.5。
-- **四个状态要分别验**：成功 / 解析失败 / 请求失败 / 空场景。⚠️ 失败态必须加 `.is-error`，否则与中性空态**同色**（`#8b95a8`）看不出报错；🚨 **舞台在深浅两主题下都是纯白，固定白底区域不要按主题切色**（统一 `#dc2626` = 4.85:1）；`.smart3d-raw` 收起态要退化成一行小字（默认面板吃 36px 视口）。另：**`.smart3d-nomodel`（未配置读图模型）是阻断性告警，必须读得全** —— 原 `nowrap`+`overflow:hidden` 且无 `text-overflow` 会把它硬切（英文 303px，560px 默认节点都差 18px），已改为允许换行。字段/查看器/坑位见 `REFERENCE.md` K。
+- **四个状态要分别验**：成功 / 解析失败 / 请求失败 / 空场景。⚠️ 失败态必须加 `.is-error`，否则与中性空态**同色**（`#8b95a8`）看不出报错；🚨 **舞台在深浅两主题下都是纯白，固定白底区域不要按主题切色**（统一 `#dc2626` = 4.85:1）；`.smart3d-raw` 收起态要退化成一行小字（默认面板吃 36px 视口）。另：**`.smart3d-nomodel`（未配置模型）是阻断性告警，必须读得全** —— 原 `nowrap`+`overflow:hidden` 无 `text-overflow` 会硬切（英文 303px，560px 默认节点也差 18px），已改允许换行。字段/查看器/坑位见 `REFERENCE.md` K。
 
 ## 六、本地服务
 
