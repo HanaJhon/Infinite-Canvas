@@ -9506,10 +9506,15 @@ function smart3DBodyHtml(node){
     const runLabel = node.running ? tr('smart.3dGenerating') : (objects.length ? tr('smart.3dRerun') : tr('smart.3dRun'));
     const fovVal = smart3DCurrentFov(node);
     const focalMm = smart3DFocalMm(fovVal);
-    return `<div class="smart3d-body" data-3d-root="1">
+    // 节点窄时（最小尺寸 320px）把「已识别 N 个对象」压成纯图标：实测 320px 宽下控件行总宽 294px，
+    // 这条次级信息独占 107px（36%），两个模型下拉只剩 45px，只能显示 "G.."/"g.."，
+    // 读不出选的是哪个模型。折叠后下拉恢复到约 84px。文案保留在 title 里。
+    const narrow = smart3DLayoutSize(node).width < 420;
+    const objectsText = trf('smart.3dObjects', {n:objects.length});
+    return `<div class="smart3d-body${narrow ? ' is-narrow' : ''}" data-3d-root="1">
         <div class="smart3d-stage" data-3d-stage="1" data-3d-node="${escapeAttr(node.id)}">${placeholder}</div>
         <div class="smart3d-bar">
-            <span class="smart3d-meta"><i data-lucide="boxes"></i>${escapeHtml(trf('smart.3dObjects', {n:objects.length}))}</span>
+            <span class="smart3d-meta" title="${escapeAttr(objectsText)}"><i data-lucide="boxes"></i><span>${escapeHtml(objectsText)}</span></span>
             ${smart3DModelControlsHtml(node)}
             <button class="smart3d-run${node.running ? ' is-running' : ''}" type="button" data-3d-run="1" ${node.running ? 'disabled' : ''} title="${escapeAttr(runLabel)}">
                 <i data-lucide="${node.running ? 'loader-2' : 'play'}"></i><span>${escapeHtml(runLabel)}</span>
