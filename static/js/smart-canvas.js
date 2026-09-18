@@ -10006,8 +10006,10 @@ function render(){
         const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
         const deleteBtn = (isGroup || isMinimax) ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
-        // 3D 节点的操作说明移到标题栏内（节点名后面的灰色小字），底部不再有说明行。
-        const headSub = is3D ? `<span class="node-head-sub">${escapeHtml(smart3DHasScene(node) ? tr('smart.3dDragHint') : tr('smart.3dEmptyHint'))}</span>` : '';
+        // 3D 节点的交互说明（拖拽旋转 · 滚轮缩放）移到标题栏内、跟在节点名后面的灰色小字，底部不再有说明行。
+        // 仅在「已有场景」时显示：空场景/生成失败的提示由舞台中央的占位层负责，避免同一句话重复出现，
+        // 也避免生成失败时标题栏错误地显示「连接快速生图后点生成」。
+        const headSub = (is3D && smart3DHasScene(node)) ? `<span class="node-head-sub">${escapeHtml(tr('smart.3dDragHint'))}</span>` : '';
         const hint = is3D ? '' : isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
         const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${is3D ? 'smart3d-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
 
