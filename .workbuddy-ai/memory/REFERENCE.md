@@ -165,6 +165,49 @@ Gemini 家族 10 个：`gemini-3.1-pro`、`gemini-2.5-pro`、`gemini-3-flash`、
 - **不要动**：`get-pip.py`（`Program.cs` 引用）、`inspire_image_dims.json`（`main.py` 引用）、`history.json`、`python/`、`packages/`、`static/`、`data/`、`workflows/`、`tools/`、`CLI/.../*-arm64-*.tgz`、`output/backup/`。
 - 删通道 ≠ API key 消失（`api_providers.json` **不存 key**，真身在 `API/.env`）。逐处核对清单见本文档 D。
 
+### G.1 2026-09-18 二次全量盘点（「哪些能删」）
+
+**结论**：项目内部「零风险可清」只剩 **≈76 MB**（历次清理已把大头拿走）；真正的大头在**项目之外**。
+
+**A 类 纯缓存 / 自动重建（零影响）**
+- `data/media_previews/` 5.8 MB / 203 个 —— `main.py:7614 media_preview_cache_paths()` 的 key =
+  `sha1(绝对路径|mtime_ns|size|宽度)`，`:7656 media_preview()` 未命中**现算现存** → 纯缩略图缓存。
+- `python/**/__pycache__/` 11.9 MB / 152 目录 / 1309 文件（全在 `site-packages` 下）。
+- `.git.broken-20260917/`（`.git` 事故的空壳标记，**已被 git 跟踪**）、`nuget.temp.config`（197 B，也已被跟踪）。
+
+**B 类 运行/构建产物（先关启动器）**
+- `Lochou启动器.exe.WebView2/` 38.9 MB（`.gitignore` 自己写着「用户级运行状态，非源码」）。
+  🎁 删它**同时清掉 D.1 里那条「API 密钥」自动填充**。
+- `launcher/obj/` 9.3 MB（含 `singlefilehost.exe`）、`dist/` 1.8 MB —— `build-launcher.ps1` 可重建。
+
+**C 类 `output/`**：108 文件 / 8.8 MB，其中 74 张历轮验证 PNG 占 8.66 MB 可删；
+**`output/backup/` 必须留**；9 个 `.md` 报告建议留。
+
+**D 类 不要删（会破坏功能或视觉）**
+- ⚠️ **`assets/output/` 16 个文件 / 135.6 MB 全部被 `history.json` 引用**
+  （`"images": ["/assets/output/online_xxx.png"]`）→ 是生图历史本体，删了历史列表裂图。
+- `python/`（`run.bat` → `python\python.exe`）、`Lochou启动器.exe`（68.9 MB，已跟踪，分发用）、
+  `static/`、`Picture/`、`get-pip.py`、`data/*`、`output/backup/`。
+- 与旧结论一致、**再次确认不要动**：`packages/`、`CLI/**/*.tgz`、`inspire_image_dims.json`。
+  （我一度把后三者列进「可删」，复核 `Program.cs` 引用后收回 —— `inspire_image_dims.json` 删了
+  会让灵感页首次访问同步等最多 6 秒，`INSPIRE_DIMS_PROBE_BUDGET=6.0`。）
+- 唯一确认可删的用户数据：`assets/input/` 里 **112 个无引用 `ai_ref_*.png` / 4.4 MB**
+  （116 个里只有 4 个被引用）。
+
+**E 类 项目之外 `D:\工作\无限画布\`（共 7.4 GB，最大头）**
+- 🥇 `Infinite-Canvas-agent-main/` **3318.7 MB** —— **2026-09-04 的旧项目整份副本，无 `.git`**，
+  内含 `assets/` 2422.7 MB、`一键启动.exe.WebView2/` 431.7 MB、`launcher/` 171.7 MB。
+  当前工作项目是 `Infinite-Canvas/`（新一代，用 `Lochou启动器.exe`）。
+- `Infinite-Canvas.v0.1.zip` 1614 MB、`Infinite-Canvas.for.lochou.launcher.Official.v1.0.zip` 807.8 MB、
+  `repo-20260918.bundle` 452.7 MB、`repo-20260918-b4msgfix.bundle` 452.7 MB（本次留底）、`icon/` 15.3 MB。
+
+**方法**：把 `history.json` + `data/asset_library.json` + `data/projects.json` +
+`data/prompt_libraries.json` + `data/inspire_prompt_zh.json` + 7 个画布 JSON 合并成 441 KB
+引用文本，逐文件名比对；再回读源码确认目录用途。
+**回收站**：本次测得 1401 条目 / **0.01 GB**（几乎空）—— 注意「删除即入回收站」，删完必须清空才真释放。
+
+报告：`output/可精简文件分析报告-2026-09-18.md`。
+
 ## H. 3D 预览：恢复修改前基础白模工作室方案（2026-09-18）
 
 当前按老板要求固定为修改前已验证的视觉方案：**纯白 `#ffffff` 视口 + 灰白基础白模 + 原工作室环境光 + 隐藏坐标网格**。
