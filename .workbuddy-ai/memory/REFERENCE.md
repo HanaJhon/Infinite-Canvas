@@ -261,6 +261,42 @@ const SMART_3D_STUDIO = {
 - **「查看模型输出」`.smart3d-raw` 收起态要退化成一行小字**：默认面板形态（`border`+`background`+`padding:6px 8px`）高 28px，加 `.smart3d-body` 的 8px gap 共吃 **36px 视口高度**（比把操作说明挪进标题栏省下的 25px 还多）。改法是把面板样式挪到 `.smart3d-raw[open]`，收起态只剩 summary 的 14px 行盒；实测舞台高 312 → **326**。
 - 验收锚点：失败态 `.smart3d-placeholder` 的 computed color 为 `rgb(220,38,38)`（两主题一致）；空态为 `rgb(139,149,168)`；`.smart3d-raw` 收起 `h=14`、展开 `h≈47.5` 且 `borderTopWidth=1px`、`backgroundColor=rgb(248,250,252)`；`stage.h` 有 raw=326 / 无 raw=348；节点高恒为 470。
 
+### K.4 窄节点控件行折叠（2026-09-18 第五轮打磨，commit 21a00ed）
+
+**问题**：节点缩到最小尺寸 320×280 时，`.smart3d-bar` 总宽只有 294px。`.smart3d-meta`（「已识别 N 个对象」）是 `flex:0 0 auto` + `white-space:nowrap`，独占 **106.8px（36%）**，把 `flex:1 1 0` 的两个 `.smart3d-select` 压到各 **45.1px** —— 下拉里只能看到 `"G.."` / `"g.."`，完全读不出选的是 `gemini-3.1-pro` 还是 `gemini-2.5-pro`。
+
+**改法**：`smart3DBodyHtml()` 里用 `smart3DLayoutSize(node).width < 420` 判断，给 `.smart3d-body` 加 `is-narrow`；CSS 侧隐藏 `.smart3d-meta > span`（只留 `boxes` 图标），文案移进 `title` 属性保留可达性，并把 padding 从 `0 8px` 收到 `0 7px`。
+
+```js
+const narrow = smart3DLayoutSize(node).width < 420;
+const objectsText = trf('smart.3dObjects', {n:objects.length});
+return `<div class="smart3d-body${narrow ? ' is-narrow' : ''}" data-3d-root="1">`;
+```
+```css
+.smart3d-body.is-narrow .smart3d-meta { padding:0 7px; }
+.smart3d-body.is-narrow .smart3d-meta > span { display:none; }
+```
+
+⚠️ **`.smart3d-meta` 内部必须包一层 `<span>`**（原来是裸文本 + `<i>`），否则没有可隐藏的钩子。`title` 属性是折叠后唯一的文案出口，不能省。
+
+**阈值 420 的由来**：440px 宽时控件行总宽约 414px，`.smart3d-meta` 占 107.1px 但两个下拉仍有 107.1px（能显示完整模型名），不必折叠；380px 时折叠收益明显（116.5px > 440px 的 107.1px）。取 420 让 440 保持展开、380 折叠。
+
+**验收锚点（真实 DOM）**：
+| 节点宽 | `body.className` | `.smart3d-meta > span` display | `.smart3d-select` 宽 |
+|---|---|---|---|
+| 320 | `smart3d-body is-narrow` | `none` | **84.5px**（改前 45.1px） |
+| 380 | `smart3d-body is-narrow` | `none` | 116.5px |
+| 440 | `smart3d-body` | `block` | 107.1px |
+
+- 写入 200×150 的节点会被 `smart3DLayoutSize()` 钳到 **320×280**（`SMART_3D_MIN_W/H`），所以窄态是真实可达的，不是理论边界。
+- 320×280 + 超长上游报错 + 展开 raw 时，`.smart3d-placeholder` 156/156 无溢出；8 个节点同时存在时 `.smart3d-bar` 无横向溢出（`scrollWidth <= clientWidth`）。
+
+### K.5 选中态（2026-09-18 第五轮同批验证）
+
+`.image-node.smart3d-node.selected` 走全局规则 `border-color:var(--strong); box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow)`，实测 `borderTopColor` 由 `rgb(232,237,243)` → **`rgb(17,24,39)`**、`boxShadow` → **`rgb(17,24,39) 0 0 0 1px, rgba(15,23,42,.08) 0 14px 36px`**，正常。
+
+⚠️ **探针坑**：选中会触发 `render()` **重建节点 DOM**，之前缓存的元素引用立刻脱离文档 —— 表现为 `document.querySelectorAll('.selected').length === 1` 但 `cachedEl.classList.contains('selected') === false`、`getComputedStyle(cachedEl)` 返回**空串**。探针里一律用 `const q = (id) => d.querySelector(...)` **每次现取**。
+
 ## L. 本地服务与 git 红线补充（从 MEMORY.md 下沉）
 
 - ⚠️ **启动时 `sync_static_html_versions()`（`main.py:1743`）把 `static/*.html` 的 `?v=` 重写为 `<VERSION>.<资源mtime>` 并写回磁盘** → 每次重启让十几个 html 变 modified。**这是缓存破坏参数，必须保持最新，不要为 git 干净去 `git checkout` 还原** —— 踩过：还原后浏览器继续用缓存旧 JS，而新 CSS 已隐藏 iframe 内原胶囊 → 两个胶囊都不显示，表现为「项目功能整个消失」。

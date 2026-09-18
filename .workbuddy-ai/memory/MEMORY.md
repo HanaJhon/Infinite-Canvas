@@ -35,6 +35,7 @@
 - 定位：上游只能「快速生图」、下游也只能「快速生图」，与 prompt/loop/group 双向拒绝（`canAutoConnectDraggedNode()` + `connectInputNode()` 两处都要改）。
 - 视觉风格：纯白 `#ffffff` 视口 + 灰白石膏白模 `#d9dce1` + 固定工作室光（hemi 0.34 + 三盏 directional 1.35/0.46/0.60），无 GridHelper，地面仅 `ShadowMaterial(opacity 0.20)`；场景 JSON 只留几何与相机。
 - **外框布局约定**：① `padding-top:0` 让标题栏顶到边；② **跳过 `.floating-node-actions` 浮动删除按钮**（模板加 `&& !is3D`，否则与标题栏重叠且不可点）；③ **交互说明入标题栏**（`headSub` → `.node-head-sub` 灰色小字，`is3D && smart3DHasScene(node)` 为条件，底部不渲染 `.node-hint`）；④ **标题栏 `padding:0; border-bottom:0`**（3D 是唯一显示标题栏的非空节点，必须与舞台同列对齐；舞台自带 1px 边框，再留 border 会叠成 2px 双线）；⑤ **标题栏内 `.node-delete` 必须显式去掉 `.mini-x` 的 `box-shadow`/`backdrop-filter` 并补 `:hover`**（全局 3 类规则优先级高于 `.mini-x:hover` 2 类）。
+- **窄节点（`smart3DLayoutSize(node).width < 420`）给 `.smart3d-body` 加 `is-narrow`**，CSS 隐藏 `.smart3d-meta > span`（对象计数压成纯图标，文案留在 `title`）—— 否则最小尺寸 320px 下两个模型下拉只剩 45px（只显示 `G..`/`g..`），折叠后 84.5px。`.smart3d-meta` 内部必须保留 `<span>` 包裹文案作为钩子。
 - **四个状态要分别验**：成功 / 解析失败 / 请求失败 / 空场景。⚠️ 失败态必须加 `.is-error`，否则与中性空态**同色**（都是 `#8b95a8`）看不出报错；🚨 **舞台在深浅两主题下都是纯白 `#ffffff`，固定白底区域不要按主题切色**（`#f87171` 在白底只有 2.76:1，须统一 `#dc2626` = 4.85:1）；`.smart3d-raw` 收起态要退化成一行小字（默认面板形态吃 36px 视口）。字段/查看器/坑位见 `REFERENCE.md` K。
 
 ## 六、本地服务
