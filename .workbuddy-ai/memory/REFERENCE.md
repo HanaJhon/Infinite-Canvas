@@ -125,19 +125,19 @@ Gemini 家族 10 个：`gemini-3.1-pro`、`gemini-2.5-pro`、`gemini-3-flash`、
 - **不要动**：`get-pip.py`（`Program.cs` 引用）、`inspire_image_dims.json`（`main.py` 引用）、`history.json`、`python/`、`packages/`、`static/`、`data/`、`workflows/`、`tools/`、`CLI/.../*-arm64-*.tgz`、`output/backup/`。
 - 删通道 ≠ API key 消失（`api_providers.json` **不存 key**，真身在 `API/.env`）。逐处核对清单见本文档 D。
 
-## H. 3D 预览：恢复首版场景驱动渲染（2026-09-18）
+## H. 3D 预览：恢复白模工作室渲染（2026-09-18）
 
-此前曾短暂试用「纯白工作室 + 灰白白模」方案，现按老板要求恢复为：**纯白 `#ffffff` 视口 + 默认环境光**，同时保留场景自带灯光/地面/网格和对象颜色。查看器不再创建 `SMART_3D_STUDIO`、PMREM 环境贴图、半球光、三点方向光或 `ShadowMaterial` 接触阴影。
+按老板最新要求恢复为：**纯白 `#ffffff` 视口 + 灰白白模 + 工作室环境光**。查看器固定 `SMART_3D_STUDIO` 视觉，不再让旧场景或模型输出的颜色、灯光、地面字段覆盖当前观感。
 
 ### H.1 当前实现
 
-- 默认灯光：`AmbientLight(0.6)` + `DirectionalLight(0.85)`，方向光位置 `[4, 8, 5]`；若旧场景缺少任一灯光类型，查看器自动补齐。
-- 地面：固定白色 `MeshStandardMaterial` 平面；网格：浅灰 `GridHelper`，由 `ground.grid === true` 控制。旧场景的深色 `ground.color` 不再直接用于地面。
-- 对象材质：读取 `spec.color` / `roughness` / `metalness`，不再统一覆写为灰白白模。
-- `normalize3DScene()` 保留并规范化场景字段；查看器最终固定白色背景 `#ffffff`、白色地面和默认灯光兜底，避免旧画布深色字段污染新视觉要求。
-- FOV 滑块和相机姿态持久化继续保留。
+- 环境：每个 WebGL 查看器独立创建 PMREM 摄影棚环境贴图，并绑定 `scene.environment`；销毁查看器时释放环境目标，避免跨 WebGL 上下文复用。
+- 灯光：`HemisphereLight(0.34)` + 主/辅/轮廓三盏 `DirectionalLight`（`1.35 / 0.46 / 0.60`），主光开启阴影。
+- 地面：`ShadowMaterial({opacity:0.2})` 平面，只接收柔和接触阴影；背景固定纯白。
+- 对象材质：所有图元统一灰白石膏材质 `#d9dce1`、roughness `0.62`，plane 使用双面材质克隆。
+- `normalize3DScene()` 对旧场景做几何字段兼容，返回值只保留相机和图元；FOV 滑块与相机姿态持久化继续保留。
 
-### H.2 历史工作室方案（已撤回）
+### H.2 历史场景驱动方案（已撤回）
 
 此前的 `SMART_3D_STUDIO`、PMREM、半球光、三点方向光与接触阴影方案已从运行代码移除；详情保留在提交 `86b30ce` 与当日工作日志中。
 

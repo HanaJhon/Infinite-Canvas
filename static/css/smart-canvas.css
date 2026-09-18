@@ -2052,7 +2052,7 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 
 
 /* ===================== 3D 预览节点（three.js） ===================== */
-/* 原始 3D 视口：深色背景 + 场景自带地面与网格。 */
+/* 3D 预览：纯白背景 + 灰白白模，环境光由查看器固定提供。 */
 .smart3d-body { width:100%; height:100%; min-height:0; display:flex; flex-direction:column; gap:8px; }
 .smart3d-stage { position:relative; flex:1 1 auto; min-height:110px; border-radius:12px; overflow:hidden; border:1px solid rgba(148,163,184,.32); background:#ffffff; cursor:grab; touch-action:none; }
 .theme-dark .smart3d-stage { border-color:rgba(148,163,184,.26); background:#ffffff; }
