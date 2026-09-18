@@ -35,7 +35,7 @@
 
 - 定位：上游只能「快速生图」、下游也只能「快速生图」，与 prompt/loop/group 双向拒绝（`canAutoConnectDraggedNode()` + `connectInputNode()` 两处都要改）。
 - 视觉风格：纯白 `#ffffff` 视口 + 灰白石膏白模 `#d9dce1` + 固定工作室光（hemi 0.34 + 三盏 directional 1.35/0.46/0.60），无 GridHelper，地面仅 `ShadowMaterial(opacity 0.20)`；场景 JSON 只留几何与相机。
-- **节点外框布局三条定稿约定**：① `padding-top:0` 让标题栏顶到边；② **跳过 `.floating-node-actions` 浮动删除按钮**（模板加 `&& !is3D`，否则与标题栏重叠且不可点）；③ **交互说明入标题栏**（`headSub` → `.node-head-sub` 灰色小字，`is3D && smart3DHasScene(node)` 为条件，底部不渲染 `.node-hint`，腾出高度由 `.node-body{flex:1}` 吸收）。完整字段/查看器/坑位见 `REFERENCE.md` K。
+- **节点外框布局约定**：① `padding-top:0` 让标题栏顶到边；② **跳过 `.floating-node-actions` 浮动删除按钮**（模板加 `&& !is3D`，否则与标题栏重叠且不可点）；③ **交互说明入标题栏**（`headSub` → `.node-head-sub` 灰色小字，`is3D && smart3DHasScene(node)` 为条件，底部不渲染 `.node-hint`，腾出高度由 `.node-body{flex:1}` 吸收）；④ **标题栏 `padding:0; border-bottom:0`**（3D 是唯一显示标题栏的非空节点，必须与舞台同列对齐；舞台自带 1px 边框，标题栏再留 border 会叠成 2px 双线）；⑤ **标题栏内的 `.node-delete` 必须显式去掉 `.mini-x` 的 `box-shadow`/`backdrop-filter` 并补 `:hover` 反馈**（全局 3 类规则优先级高于 `.mini-x:hover` 2 类）。完整字段/查看器/坑位见 `REFERENCE.md` K。
 
 ## 六、本地服务
 

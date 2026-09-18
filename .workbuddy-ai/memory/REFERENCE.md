@@ -226,6 +226,25 @@ const SMART_3D_STUDIO = {
 
 ① `.image-node.smart3d-node` 加 `padding-top:0`，让标题栏贴齐节点顶部（其他节点内缩 12px，3D 节点标题栏必须顶到边）；② **3D 节点必须跳过 `.floating-node-actions` 浮动删除按钮**（渲染模板里加 `&& !is3D`）——标题栏被专门显示后两者会重叠，浮动按钮落在覆盖层下方不可点击；③ **交互说明放在标题栏内，3D 节点不渲染底部 `.node-hint`**：`render()` 里用 `headSub` 把 `<span class="node-head-sub">` 插到 `.node-head` 中、紧跟 `.node-title` 之后，同时把 `hint` 置空并改成条件渲染 `${hint ? '<div class="node-hint">…</div>' : ''}`。⚠️ **`headSub` 必须以 `is3D && smart3DHasScene(node)` 为条件**——空场景/生成失败时那句话（`smart.3dEmptyHint`「连接快速生图后点生成」）已由舞台中央占位层显示，再放进标题栏就是重复，且生成失败时会显示错误引导。`.node-head-sub` 是 `--faint` 灰色小字（`font-size:10px; font-weight:700; line-height:normal`，与 `.smart3d-meta`/`.smart3d-select`/`.smart3d-run`/`.smart3d-fovval` 同规格），`flex:1 1 auto` 负责顶开右侧删除按钮；对应地 3D 的 `.node-title` 由 `flex:1 1 auto` 改为 `flex:0 0 auto`。腾出的约 25px 高度由 `.node-body{flex:1 1 auto}` 自动吸收，3D 视口随之变高，节点总高不变。
 
+### K.2 标题栏对齐与删除按钮（2026-09-18 第三轮打磨，commit 955b64d）
+
+3D 节点是**唯一会显示标题栏的非空节点**，所以 `.node-head` 的默认值（为「隐藏标题栏」场景设计的）在这里全部会露出来，必须逐条覆盖：
+
+| 项 | 默认 | 3D 节点改为 | 原因 |
+|---|---|---|---|
+| `.node-head` padding | `0 10px 0 12px` | `0` | 加上节点自身 `padding:12px`，标题会比舞台多缩进 12px（实测标题 x=145 vs 舞台 x=133） |
+| `.node-head` border-bottom | `1px solid var(--line)` | `0` | 与舞台 `border-top:1px solid rgba(148,163,184,.32)` 间距为 0，叠成 2px 双线 |
+| `.node-delete` box-shadow | `.mini-x` 的 `rgba(15,23,42,.12) 0 8px 18px` | `none` | 背景已被全局 `.image-node:not(.empty-node) .node-delete` 置为 transparent，阴影留在实心标题栏里就是一块悬空灰晕 |
+| `.node-delete` backdrop-filter | `.mini-x` 的 `blur(10px)` | `none` | 同上，没有背景时只会产生一个 backdrop 根 |
+| `.node-delete` hover | 无（被 3 类规则压住） | `color:#dc2626; background:#fee2e2` | 全局 `.image-node:not(.empty-node) .node-delete`（3 个类）优先级 > `.mini-x:hover`（2 个类），不显式覆盖则 hover 只剩 1px 位移 |
+| `.smart3d-fovrow` padding | `0 2px` | `0` | 左侧图标、右侧「45°·29mm」会与上方控件行左右边缘各错开 2px |
+
+**验收锚点（真实 DOM，`?v=` 缓存必须刷新）**：`.node-title` 左边缘 == `.smart3d-stage` 左边缘；`.node-actions .node-delete` 右边缘 == 舞台右边缘 == `.smart3d-bar` 右边缘 == `.smart3d-fovval` 右边缘；`.node-head` 的 `borderBottomWidth` 为 `0px`；`.node-delete` 的 `boxShadow`/`backdropFilter` 为 `none`；舞台顶边在 2x 截图上只有 1px 线（(221,225,232)）。节点高/舞台高必须仍是 470/348（无回归）。
+
+**同时已删的死规则**：`.smart3d-node .node-hint { color:var(--faint) }` —— 3D 节点已不渲染 `.node-hint`（`hint` 被置空且改为条件渲染）。注意 `render()` 里 `world.innerHTML=''` 之后那段是**不可达死代码**（前面有 `return;`），它仍然会渲染 `.node-hint`，改样式时别被它误导。
+
+**遗留待定项**：`.node-head-sub` 用 `--faint`，浅色对比度只有 2.55:1（`#94a3b8` on ~`#feffff`）、深色 3.47:1，10px 小字低于 WCAG AA 4.5:1。老板明确要求「灰色小字」，故保留；若要提升可换 `--muted`（浅色 4.76:1）。
+
 ## L. 本地服务与 git 红线补充（从 MEMORY.md 下沉）
 
 - ⚠️ **启动时 `sync_static_html_versions()`（`main.py:1743`）把 `static/*.html` 的 `?v=` 重写为 `<VERSION>.<资源mtime>` 并写回磁盘** → 每次重启让十几个 html 变 modified。**这是缓存破坏参数，必须保持最新，不要为 git 干净去 `git checkout` 还原** —— 踩过：还原后浏览器继续用缓存旧 JS，而新 CSS 已隐藏 iframe 内原胶囊 → 两个胶囊都不显示，表现为「项目功能整个消失」。
