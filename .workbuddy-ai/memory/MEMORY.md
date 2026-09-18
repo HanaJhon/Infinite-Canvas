@@ -49,6 +49,7 @@
 - **清理走回收站**：`SHFileOperationW` + `FOF_ALLOWUNDO|FOF_NOCONFIRMATION|FOF_SILENT|FOF_NOERRORUI`，`pFrom` 用 NUL 分隔 / 双 NUL 结尾，每 40 个一批（返回码可能是 2，但**以「回收站增量 = 计划体积」为成功判据**）。删除前先跑安全白名单（路径必须在项目根下、不得命中 `python/ data/ static/ assets/ launcher/ output/ API/ .git/` 与项目根本身）。
 - ⚠️ **`git add -A <被 gitignore 的目录>/...` 会报 ignored 而失败** → 删已跟踪文件用 **`git add -u`**（`output/` 被 gitignore，其下 4 个 `step*.png` 却是跟踪状态）。
 - 2026-09-18 已执行零风险清理（363 路径 / 82.67 MB，commit `bbb7ab1`）；回收站 3121 条目 / 0.092 GB。清单与判据见 E+G。
+- ⚠️ **判「密钥残留」不能只认 `sk-` 前缀** —— `.env` 类文件必须同时按 `NAME=VALUE` 逐行解析，否则会漏掉纯数字/异形 key（踩过：漏掉 11 位纯数字的真 key，得出「无残留」假结论）。**查 git 暴露面必须连标签一起查**（`git log <tag> --find-object=<blob>`），只看分支会低估。项目内已无真 key；唯一真 key 在 git 历史且**已公开**（Public 仓库 + 4 标签）→ 只能轮换。见 D.2。
 - ⚠️ **绝不要 `git rm <文件>`**（实测整个父目录消失）；用 Python `os.remove` + `git add -A <目录>/`。
 - 🚨 `.git` 曾于 2026-09-17 被递归搬进回收站（已还原）。防护：维护前 `git bundle create ../repo-<日期>.bundle --all`；瘦身在项目外副本做。
 - ⚠️ **工具会话内 `git push` 会无限挂起** → 推送必须由老板本人终端执行（裸 `git` 不可用，真身在 PortableGit 1.2.0）。详见 B/L。

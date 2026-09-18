@@ -99,6 +99,45 @@
 
 完整报告：`output/API-Key残留排查报告-2026-09-18.md`。
 
+### D.2 2026-09-18 清除执行（老板指示「只动项目内的」）
+
+**结论：项目内已无任何真实密钥值；唯一的真 key 在 git 历史且已公开 → 只能轮换。**
+
+已清：
+- `API/.env` —— 17 行 key 变量行全部移除（16 个空行 + `MODELSCOPE_API_KEY=ms-token-***` 掩码），
+  仅留 `MODELSCOPE_CHAT_MODELS`。**依据**：`main.py:769 provider_key_env()` 由 provider id 拼变量名、
+  `:797 provider_env_key_value()` = `os.getenv(k) or read_api_env_value(k)` **按名按需读** →
+  应用**不枚举** env 行；`:1451` 的 `has_key` 只对 `api_providers.json` 里已存在的通道求值（该文件 `[]`）。
+  HKCU 里也无任何 `API_PROVIDER_*` 变量。
+- `data/api_providers.json.bak-20260918` → 回收站（3149→3150 条目）。
+
+未处理（按指示）：HKCU 4 个环境变量、项目外 3 个凭据文件、WorkBuddy 本地记录约 80 个含真 key 的文件
+（`logs/` 1.5 GB、`traces/` 813 MB、`projects/` 250 MB、`cache/`、`file-history/`、`models.json`；
+其中 `cache/` 可再生、可安全删）。
+
+#### 那枚 key 的全部事实
+
+| 项 | 值 |
+|---|---|
+| 变量名 / 形态 | `API_PROVIDER_GRSAI_KEY` = **11 位纯数字**（`415…61`）；该文件当时其余 key 全空 |
+| blob / 提交 | `b76dd86274`；`9bdb54c`(2026-09-03)、`74b5c8c`(2026-09-16) |
+| 远端 | **`origin/main` 含**（`github.com/HanaJhon/Infinite-Canvas`，**Public**）；`upstream/main` 不含 |
+| 标签 | **4 个标签全含**：`Infinite-Canvas-for-lochou-Launcher-Beta.V0.1`(2)、`…-V0.1`(1)、`Official.v0.1`(2)、`archive-image2psd-20260917`(2) |
+
+**删历史为何无效**：① 已公开约 15 天，可 clone/fork，无法召回；② GitHub 对已推送对象仍可按 SHA 取一段时间；
+③ 4 个标签 + 任何 fork 都持有该对象，清理需 force-push + 重建标签且对 fork 无效。
+→ **唯一有效处置 = 轮换**。（该值 11 位纯数字与 Grsai 现行 `sk-` 前缀 35 位格式不符，可能是早期格式/测试值，但仍按已泄露处理。）
+
+#### ⚠️ 本轮最大的方法论坑
+
+**判「密钥」绝不能只认 `sk-` 前缀。** 首轮扫描正则只覆盖 `sk-`/`Bearer`/`AIza`/`xox` 等前缀，
+**把 11 位纯数字的真 key 整个漏掉**，得出「历史中无真实密钥值」的**假结论**（差点据此收工）。
+→ **`.env` 类文件必须同时按 `NAME=VALUE` 逐行解析**：key 类变量名下的任何非空值都要报出，不管格式。
+
+另两条：① 宽正则 `[A-Za-z0-9]{32,}` 一次 4064 个假命中（几乎全是 32 位 md5）→ 先按前缀收紧再排除纯十六进制；
+② **查暴露面别只看分支，必须查标签**（`git log <tag> --find-object=<blob>`）。
+
+报告：`output/API-Key残留清除报告-2026-09-18.md`。
 
 ## E. 磁盘清理历史（2026-09-17）
 
