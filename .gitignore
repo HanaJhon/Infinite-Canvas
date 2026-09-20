@@ -27,6 +27,14 @@ __pycache__/
 *.pyc
 history.json
 
+# AI 助手的项目记忆目录
+# ⚠️ 2026-09-20：这 6 个文件（memory/*.md）此前一直被公开仓库跟踪。
+#    它们含项目内部推理、绝对路径、事故记录，且**实际带进过真密钥**
+#    （我为说明扫描器的 bug，把密钥原样抄进了注释与日志）。
+#    已改为不入库、只留本地。要恢复共享：git add -f .workbuddy-ai/memory/
+#    ⚠️ 注意：本目录是项目数据，不是缓存 —— 不要删。
+.workbuddy-ai/
+
 # 调试产物
 .qoder/
 inspire_image_dims.json
