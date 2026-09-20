@@ -958,3 +958,59 @@ api.github.com/repos/HanaJhon/Infinite-Canvas                               → 
 `left ≈ badge.left`、完全在视口内；有更新态含「有新版本/立即更新」，已最新态不含「立即更新」；
 ESC 与遮罩均可关闭；设置弹窗里「软件更新」叶子节点**只出现 1 次**（复用组件没重复渲染）。
 
+---
+
+### N.10 真实发布包端到端验证（2026-09-20，提交 `d470724`）
+
+**脚本骨架**（跑完即删，放 `output/`）：`_e2e_real_pkg.py`
+
+```python
+# ① 假安装目录：旧程序文件 + 用户数据 + prune_roots 内的旧残留
+OLD_FILES  = main.py / VERSION / static/index.html / tools/release.py / data/inspire_prompt_zh.json
+USER_DATA  = data/api_providers.json(含假 key) / data/canvases/*.json / data/asset_library.json /
+             data/keepme.json / history.json / assets/output/*.png / assets/input/*.png / API/.env /
+             output/*.png / my_notes.txt(根目录)
+STALE      = static/js/obsolete.js / tools/gone/old.txt / launcher/obsolete.dll /
+             dist/launcher/assets/index-OLDHASH.js / python/old_pkg/stale.py
+# ② 读真实包清单后 **必须关掉 ZipFile**（见坑 1），再把包复制到测试目录
+# ③ 把真实 exe 复制成 <install>/data/_apply_update_999999.exe，用**它**跑：
+#    [applier, "--apply-update", pkg, install, "", ""]     ← 空 waitPids / 空 launchExe
+#    （Relaunch 对不存在的 launchExe 有兜底，只会记一条 warning）
+# ④ 断言 A~I（见下）
+```
+
+**断言清单**
+
+| 编号 | 内容 |
+|---|---|
+| A | 用户数据 10 项 md5 全部未变 |
+| B | 清单里全部文件就位且 sha256 一致（缺失 0 / 不符 0） |
+| C | `prune_roots` 内的旧残留全部被剪 |
+| D | `prune_roots` 外的文件（根目录 `my_notes.txt`、`data/keepme.json`）未被误删 |
+| E | 随包资源 `data/inspire_prompt_zh.json` 已更新 |
+| F | 备份目录存在、被覆盖文件都备份了、备份内容 == 旧版、有 `apply-info.json` |
+| G | 更新包已被删除 |
+| H | 退出码 0 |
+| I | **`<install>/Lochou启动器.exe` sha256 == 包内 exe** ← 这条才是核心 |
+
+实测 15/15，耗时 46.9s（111 MB / 2012 文件）。
+
+**清理逻辑单独验**（`_e2e_cleanup.py`）：启动真 exe 12s 后杀掉，检查
+`data/update_download/` → `*.part` 已删、5 天前 zip 已删、**刚下完的 zip 保留**、用户数据未动。
+
+**坑（都踩过）**
+
+1. 🚨 **测试脚本自己开着 `ZipFile` 句柄会让执行器的删包静默失败** → 断言 G 假失败。
+   读清单一定用 `with zipfile.ZipFile(p) as z:`，**跑执行器之前句柄必须已关闭**。
+2. ⚠️ **验证「代码是否进 DLL」要分清两个元数据堆**：
+   - 字符串**字面量** → `#US` 堆，**UTF-16LE**（如 `'已有一个更新正在进行中'.encode('utf-16-le')`）
+   - **方法名** → `#Strings` 堆，**UTF-8**（如 `'IsUpdateInProgress'.encode('utf-8')`）
+   搜方法名用 UTF-16 会 MISS，**别据此判定「没编进去」**。
+3. **跨类调用**：`LauncherHost` 调 `Program` 的静态方法，被调方必须 `internal`
+   （`private static` → CS0122）。
+4. `shutil.rmtree` 删 2012 文件 + WebView2 目录（191 文件）会被 SIGTERM 打断 →
+   **放后台任务跑**，加 `onerror` 重试。
+5. 顺带确认 exe 能起 WebView2（用户数据目录 `<exe名>.WebView2` 会生成上百个文件），
+   可用于判断「不是启动即崩」。
+
+

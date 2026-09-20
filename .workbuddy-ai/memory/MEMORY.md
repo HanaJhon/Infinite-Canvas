@@ -79,6 +79,9 @@
 - **包内 `release-manifest.json`**（`tools/release.py` 生成的虚拟 zip 条目）= `{format, version, kind, prune_roots, files:{relpath: sha256}}`，是执行器**唯一权威来源**：按 `files` 的 sha256 决定备份哪些旧文件、按 `prune_roots`（由 `PROGRAM_DIRS` 派生）决定可删哪些残留。**不要再在 C# 里维护第二份目录清单**。
 - ⚠️ **`UPDATE_START` 必须立刻返回**，下载放后台任务：前端 `callNative` 超时只有 **30s**，而完整包 111 MB 下载远超此值。进度/错误统一走 `UPDATE_PROGRESS` 推送（`download`/`verify`/`done`/`error`）。
 - ⚠️ **执行器只支持完整包**（`kind=full`）；回滚只做到「旧文件备份到 `data/update_backups/`」，回滚 UI 未做（阶段 3）。
+- 🚨 **验执行器必须复现生产路径**：把 exe **复制到 `<install>/data/_apply_update_<pid>.exe` 再用那个副本跑** `--apply-update`。拿仓库根的 exe 直接跑等于没测到「副本在 `data/` 下才能覆盖安装目录里的正本 exe」这条设计（2026-09-20 用真实 111 MB 包补测，15/15 通过）。
+- ⚠️ **`TryDelete` 是静默的** → 删不掉就残留。已加 `CleanupStaleDownloads(root)`（启动时跑）：`*.part` 无条件删、`*.zip` 只清 **2 天前**的。🚨 **不能无条件删 `*.zip`** —— 用户点完更新又立刻重开启动器时执行器正在读那个包。
+- ⚠️ **`HandleStartUpdateAsync` 开头有并发保险** `Program.IsUpdateInProgress(root)`：点完更新启动器 1.5s 内退出，用户马上重开再点一次会起**第二个执行器同时往同一目录解包 → 目录写坏**。判据是「正在运行的映像文件删不掉」。（跨类调用时该方法必须 `internal`，`private static` 报 CS0122。）
 - ⚠️ **`dist/` 与 `launcher/dist` 被 `.gitignore` 忽略** → 启动器前端 bundle **不在 git 里**，只在发布包与工作区。仓库不自包含启动器界面（既有状态）；所以**发布包必须从工作区构建，不能从 git 树构建**。
 - **启动器首页胶囊 = 更新入口**（2026-09-20，提交 `9e0b1e6`）：胶囊上的 `V` 号取自 C# 新增的 **`GET_VERSION`**（只读本地 `VERSION`，**不走网络**）；🚨 **不要拿 `UPDATE_CHECK` 当版本号来源**（要联网、25s 超时，断网就空）。启动时**静默**自动检查一次（不显示 loading、不把网络错误抛界面 —— 未发版前 `update.json` 必然 404），有新版本则胶囊右上角亮红点 + 胶囊换青色。
   - 🚨 **更新浮层必须挂在 hero 横幅外面**：横幅有 `overflow-hidden`，放里面会被裁掉；只能 `position:fixed` 挂 body 再用 `getBoundingClientRect()` 定位。
