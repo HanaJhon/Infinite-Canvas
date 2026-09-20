@@ -832,3 +832,58 @@ raw.githubusercontent.com/HanaJhon/Infinite-Canvas/main/static/update-notes.json
 api.github.com/repos/HanaJhon/Infinite-Canvas                               → 403  rate limit
 ```
 → 更新流程**不该依赖 GitHub API**；版本比对走 raw 静态文件、清单走 `releases/latest/download/`。
+
+### N.8 阶段 2 实现细节（2026-09-20，提交 `3b40339`）
+
+**执行器 = exe 自身**（`launcher/UpdateApplier.cs`，374 行）
+
+```
+<exe> --apply-update <zip> <destDir> <waitPids,逗号分隔> <launchExe>
+```
+1. 等 PID（120s 超时；超时即中止、不改盘）→ 2. 读包内 `release-manifest.json`
+（`kind` 必须 `full`）→ 3. 只备份 sha256 会变的旧文件到
+`data/update_backups/<yyyyMMdd-HHmmss>/` → 4. 解压（剥顶层目录 + 路径越界校验）
+→ 5. 按 `prune_roots` 剪枝（禁用名单二次防线：`data`/`assets`/`output`/`API`/`.git`/`.workbuddy-ai`）
+→ 6. 删包 + 备份保留 10 → 拉起启动器。
+日志：`%LOCALAPPDATA%\InfiniteCanvasLauncher\update.log`。
+
+**启动器侧（`launcher/Program.cs`）**
+
+| 项 | 位置/要点 |
+|---|---|
+| `Main(string[] args)` | `--apply-update` 分支在单实例互斥量**之前**，且不调 `ApplicationConfiguration.Initialize()` |
+| `CleanupStaleAppliers(root)` | 启动时删 `data/_apply_update_*.exe`（跑着的那份删不掉，正常） |
+| `UpdateManifestUrl` | `https://github.com/HanaJhon/Infinite-Canvas/releases/latest/download/update.json`，⚠️ 与 `main.py` 的 `GITHUB_*` 必须一致 |
+| `UpdateAssetBaseUrl` | `.../releases/latest/download/` + asset 名（同样不耗 API 配额） |
+| `CompareVersion(a,b)` | 点分数字逐段比 |
+| `HandleCheckUpdateAsync` | 读 `<root>/VERSION` + 拉清单 → `{ok,current,latest,updateAvailable,notes,size,sha256,assetName,url}` |
+| `HandleStartUpdateAsync` | **立刻返回** `{ok,started}`，`Task.Run(RunUpdateAsync(...))` |
+| `RunUpdateAsync` | 下载（`HttpCompletionOption.ResponseHeadersRead` + 256 KB 缓冲 + 百分比推送）→ 校验体积+sha256 → 复制自己到 `data/_apply_update_<pid>.exe` → 派生 → `ScheduleExit(1500)` |
+| `PrepareForUpdate` | 杀掉 `server` 进程，返回 `[自己PID, 服务PID]` |
+| `SendToWebView(type,payload)` | 通用推送；`SendLog` 是它的特例（`type="LOG"`） |
+
+**包内清单生成（`tools/release.py`）**
+
+- `write_zip(zip_path, files, top, extra)` 的 `extra` 支持虚拟条目
+- `build_package_manifest(version, kind, files, hashes)` 产出 `release-manifest.json`
+- `MANIFEST_NAME = "release-manifest.json"`；完整包与增量包都带（增量包带**全量** files 供剪枝判断）
+- ⚠️ `cmd_build` 里**不要**再写局部 `import json`（会遮蔽模块级，触发 `UnboundLocalError`）
+
+**前端（`E:\claude\skill\canvas-launcher`）**
+
+- `App.tsx`：设置弹窗内「软件更新」区块 + `updateInfo`/`updatePhase`/`updatePercent` 状态
+  + `UPDATE_PROGRESS` 监听 + `handleCheckUpdate`/`handleStartUpdate`；模块级 `formatBytes()`
+- `nativeBridge.ts`：`getMockNativeResponse` 补 `UPDATE_CHECK`/`UPDATE_START`（浏览器预览用）
+- 设置弹窗容器加 `max-h-[86vh] overflow-y-auto`（新增区块后防溢出）
+- bundle `index-Bm2vKWq7` → `index-D8EkQHII`
+
+**端到端实测脚本要点（可复用）**
+
+- ⚠️ **applier 用完会删包** → 必须复制副本再测，不能拿真产物测
+- 假安装目录要同时放：会被覆盖的旧程序文件、程序目录里的旧残留、以及
+  `data/canvases/*`、`data/api_providers.json`、`data/asset_library.json`、
+  `assets/output/*`、`assets/input/*`、`API/.env`、`history.json`、`output/*` 等用户数据
+- 校验六件事：用户数据 md5 未变 / 程序文件 sha256 == 清单 / 残留被删 /
+  备份内容 == 旧版 / 包被删 / 全量 2011 文件哈希一致
+- 传空字符串当 `waitPids`（无等待进程）；`launchExe` 指向不存在的路径以跳过真实拉起
+- 构造假安装目录时注意**别复用同名目录变量做 rmtree**（踩过：把刚复制的测试包删了）

@@ -75,4 +75,9 @@
 - 网页端自更新**只覆盖 `main.py` / `VERSION` / `static/**`**（`update_allowed_file()`，`main.py:2479`）；启动器本体、`python/`、`tools/`、`CLI/` 都更新不到。`launcher/Program.cs` **零更新逻辑**（阶段 2 待做）。
 - ⚠️ **发布流程必须老板本人执行**：工具会话内 `git push` / `gh` 会挂起。`release-summary.txt` 里已生成可直接执行的 `gh release create` 命令。
 - 📌 `update.json` **必须作为 Release 资产上传** → 启动器从 `releases/latest/download/update.json` 取（该路径**不消耗** GitHub API 配额；实测 `api.github.com` 匿名调用已 403 rate limit）。
-- 详见 N / `output/更新功能设计方案-2026-09-20.md`（§9 为阶段 1 执行结果）。
+- 🚨 **启动器执行器不要用 `.cmd` / `.ps1`** —— 安装路径含中文，脚本极易因编码毁文件名。做法是 **exe 自身 `--apply-update` 模式**：启动器复制自己到 `<root>/data/_apply_update_<pid>.exe` 再派生该副本（在 `data/` 下 → 可覆盖安装目录里的正本 exe），自己退出；副本用完无法自删，由**下次启动的启动器**清理。⚠️ `Main(string[] args)` 里 `--apply-update` 分支**必须排在单实例互斥量之前**（否则旧启动器没退干净时会被挡下弹「已在运行中」）。
+- **包内 `release-manifest.json`**（`tools/release.py` 生成的虚拟 zip 条目）= `{format, version, kind, prune_roots, files:{relpath: sha256}}`，是执行器**唯一权威来源**：按 `files` 的 sha256 决定备份哪些旧文件、按 `prune_roots`（由 `PROGRAM_DIRS` 派生）决定可删哪些残留。**不要再在 C# 里维护第二份目录清单**。
+- ⚠️ **`UPDATE_START` 必须立刻返回**，下载放后台任务：前端 `callNative` 超时只有 **30s**，而完整包 111 MB 下载远超此值。进度/错误统一走 `UPDATE_PROGRESS` 推送（`download`/`verify`/`done`/`error`）。
+- ⚠️ **执行器只支持完整包**（`kind=full`）；回滚只做到「旧文件备份到 `data/update_backups/`」，回滚 UI 未做（阶段 3）。
+- ⚠️ **`dist/` 与 `launcher/dist` 被 `.gitignore` 忽略** → 启动器前端 bundle **不在 git 里**，只在发布包与工作区。仓库不自包含启动器界面（既有状态）；所以**发布包必须从工作区构建，不能从 git 树构建**。
+- 详见 N / `output/更新功能设计方案-2026-09-20.md`（§9 阶段 1、§10 阶段 2 执行结果）。
