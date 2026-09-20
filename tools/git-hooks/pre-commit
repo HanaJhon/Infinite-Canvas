@@ -1,0 +1,17 @@
+#!/bin/sh
+# 提交前拦下疑似 API 密钥。
+#
+# 安装（在仓库根执行一次）：
+#     git config core.hooksPath tools/git-hooks
+#
+# 之所以把钩子放进 tools/ 而不是 .git/hooks/：.git/hooks/ 不受版本控制，
+# 换台机器 / 重新 clone 就没了。放进 tools/ 再指 core.hooksPath 才能被跟踪。
+#
+# 紧急绕过（确认是误报时）：git commit --no-verify
+# 更好的做法：把路径写进仓库根的 .secretsignore
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+PY="$ROOT/python/python.exe"
+[ -x "$PY" ] || PY="python"
+
+exec "$PY" "$ROOT/tools/scan_secrets.py" --staged
