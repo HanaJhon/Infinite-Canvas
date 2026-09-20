@@ -47,7 +47,6 @@ Windows 用户也可直接双击根目录的 **`Lochou启动器.exe`**：图形�
 - 原项目（已停更）：[hero8152/Infinite-Canvas](https://github.com/hero8152/Infinite-Canvas)
 - 教程视频：[YouTube](https://youtu.be/r_y_9ALr7fg)
 - Chrome 采集插件：[Chrome 商店](https://chromewebstore.google.com/detail/infinite-canvas-%E5%9B%BE%E5%83%8F%E8%A7%86%E9%A2%91%E6%96%87%E5%AD%97%E6%8A%93%E5%8F%96%E5%B7%A5/ajfhnbklbmpfaaookhfakohabnpmlcic)
-- 推荐 API 站（生图 / 视频 / LLM）：[apib.ai](https://apib.ai/register?aff=1uyAbb) · [fhl.mom](https://www.fhl.mom/register?aff=86L574B4T2N9)
 ---
 <img width="2079" height="665" alt="image" src="https://github.com/user-attachments/assets/8469923b-f7a2-403c-9c37-e6e789211f28" />
 <img width="1865" height="1503" alt="image" src="https://github.com/user-attachments/assets/f4030201-67c6-4845-b08b-b6fdf304afaa" />
