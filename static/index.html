@@ -1682,7 +1682,7 @@
         const DEFAULT_PAGE_ID = 'canvas';
         const PAGE_IDS = ['online','gpt-chat','canvas','asset-manager','api-settings'];
         const LOCAL_PAGE_IDS = [];
-        const PROJECT_URL = 'https://github.com/mufanmu/Infinite-Canvas-agent';
+        const PROJECT_URL = 'https://github.com/HanaJhon/Infinite-Canvas';
         let appInfo = { version:'', repo_url:PROJECT_URL, version_url:'' };
         let updateConnectivityResult = null;
         let projectUpdateRunning = false;
@@ -2237,8 +2237,8 @@
             const github = sources.github || {};
             const ms = sources.modelscope || {};
             return [
-                { name:'GitHub 更新列表', url:github.tree_url || appInfo.tree_url || 'https://api.github.com/repos/mufanmu/Infinite-Canvas-agent/git/trees/main?recursive=1', source:'github', required:true },
-                { name:'GitHub 版本文件', url:github.version_url || appInfo.version_url || 'https://raw.githubusercontent.com/mufanmu/Infinite-Canvas-agent/main/VERSION', source:'github', required:true },
+                { name:'GitHub 更新列表', url:github.tree_url || appInfo.tree_url || 'https://api.github.com/repos/HanaJhon/Infinite-Canvas/git/trees/main?recursive=1', source:'github', required:true },
+                { name:'GitHub 版本文件', url:github.version_url || appInfo.version_url || 'https://raw.githubusercontent.com/HanaJhon/Infinite-Canvas/main/VERSION', source:'github', required:true },
                 { name:'GitHub 主页', url:'https://github.com/', source:'github' },
                 { name:'Google 连通性', url:'https://www.google.com/generate_204', source:'reference' },
                 ...(UPDATE_SOURCE_MODELSCOPE_ENABLED ? [
@@ -2337,10 +2337,10 @@
                     updateUiText(
                         UPDATE_SOURCE_MODELSCOPE_ENABLED
                             ? '测试会同时测速 GitHub 和 ModelScope。你可以根据结果切换下载源。'
-                            : '测试会检测自有仓库 mufanmu/Infinite-Canvas-agent 的连通性，确认可访问后再更新。',
+                            : '测试会检测本仓库 HanaJhon/Infinite-Canvas 的连通性，确认可访问后再更新。',
                         UPDATE_SOURCE_MODELSCOPE_ENABLED
                             ? 'The test checks both GitHub and ModelScope. Choose the faster reachable source before updating.'
-                            : 'The test checks connectivity to mufanmu/Infinite-Canvas-agent before updating.'
+                            : 'The test checks connectivity to HanaJhon/Infinite-Canvas before updating.'
                     )
                 );
             } else if(updateConnectivityResult.backend_missing) {

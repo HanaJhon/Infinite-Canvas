@@ -201,12 +201,16 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 GLOBAL_LOOP = None
-APP_VERSION = "2026.08.29"
-# 本分支已脱离上游 hero8152/Infinite-Canvas，自动更新指向自有仓库 mufanmu/Infinite-Canvas-agent
-GITHUB_REPO_URL = "https://github.com/mufanmu/Infinite-Canvas-agent"
-GITHUB_VERSION_URL = "https://raw.githubusercontent.com/mufanmu/Infinite-Canvas-agent/main/VERSION"
-GITHUB_TREE_URL = "https://api.github.com/repos/mufanmu/Infinite-Canvas-agent/git/trees/main?recursive=1"
-GITHUB_RAW_ROOT = "https://raw.githubusercontent.com/mufanmu/Infinite-Canvas-agent/main"
+APP_VERSION = "2026.08.29"  # 历史遗留常量，全项目无引用；实际版本以 VERSION 文件为准（current_app_version()）
+# 本分支已脱离上游 hero8152/Infinite-Canvas。自动更新必须指向「本仓库」，也就是
+# `git remote -v` 里的 origin，否则往 origin 推送的新版本软件内检查不到。
+# ⚠️ 2026-09-20 修正：这组常量原先指向 mufanmu/Infinite-Canvas-agent，
+#    而那是 hero8152/Infinite-Canvas 的一个第三方 fork（不是本项目），
+#    导致 README 里「改 VERSION → push → 软件内自动检测新版本」实际不成立。现改回本仓库。
+GITHUB_REPO_URL = "https://github.com/HanaJhon/Infinite-Canvas"
+GITHUB_VERSION_URL = "https://raw.githubusercontent.com/HanaJhon/Infinite-Canvas/main/VERSION"
+GITHUB_TREE_URL = "https://api.github.com/repos/HanaJhon/Infinite-Canvas/git/trees/main?recursive=1"
+GITHUB_RAW_ROOT = "https://raw.githubusercontent.com/HanaJhon/Infinite-Canvas/main"
 GITHUB_UPDATE_NOTES_URL = GITHUB_RAW_ROOT + "/static/update-notes.json"
 # 更新源：ModelScope 备份源已禁用（原指向上游 daniel8152 的空间，会把上游代码拉下来覆盖本分支改造）
 # 常量保留为空串，流程中已跳过该源；将来若有自己的 ModelScope 空间，填回这 6 个常量并恢复流程即可。
@@ -2433,7 +2437,7 @@ def version_gt(a: str, b: str) -> bool:
 def check_update():
     """服务端检测远端版本（走系统代理，避免浏览器跨域/被墙）。
 
-    本分支只跟自有仓库 mufanmu/Infinite-Canvas-agent 比对；原 ModelScope 备份源指向上游，已禁用。
+    本分支只跟自有仓库 HanaJhon/Infinite-Canvas 比对；原 ModelScope 备份源指向上游，已禁用。
     """
     current = current_app_version()
     holder: Dict[str, Dict[str, Any]] = {}
