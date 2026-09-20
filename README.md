@@ -1,5 +1,5 @@
 # Infinite-Canvas · AI Agent · Lochou 版
-AI 无限画布：聊天驱动画图 / 图片编辑 / 视频生成 / 灵感库，支持 OpenAI 协议、ComfyUI、火山方舟、ModelScope、即梦等。
+AI 无限画布：聊天驱动画图 / 图片编辑 / 视频生成 / 灵感库，支持 OpenAI 协议、即梦等。
 > 基于 [hero8152/Infinite-Canvas](https://github.com/hero8152/Infinite-Canvas) 二次开发，独立维护，不跟随上游（上游已于 2026-08 停更）。
 
 ## 近期更新 & 使用须知
