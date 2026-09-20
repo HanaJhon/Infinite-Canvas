@@ -306,18 +306,51 @@ def extract_notes_from_changelog() -> list[str]:
     return notes[:40]
 
 
+_MD_INLINE = [
+    (re.compile(r"\[([^\]]+)\]\((?:[^)]+)\)"), r"\1"),   # [文字](链接) -> 文字
+    (re.compile(r"\*\*([^*]+)\*\*"), r"\1"),             # **粗体**
+    (re.compile(r"__([^_]+)__"), r"\1"),
+    (re.compile(r"(?<!\*)\*([^*]+)\*(?!\*)"), r"\1"),    # *斜体*
+    (re.compile(r"`([^`]+)`"), r"\1"),                   # `行内代码` -> 纯文字
+]
+_LIST_MARKER = re.compile(r"^(?:[-*+·]|\d+[.)])\s+")
+
+
+def _md_to_plain(s: str) -> str:
+    """把一行 Markdown 压成纯文字。
+
+    更新说明最终是给**启动器更新面板**当纯文本列表项显示的（不是渲染 Markdown），
+    所以反引号、粗体星号、链接语法都会原样露出，必须在这里剥掉。
+    """
+    for pat, repl in _MD_INLINE:
+        s = pat.sub(repl, s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def read_notes_file(path: str) -> list[str]:
-    text = open(path, encoding="utf-8", errors="replace").read().splitlines()
-    out = []
-    for line in text:
+    """读 `--notes-file` 指定的 Markdown，产出**适合直接显示**的纯文本条目。
+
+    ⚠️ 标题行（`#` / `##`）**不产出条目** —— 面板把每条渲染成一个圆点，
+    标题当圆点就是「本次更新」「升级方式」这类噪音，还会把真正的内容挤出显示窗口。
+    只在「整份文件只有标题」时才退回用标题，避免产出空列表。
+    """
+    headings, body = [], []
+    for line in open(path, encoding="utf-8", errors="replace").read().splitlines():
         s = line.strip()
         if not s:
             continue
         if s.startswith("#"):
-            out.append(s.lstrip("# ").strip())
-        else:
-            out.append(s.lstrip("-*· ").strip())
-    return out[:60]
+            t = _md_to_plain(s.lstrip("# ").strip())
+            if t:
+                headings.append(t)
+            continue
+        s = s.lstrip(">").strip()             # 引用块
+        s = _LIST_MARKER.sub("", s)           # - / * / 1. 列表符号
+        s = _md_to_plain(s)
+        if s:
+            body.append(s)
+    return (body or headings)[:24]
+
 
 
 # ---------------------------------------------------------------------------
