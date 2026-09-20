@@ -22,13 +22,17 @@
     python tools/release.py verify <zip 或目录>  # 校验已有包/目录是否含用户数据
     python tools/release.py build                # 生成干净包 + update.json
     python tools/release.py build --build-exe    # 先重编启动器 exe 再打包
-    python tools/release.py build --notes-file RELEASE_NOTES.md
+    python tools/release.py build --notes-file output/RELEASE_NOTES-<版本>.md
 
 产物（默认写到 output/release/<版本>/）
 --------------------------------------
-    Infinite-Canvas-Full-<版本>.zip      完整程序包（首次安装 / 跨版本）
-    Infinite-Canvas-Update-<版本>.zip    增量包（只含与上一版本相比有变化的文件）
+    Infinite-Canvas-Full-<版本>.zip      完整程序包（首次安装 / 跨版本 / 自动更新）
+    Infinite-Canvas-Update-<版本>.zip    增量包（只含与上一版本相比有变化的文件；
+                                          仅当本次没有文件被删除时才产出，且启动器
+                                          目前只接受完整包 kind=full）
     update.json                          更新清单（放到 GitHub Release 资产里）
+    包内 release-manifest.json           虚拟条目，更新执行器的唯一权威来源
+                                          {format,version,kind,prune_roots,files:{路径:sha256}}
     file-hashes.json                     本次的文件指纹，作为下次增量包的基线
     release-summary.txt                  人类可读的汇总 + gh release 命令
 
@@ -582,7 +586,12 @@ def cmd_build(args) -> int:
         print("[info] 没有更早的 file-hashes.json，本次不产出增量包（只有完整包）。")
 
     # 清单
-    notes = read_notes_file(args.notes_file) if args.notes_file else extract_notes_from_changelog()
+    if args.notes_file:
+        notes = read_notes_file(args.notes_file)
+        notes_source = os.path.abspath(args.notes_file)
+    else:
+        notes = extract_notes_from_changelog()
+        notes_source = os.path.join(ROOT, "CHANGELOG.md")
     manifest = {
         "format": 1,
         "channel": args.channel,
@@ -623,7 +632,7 @@ def cmd_build(args) -> int:
         lines.append(f"    \"{out_dir}\\{p['name']}\" \\")
     lines += [
         f"    \"{out_dir}\\update.json\" \\",
-        f"    --title \"{manifest['tag']}\" --notes-file RELEASE_NOTES.md",
+        f"    --title \"{manifest['tag']}\" --notes-file \"{notes_source}\"",
         "",
         "注意：update.json 必须作为 Release 资产上传，启动器会用",
         "      https://github.com/HanaJhon/Infinite-Canvas/releases/latest/download/update.json 取它。",
