@@ -892,8 +892,16 @@ sealed class LauncherHost : IDisposable
 
     // Grsai 专有服务没有 /models 接口（实测 GET/POST /v1/models、/v1/api/models 等全部 404），只能返回内置清单。
     // 清单经实测校验：图像模型取自项目 grsai-image-gen skill 的 references/api.md；
-    // 文本模型逐个打 /v1/chat/completions 验证，只有返回 200 的才收录
-    // （gpt-5.5 / gpt-5.6-* / gpt-6-astra 与 gemini-*-image-* 实测返回 400，已剔除）。
+    // 文本模型逐个打 /v1/chat/completions 验证，只有返回 200 的才收录。
+    //
+    // ⚠️ 2026-09-17 的 commit a94a050 曾把 gpt-5.5 / gpt-5.6-* / gpt-6-astra 判为「实测 400，已剔除」，
+    //    导致启动器拉取不到任何 GPT 对话模型。
+    //    2026-09-20 串行复测（间隔 1.5s）推翻了该结论：gpt-6-astra 18.7s / gpt-5.6-terra 25.2s / gpt-5.6-sol 19.0s /
+    //    gpt-5.5 18.6s 全部 HTTP 200 可用；而 gpt-5.6-luna / gpt-5.6 / gpt-6 / gpt-5.5-pro / gpt-4o 返回明确的
+    //    "model not found"（负对照有效）→ 当时拿到的 400 是上游抖动，不是模型不存在。
+    //    📌 教训：Grsai 的 400 有两种含义 —— "model not found"（真不存在）与上游抖动；判「不存在」必须看到前者，否则重试。
+    //    gemini-*-image-* 未收录：名字含 "image" 会被前端归类为图像模型，不应出现在对话清单里。
+    //    修改本清单前请先跑技能 gateway-model-probe 的探测流程（串行、间隔 1~1.5s、看 error.message）。
     private static bool IsGrsaiProvider(string protocol, string baseUrl)
     {
         var p = (protocol ?? "").ToLowerInvariant();
@@ -934,6 +942,11 @@ sealed class LauncherHost : IDisposable
         "gemini-3.5-flash-lite",
         "gemini-3.7-flash",
         "gemini-3.8-flash",
+        // GPT 系列（2026-09-20 串行实测 /v1/chat/completions 全部返回 200；与 static/js/api-settings.js 的 grsai 预设保持一致）
+        "gpt-6-astra",
+        "gpt-5.6-terra",
+        "gpt-5.6-sol",
+        "gpt-5.5",
     };
 
     private ModelsEndpoint? ResolveModelsEndpoint(string baseUrl, string protocol, string? apiKey, string? providerId, string? providerName)
