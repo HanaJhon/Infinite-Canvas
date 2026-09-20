@@ -707,3 +707,76 @@ git update-ref refs/heads/main $NEW
 r186 的 `build/` 已拆分，**不能单文件 vendoring**：`three.core.js`（1,458,113 B，含 `REVISION='186'`）+ `three.module.js`（662,772 B，**`import ... from './three.core.js'`**），合计 **2.02 MB（+67%）**。两文件须同目录，**importmap 条目本身不用改**。
 
 **结论**：值得升、但不紧急，**不建议在 3D 节点打磨中途升**（r160 无安全问题、功能够用；升级必然改观感）。等告一段落再一次性完成「换 2 个文件 + 改 2 处代码 + 重调 `SMART_3D_STUDIO` + 重跑视觉验收」。
+
+## N. 发布打包与更新机制细节（2026-09-20 调研）
+
+### N.1 网页端自更新（已存在，`main.py`）
+
+| 接口 | 位置 | 作用 |
+|---|---|---|
+| `GET /api/check-update` | `:2432` | 拉远端 `VERSION` 比对 → `update_available` + 更新说明 |
+| `POST /api/update-from-github` | `:2915` | 下载 → 暂存 → 校验 → 备份 → 替换 → 可选自动重启 |
+| `GET /api/update-backups` | `:3099` | 列恢复点 |
+| `POST /api/update-rollback` | `:3108` | 回滚 |
+| `GET /api/update-connectivity` | `:2369` | 探测更新源连通性（另有 `/probe`） |
+
+- 白名单 `update_allowed_file()`（`:2479`）= **`main.py` / `VERSION` / `static/**`**，别的一律拒绝。
+- 暂存校验 `validate_staged_update()`（`:2768`）：`compile()` 编译 `main.py` + 校验 `VERSION` 格式 + 逐文件存在性。
+- 恢复点 `data/update_backups/<时间戳>/`，`manifest.json`（`format:2`、`kind`、`from_version`、`target_version`、`parent_backup`），保留 **10** 个（`UPDATE_BACKUP_RETENTION`）。
+- 自重启 `schedule_self_restart()`（`:2620`）：Windows 派生 `_self_restart.bat`（`chcp 65001` + `timeout` + `taskkill /F /PID` + `start` 拉起 `启动服务.bat`/`start.bat`，否则回退 `python\python.exe main.py`），POSIX 派生 `_self_restart.sh`。
+- GitHub 侧用 `api.github.com/.../git/trees/main?recursive=1` 取文件树（带 ETag 缓存 600s），文件走 `raw.githubusercontent.com` 下载；支持 `GITHUB_TOKEN` 把限额 60/h 提到 5000/h。
+- ModelScope 源：`MODELSCOPE_*`，**当前被 `UPDATE_SOURCE_MODELSCOPE_ENABLED` 禁用**，`normalize_update_source()` 会把任何 modelscope 请求降级为 github。
+
+### N.2 启动器（`launcher/Program.cs`）可复用的能力
+
+- UI = **WebView2** 加载 `dist/launcher/index.html`（React）；原生通信走 `window.chrome.webview.postMessage` + 30s 超时 + `Qe(e,t)` fallback。
+- `private Process? server`（`:221`）**已持有 python 服务 PID**；`:1259` 有 `try { if (!server.HasExited) server.Kill(true); } catch {}`。
+- `ResolveProjectRoot()` 可定位项目根 → 能直接读 `<root>/VERSION`。
+- **零更新逻辑**：grep `VERSION|Version|更新|update|Update` 只命中 WinForms 的 `UpdateFormRegion()` 和注册表 Run 键。
+
+### N.3 版本号现状（三套并存）
+
+| 来源 | 值 |
+|---|---|
+| `VERSION` 文件 | `2026.08.30` |
+| git tag | `Official.v1.1`（另有 `Official.v0.1`、`…Beta.V0.1`、`…-V0.1`、`archive-image2psd-20260917`） |
+| `main.py:204 APP_VERSION` | `"2026.08.29"`（兜底，与 VERSION 文件不一致） |
+
+建议收敛到 `VERSION` 文件为唯一真相（格式 `YYYY.MM.DD`）。
+
+### N.4 发布包实测分析（`Infinite-Canvas.for.lochou.launcher.Official.v1.1.zip`，798.14 MB）
+
+顶层唯一目录 `Infinite-Canvas/`，3432 条目。体积 top：
+
+| 条目 | 体积 |
+|---|---|
+| `.git/objects/pack/pack-65e5…pack` | 452.53 MB |
+| `.git/objects/pack/pack-c22a…pack` | 75.74 MB |
+| `Lochou启动器.exe` | 68.89 MB |
+| `assets/output/online_*.png` × 17 | 合计 135.60 MB |
+| `assets/input/*` × 6 | 合计 0.71 MB |
+
+含 `.git`（623 条目，含 `refs/heads/main`、`refs/remotes/upstream/*`、`refs/tags/`）、8 个 `data/canvases/*.json`（含 54 KB 的 `7bc696dc…`）、`history.json`。
+`API/.env` 已是清理后 1 行（无密钥）；`data/api_providers.json` = `[]`。
+
+### N.5 本地/远端发布资产
+
+| 位置 | 名称 | 体积 |
+|---|---|---|
+| `D:\工作\无限画布\` | `Infinite-Canvas.for.lochou.launcher.Official.v1.1.zip` | 798.14 MB |
+| GitHub Release `Official.v1.1` | 同名 | 836,907,605 B |
+| GitHub Release `Official.v0.1`（名称显示 `Official.v1.0`，**tag 与 name 不一致**） | `…Official.v1.0.zip` | 847,084,831 B |
+| GitHub Release `…Beta.V0.1` | `Infinite-Canvas-for-lochou-Launcher-Beta.V0.1.zip` | 1,551,677,919 B |
+| GitHub Release `…-V0.1` | `Infinite-Canvas-agent-for-lochou-Windows-x86-Portable-v0.1.zip` | 424,023,165 B |
+
+另有本地目录 `D:\工作\无限画布\Infinite-Canvas-agent-main\`（下载的 mufanmu fork 解压副本，含 `dist/InfiniteCanvasLauncher.exe` 68.78 MB）。
+
+### N.6 设计方案要点（完整版见 `output/更新功能设计方案-2026-09-20.md`）
+
+- **不需要安装包**；便携目录 + 自更新。Inno Setup 只在需要快捷方式/卸载项时才做。
+- 清单 `update.json` 放 Release 资产，用 **`releases/latest/download/update.json`** 取（**不消耗 API 配额、无需鉴权**）。
+- 包分 `delta`（日常，2~15 MB）与 `full`（首次/跨版本，150~200 MB）；都带 `size` + `sha256`。
+- **覆盖正在运行的 exe 必失败** → 必须派生独立进程（`.cmd` 或小 `updater.exe`）。
+- 替换阶段用 **allow-list**（只复制认识的程序路径），不用 deny-list。
+- 回滚复用网页端 `data/update_backups/`，让两处更新共用一套恢复点。
+- `API/.env` 只能追加缺失键，**绝不整文件覆盖**。

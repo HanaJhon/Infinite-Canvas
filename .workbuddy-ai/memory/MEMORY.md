@@ -1,6 +1,6 @@
 # 项目长期记忆 · Infinite-Canvas
 
-> 索引式硬规则，细节下沉 `REFERENCE.md`（A 启动器 / B `.git` / C 胶囊 / D Key 残留 / E+G 磁盘清理 / F Grsai / H 3D 白模 / I 保存 / J 前端 / K 3D 界面 / L 服务与 git / M three.js）；过程见 `YYYY-MM-DD.md`。
+> 索引式硬规则，细节下沉 `REFERENCE.md`（A 启动器 / B `.git` / C 胶囊 / D Key 残留 / E+G 磁盘清理 / F Grsai / H 3D 白模 / I 保存 / J 前端 / K 3D 界面 / L 服务与 git / M three.js / N 发布打包与更新）；过程见 `YYYY-MM-DD.md`。
 
 ## 一、画布数据安全（最高优先级）
 
@@ -55,3 +55,13 @@
 - ⚠️ **绝不要 `git rm <文件>`**（实测整个父目录消失）；用 Python `os.remove` + `git add -A <目录>/`。
 - 🚨 `.git` 曾于 2026-09-17 被递归搬进回收站（已还原）。防护：维护前 `git bundle create ../repo-<日期>.bundle --all`；瘦身在项目外副本做。
 - ⚠️ **工具会话内 `git push` 会无限挂起** → 推送必须由老板本人终端执行（裸 `git` 不可用，真身在 PortableGit 1.2.0）。详见 B/L。
+
+## 八、发布打包硬红线（2026-09-20 发现）
+
+- 🚨 **绝不能把工作目录整包压缩当发布包**。实测 `...Official.v1.1.zip`（798 MB）含 **528 MB `.git`**（含已公开的 Grsai 密钥 blob）+ 8 个作者画布 + `history.json` + **135.6 MB 作者个人图片**（`assets/output/online_*.png`）。→ 用户下载即得到作者私有数据，且更新功能会反复分发。
+- **打包必须用 allow-list 复制程序文件 + 断言 deny-list 未命中**（deny-list = `API/.env`、`data/**`、`assets/input|output/**`、`history.json`、`output/**`、`.git/**`、`*.exe.WebView2/**`、`launcher/bin|obj/**`）。干净包预计 150~200 MB。
+- ⚠️ **不能简单「用 git 树当更新包」**：`dist/`（启动器 UI 资源）虽是程序文件，却被 `.gitignore` 忽略、不在 git 里。
+- ⚠️ **`assets/` 混装两类东西**（用户数据 `input|output` + README 说的内置灵感库资源）→ 同目录混装则永远无法安全更新它；要内置的资源应挪到 `static/bundled/` 之类。
+- 🚨 **更新源 URL 指向别人的 fork**：`main.py:207-210` 全指 `raw.githubusercontent.com/mufanmu/Infinite-Canvas-agent`（实测是 `hero8152/Infinite-Canvas` 的 fork，别人的号）→ **往自己仓库推版本，软件内更新检查看不到**；README 那条「改 VERSION → push → 自动检测」当前不成立。
+- 网页端自更新**只覆盖 `main.py` / `VERSION` / `static/**`**（`update_allowed_file()`，`main.py:2479`）；启动器本体、`python/`、`tools/`、`CLI/` 都更新不到。`launcher/Program.cs` **零更新逻辑**。
+- 详见 N / `output/更新功能设计方案-2026-09-20.md`。
