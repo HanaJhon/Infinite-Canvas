@@ -593,6 +593,11 @@ sealed class LauncherHost : IDisposable
                     case "FETCH_MODELS":
                         result = await HandleFetchModelsAsync(payload);
                         break;
+                    case "GET_VERSION":
+                        // 只读本地 VERSION，不走网络。胶囊上的版本号靠它即时填上，
+                        // 不必等 UPDATE_CHECK 的联网往返（且断网时也能正确显示）。
+                        result = new { ok = true, version = LocalVersion() };
+                        break;
                     case "UPDATE_CHECK":
                         result = await HandleCheckUpdateAsync();
                         break;
