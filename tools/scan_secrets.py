@@ -34,9 +34,10 @@ SENSITIVE = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|(?<!o)AUTH
 ENV_LINE = re.compile(r"^[ \t]*([A-Za-z_][A-Za-z0-9_]{2,})[ \t]*[:=][ \t]*(.*?)[ \t]*$", re.M)
 # 🚨 上面这条**不能**写成 `\s*[:=]\s*(.+?)`：
 #    `\s*` 会把换行也吃掉，于是 `API_PROVIDER_FHL_KEY=`（空值行）会被当成上一行的值，
-#    而真正的 `API_PROVIDER_GRSAI_KEY=41564564561` 会被并进上一行、变成
-#    `value='API_PROVIDER_GRSAI_KEY=41564564561'` —— 含 `=` 于是被 looks_real 拒掉，
-#    结果就是**漏报真密钥**（2026-09-20 实测踩到）。三处修正：
+#    而下一行的真密钥会被并进来、变成 `value='API_PROVIDER_GRSAI_KEY=415***561'` ——
+#    含 `=` 于是被 looks_real 拒掉，结果就是**漏报真密钥**（2026-09-20 实测踩到）。
+#    ⚠️ 写注释/文档时**一律用掩码值**（`415***561`），不要把真密钥原样抄进来。
+#    三处修正：
 #      ① 分隔符两侧只允许 `[ \t]`，不许跨行；② 值用 `(.*?)` 允许为空；③ 值到行尾为止。
 JSON_FIELD = re.compile(
     r'"(api_?key|apikey|api_?secret|token|access_?token|secret|password|bearer)"'
@@ -48,6 +49,14 @@ INLINE = re.compile(
     r"|xox[baprs]-[A-Za-z0-9_\-]{10,}|gh[pousr]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}"
     r"|AIza[0-9A-Za-z_\-]{33})\b")
 BEARER = re.compile(r"Bearer\s+([A-Za-z0-9_\-\.]{20,})")
+# 🚨 行内（含注释、文档）的「键名=数字」也要抓。
+#    踩过（2026-09-20）：为了说明上面 ENV_LINE 的假阴性 bug，我把真密钥原样抄进了
+#    本文件的注释里 —— 而 ENV_LINE 只在**行首**匹配，注释行以 `#` 开头 → 完全看不见，
+#    于是**扫描器自己成了泄漏源**，还随发布包分发出去（靠第二把尺子才发现）。
+#    ⚠️ 这条规则**不参与 ALLOW_FILE 豁免**，见 scan_text() 的 always 参数。
+KEYED_NUMBER = re.compile(
+    r"(?i)[A-Za-z0-9_]{0,32}(?:key|token|secret|password|passwd|credential)"
+    r"[A-Za-z0-9_]{0,32}[ \t]*[:=][ \t]*['\"]?(\d{10,32})['\"]?(?![0-9])")
 
 # 占位符/示例值，命中即放过
 PLACEHOLDER = re.compile(
@@ -64,10 +73,12 @@ SKIP_PATH = re.compile(
 SKIP_EXT = re.compile(r"\.(png|jpe?g|gif|webp|ico|svgz|zip|7z|rar|exe|dll|pdb|so|dylib|"
                       r"woff2?|ttf|otf|mp4|mp3|wav|pdf|pyc|pack|bin)$", re.I)
 
-# 允许清单：本文件自身、示例配置、文档里的写法
+# 允许清单：示例配置、文档里的写法。
+# 🚨 `scan_secrets.py` **不在**豁免之列 —— 实测它并不会自匹配（`sk-`/`AKIA` 等
+#    前缀在源码里后面跟的是 `{20,}` 这类正则元字符，凑不满长度下限），
+#    所以没有理由豁免它；豁免的代价是**它自己注释里藏了真密钥也查不出来**（2026-09-20 踩过）。
 ALLOW_FILE = re.compile(
-    r"(scan_secrets\.py|\.env\.example|\.env\.sample|README|SECURITY\.md|"
-    r"\.secretsignore)$", re.I)
+    r"(\.env\.example|\.env\.sample|README|SECURITY\.md|\.secretsignore)$", re.I)
 
 
 def mask(v: str) -> str:
@@ -162,6 +173,14 @@ def scan_text(path: str, text: str) -> list[tuple[str, str]]:
         add("(inline)", m.group(1))
     for m in BEARER.finditer(text):
         add("(bearer)", m.group(1))
+    # 行内「键名=数字」：与上面几条不同，这条**不受 looks_real 的占位符豁免影响**，
+    # 因为 11 位纯数字本身就是 Grsai 这类网关的真实形态。
+    for m in KEYED_NUMBER.finditer(text):
+        val = m.group(1)
+        mm = mask(val)
+        if mm not in seen:
+            seen.add(mm)
+            hits.append((f"(keyed-number)", mm))
     return hits
 
 
