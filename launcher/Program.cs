@@ -36,6 +36,7 @@ internal static class Program
 
         var root = ResolveProjectRoot();
         CleanupStaleAppliers(root);
+        CleanupStaleDownloads(root);
         using var host = new LauncherHost(root, AppUrl);
         Application.Run(host.Form);
     }
@@ -56,6 +57,59 @@ internal static class Program
             }
         }
         catch { /* 清理失败不影响启动 */ }
+    }
+
+    /// <summary>
+    /// 清理更新下载目录里的垃圾：
+    /// · `*.part` 是没下完的半成品，任何时刻都是垃圾（单实例互斥量保证同时只有一个启动器在下载）
+    /// · `*.zip` 正常会被执行器删掉；删不掉（被占用 / 中途崩溃）就会残留 111 MB
+    /// ⚠️ **不能无条件删 `*.zip`** —— 用户可能刚点完更新又立刻重开启动器，此时执行器
+    ///    正在读那个包，删掉会让更新中途失败。所以只清 2 天前的。
+    /// </summary>
+    private static void CleanupStaleDownloads(string root)
+    {
+        try
+        {
+            var dir = Path.Combine(root, "data", "update_download");
+            if (!Directory.Exists(dir)) return;
+
+            foreach (var f in Directory.EnumerateFiles(dir, "*.part"))
+            {
+                try { File.Delete(f); } catch { }
+            }
+
+            var cutoff = DateTime.UtcNow.AddDays(-2);
+            foreach (var f in Directory.EnumerateFiles(dir, "*.zip"))
+            {
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(f) < cutoff) File.Delete(f);
+                }
+                catch { }
+            }
+        }
+        catch { /* 清理失败不影响启动 */ }
+    }
+
+    /// <summary>
+    /// 是否已有执行器在跑。用户点完「立即更新」后启动器会在 1.5s 内退出，
+    /// 若他马上重开启动器再点一次，就会起第二个执行器同时往同一个目录解包 →
+    /// 安装目录会被写坏。这里用「正在运行的映像文件删不掉」当判据拦下来。
+    /// </summary>
+    internal static bool IsUpdateInProgress(string root)
+    {
+        try
+        {
+            var dataDir = Path.Combine(root, "data");
+            if (!Directory.Exists(dataDir)) return false;
+            foreach (var f in Directory.EnumerateFiles(dataDir, "_apply_update_*.exe"))
+            {
+                try { File.Delete(f); }
+                catch { return true; }
+            }
+        }
+        catch { }
+        return false;
     }
 
     private static string ResolveProjectRoot()
@@ -1342,6 +1396,11 @@ sealed class LauncherHost : IDisposable
 
         if (string.IsNullOrEmpty(url))
             return Task.FromResult<object>(new { ok = false, error = "缺少下载地址" });
+
+        // 防并发：用户点完更新又立刻重开启动器再点一次时，两个执行器同时往同一个
+        // 安装目录解包会把目录写坏。UI 上按钮在下载期间是禁用的，这里是第二道保险。
+        if (Program.IsUpdateInProgress(root))
+            return Task.FromResult<object>(new { ok = false, error = "已有一个更新正在进行中，请等它完成后重启启动器再试。" });
 
         // ⚠️ 前端 callNative 的超时只有 30s，而完整包 111 MB 的下载远超此值。
         //    所以这里立刻返回，真正的「下载 → 校验 → 派生执行器」放到后台任务，
