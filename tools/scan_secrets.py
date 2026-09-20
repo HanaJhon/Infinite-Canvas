@@ -27,7 +27,9 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ---------------------------------------------------------------- 扫描规则
-SENSITIVE = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)", re.I)
+# ⚠️ `AUTH` 前加 `(?<!o)` 是为了排掉 `oauth2_redirect_url` 这类**代码行**：
+#    它含 "auth"（o-auth-2）却被当成敏感变量名，实测产生误报。
+SENSITIVE = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|(?<!o)AUTH)", re.I)
 
 ENV_LINE = re.compile(r"^[ \t]*([A-Za-z_][A-Za-z0-9_]{2,})[ \t]*[:=][ \t]*(.*?)[ \t]*$", re.M)
 # 🚨 上面这条**不能**写成 `\s*[:=]\s*(.+?)`：
@@ -215,6 +217,11 @@ def iter_history():
         header = data[pos:nl].decode("utf-8", "replace")
         pos = nl + 1
         parts = header.split()
+        # 🚨 必须处理 `<sha> missing`（2 字段）：写成 `if len(parts) != 3: break`
+        #    会在遇到 missing 对象时**静默截断后面所有对象**，产生假阴性。
+        if len(parts) == 2:
+            i += 1
+            continue
         if len(parts) != 3:
             break
         size = int(parts[2])
@@ -222,6 +229,10 @@ def iter_history():
         pos += size + 1
         sha, path = parts[0], blobs[i][1]
         i += 1
+        if not any(c in raw for c in (b"KEY", b"key", b"TOKEN", b"token", b"SECRET",
+                                      b"secret", b"PASSWORD", b"password",
+                                      b"sk-", b"Bearer")):
+            continue          # 预筛：没这些子串的 blob 不必解码
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
