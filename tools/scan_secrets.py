@@ -193,12 +193,12 @@ def iter_paths(targets: list[str]):
     for t in targets:
         p = os.path.join(ROOT, t)
         if os.path.isfile(p):
-            yield t, p
+            yield t.replace("\\", "/"), None
         elif os.path.isdir(p):
             for base, _dirs, files in os.walk(p):
                 for fn in files:
                     full = os.path.join(base, fn)
-                    yield os.path.relpath(full, ROOT).replace("\\", "/"), full
+                    yield os.path.relpath(full, ROOT).replace("\\", "/"), None
 
 
 def iter_history():
@@ -268,18 +268,22 @@ def main() -> int:
         label = "暂存区"
 
     total = 0
-    for path, full in src:
+    # 约定：src 产出 (显示路径, 文本或 None)。文本为 None 表示「从磁盘读 ROOT/<路径>」；
+    # 历史模式直接把 blob 文本带过来（路径形如 `API/.env @ b76dd86274c6`，**磁盘上不存在**）。
+    # 🚨 踩过的坑：早期版本对历史模式也走 os.path.isfile() 判断，
+    #    结果每个条目都被 continue 掉 —— `--history` **永远报「干净」**（危险的假阴性）。
+    for path, text in src:
         if skip(path, ignore):
             continue
-        if full is None:
+        if text is None:
             full = os.path.join(ROOT, path)
-        if not os.path.isfile(full):
-            continue
-        try:
-            with open(full, "rb") as f:
-                text = f.read().decode("utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
+            if not os.path.isfile(full):
+                continue
+            try:
+                with open(full, "rb") as f:
+                    text = f.read().decode("utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
         for name, masked in scan_text(path, text):
             total += 1
             print(f"  [疑似密钥] {path}\n              {name} = {masked}")
