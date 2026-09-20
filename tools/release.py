@@ -646,6 +646,21 @@ def cmd_build(args) -> int:
     print(f"[mani] 包内 {MANIFEST_NAME}：{len(_m['files'])} 个文件哈希，"
           f"可剪枝目录 {_m['prune_roots']}")
 
+    # 🔒 安全闸：证明包内不含任何密钥 / 用户数据。
+    #    为什么不能只靠上面的 deny-list 断言 —— 它是**路径**断言，而密钥是**内容**问题。
+    #    踩过（2026-09-20）：`tools/scan_secrets.py` 的注释里藏着一枚真密钥，
+    #    路径断言照样报「通过」，是第二把尺子才发现。详见 tools/scan_release.py。
+    #    正控失败（尺子自身失效）或命中任何一项，都直接中止打包。
+    audit = os.path.join(ROOT, "tools", "scan_release.py")
+    if os.path.isfile(audit):
+        rc = subprocess.call([sys.executable, audit, full_path])
+        if rc != 0:
+            print(f"[FATAL] 发布包安全审计未通过（rc={rc}），已中止。"
+                  f"请看上方明细；若确认误报，把它写进 .secretsignore 或修正规则。")
+            return 1
+    else:
+        print("[WARN] 找不到 tools/scan_release.py，跳过密钥审计（不推荐）。")
+
     # 增量包
     packages = [{
         "kind": "full",
