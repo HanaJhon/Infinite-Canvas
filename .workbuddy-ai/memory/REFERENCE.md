@@ -1015,7 +1015,7 @@ STALE      = static/js/obsolete.js / tools/gone/old.txt / launcher/obsolete.dll 
 
 
 
-### N.7 版本号规则与双端规范化（2026-09-20，提交 `36051f0`）
+### N.11 版本号规则与双端规范化（2026-09-20，提交 `36051f0`）
 
 **规则（唯一一条）**：三段式起于 `1.1.1`，**每多进一级就少一段**（段数 3→2→1，只减不增）。
 首段满 10 **不再进位**。
@@ -1083,3 +1083,58 @@ else:
 **冒充新功能**（实测 9 条里 3 条是升级说明）。只跳过**认识的**标题关键词
 （`升级`/`安装`/`下载`/`注意`/`说明`/`upgrade`/`install`/`download`/`notes`），
 **不认识的标题一律保留**（宁可多显示也不悄悄漏真实条目）。
+
+
+## D.3 扫描器自噬事故与规则补强（2026-09-20）
+
+### 事故：`tools/scan_secrets.py` 自己成了泄漏源
+
+为说明 `ENV_LINE` 的假阴性 bug（`\s` 吃换行），把真密钥**原样抄进了本文件第 37~38 行的注释**。
+该文件随发布包分发 → 用户拿到的包里带着一枚真密钥。
+
+**为什么既有防线全都漏了**：
+| 防线 | 为何失效 |
+|---|---|
+| `release.py verify` | 只做**路径** deny-list 断言；密钥是**内容**问题 |
+| `scan_secrets.py --staged` | `ALLOW_FILE` 里含 `scan_secrets.py` → **它从不扫自己** |
+| `ENV_LINE` 规则 | 只在**行首**匹配；注释行以 `#` 开头 → 行内 `KEY=数字` 完全看不见 |
+
+**三处修复**：
+1. 注释改掩码 `415***561`；加硬规则：**写注释/文档/日志一律用掩码值**。
+2. `ALLOW_FILE` 移除 `scan_secrets.py`（实测它**并不自匹配**：`sk-`/`AKIA` 等前缀在源码里
+   后面跟的是 `{20,}` 这类正则元字符，凑不满长度下限）。
+3. 新增 `KEYED_NUMBER` 规则 —— 抓**行内**（含注释）的「键名=数字」，不受占位符豁免影响：
+   `(?i)[A-Za-z0-9_]{0,32}(?:key|token|secret|password|passwd|credential)[A-Za-z0-9_]{0,32}[ \t]*[:=][ \t]*['\"]?(\d{10,32})['\"]?(?![0-9])`
+
+### 我自己把密钥又提交进了 git 历史（诚实记录）
+
+全量扫（`rev-list --objects --all` + `cat-file --batch`，6571 对象）→ **6 个 blob 含该 key**：
+`API/.env`（原有）、`tools/scan_secrets.py` × 3 blob（提交 `8e522e1`/`e04d0b9`/`cd2ebe3`）、
+`.workbuddy-ai/memory/2026-09-20.md` × 2 blob（提交 `0a6308c`/`34b166d`）。
+→ 该 key **已失效 + 已公开 17 天**，无新增实际风险；已推送公开仓库，按既定决策 fix-forward。
+
+📌 **通用教训**：`ALLOW_FILE` 这类「豁免自身」的设计，会让**扫描器/校验器本身成为盲区**。
+新增任何豁免都要问一句：「豁免对象自己出问题，谁来看见？」
+
+## N.12 发布包安全审计闸（`tools/scan_release.py`，2026-09-20，提交 `ab03d8d`）
+
+`release.py build` 写完完整包后**自动调审计，不通过即中止**（不再产出脏包）。
+
+```
+python tools/scan_release.py <zip 或 目录>
+python tools/scan_release.py --selftest      # 只跑正控
+```
+
+- **两把尺子**：① 复用 `scan_secrets` 规则（env 行 / JSON 字段 / 已知前缀 / Bearer / 行内 KEY=数字）；
+  ② 独立规则集（ASSIGN / HEADER / BEARER / NUMKEY / RANDOM），覆盖 `const KEY = "xxx"` 这类盲区。
+- **结构断言按「内容」判**，不按路径 —— 否则会误报：
+  - `python/Lib/site-packages/certifi/cacert.pem` = **公共根证书库**（删了 HTTPS 就崩）→ 必须保留；
+  - `static/runninghub/api_providers.json` = **程序内置 RunningHub 预设模板**（`chat_models` 为空、无密钥字段）；
+  - 真私钥改按 `-----BEGIN … PRIVATE KEY-----` **内容**判。
+- 🚨 **内置正控**：先证明规则量得到已知密钥，否则 0 命中作废（防「`\s` 吃换行」那类假阴性）。
+  **正控样本必须运行时拼装**（每段 <32 字符）—— 第一版写字面量，立刻被自己的闸拦下 6 处命中。
+- 熵启发式（`RANDOM`）**只对第一方代码生效**，跳过 `site-packages/` 与 `static/vendor/`
+  （那里全是 SPDX 许可证 id、base64 文档示例、压缩 JS —— 2026-09-20 逐个核实过）。
+
+**2026-09-20 实测基线**（`Infinite-Canvas-Full-1.1.1.zip`）：
+2020 条目 / 111.53 MB / sha256 `60f02db9…2d0d`；结构 0 / 密钥 0 / 正控 8 项有效。
