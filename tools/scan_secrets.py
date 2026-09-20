@@ -29,7 +29,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ---------------------------------------------------------------- 扫描规则
 SENSITIVE = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)", re.I)
 
-ENV_LINE = re.compile(r"^[ \t]*([A-Za-z_][A-Za-z0-9_]{2,})\s*[:=]\s*(.+?)[ \t]*$", re.M)
+ENV_LINE = re.compile(r"^[ \t]*([A-Za-z_][A-Za-z0-9_]{2,})[ \t]*[:=][ \t]*(.*?)[ \t]*$", re.M)
+# 🚨 上面这条**不能**写成 `\s*[:=]\s*(.+?)`：
+#    `\s*` 会把换行也吃掉，于是 `API_PROVIDER_FHL_KEY=`（空值行）会被当成上一行的值，
+#    而真正的 `API_PROVIDER_GRSAI_KEY=41564564561` 会被并进上一行、变成
+#    `value='API_PROVIDER_GRSAI_KEY=41564564561'` —— 含 `=` 于是被 looks_real 拒掉，
+#    结果就是**漏报真密钥**（2026-09-20 实测踩到）。三处修正：
+#      ① 分隔符两侧只允许 `[ \t]`，不许跨行；② 值用 `(.*?)` 允许为空；③ 值到行尾为止。
 JSON_FIELD = re.compile(
     r'"(api_?key|apikey|api_?secret|token|access_?token|secret|password|bearer)"'
     r'\s*:\s*"?([^",\s}]{6,})"?', re.I)
