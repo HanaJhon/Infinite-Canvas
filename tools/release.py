@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -319,8 +320,13 @@ def read_notes_file(path: str) -> list[str]:
 # 打包
 # ---------------------------------------------------------------------------
 
-def write_zip(zip_path: str, files: list[str], top: str = PACKAGE_TOP) -> None:
-    """写 zip。条目时间固定，保证内容相同则产物字节相同。"""
+def write_zip(zip_path: str, files: list[str], top: str = PACKAGE_TOP,
+              extra: dict[str, bytes] | None = None) -> None:
+    """写 zip。条目时间固定，保证内容相同则产物字节相同。
+
+    `extra` 是「虚拟条目」（内容在内存里、磁盘上没有对应文件），
+    用于把 release-manifest.json 塞进包内。
+    """
     os.makedirs(os.path.dirname(zip_path), exist_ok=True)
     fixed = (2026, 1, 1, 0, 0, 0)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
@@ -331,6 +337,38 @@ def write_zip(zip_path: str, files: list[str], top: str = PACKAGE_TOP) -> None:
             info.external_attr = 0o644 << 16
             with open(src, "rb") as f:
                 z.writestr(info, f.read())
+        for name, data in sorted((extra or {}).items()):
+            info = zipfile.ZipInfo(f"{top}/{name}", date_time=fixed)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            z.writestr(info, data)
+
+
+def build_package_manifest(version: str, kind: str, files: list[str],
+                           hashes: dict[str, str]) -> bytes:
+    """生成包内清单 release-manifest.json。
+
+    这是更新器（启动器 applier）的**唯一权威来源**：它靠 `files` 的 sha256
+    判断哪些文件要被覆盖（先备份旧的）、靠 `prune_roots` 判断可以删哪些
+    旧版残留。之所以放进包内而不是让 C# 再维护一份目录清单，是为了避免
+    「两处清单不一致」这类已经踩过的 bug。
+
+    `prune_roots` 只取 PROGRAM_DIRS 里真实出现过的顶层目录 ——
+    即**程序独占目录**。`data/` / `assets/` / `output/` / `API/` 永不在其中，
+    所以 applier 不可能误删用户数据。
+    """
+    roots = sorted({f.split("/")[0] for f in files if "/" in f} & set(PROGRAM_DIRS))
+    manifest = {
+        "format": 1,
+        "version": version,
+        "kind": kind,                 # full | delta
+        "prune_roots": roots,
+        "files": {rel: hashes[rel] for rel in sorted(files)},
+    }
+    return json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+MANIFEST_NAME = "release-manifest.json"
 
 
 def find_previous_baseline(current_version: str) -> tuple[str, dict] | None:
@@ -347,7 +385,6 @@ def find_previous_baseline(current_version: str) -> tuple[str, dict] | None:
         if not os.path.isfile(path):
             continue
         if best is None or version_key(name) > version_key(best[0]):
-            import json
             best = (name, json.load(open(path, encoding="utf-8")))
     return best
 
@@ -489,12 +526,16 @@ def cmd_build(args) -> int:
     print(f"[info] 入选 {len(files)} 个文件，合计 {human(total)}")
     print()
 
-    # 完整包
+    # 完整包（内含 release-manifest.json，供启动器 applier 备份与剪枝）
     full_name = f"Infinite-Canvas-Full-{version}.zip"
     full_path = os.path.join(out_dir, full_name)
-    write_zip(full_path, files)
+    manifest_bytes = build_package_manifest(version, "full", files, hashes)
+    write_zip(full_path, files, extra={MANIFEST_NAME: manifest_bytes})
     full_size = os.path.getsize(full_path)
     print(f"[pack] {full_name}  {human(full_size)}")
+    _m = json.loads(manifest_bytes)
+    print(f"[mani] 包内 {MANIFEST_NAME}：{len(_m['files'])} 个文件哈希，"
+          f"可剪枝目录 {_m['prune_roots']}")
 
     # 增量包
     packages = [{
@@ -524,7 +565,9 @@ def cmd_build(args) -> int:
         else:
             delta_name = f"Infinite-Canvas-Update-{version}.zip"
             delta_path = os.path.join(out_dir, delta_name)
-            write_zip(delta_path, changed)
+            # 增量包也带完整清单：applier 需要全量 files 才能判断剪枝与备份
+            write_zip(delta_path, changed,
+                      extra={MANIFEST_NAME: build_package_manifest(version, "delta", files, hashes)})
             delta_size = os.path.getsize(delta_path)
             print(f"[pack] {delta_name}  {human(delta_size)}  "
                   f"（基线 {base_ver}：变更 {len(changed)} 个）")
@@ -550,7 +593,6 @@ def cmd_build(args) -> int:
         "notes": notes,
         "packages": packages,
     }
-    import json
     manifest_path = os.path.join(out_dir, "update.json")
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)

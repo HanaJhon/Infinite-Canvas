@@ -15,8 +15,17 @@ internal static class Program
     private const string AppUrl = "http://127.0.0.1:3000/";
 
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
+        // 更新执行器模式：必须赶在拿单实例互斥量之前处理 ——
+        // 此时旧启动器可能还没退干净，走正常分支会被互斥量挡下并弹「已在运行中」。
+        // 这一路也不需要 WinForms，故不调 ApplicationConfiguration.Initialize()。
+        if (UpdateApplier.IsApplyMode(args))
+        {
+            Environment.Exit(UpdateApplier.Run(args));
+            return;
+        }
+
         ApplicationConfiguration.Initialize();
         using var mutex = new Mutex(true, "InfiniteCanvasLauncher.SingleInstance", out var isOwner);
         if (!isOwner)
@@ -26,8 +35,27 @@ internal static class Program
         }
 
         var root = ResolveProjectRoot();
+        CleanupStaleAppliers(root);
         using var host = new LauncherHost(root, AppUrl);
         Application.Run(host.Form);
+    }
+
+    /// <summary>
+    /// 清理上次更新留下的执行器副本。它跑完无法自删（自己就是正在运行的映像），
+    /// 所以交给下一次启动的启动器收尾。正在跑的那份删不掉，属正常。
+    /// </summary>
+    private static void CleanupStaleAppliers(string root)
+    {
+        try
+        {
+            var dataDir = Path.Combine(root, "data");
+            if (!Directory.Exists(dataDir)) return;
+            foreach (var f in Directory.EnumerateFiles(dataDir, "_apply_update_*.exe"))
+            {
+                try { File.Delete(f); } catch { }
+            }
+        }
+        catch { /* 清理失败不影响启动 */ }
     }
 
     private static string ResolveProjectRoot()
@@ -564,6 +592,12 @@ sealed class LauncherHost : IDisposable
                         break;
                     case "FETCH_MODELS":
                         result = await HandleFetchModelsAsync(payload);
+                        break;
+                    case "UPDATE_CHECK":
+                        result = await HandleCheckUpdateAsync();
+                        break;
+                    case "UPDATE_START":
+                        result = await HandleStartUpdateAsync(payload);
                         break;
                     default:
                         result = new { acknowledged = true };
@@ -1174,6 +1208,325 @@ sealed class LauncherHost : IDisposable
             shortcut.Save();
             SendLog($"[快捷方式] 已在桌面创建: {shortcutPath}");
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 更新（阶段 2）
+    //
+    // ⚠️ 这两个 URL 里的仓库名必须与 main.py 顶部的 GITHUB_* 常量保持一致。
+    //    C# 侧读不到 main.py 的常量，只能各写一份；两处不一致就是 bug 信号。
+    //    用 releases/latest/download/ 取资产：该路径**不消耗** GitHub API 配额
+    //    （api.github.com 匿名只有 60 次/时，实测已 403）。
+    // ------------------------------------------------------------------
+
+    private const string UpdateRepoSlug = "HanaJhon/Infinite-Canvas";
+    private const string UpdateManifestUrl =
+        "https://github.com/" + UpdateRepoSlug + "/releases/latest/download/update.json";
+    private const string UpdateAssetBaseUrl =
+        "https://github.com/" + UpdateRepoSlug + "/releases/latest/download/";
+
+    private static readonly HttpClient _updateHttpClient = new HttpClient
+    {
+        Timeout = TimeSpan.FromMinutes(15),
+    };
+
+    /// <summary>读本地 VERSION 文件（与 main.py 的 current_app_version() 同源）。</summary>
+    private string LocalVersion()
+    {
+        try
+        {
+            var p = Path.Combine(root, "VERSION");
+            if (File.Exists(p)) return File.ReadAllText(p).Trim();
+        }
+        catch { }
+        return "";
+    }
+
+    /// <summary>按点分数字比版本。a &gt; b 返回 1，相等 0，小于 -1。</summary>
+    private static int CompareVersion(string a, string b)
+    {
+        static int[] Parts(string s) => s
+            .Split('.', StringSplitOptions.RemoveEmptyEntries)
+            .Select(x => int.TryParse(x.Trim(), out var v) ? v : 0)
+            .ToArray();
+
+        var pa = Parts(a ?? "");
+        var pb = Parts(b ?? "");
+        for (var i = 0; i < Math.Max(pa.Length, pb.Length); i++)
+        {
+            var x = i < pa.Length ? pa[i] : 0;
+            var y = i < pb.Length ? pb[i] : 0;
+            if (x != y) return x > y ? 1 : -1;
+        }
+        return 0;
+    }
+
+    private async Task<object> HandleCheckUpdateAsync()
+    {
+        var current = LocalVersion();
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, UpdateManifestUrl);
+            req.Headers.TryAddWithoutValidation("User-Agent", "InfiniteCanvasLauncher/1.0");
+            req.Headers.TryAddWithoutValidation("Accept", "application/json");
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+            using var resp = await _updateHttpClient.SendAsync(req, cts.Token);
+            if (!resp.IsSuccessStatusCode)
+                return new { ok = false, current, error = $"取更新清单失败（HTTP {(int)resp.StatusCode}）。若刚发版，请确认 Release 已上传 update.json。" };
+
+            var text = await resp.Content.ReadAsStringAsync(cts.Token);
+            using var doc = JsonDocument.Parse(text);
+            var r = doc.RootElement;
+
+            var latest = r.TryGetProperty("version", out var vProp) ? (vProp.GetString() ?? "") : "";
+            if (string.IsNullOrEmpty(latest))
+                return new { ok = false, current, error = "更新清单里没有 version 字段" };
+
+            var notes = new List<string>();
+            if (r.TryGetProperty("notes", out var nProp) && nProp.ValueKind == JsonValueKind.Array)
+                foreach (var it in nProp.EnumerateArray())
+                    if (it.ValueKind == JsonValueKind.String) notes.Add(it.GetString() ?? "");
+
+            var size = 0L;
+            var sha = "";
+            var assetName = "";
+            if (r.TryGetProperty("packages", out var pkgs) && pkgs.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var p in pkgs.EnumerateArray())
+                {
+                    if (!p.TryGetProperty("kind", out var kProp) ||
+                        !string.Equals(kProp.GetString(), "full", StringComparison.OrdinalIgnoreCase)) continue;
+                    assetName = p.TryGetProperty("name", out var nm) ? (nm.GetString() ?? "") : "";
+                    size = p.TryGetProperty("size", out var sz) ? sz.GetInt64() : 0;
+                    sha = p.TryGetProperty("sha256", out var hProp) ? (hProp.GetString() ?? "") : "";
+                    break;
+                }
+            }
+
+            if (string.IsNullOrEmpty(assetName))
+                return new { ok = false, current, latest, notes, error = "更新清单里没有完整包" };
+
+            return new
+            {
+                ok = true,
+                current,
+                latest,
+                updateAvailable = CompareVersion(latest, current) > 0,
+                notes,
+                size,
+                sha256 = sha,
+                assetName,
+                url = UpdateAssetBaseUrl + Uri.EscapeDataString(assetName),
+            };
+        }
+        catch (Exception ex)
+        {
+            return new { ok = false, current, error = ex.Message };
+        }
+    }
+
+    private Task<object> HandleStartUpdateAsync(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object)
+            return Task.FromResult<object>(new { ok = false, error = "缺少更新参数" });
+
+        var url = payload.TryGetProperty("url", out var uProp) ? (uProp.GetString() ?? "") : "";
+        var expectedSha = payload.TryGetProperty("sha256", out var sProp) ? (sProp.GetString() ?? "") : "";
+        var expectedSize = payload.TryGetProperty("size", out var zProp) && zProp.TryGetInt64(out var z) ? z : 0L;
+        var targetVersion = payload.TryGetProperty("version", out var vProp) ? (vProp.GetString() ?? "") : "";
+
+        if (string.IsNullOrEmpty(url))
+            return Task.FromResult<object>(new { ok = false, error = "缺少下载地址" });
+
+        // ⚠️ 前端 callNative 的超时只有 30s，而完整包 111 MB 的下载远超此值。
+        //    所以这里立刻返回，真正的「下载 → 校验 → 派生执行器」放到后台任务，
+        //    进度与错误一律走 UPDATE_PROGRESS 推送。
+        _ = Task.Run(() => RunUpdateAsync(url, expectedSha, expectedSize, targetVersion));
+        return Task.FromResult<object>(new { ok = true, started = true, version = targetVersion });
+    }
+
+    private async Task RunUpdateAsync(string url, string expectedSha, long expectedSize, string targetVersion)
+    {
+        var downloadDir = Path.Combine(root, "data", "update_download");
+        Directory.CreateDirectory(downloadDir);
+        var fileName = Path.GetFileName(new Uri(url).LocalPath);
+        if (string.IsNullOrEmpty(fileName)) fileName = "update.zip";
+        var zipPath = Path.Combine(downloadDir, fileName);
+        var tmpPath = zipPath + ".part";
+
+        try
+        {
+            SendLog($"开始下载更新包 {fileName} ...");
+            SendToWebView("UPDATE_PROGRESS", new { phase = "download", percent = 0, received = 0L, total = expectedSize });
+
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.TryAddWithoutValidation("User-Agent", "InfiniteCanvasLauncher/1.0");
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
+            using var resp = await _updateHttpClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            if (!resp.IsSuccessStatusCode)
+            {
+                Fail($"下载失败（HTTP {(int)resp.StatusCode}）");
+                return;
+            }
+
+            var total = resp.Content.Headers.ContentLength ?? expectedSize;
+            long received = 0;
+            var lastPercent = -1;
+            await using (var src = await resp.Content.ReadAsStreamAsync(cts.Token))
+            await using (var dst = File.Create(tmpPath))
+            {
+                var buffer = new byte[256 * 1024];
+                int n;
+                while ((n = await src.ReadAsync(buffer, cts.Token)) > 0)
+                {
+                    await dst.WriteAsync(buffer.AsMemory(0, n), cts.Token);
+                    received += n;
+                    if (total > 0)
+                    {
+                        var percent = (int)(received * 100 / total);
+                        if (percent != lastPercent)
+                        {
+                            lastPercent = percent;
+                            SendToWebView("UPDATE_PROGRESS", new { phase = "download", percent, received, total });
+                        }
+                    }
+                }
+            }
+
+            // 校验：体积 + sha256，两者都必须过才允许动盘上的文件
+            SendToWebView("UPDATE_PROGRESS", new { phase = "verify", percent = 100, received, total });
+            var actualSize = new FileInfo(tmpPath).Length;
+            if (expectedSize > 0 && actualSize != expectedSize)
+            {
+                TryDeleteFile(tmpPath);
+                Fail($"体积校验失败：期望 {expectedSize} 字节，实际 {actualSize} 字节");
+                return;
+            }
+            if (!string.IsNullOrEmpty(expectedSha))
+            {
+                var actualSha = await Task.Run(() => Sha256File(tmpPath));
+                if (!string.Equals(actualSha, expectedSha, StringComparison.OrdinalIgnoreCase))
+                {
+                    TryDeleteFile(tmpPath);
+                    Fail($"校验失败：sha256 不一致（实际 {actualSha[..12]}…）");
+                    return;
+                }
+            }
+
+            if (File.Exists(zipPath)) TryDeleteFile(zipPath);
+            File.Move(tmpPath, zipPath);
+            SendLog("更新包校验通过。");
+
+            // 派生更新执行器：把自己复制一份到 data/ 下再跑，这样它能覆盖安装目录里的正本 exe
+            var selfPath = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(selfPath) || !File.Exists(selfPath))
+            {
+                Fail("定位不到启动器自身路径，无法派生更新进程");
+                return;
+            }
+
+            var applierPath = Path.Combine(root, "data", $"_apply_update_{Environment.ProcessId}.exe");
+            File.Copy(selfPath, applierPath, overwrite: true);
+
+            var pids = PrepareForUpdate();
+            var psi = new ProcessStartInfo
+            {
+                FileName = applierPath,
+                Arguments = $"--apply-update \"{zipPath}\" \"{root}\" \"{string.Join(",", pids)}\" \"{selfPath}\"",
+                WorkingDirectory = root,
+                UseShellExecute = false,
+            };
+            Process.Start(psi);
+            SendLog("更新进程已启动，启动器即将退出以释放文件占用。");
+            SendToWebView("UPDATE_PROGRESS", new
+            {
+                phase = "done",
+                percent = 100,
+                version = targetVersion,
+                downloadedBytes = actualSize,
+            });
+
+            // 留一点时间把消息送到界面，再退出
+            ScheduleExit(1500);
+        }
+        catch (Exception ex)
+        {
+            TryDeleteFile(tmpPath);
+            Fail(ex.Message);
+        }
+    }
+
+    private void Fail(string message)
+    {
+        SendLog($"[更新失败] {message}");
+        SendToWebView("UPDATE_PROGRESS", new { phase = "error", error = message });
+    }
+
+    /// <summary>停掉服务进程并返回需要等待退出的 PID 列表（含自己）。</summary>
+    private List<int> PrepareForUpdate()
+    {
+        var pids = new List<int> { Environment.ProcessId };
+        try
+        {
+            if (server is not null && !server.HasExited)
+            {
+                var pid = server.Id;
+                server.Kill(true);
+                try { server.WaitForExit(8000); } catch { }
+                pids.Add(pid);
+                SendLog($"已停止服务进程（PID {pid}）。");
+            }
+        }
+        catch (Exception ex)
+        {
+            SendLog($"停止服务进程时出错：{ex.Message}");
+        }
+        ownsServer = false;
+        return pids;
+    }
+
+    private void ScheduleExit(int delayMs)
+    {
+        try
+        {
+            form.BeginInvoke(() =>
+            {
+                var timer = new System.Windows.Forms.Timer { Interval = delayMs };
+                timer.Tick += (_, _) =>
+                {
+                    timer.Stop();
+                    timer.Dispose();
+                    forceExit = true;
+                    tray.Visible = false;
+                    form.Close();
+                };
+                timer.Start();
+            });
+        }
+        catch { }
+    }
+
+    private void SendToWebView(string type, object payload)
+    {
+        if (form.IsDisposed) return;
+        try
+        {
+            var json = JsonSerializer.Serialize(new { type, payload });
+            if (webView.CoreWebView2 != null)
+                webView.BeginInvoke(() => webView.CoreWebView2.PostWebMessageAsJson(json));
+        }
+        catch { }
+    }
+
+    private static string Sha256File(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { }
     }
 
     private void SendLog(string message)
