@@ -450,7 +450,8 @@ def write_zip(zip_path: str, files: list[str], top: str = PACKAGE_TOP,
 
 
 def build_package_manifest(version: str, kind: str, files: list[str],
-                           hashes: dict[str, str]) -> bytes:
+                           hashes: dict[str, str],
+                           deleted: list[str] | None = None) -> bytes:
     """生成包内清单 release-manifest.json。
 
     这是更新器（启动器 applier）的**唯一权威来源**：它靠 `files` 的 sha256
@@ -461,6 +462,9 @@ def build_package_manifest(version: str, kind: str, files: list[str],
     `prune_roots` 只取 PROGRAM_DIRS 里真实出现过的顶层目录 ——
     即**程序独占目录**。`data/` / `assets/` / `output/` / `API/` 永不在其中，
     所以 applier 不可能误删用户数据。
+
+    `deleted` 仅增量包 (delta) 使用：列出本版相对基线「被移除」的文件，
+    启动器会按它把它们从安装目录删掉（不能靠剪枝表达，因为 delta 不剪枝）。
     """
     roots = sorted({f.split("/")[0] for f in files if "/" in f} & set(PROGRAM_DIRS))
     manifest = {
@@ -469,6 +473,7 @@ def build_package_manifest(version: str, kind: str, files: list[str],
         "kind": kind,                 # full | delta
         "prune_roots": roots,
         "files": {rel: hashes[rel] for rel in sorted(files)},
+        "deleted": sorted(deleted or []),
     }
     return json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
 
@@ -677,30 +682,30 @@ def cmd_build(args) -> int:
             rel for rel, h in hashes.items()
             if base_hashes.get(rel) != h
         )
+        # changed 已包含「新增 + 修改」；removed 是基线有、本版没有（被删）的文件
         removed = sorted(set(base_hashes) - set(hashes))
-        if not changed:
+        if not changed and not removed:
             print(f"[info] 与基线 {base_ver} 相比没有任何文件变化，不产出增量包。")
-        elif removed:
-            # 增量包只覆盖「新增/修改」，表达不了「删除」——用户目录里被删的文件会残留，
-            # 而残留的旧 JS/CSS 会和新版本混跑，比不更新更危险。有删除就只发完整包。
-            print(f"[info] 与基线 {base_ver} 相比有 {len(removed)} 个文件被删除"
-                  f"（{', '.join(removed[:5])}{' …' if len(removed) > 5 else ''}），"
-                  "增量包无法表达删除，本次只产出完整包。")
         else:
+            # 增量包：zip 内只放「变更文件」（新增/修改）；被删文件走 manifest.deleted，
+            # 由启动器就地删除。这样哪怕本版删了文件，用户也能走增量更新，而不是被迫下全量包。
             delta_name = f"Infinite-Canvas-Update-{version}.zip"
             delta_path = os.path.join(out_dir, delta_name)
-            # 增量包也带完整清单：applier 需要全量 files 才能判断剪枝与备份
+            # 清单仍带完整 files（applier 据此判断哪些要备份）与 deleted（待删文件）
             write_zip(delta_path, changed,
-                      extra={MANIFEST_NAME: build_package_manifest(version, "delta", files, hashes)})
+                      extra={MANIFEST_NAME: build_package_manifest(version, "delta", files, hashes, deleted=removed)})
             delta_size = os.path.getsize(delta_path)
             print(f"[pack] {delta_name}  {human(delta_size)}  "
-                  f"（基线 {base_ver}：变更 {len(changed)} 个）")
+                  f"（基线 {base_ver}：变更 {len(changed)} 个"
+                  + (f"、删除 {len(removed)} 个" if removed else "")
+                  + "）")
             packages.insert(0, {
                 "kind": "delta",
                 "name": delta_name,
                 "size": delta_size,
                 "sha256": sha256_file(delta_path),
                 "from_version": base_ver,
+                "deleted": len(removed),
             })
     else:
         print("[info] 没有更早的 file-hashes.json，本次不产出增量包（只有完整包）。")

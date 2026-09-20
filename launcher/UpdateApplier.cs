@@ -86,23 +86,44 @@ internal static class UpdateApplier
             Log($"清单：version={manifest.Version} kind={manifest.Kind} 文件数={manifest.Files.Count} " +
                 $"可剪枝目录=[{string.Join(", ", manifest.PruneRoots)}]");
 
-            if (!string.Equals(manifest.Kind, "full", StringComparison.OrdinalIgnoreCase))
+            // 增量包与完整包的差别：
+            //  - 增量包 (delta) 只包含「相对上一版的变更文件」，清单里的 files 仍是全集。
+            //    所以【不能剪枝】（剪枝会按全集去删其余文件，把整个安装清空）；
+            //    只覆盖包内那几个文件，并按 manifest.deleted 删除被移除的文件。
+            //  - 完整包 (full) 覆盖全部文件，再剪掉 prune_roots 内的旧残留。
+            var isDelta = string.Equals(manifest.Kind, "delta", StringComparison.OrdinalIgnoreCase);
+            if (!isDelta && !string.Equals(manifest.Kind, "full", StringComparison.OrdinalIgnoreCase))
             {
-                Log("[中止] 只支持完整包（增量包需要额外合并逻辑，尚未实现）");
+                Log($"[中止] 不支持的包类型：{manifest.Kind}（只支持 full / delta）");
                 return 5;
             }
+            Log(isDelta
+                ? "检测到增量包（delta）：仅覆盖变更文件，不执行剪枝。"
+                : "检测到完整包（full）：备份 → 覆盖 → 剪枝。");
 
-            // ③ 备份「将要被覆盖的旧文件」—— 只备份内容真的变了的，避免每次几 GB
-            var backupDir = BackupChangedFiles(destDir, manifest, out var backupCount);
+            // ③ 备份「将要被覆盖的旧文件」—— 只备份内容真的变了的，避免每次几 GB。
+            //    增量包只备份包内那几个文件（restrict=zip 内条目），不碰其余。
+            var zipRels = GetZipEntryRels(zipPath);
+            var backupDir = BackupChangedFiles(destDir, manifest, isDelta ? zipRels : null, out var backupCount);
             Log($"已备份 {backupCount} 个将被覆盖的文件 -> {backupDir ?? "（无需备份）"}");
 
-            // ④ 解压覆盖
+            // ④ 解压覆盖（只写包内条目；增量包因此天然只更新变更文件）
             var written = ExtractOverwrite(zipPath, destDir);
             Log($"已写入 {written} 个文件");
 
-            // ⑤ 剪掉旧版残留（只在程序独占目录内）
-            var pruned = PruneStaleFiles(destDir, manifest);
-            Log($"已清理 {pruned} 个旧版残留文件");
+            // ⑤ 完整包剪掉旧版残留；增量包按 manifest.deleted 删除被移除的文件
+            var pruned = 0;
+            var deleted = 0;
+            if (isDelta)
+            {
+                deleted = DeleteListedFiles(destDir, manifest.Deleted);
+                Log($"已删除 {deleted} 个被移除的文件（增量包）");
+            }
+            else
+            {
+                pruned = PruneStaleFiles(destDir, manifest);
+                Log($"已清理 {pruned} 个旧版残留文件");
+            }
 
             // ⑥ 收尾
             TryDelete(zipPath);
@@ -181,8 +202,10 @@ internal static class UpdateApplier
         }
     }
 
-    /// <summary>把「内容将要变化」的现有文件复制到 data/update_backups/&lt;时间戳&gt;/。返回备份目录与文件数。</summary>
-    private static string? BackupChangedFiles(string destDir, PackageManifest manifest, out int count)
+    /// <summary>把「内容将要变化」的现有文件复制到 data/update_backups/&lt;时间戳&gt;/。返回备份目录与文件数。
+    /// <param name="restrictRels">非空时只备份这些相对路径（增量包用它限制为 zip 内文件，避免把全集都备份）。</param>
+    /// </summary>
+    private static string? BackupChangedFiles(string destDir, PackageManifest manifest, HashSet<string>? restrictRels, out int count)
     {
         count = 0;
         var backupRoot = Path.Combine(destDir, "data", "update_backups");
@@ -190,6 +213,7 @@ internal static class UpdateApplier
 
         foreach (var (rel, expectedHash) in manifest.Files)
         {
+            if (restrictRels is not null && !restrictRels.Contains(rel)) continue;
             var target = SafeCombine(destDir, rel);
             if (target is null || !File.Exists(target)) continue;
 
@@ -330,6 +354,20 @@ internal static class UpdateApplier
         return idx < 0 ? entryName : entryName[(idx + 1)..];
     }
 
+    /// <summary>列出 zip 内所有文件条目（剥掉顶层目录后的相对路径）。用于增量包只备份/只覆盖这些文件。</summary>
+    private static HashSet<string> GetZipEntryRels(string zipPath)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var zip = ZipFile.OpenRead(zipPath);
+        foreach (var e in zip.Entries)
+        {
+            if (e.FullName.EndsWith("/", StringComparison.Ordinal)) continue;
+            var rel = StripTopSegment(e.FullName);
+            if (!string.IsNullOrEmpty(rel)) set.Add(rel);
+        }
+        return set;
+    }
+
     private static string Sha256File(string path)
     {
         using var stream = File.OpenRead(path);
@@ -340,6 +378,27 @@ internal static class UpdateApplier
     {
         try { File.Delete(path); return true; }
         catch { return false; }
+    }
+
+    /// <summary>增量包：按 manifest.deleted 删除被移除的文件。受 ForbiddenRoots 与越界保护，删除失败不致命。</summary>
+    private static int DeleteListedFiles(string destDir, List<string> deleted)
+    {
+        var n = 0;
+        foreach (var rel in deleted ?? new List<string>())
+        {
+            var name = rel.Trim().Trim('/', '\\');
+            if (string.IsNullOrEmpty(name)) continue;
+            var top = name.Split('/', StringSplitOptions.None)[0];
+            if (ForbiddenRoots.Contains(top, StringComparer.OrdinalIgnoreCase))
+            {
+                Log($"  [安全] 拒绝删除禁用目录下的文件：{rel}");
+                continue;
+            }
+            var target = SafeCombine(destDir, name);
+            if (target is null || !File.Exists(target)) continue;
+            if (TryDelete(target)) { n++; Log($"  已删除 {rel}"); }
+        }
+        return n;
     }
 
     private static void Log(string message)
@@ -370,5 +429,9 @@ internal static class UpdateApplier
 
         [System.Text.Json.Serialization.JsonPropertyName("files")]
         public Dictionary<string, string> Files { get; set; } = new();
+
+        /// <summary>增量包里被移除的文件（相对路径）。执行器会把这些从安装目录删掉。仅 delta 使用。</summary>
+        [System.Text.Json.Serialization.JsonPropertyName("deleted")]
+        public List<string> Deleted { get; set; } = new();
     }
 }

@@ -1334,21 +1334,45 @@ sealed class LauncherHost : IDisposable
             var size = 0L;
             var sha = "";
             var assetName = "";
+            var isDelta = false;
             if (r.TryGetProperty("packages", out var pkgs) && pkgs.ValueKind == JsonValueKind.Array)
             {
+                string? deltaName = null, deltaSha = null; long deltaSize = 0;
+                string? fullName = null, fullSha = null; long fullSize = 0;
                 foreach (var p in pkgs.EnumerateArray())
                 {
-                    if (!p.TryGetProperty("kind", out var kProp) ||
-                        !string.Equals(kProp.GetString(), "full", StringComparison.OrdinalIgnoreCase)) continue;
-                    assetName = p.TryGetProperty("name", out var nm) ? (nm.GetString() ?? "") : "";
-                    size = p.TryGetProperty("size", out var sz) ? sz.GetInt64() : 0;
-                    sha = p.TryGetProperty("sha256", out var hProp) ? (hProp.GetString() ?? "") : "";
-                    break;
+                    if (!p.TryGetProperty("kind", out var kProp)) continue;
+                    var kind = kProp.GetString() ?? "";
+                    if (string.Equals(kind, "delta", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // 只接受「从我当前版本出发」的增量：落点才完整。
+                        // 若当前版本与 from_version 不符（例如跳过了一版），必须用完整包。
+                        var fromVer = p.TryGetProperty("from_version", out var fv) ? (fv.GetString() ?? "") : "";
+                        if (VersionUtil.CompareVersion(fromVer, current) != 0) continue;
+                        deltaName = p.TryGetProperty("name", out var nm) ? (nm.GetString() ?? "") : "";
+                        deltaSize = p.TryGetProperty("size", out var sz) ? sz.GetInt64() : 0;
+                        deltaSha = p.TryGetProperty("sha256", out var hProp) ? (hProp.GetString() ?? "") : "";
+                    }
+                    else if (string.Equals(kind, "full", StringComparison.OrdinalIgnoreCase))
+                    {
+                        fullName = p.TryGetProperty("name", out var nm) ? (nm.GetString() ?? "") : "";
+                        fullSize = p.TryGetProperty("size", out var sz) ? sz.GetInt64() : 0;
+                        fullSha = p.TryGetProperty("sha256", out var hProp) ? (hProp.GetString() ?? "") : "";
+                    }
+                }
+                // 优先增量：体积通常只有改动过的几个文件（几 MB 而非 111 MB）
+                if (!string.IsNullOrEmpty(deltaName))
+                {
+                    assetName = deltaName; size = deltaSize; sha = deltaSha ?? ""; isDelta = true;
+                }
+                else if (!string.IsNullOrEmpty(fullName))
+                {
+                    assetName = fullName; size = fullSize; sha = fullSha ?? "";
                 }
             }
 
             if (string.IsNullOrEmpty(assetName))
-                return new { ok = false, current, latest, notes, error = "更新清单里没有完整包" };
+                return new { ok = false, current, latest, notes, error = "更新清单里没有可用更新包" };
 
             return new
             {
@@ -1365,6 +1389,7 @@ sealed class LauncherHost : IDisposable
                 size,
                 sha256 = sha,
                 assetName,
+                isDelta,
                 url = UpdateAssetBaseUrl + Uri.EscapeDataString(assetName),
             };
         }
