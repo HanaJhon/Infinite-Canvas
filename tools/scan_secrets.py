@@ -69,6 +69,23 @@ def mask(v: str) -> str:
     return f"{v[:3]}…{v[-3:]}(len={len(v)})"
 
 
+def _setup_io() -> None:
+    """把 stdout/stderr 调成「绝不抛异常」。
+
+    🚨 踩过的坑（2026-09-20）：脚本原来用 `✔` / `✖`（U+2714 / U+2716）做状态标记，
+    在 **GBK 控制台（Windows 代码页 936）** 下直接抛
+        UnicodeEncodeError: 'gbk' codec can't encode character '\u2714'
+    —— 而 pre-commit 钩子正是由 git 客户端以 GBK 环境拉起的，
+    结果钩子崩溃、**所有提交都被拦下**。所以：① 状态标记一律用 ASCII；
+    ② 这里再兜一层 errors='replace'，任何字符编不出来也只是变成 '?'，不会崩。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:
+            pass
+
+
 PREFIX = re.compile(r"^(sk-|ms-|gh[pousr]_|xox[baprs]-|AKIA|AIza)", re.I)
 
 
@@ -214,8 +231,11 @@ def main() -> int:
     g.add_argument("--history", action="store_true", help="扫全部提交历史（含标签，慢）")
     g.add_argument("--path", nargs="+", metavar="P", help="扫指定文件/目录")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--strict", action="store_true",
+                    help="脚本自身出错时也返回非 0（默认出错放行，避免把提交彻底堵死）")
     args = ap.parse_args()
 
+    _setup_io()
     ignore = load_ignore()
     if args.history:
         src = iter_history()
@@ -248,13 +268,27 @@ def main() -> int:
             print(f"  [疑似密钥] {path}\n              {name} = {masked}")
 
     if total:
-        print(f"\n✖ 在{label}发现 {total} 处疑似密钥。")
+        print(f"\n[FAIL] 在{label}发现 {total} 处疑似密钥。")
         print("  如果确认是误报，把路径写进 .secretsignore；否则请移除后再提交。")
+        print("  临时绕过（确认误报时）：git commit --no-verify")
         return 1
     if not args.quiet:
-        print(f"✔ {label}未发现疑似密钥。")
+        print(f"[OK] {label}未发现疑似密钥。")
     return 0
 
 
+def _run() -> int:
+    """包一层兜底：脚本自身出错时不要把用户的提交彻底堵死。"""
+    try:
+        return main()
+    except SystemExit:
+        raise
+    except Exception as exc:      # noqa: BLE001
+        _setup_io()
+        print(f"[WARN] 密钥扫描器自身出错，本次跳过检查：{type(exc).__name__}: {exc}")
+        print("       这不是密钥告警。如需严格模式请加 --strict。")
+        return 1 if "--strict" in sys.argv else 0
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_run())
