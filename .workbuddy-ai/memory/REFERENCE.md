@@ -887,3 +887,74 @@ api.github.com/repos/HanaJhon/Infinite-Canvas                               → 
   备份内容 == 旧版 / 包被删 / 全量 2011 文件哈希一致
 - 传空字符串当 `waitPids`（无等待进程）；`launchExe` 指向不存在的路径以跳过真实拉起
 - 构造假安装目录时注意**别复用同名目录变量做 rmtree**（踩过：把刚复制的测试包删了）
+
+---
+
+### N.9 启动器胶囊更新入口（2026-09-20，提交 `9e0b1e6`）
+
+**位置**：首页 hero 横幅左上角那颗胶囊 `Infinite Canvas for Lochou Launcher [V…]`。
+
+**C# 侧（`launcher/Program.cs`）**
+
+| 项 | 内容 |
+|---|---|
+| `GET_VERSION` | 消息 switch 里新增，紧挨 `UPDATE_CHECK` 之前。返回 `{ok:true, version: LocalVersion()}` |
+| 为什么单独加 | `LocalVersion()` 只读 `<root>/VERSION`，**不走网络**。胶囊版本号要即时显示，`UPDATE_CHECK` 有 25s 超时且断网为空 |
+
+**前端（`E:\claude\skill\canvas-launcher\src\App.tsx`）**
+
+| 项 | 内容 |
+|---|---|
+| 类型 | 模块级 `export type UpdateInfo` / `UpdatePhase` |
+| `UpdateSection` | 模块级组件（不是 App 内联），props：`info/checking/phase/percent/error/onCheck/onStart/showHeader?`。设置弹窗与首页浮层**共用** |
+| `runUpdateCheck(silent)` | `silent=true` 时不显示 loading、不把网络错误写进 `updateError`，但结果照常 `setUpdateInfo` |
+| 启动自动检查 | 挂载时 `GET_VERSION` → `setAppVersion`，再 `runUpdateCheck(true)` |
+| `appVersion` | 本地版本，`displayVersion = updateInfo?.current || appVersion` |
+| `versionBadgeRef` | 指向胶囊外层 `div.relative.inline-flex`（红点是它的兄弟节点） |
+| `anchorPanelTo(el)` | `left = clamp(12, r.left, innerWidth - 400 - 12)`，`top = r.bottom + 10` |
+| 浮层 | `fixed z-[60] w-[400px]`；遮罩 `fixed inset-0 z-[55]` 点击关闭；ESC 关闭；`resize` + `scroll(capture)` 重新贴合 |
+| 红点 | 两个 `<span class="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-red-500">`，一个带 `animate-ping` |
+| `nativeBridge.ts` | `getMockNativeResponse` 补 `GET_VERSION` |
+
+**bundle 演进**：`index-D8EkQHII` → `index-BGiB8RcL`（首版）→ `index-V7XPP4EC`（加钳制后定稿）。
+
+**端到端实测：在无头浏览器里驱动 WebView2 托管的 SPA**
+
+1. 复制 `dist/launcher` 到临时目录（**不要**在真 `dist/launcher` 里加探针文件 —— `sync_verify.py check`
+   会把 `index-*.js` 残留算成异常）。
+2. 复制 `index.html` 当探针页，在 `<script type="module">` **之前**注入假的 `window.chrome.webview`：
+   ```js
+   var listeners = [];
+   window.chrome = { webview: {
+     addEventListener: (t,h) => { if (t==='message') listeners.push(h); },
+     removeEventListener: (t,h) => { var i=listeners.indexOf(h); if(i>=0) listeners.splice(i,1); },
+     postMessage: (msg) => {
+       var payload = { requestId: msg.requestId, success: true, result: CANNED[msg.type] || {}, error: null };
+       setTimeout(() => listeners.slice().forEach(h => h({data:payload})), 0);
+     }
+   }};
+   ```
+   → 走的是**真实 `callNative` 路径**（不是 `nativeBridge` 的 mock，那个写死 `updateAvailable:false`，
+   永远看不到红点）。用 `?nou=1` 切「已最新」态。
+3. 量完把结果塞 `document.title = 'TAG=' + JSON.stringify(out)`，`--dump-dom` 后
+   `re.search(r'<title>TAG=(.*?)</title>')` + `html.unescape` + `json.loads`。
+4. 探针里注入 `*{transition:none!important;animation:none!important}`（`--virtual-time-budget`
+   不推进 transition，且关掉 `animate-ping` 反而让红点稳定可见）。
+
+**两条必记的坑**
+
+- 🚨 **Tailwind 4 的计算色是 `oklch()`/`oklab()`**，不是 `rgb()`。判色必须用 canvas 归一化：
+  ```js
+  var cv=document.createElement('canvas'); cv.width=cv.height=1;
+  var ctx=cv.getContext('2d');
+  function toRgb(c){ ctx.clearRect(0,0,1,1); ctx.fillStyle='#000'; ctx.fillStyle=c;
+    ctx.fillRect(0,0,1,1); var d=ctx.getImageData(0,0,1,1).data; return [d[0],d[1],d[2],d[3]/255]; }
+  ```
+- ⚠️ **侧栏折叠时设置按钮没有文字**，`aside button:last-of-type` 会命中导航里最后一个按钮
+  （切走 tab），要按 `svg` 的 `lucide-settings` 类找。
+
+**断言清单**：胶囊文本含 `V` + 本地版本、不含 `V0.1`；红点数量 ≥1 且
+`right ≥ badge.right-3 && top ≤ badge.top+4`；浮层 `width===400`、`top - badge.bottom === 10`、
+`left ≈ badge.left`、完全在视口内；有更新态含「有新版本/立即更新」，已最新态不含「立即更新」；
+ESC 与遮罩均可关闭；设置弹窗里「软件更新」叶子节点**只出现 1 次**（复用组件没重复渲染）。
+

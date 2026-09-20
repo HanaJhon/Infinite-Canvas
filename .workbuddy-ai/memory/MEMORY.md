@@ -80,4 +80,8 @@
 - ⚠️ **`UPDATE_START` 必须立刻返回**，下载放后台任务：前端 `callNative` 超时只有 **30s**，而完整包 111 MB 下载远超此值。进度/错误统一走 `UPDATE_PROGRESS` 推送（`download`/`verify`/`done`/`error`）。
 - ⚠️ **执行器只支持完整包**（`kind=full`）；回滚只做到「旧文件备份到 `data/update_backups/`」，回滚 UI 未做（阶段 3）。
 - ⚠️ **`dist/` 与 `launcher/dist` 被 `.gitignore` 忽略** → 启动器前端 bundle **不在 git 里**，只在发布包与工作区。仓库不自包含启动器界面（既有状态）；所以**发布包必须从工作区构建，不能从 git 树构建**。
+- **启动器首页胶囊 = 更新入口**（2026-09-20，提交 `9e0b1e6`）：胶囊上的 `V` 号取自 C# 新增的 **`GET_VERSION`**（只读本地 `VERSION`，**不走网络**）；🚨 **不要拿 `UPDATE_CHECK` 当版本号来源**（要联网、25s 超时，断网就空）。启动时**静默**自动检查一次（不显示 loading、不把网络错误抛界面 —— 未发版前 `update.json` 必然 404），有新版本则胶囊右上角亮红点 + 胶囊换青色。
+  - 🚨 **更新浮层必须挂在 hero 横幅外面**：横幅有 `overflow-hidden`，放里面会被裁掉；只能 `position:fixed` 挂 body 再用 `getBoundingClientRect()` 定位。
+  - ⚠️ **Tailwind 4 的 `getComputedStyle().backgroundColor` 返回 `oklch()`/`oklab()` 而不是 `rgb()`** → 用 `rgba?\((\d+)` 正则判颜色一定漏判（实测 `bg-red-500` = `oklch(0.637 0.237 25.331)`）。量颜色要建 1×1 canvas 归一化成 rgb。
+  - 更新区块抽成 `UpdateSection` 组件，首页浮层与设置弹窗**共用**，改一处即两处生效。
 - 详见 N / `output/更新功能设计方案-2026-09-20.md`（§9 阶段 1、§10 阶段 2 执行结果）。
