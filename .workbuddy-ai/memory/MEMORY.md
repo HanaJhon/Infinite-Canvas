@@ -112,3 +112,6 @@
 - 🚨 **`--history` 曾「从未真正扫描」**（提交 `cd2ebe3`）：历史条目的路径形如 `API/.env @ b76dd86274c6`（磁盘上不存在），却与文件模式共用 `os.path.isfile()` 判断 → 全被 `continue` → **永远报「干净」**。约定改成 `(显示路径, 文本或None)`：`None` 才读磁盘。**新增任何扫描来源后，都要拿已知阳性确认它真的扫到了。**
 - ⚠️ `git cat-file --batch` 解析要处理 `<sha> missing`（2 字段）头；写成 `if len(parts) != 3: break` 会**静默截断后续所有对象**。`SENSITIVE` 里的 `AUTH` 要写 `(?<!o)AUTH`，否则 `oauth2_redirect_url` 误报。
 - 📌 工具会话内 `git push` 挂起（见 L）；`core.hooksPath` 是**本地配置**，换机器要重设。
+- 🚨 **远端 4 个旧 Release 资产是比 git 历史更大的暴露面**（2026-09-20 实测，公开可下、合计 **3.49 GB**）：`Official.v1.1`(798 MB，含 **623 个 `.git/` 条目**)、`Official.v0.1`(808 MB)、`Beta.V0.1`(1480 MB，含 **3502 个 `.git/` 条目**)、`V0.1`(404 MB，`API/.env` 里就是那枚已失效密钥)。四个包都含 **作者画布 `data/canvases/*.json` + `history.json`**；两个 Official 的 `api_providers.json` 是空 `[]`。**删不删由老板定**。
+- 📌 **查远端 Release 不必消耗 API 配额**：`api.github.com` 匿名调用已 403 rate limit → 改用 `releases/download/<tag>/<asset>` 的 **HEAD** 量体积、**Range** 读 zip 中央目录（能列条目、也能单取某个文件），全程不下载整包。
+  - ⚠️ **ZIP 中央目录字段偏移**：压缩方式 **10**、压缩大小 **20**、未压缩大小 **24**、本地头偏移 **42**。别把 **12** 当压缩大小（那是 `last_mod_time`）。
