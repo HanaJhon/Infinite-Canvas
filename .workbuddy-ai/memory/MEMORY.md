@@ -99,3 +99,16 @@
 - 🚨 **`read_notes_file()` 必须跳过收尾章节**（`升级`/`安装`/`下载`/`注意`/`说明`/`upgrade`/`install`/`download`/`notes`）：否则「升级方式」的正文会在更新面板里**冒充新功能**。只跳**认识的**标题，不认识的一律保留（宁可多显示也不悄悄漏真条目）。
 - ⚠️ **同一文件的多处 `Edit` 绝不能并行** —— 并行写会互相覆盖。本次丢了 3 处（`main.py` 的 `version_rules()` 定义 → `/api/check-update` 500 `NameError`；`Program.cs` 的 `LocalVersion` 规范化；`release.py` 的用法注释）。改完必须用 `re.findall` 逐条断言「期望 N 处 / 期望 0 处」。
 - ⚠️ **无头 Edge 探针：`--virtual-time-budget` 会被真实外链挂住**。启动器 `index.html` 的 `https://font.sec.miui.com/...` 字体请求让虚拟时钟迟迟不 settled → `--dump-dom` 在 React 回填数据前就结束，测到 `V—`（**而截图里明明正常**）。探针副本必须**剔除所有 `http(s)://` 外链**并把 budget 提到 40000。异步状态（`GET_VERSION`/`UPDATE_CHECK`）本就慢，别只靠加等待。**数据自相矛盾时先怀疑测量环境**。
+
+## 十、密钥防泄漏（2026-09-20）
+
+- **结论：`git` 里的泄露密钥清不掉，只能轮换。** 本项目唯一真密钥 = `API_PROVIDER_GRSAI_KEY`（写在 `API/.env`，11 位纯数字），在提交 `9bdb54c` 里，**5 个标签全部可达**；远端仓库 **public**，暴露 ~17 天。该密钥**实测已失效**（Grsai 返回 `400 apikey error`）。
+  - 清历史救不了：GitHub 的不可达对象**仍可按 SHA 访问**（只有 GitHub Support 能清）；fork/clone/镜像已持有；重写会改掉**全部提交 SHA**（5 个标签要删掉重建）；本仓库 `.git` **859 MB** 且 `git filter-repo` 未装。
+  - 已删除 `API/.env`（主干干净，`raw.githubusercontent.com/.../main/API/.env` → 404），但历史仍 200 可下。
+- **预防三件套（提交 `b488c70`…`e04d0b9`）**：`tools/scan_secrets.py`（`--staged`/`--tree`/`--history`/`--path`）+ `tools/git-hooks/pre-commit`（装法 `git config core.hooksPath tools/git-hooks`）+ `.secretsignore`；`.gitignore` 已从只有 `API/.env` 扩成 `.env`/`.env.*`/`*.env`（只给 `*.env.example|sample|template` 例外）。
+- 🚨 **被 git 钩子拉起的脚本，输出里绝不能有非 ASCII 符号** —— `✔`/`✖`（U+2714/U+2716）在 **GBK 控制台（代码页 936）** 下抛 `UnicodeEncodeError`，钩子崩溃 → **所有提交被堵死**（2026-09-20 实测，老板 Git GUI 直接报 Traceback）。→ 状态标记用 ASCII + `sys.stdout.reconfigure(errors="replace")` 兜底 + **fail-open**（脚本自身异常返回 0，只有真扫到密钥才返回 1）。
+- 🚨 **`ENV_LINE` 正则的分隔符两侧只许 `[ \t]`，绝不能写 `\s`** —— `\s` 会吃换行，把「空值行 + 下一行」并成一个值，真密钥被藏进多段值里然后被字符集检查拒掉 → **假阴性**（本次实测漏掉那枚 Grsai 密钥）。正确式：`^[ \t]*(NAME)[ \t]*[:=][ \t]*(.*?)[ \t]*$`。
+- ⚠️ **扫描规则收紧后必须用「已知含密钥的样本」做正控** —— 否则会把「规则太严导致漏报」误当成「已经干净」。本次先收紧 → 全库 0 命中 → 差点又报「历史无密钥」。
+- 🚨 **`--history` 曾「从未真正扫描」**（提交 `cd2ebe3`）：历史条目的路径形如 `API/.env @ b76dd86274c6`（磁盘上不存在），却与文件模式共用 `os.path.isfile()` 判断 → 全被 `continue` → **永远报「干净」**。约定改成 `(显示路径, 文本或None)`：`None` 才读磁盘。**新增任何扫描来源后，都要拿已知阳性确认它真的扫到了。**
+- ⚠️ `git cat-file --batch` 解析要处理 `<sha> missing`（2 字段）头；写成 `if len(parts) != 3: break` 会**静默截断后续所有对象**。`SENSITIVE` 里的 `AUTH` 要写 `(?<!o)AUTH`，否则 `oauth2_redirect_url` 误报。
+- 📌 工具会话内 `git push` 挂起（见 L）；`core.hooksPath` 是**本地配置**，换机器要重设。
