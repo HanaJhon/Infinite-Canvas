@@ -26,6 +26,8 @@
 - 下拉唯一数据源是 `chatApiProviders()`（`smart-canvas.js:3049`），**只认 `chat_models`**；3D 节点用 `chatModelOptions()`，不做视觉过滤。
 - **Grsai 对话模型 14 个**（GPT 4 + Gemini 10），4 个 GPT 全支持读图；命名 = **OpenAI 官方模型 ID**，别自己编后缀。清单见 F。
 - ⚠️ 探测三坑（F.4）：① 别按通用命名猜；② **禁止并发扫** → 串行 + 间隔 1~1.5s；③ **判「不存在」必须看到 `model not found`**。Grsai 无 `/v1/models` 只能手填。
+- ⚠️ **画布下拉与启动器清单是两套，必须一致**：画布读 `data/api_providers.json` 的 `chat_models`；启动器「拉取并自动归类模型」读 **C# 硬编码** `GrsaiCuratedModels()`（`launcher/Program.cs:904`，Grsai 无 `/models` → 短路返回 `source="curated"`）。**两处不一致就是 bug 信号**。🚨 **不要因为一次 400 就把模型从清单剔掉** —— `a94a050`（2026-09-17）就这么干的，把 4 个 GPT 全剔了，导致启动器 3 天拉不到任何 GPT 对话模型。改清单前**必读同文件顶部注释**。见 F.6。
+- ⚠️ 改 `launcher/Program.cs`（C#）**必须重编 exe**，同步 web 资源无效。exe 是压缩单文件包（`EnableCompressionInSingleFile=true`）→ **grep 搜不到字符串**，验证要查未压缩的 `launcher/bin/Release/net8.0-windows/win-x64/InfiniteCanvasLauncher.dll`，或解 bundle（字段区在 name 前 25 字节、type 1 字节）。构建命令见 F.6 / 技能 `launcher-web-sync`。
 
 ## 五、3D 预览节点（`smart-3d`）
 

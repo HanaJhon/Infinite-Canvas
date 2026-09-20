@@ -197,6 +197,30 @@ Gemini 家族 10 个：`gemini-3.1-pro`、`gemini-2.5-pro`、`gemini-3-flash`、
 - `data/api_providers.json`：改前 md5 `3848b2a08944bbe45c02e4da1c60d280`（1035 bytes）→ 补 3 个 GPT 后 `670b3807ebabb2d1eb25bc91c2f5e4b1`（1099 bytes）→ 补 `gpt-6-astra` 后 `f4778fa8165dea2dd16aea05c041ddd6`。备份 `data/api_providers.json.bak-20260918`（= 改前状态）。
 - `static/js/api-settings.js:177` 的 `RECOMMENDED_APIS` Grsai 预设：`['gpt-5.6-terra']` → `['gpt-6-astra','gpt-5.6-terra','gpt-5.6-sol','gpt-5.5']`。
 
+### F.6 启动器内置清单漏 GPT 事故（2026-09-17 引入 → 2026-09-20 修复）
+
+**结论：Grsai 无 `/models` 端点，启动器返回的清单是 C# 硬编码的 `GrsaiCuratedModels()`（`launcher/Program.cs` 约 `:904`），
+由 `HandleFetchModelsAsync` 的 `IsGrsaiProvider(...)` 短路分支返回（`source="curated"`）。
+这份清单**必须与 F.1 的 14 个对话模型保持一致**。**
+
+- **引入**：commit `a94a050`（2026-09-17 17:27）依据一次探测，把 `gpt-6-astra`/`gpt-5.6-terra`/`gpt-5.6-sol`/`gpt-5.5`
+  从清单里剔除，注释写「实测返回 400，已剔除」。那次 400 是**上游抖动**（见 F.4 第 3 条）。
+  后果：启动器「拉取并自动归类模型」**永远拉不到任何 GPT 对话模型**，只剩 10 个 Gemini。
+- **修复**：2026-09-20 串行复测（间隔 1.5s）4 个模型全部 200（18.6~25.2s）；负对照
+  `gpt-5.6-luna`/`gpt-5.6`/`gpt-6`/`gpt-5.5-pro`/`gpt-4o` 全部明确 `model not found` → 补回清单并重写注释。
+- **前端无需改动**：拉取后 `qe(e.models)` 按关键词归类（视频 17 词：video/runway/gen-3/gen3/gen-2/luma/kling/sora/
+  cogvideo/hailuo/minimax-h3/pika/vidu/animate/svd/ltx/hunyuanvideo；图像 13 词：image/flux/dall-e/dalle/sdxl/
+  stable-diffusion/midjourney/kolors/paint/draw/diffusion/banana/art；**其余归 chat**）。
+  4 个 GPT 名字不含任何 image/video 关键词 → 正确落入「聊天对话模型」。
+  ⚠️ 注意 `art` 是图像关键词，但 `astra` 不含 `art` 子串，安全。
+- **验证 exe 的技巧**：`csproj` 有 `EnableCompressionInSingleFile=true` → **grep exe 搜不到字符串**（UTF-8/UTF-16LE 都不行）。
+  ① 最快：查未压缩的 `launcher/bin/Release/net8.0-windows/win-x64/InfiniteCanvasLauncher.dll`（字符串在 `#US` 堆，UTF-16LE）；
+  ② 端到端：解 single-file bundle —— manifest 条目 = `off(8)+size(8)+csize(8)+type(1)+name`，
+  **字段区在 name 前 25 字节**（⚠️ type 是 **1 字节**，按 28 对齐读出来全是垃圾），
+  `zlib.decompress(d[off:off+csize], -15)` 后校验 `len==size` 且以 `MZ` 开头。
+- **提交惯例**：`git log -- Lochou启动器.exe` 只有 2 个提交，**都在发布点**。常规修复默认只提交源码；
+  是否把重编的 exe 一起提交需老板拍板（每个 exe blob 约 68.9 MB）。
+
 ## G. 磁盘/清理补充细节
 
 - ⚠️ **`git ls-files` 默认 `core.quotepath=true`，中文名被转义成八进制** → `os.path.getsize` 静默跳过（曾漏掉两个 68.9 MB exe）。**必须 `-c core.quotepath=false` 且 `-z`**。
