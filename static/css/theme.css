@@ -84,13 +84,15 @@ body.studio-theme-dark .nav-item.active {
     box-shadow: 0 12px 24px rgba(0,0,0,.28);
 }
 
-html.studio-theme-dark body .logo-ring,
-body.studio-theme-dark .logo-ring {
-    border-color: #d8dee9 !important;
+/* logo 换成启动器图标后不再有描边；暗色主题给图标补一圈浅边，避免黑底图标融进深色侧栏 */
+html.studio-theme-dark body .logo-ring .logo-mark,
+body.studio-theme-dark .logo-ring .logo-mark {
+    box-shadow: 0 0 0 1px rgba(216, 222, 233, .28);
 }
 
-html.studio-theme-dark body #logo-dot,
-body.studio-theme-dark #logo-dot {
+/* 只覆盖常态颜色，排队忙碌时的蓝点不能被 !important 压掉 */
+html.studio-theme-dark body .logo-ring:not(.is-queue-busy) #logo-dot,
+body.studio-theme-dark .logo-ring:not(.is-queue-busy) #logo-dot {
     background: #d8dee9 !important;
 }
 

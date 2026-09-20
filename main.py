@@ -3392,6 +3392,9 @@ class JimengHelpRequest(BaseModel):
 class CodexHelpRequest(BaseModel):
     command: str = ""
 
+class CodexPermissionRequest(BaseModel):
+    level: str = ""
+
 class GeminiCliHelpRequest(BaseModel):
     command: str = ""
 
@@ -5472,6 +5475,127 @@ def codex_decode_output(stdout, stderr):
     err_text = (stderr or b"").decode("utf-8", errors="replace").strip()
     return out_text, err_text
 
+# ===================== OpenAI CLI（Codex）权限开关 =====================
+# Codex 的 workspace-write 沙箱默认禁止联网，导致 agent 无法 npx 安装 / 使用 skill。
+# 这里把「沙箱级别」做成可配置开关，默认维持原来的 workspace-write（不联网），
+# 由用户在「API 设置 → OpenAI CLI 账户」里按需放宽。
+CODEX_PERMISSION_FILE = os.path.join(DATA_DIR, "codex_permissions.json")
+
+CODEX_PERMISSION_LEVELS = {
+    "read-only": {
+        "label": "只读",
+        "desc": "只能读取与推理，禁止改动文件、禁止联网（最安全）。",
+        "sandbox": "read-only",
+        "network": False,
+    },
+    "workspace-write": {
+        "label": "工作区可写",
+        "desc": "可修改项目内文件，禁止联网。这是默认级别。",
+        "sandbox": "workspace-write",
+        "network": False,
+    },
+    "workspace-write-network": {
+        "label": "工作区可写 + 联网",
+        "desc": "可修改项目内文件，并允许联网与写入 Skill / npm 目录 —— 可安装并使用 Skill。",
+        "sandbox": "workspace-write",
+        "network": True,
+    },
+    "danger-full-access": {
+        "label": "完全放行",
+        "desc": "不启用沙箱，等同在本机直接执行命令（风险最高，仅在完全信任时使用）。",
+        "sandbox": "danger-full-access",
+        "network": True,
+    },
+}
+CODEX_DEFAULT_PERMISSION = "workspace-write"
+
+def codex_toml_string_array(values):
+    """拼 TOML 字面量数组；Windows 路径含反斜杠，用单引号字面量避免转义问题。"""
+    cleaned = []
+    for value in values or []:
+        text = str(value or "").strip()
+        if text and "'" not in text and text not in cleaned:
+            cleaned.append(text)
+    return "[" + ", ".join("'" + item + "'" for item in cleaned) + "]"
+
+def codex_permission_extra_roots():
+    """安装 / 使用 Skill 需要写到 Codex 目录与 npm 缓存，这些在工作区之外。"""
+    candidates = []
+    home = os.path.expanduser("~")
+    appdata = str(os.environ.get("APPDATA") or "").strip()
+    localappdata = str(os.environ.get("LOCALAPPDATA") or "").strip()
+    if home:
+        candidates.append(os.path.join(home, ".codex"))
+        candidates.append(os.path.join(home, ".npm"))
+    if appdata:
+        candidates.append(os.path.join(appdata, "npm"))
+    if localappdata:
+        candidates.append(os.path.join(localappdata, "npm-cache"))
+    roots = []
+    for path in candidates:
+        if path and os.path.isdir(path) and path not in roots:
+            roots.append(path)
+    return roots
+
+def load_codex_permission():
+    level = CODEX_DEFAULT_PERMISSION
+    try:
+        if os.path.exists(CODEX_PERMISSION_FILE):
+            with open(CODEX_PERMISSION_FILE, "r", encoding="utf-8-sig") as f:
+                raw = json.load(f) or {}
+            candidate = str((raw or {}).get("level") or "").strip()
+            if candidate in CODEX_PERMISSION_LEVELS:
+                level = candidate
+    except Exception as exc:
+        print(f"加载 OpenAI CLI 权限设置失败: {exc}")
+    return level
+
+def save_codex_permission(level):
+    level = str(level or "").strip()
+    if level not in CODEX_PERMISSION_LEVELS:
+        raise HTTPException(status_code=400, detail="未知的权限级别")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(CODEX_PERMISSION_FILE, "w", encoding="utf-8") as f:
+        json.dump({"level": level}, f, ensure_ascii=False, indent=2)
+    return level
+
+def codex_permission_payload():
+    level = load_codex_permission()
+    current = CODEX_PERMISSION_LEVELS[level]
+    return {
+        "level": level,
+        "label": current["label"],
+        "desc": current["desc"],
+        "sandbox": current["sandbox"],
+        "network_access": bool(current["network"]),
+        "default_level": CODEX_DEFAULT_PERMISSION,
+        "extra_roots": codex_permission_extra_roots(),
+        "levels": [
+            {
+                "id": key,
+                "label": value["label"],
+                "desc": value["desc"],
+                "sandbox": value["sandbox"],
+                "network_access": bool(value["network"]),
+            }
+            for key, value in CODEX_PERMISSION_LEVELS.items()
+        ],
+    }
+
+def codex_permission_args():
+    """把当前权限级别翻译成 codex exec 的沙箱参数。"""
+    permission = CODEX_PERMISSION_LEVELS[load_codex_permission()]
+    args = ["--sandbox", permission["sandbox"]]
+    if permission["sandbox"] == "workspace-write" and permission["network"]:
+        args.extend(["-c", "sandbox_workspace_write.network_access=true"])
+        extra_roots = codex_permission_extra_roots()
+        if extra_roots:
+            args.extend([
+                "-c",
+                "sandbox_workspace_write.writable_roots=" + codex_toml_string_array(extra_roots),
+            ])
+    return args
+
 async def run_codex_cli(prompt, model="", image_paths=None, timeout=None, output_last_message=True):
     exe = codex_cli_executable()
     if not exe:
@@ -5483,8 +5607,7 @@ async def run_codex_cli(prompt, model="", image_paths=None, timeout=None, output
         "exec",
         "--cd",
         BASE_DIR,
-        "--sandbox",
-        "workspace-write",
+        *codex_permission_args(),
         "--skip-git-repo-check",
     ]
     exec_model = codex_model_for_exec(model)
@@ -13786,6 +13909,19 @@ async def codex_help(payload: CodexHelpRequest):
     if proc.returncode != 0:
         raise HTTPException(status_code=502, detail=(err_text or out_text or f"exit={proc.returncode}")[:1000])
     return {"text": out_text or err_text, "raw": {"stdout": out_text, "stderr": err_text}}
+
+@app.get("/api/codex/permissions")
+async def codex_permissions_get():
+    """读取 OpenAI CLI（Codex）的沙箱权限级别。"""
+    return codex_permission_payload()
+
+@app.post("/api/codex/permissions")
+async def codex_permissions_set(payload: CodexPermissionRequest):
+    """设置 OpenAI CLI（Codex）的沙箱权限级别；下次调用 codex exec 时生效。"""
+    save_codex_permission(payload.level)
+    data = codex_permission_payload()
+    data["saved"] = True
+    return data
 
 @app.get("/api/gemini-cli/status")
 async def gemini_cli_status():

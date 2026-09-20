@@ -16,12 +16,12 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/tailwindcss-cdn.js?v=1.1.1.1788083492"></script>
-    <script src="/static/vendor/js/lucide.js?v=1.1.1.1788083492"></script>
-    <script src="/static/js/theme.js?v=1.1.1.1788083492"></script>
-    <script src="/static/js/i18n.js?v=1.1.1.1789701464"></script>
-    <link rel="stylesheet" href="/static/css/theme.css?v=1.1.1.1788083492">
-    <link rel="stylesheet" href="/static/css/api-settings.css?v=1.1.1.1789870803">
+    <script src="/static/vendor/js/tailwindcss-cdn.js?v=1.1.2.1788083492"></script>
+    <script src="/static/vendor/js/lucide.js?v=1.1.2.1788083492"></script>
+    <script src="/static/js/theme.js?v=1.1.2.1788083492"></script>
+    <script src="/static/js/i18n.js?v=1.1.2.1789701464"></script>
+    <link rel="stylesheet" href="/static/css/theme.css?v=1.1.2.1789890240">
+    <link rel="stylesheet" href="/static/css/api-settings.css?v=1.1.2.1789890326">
 </head>
 <body>
     <div class="page">
@@ -238,6 +238,16 @@
                                     <button class="action-btn" type="button" onclick="openCodexHelp()"><i data-lucide="terminal" class="w-3.5 h-3.5"></i><span>帮助</span></button>
                                 </div>
                                 <div id="codexCliInfo" class="jimeng-credit"></div>
+                                <div class="codex-perm">
+                                    <div class="codex-perm-head">
+                                        <div class="rh-key-title">权限级别</div>
+                                        <div id="codexPermStatus" class="jimeng-status-pill">读取中...</div>
+                                    </div>
+                                    <div class="rh-key-desc">控制 <code>codex exec</code> 的沙箱范围。默认「工作区可写」禁止联网，agent 因此无法安装 / 使用 Skill。</div>
+                                    <select id="codexPermSelect" class="codex-perm-select" onchange="onCodexPermissionChange()"></select>
+                                    <div id="codexPermDesc" class="codex-perm-desc"></div>
+                                    <div id="codexPermHint" class="codex-perm-hint"></div>
+                                </div>
                             </div>
                             <div id="geminiCliPanel" class="jimeng-cli-panel" hidden>
                                 <div class="jimeng-cli-head">
@@ -566,6 +576,6 @@
         </div>
     </div>
 
-    <script src="/static/js/api-settings.js?v=1.1.1.1789699421"></script>
+    <script src="/static/js/api-settings.js?v=1.1.2.1789890366"></script>
 </body>
 </html>

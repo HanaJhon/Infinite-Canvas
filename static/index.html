@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="/static/images/logo.png" type="image/png">
+    <link rel="icon" href="/static/images/logo.png?v=1.1.2" type="image/png">
     <title>AI Studio</title>
     <style>
         html.studio-route-booting body {
@@ -23,11 +23,11 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/tailwindcss-cdn.js?v=1.1.1.1788083492"></script>
-    <script src="/static/js/theme.js?v=1.1.1.1788083492"></script>
-    <script src="/static/js/i18n.js?v=1.1.1.1789701464"></script>
+    <script src="/static/vendor/js/tailwindcss-cdn.js?v=1.1.2.1788083492"></script>
+    <script src="/static/js/theme.js?v=1.1.2.1788083492"></script>
+    <script src="/static/js/i18n.js?v=1.1.2.1789701464"></script>
     <style>
-        @import url('/static/vendor/css/fonts.css?v=1.1.1.1788083492');
+        @import url('/static/vendor/css/fonts.css?v=1.1.2.1788083492');
 
         /* 本地 Tailwind 工具类兜底：CDN 慢/未就绪时也能立刻给图标尺寸，避免首屏左侧栏空白 */
         .w-1\.5 { width: 0.375rem; }
@@ -180,11 +180,13 @@
             animation: sidebar-enter 0.5s var(--fluid-ease);
         }
 
+        /* 侧栏 logo：使用启动器同款图标（static/images/logo.png） */
         .logo-ring {
+            position: relative;
             width: 36px;
             height: 36px;
-            border: 2px solid var(--text);
-            border-radius: 12px;
+            border: 0;
+            border-radius: 11px;
             background: transparent;
             padding: 0;
             color: var(--text);
@@ -194,39 +196,57 @@
             cursor: pointer;
             flex: 0 0 auto;
             /* 仅保留 hover 真正会用到的属性过渡，避免 transition: all 因首屏属性补齐被意外触发 */
-            transition: transform 0.6s var(--fluid-ease) 0.5s, border-radius 0.6s var(--fluid-ease) 0.5s, border-color 0.3s, background-color .18s, box-shadow .2s;
+            transition: background-color .18s, box-shadow .2s;
         }
 
-        .sidebar:hover .logo-ring {
-            transform: rotate(90deg);
-            border-radius: 50%;
-            transition-delay: 0s;
+        /* 品牌图形不参与旋转：转动会让图形看起来是歪的，改用轻微抬升 */
+        .logo-ring .logo-mark {
+            width: 100%;
+            height: 100%;
+            display: block;
+            border-radius: 11px;
+            object-fit: contain;
+            transition: transform .35s var(--fluid-ease), box-shadow .25s;
+        }
+
+        .sidebar:hover .logo-ring .logo-mark {
+            transform: scale(1.06);
         }
 
         .logo-ring:hover,
         .logo-ring:focus-visible {
             background: var(--nav-hover-bg);
-            border-color: var(--text);
             box-shadow: 0 0 0 4px rgba(148, 163, 184, .16), 0 10px 24px rgba(15, 23, 42, .08);
             outline: none;
         }
 
-        .logo-ring:hover #logo-dot,
-        .logo-ring:focus-visible #logo-dot {
-            transform: scale(1.8);
+        .logo-ring:hover .logo-mark,
+        .logo-ring:focus-visible .logo-mark {
+            transform: scale(1.08);
         }
 
-        .logo-ring:active {
+        .logo-ring:active .logo-mark {
             transform: scale(.94);
-            transition-delay: 0s;
         }
 
-        .sidebar:hover .logo-ring:active {
-            transform: rotate(90deg) scale(.94);
-        }
-
+        /* 队列忙碌指示：常态隐藏，排队时亮蓝点（沿用原 #logo-dot 的语义） */
         #logo-dot {
-            transition: transform .16s ease, background-color .16s ease, box-shadow .16s ease;
+            position: absolute;
+            right: -1px;
+            bottom: -1px;
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            box-shadow: 0 0 0 2px var(--sidebar-bg);
+            opacity: 0;
+            transform: scale(.6);
+            pointer-events: none;
+            transition: transform .16s ease, background-color .16s ease, opacity .16s ease, box-shadow .16s ease;
+        }
+
+        .logo-ring.is-queue-busy #logo-dot {
+            opacity: 1;
+            transform: scale(1);
         }
 
         /* 导航项 */
@@ -1337,17 +1357,14 @@
             transition-delay: 0s;
         }
         .sidebar.is-pinned .logo-ring {
-            transform: rotate(90deg);
-            border-radius: 50%;
             transition-delay: 0s;
             background: var(--nav-hover-bg);
             color: var(--text);
             box-shadow: 0 0 0 4px rgba(148, 163, 184, .10);
         }
-        .sidebar.is-pinned #logo-dot {
-            background: var(--text) !important;
-            transform: scale(1.35);
-            box-shadow: 0 0 0 4px rgba(148, 163, 184, .16);
+        /* 固定态只抬升 logo，不再旋转（品牌图形保持正立） */
+        .sidebar.is-pinned .logo-mark {
+            transform: scale(1.06);
         }
         .sidebar.is-pinned .logo-ring:hover,
         .sidebar.is-pinned .logo-ring:focus-visible {
@@ -1414,9 +1431,10 @@
             width: 80px;
         }
         .sidebar.is-collapsing:hover .logo-ring {
-            transform: none;
-            border-radius: 12px;
             background: transparent;
+        }
+        .sidebar.is-collapsing:hover .logo-mark {
+            transform: none;
         }
         .sidebar.is-collapsing:hover .nav-item,
         .sidebar.is-collapsing:hover .nav-fold-toggle {
@@ -1475,7 +1493,8 @@
     <div class="app-shell">
         <aside class="sidebar" id="studioSidebar">
             <button class="logo-ring mb-12" id="sidebarLogoToggle" type="button" onclick="toggleSidebarPinned(event)" aria-pressed="false" title="固定导航栏">
-                <div class="w-1.5 h-1.5 rounded-full transition-colors" id="logo-dot" style="background:var(--text)"></div>
+                <img class="logo-mark" src="/static/images/logo.png?v=1.1.2" alt="" aria-hidden="true" draggable="false">
+                <span id="logo-dot" style="background:var(--text)"></span>
             </button>
 
             <nav>
@@ -1580,11 +1599,11 @@
         </script>
 
         <main class="stage">
-            <iframe id="frame-online" data-src="/static/online.html?v=1.1.1.1789876468" scrolling="yes"></iframe>
-            <iframe id="frame-gpt-chat" data-src="/static/gpt-chat.html?v=1.1.1.1789876468" scrolling="yes"></iframe>
-            <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=1.1.1.1789876468" scrolling="yes"></iframe>
-            <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=1.1.1.1789876468" scrolling="yes"></iframe>
-            <iframe id="frame-canvas" class="active" src="/static/canvas-list.html?v=1.1.1.1789876468" scrolling="yes"></iframe>
+            <iframe id="frame-online" data-src="/static/online.html?v=1.1.2.1789890383" scrolling="yes"></iframe>
+            <iframe id="frame-gpt-chat" data-src="/static/gpt-chat.html?v=1.1.2.1789892037" scrolling="yes"></iframe>
+            <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=1.1.2.1789892037" scrolling="yes"></iframe>
+            <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=1.1.2.1789892037" scrolling="yes"></iframe>
+            <iframe id="frame-canvas" class="active" src="/static/canvas-list.html?v=1.1.2.1789892037" scrolling="yes"></iframe>
 
         </main>
     </div>
@@ -1839,16 +1858,19 @@
                 const monitor = document.getElementById('nano-monitor');
                 const queueVal = document.getElementById('queue-val');
                 const logoDot = document.getElementById('logo-dot');
+                const logoToggle = document.getElementById('sidebarLogoToggle');
                 const total = data.total || 0;
                 const pos = data.position || 0;
                 if (pos > 0) {
                     monitor?.classList.add('is-busy');
                     if (queueVal) queueVal.innerText = `${pos}/${total}`;
                     if (logoDot) logoDot.style.backgroundColor = '#3b82f6';
+                    logoToggle?.classList.add('is-queue-busy');
                 } else {
                     monitor?.classList.remove('is-busy');
                     if (queueVal) queueVal.innerText = total > 0 ? total : '0';
                     if (logoDot) logoDot.style.backgroundColor = 'var(--text)';
+                    logoToggle?.classList.remove('is-queue-busy');
                 }
             } catch (e) { }
         }

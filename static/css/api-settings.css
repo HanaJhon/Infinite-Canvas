@@ -394,6 +394,17 @@ body.show-gemini-cli .jimeng-cli-panel:not([hidden]) { display:flex; }
 .jimeng-help-toolbar { display:flex; gap:10px; align-items:center; padding:14px 20px; border-bottom:1px solid var(--line); }
 .jimeng-help-toolbar select { height:38px; min-width:180px; border:1px solid var(--line); border-radius:10px; background:var(--panel); color:var(--text); padding:0 10px; font-weight:800; outline:none; }
 .jimeng-help-output { margin:0; padding:18px 20px; min-height:420px; max-height:62vh; overflow:auto; background:var(--soft); color:var(--text); font:12px/1.55 ui-monospace,Menlo,Consolas,monospace; white-space:pre-wrap; word-break:break-word; }
+
+/* OpenAI CLI（Codex）权限开关 */
+.codex-perm { display:flex; flex-direction:column; gap:10px; margin-top:16px; padding-top:14px; border-top:1px solid var(--line); }
+.codex-perm-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.codex-perm-select { width:100%; height:40px; border:1px solid var(--line); border-radius:11px; background:var(--panel); color:var(--text); padding:0 12px; font-size:13px; font-weight:800; outline:none; cursor:pointer; }
+.codex-perm-select:hover { border-color:var(--line-strong); }
+.codex-perm-select:focus-visible { border-color:var(--text); box-shadow:0 0 0 3px rgba(148,163,184,.22); }
+.codex-perm-desc { font-size:12px; line-height:1.6; color:var(--text); opacity:.78; }
+.codex-perm-desc.is-danger { color:#dc2626; opacity:1; font-weight:800; }
+.codex-perm-hint { font-size:12px; line-height:1.6; color:var(--text); opacity:.6; }
+body.studio-theme-dark .codex-perm-desc.is-danger { color:#f87171; }
 body.show-volcengine .api-key-label { display:inline-flex !important; }
 .runninghub-config-block[hidden] { display:none !important; }
 .runninghub-config-block { display:none; gap:14px; }

@@ -42,6 +42,10 @@ const codexCliInfo = document.getElementById('codexCliInfo');
 const codexHelpOverlay = document.getElementById('codexHelpOverlay');
 const codexHelpCommand = document.getElementById('codexHelpCommand');
 const codexHelpOutput = document.getElementById('codexHelpOutput');
+const codexPermSelect = document.getElementById('codexPermSelect');
+const codexPermStatus = document.getElementById('codexPermStatus');
+const codexPermDesc = document.getElementById('codexPermDesc');
+const codexPermHint = document.getElementById('codexPermHint');
 const geminiCliPanel = document.getElementById('geminiCliPanel');
 const geminiCliStatus = document.getElementById('geminiCliStatus');
 const geminiCliInfo = document.getElementById('geminiCliInfo');
@@ -2494,7 +2498,10 @@ function renderEditor(){
     if(codexCliPanel){
         codexCliPanel.hidden = !isCodex;
         codexCliPanel.style.display = isCodex ? 'flex' : 'none';
-        if(isCodex) refreshCodexStatus(false);
+        if(isCodex){
+            refreshCodexStatus(false);
+            loadCodexPermission();
+        }
     }
     if(geminiCliPanel){
         geminiCliPanel.hidden = !isGeminiCli;
@@ -2685,6 +2692,66 @@ async function refreshCodexStatus(showInfo=true){
     } catch(e){
         setCodexStatus('检测失败', false);
         if(codexCliInfo) codexCliInfo.textContent = e.message || String(e);
+    }
+}
+let codexPermLevels = [];
+function renderCodexPermission(data){
+    if(!data) return;
+    codexPermLevels = Array.isArray(data.levels) ? data.levels : [];
+    if(codexPermSelect){
+        codexPermSelect.innerHTML = '';
+        codexPermLevels.forEach(item => {
+            codexPermSelect.appendChild(new Option(item.label + (item.network_access ? '（可联网）' : ''), item.id));
+        });
+        codexPermSelect.value = data.level || '';
+    }
+    const current = codexPermLevels.find(item => item.id === data.level) || {};
+    if(codexPermDesc){
+        codexPermDesc.textContent = current.desc || '';
+        codexPermDesc.classList.toggle('is-danger', data.level === 'danger-full-access');
+    }
+    if(codexPermHint){
+        const roots = Array.isArray(data.extra_roots) ? data.extra_roots : [];
+        codexPermHint.textContent = (data.level === 'workspace-write-network' && roots.length)
+            ? ('额外可写目录：' + roots.join('、'))
+            : '';
+    }
+    if(codexPermStatus){
+        codexPermStatus.textContent = data.label || '未设置';
+        codexPermStatus.classList.toggle('ok', data.level !== 'danger-full-access');
+        codexPermStatus.classList.toggle('bad', data.level === 'danger-full-access');
+    }
+}
+async function loadCodexPermission(){
+    if(!codexPermSelect) return;
+    if(codexPermStatus) codexPermStatus.textContent = '读取中...';
+    try {
+        const data = await fetch('/api/codex/permissions').then(r => r.json());
+        renderCodexPermission(data);
+    } catch(e){
+        if(codexPermStatus) codexPermStatus.textContent = '读取失败';
+        if(codexPermDesc) codexPermDesc.textContent = e.message || String(e);
+    }
+}
+async function onCodexPermissionChange(){
+    if(!codexPermSelect) return;
+    const level = codexPermSelect.value;
+    if(codexPermStatus) codexPermStatus.textContent = '保存中...';
+    try {
+        const data = await fetch('/api/codex/permissions', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({level})
+        }).then(async r => {
+            const json = await r.json();
+            if(!r.ok) throw new Error(json.detail || '保存权限级别失败');
+            return json;
+        });
+        renderCodexPermission(data);
+    } catch(e){
+        if(codexPermStatus) codexPermStatus.textContent = '保存失败';
+        if(codexPermDesc) codexPermDesc.textContent = e.message || String(e);
+        loadCodexPermission();
     }
 }
 function openCodexHelp(){
