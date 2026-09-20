@@ -1591,6 +1591,29 @@ app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
 
 # --- Pydantic 模型 ---
 
+_VERSION_RULES = None
+
+def version_rules():
+    """取 tools/versioning.py 的规范化实现（只加载一次）。
+
+    VERSION 是唯一版本来源；规范式（1.1.10 → 1.2.0）由 tools/bump_version.py
+    与 tools/release.py 保证。这里再折算一次，是为了兜住「有人手改了 VERSION」
+    的情况 —— 否则画布里的版本徽章会显示 1.1.10，而远端 update.json 写的是
+    1.2.0，两边对不上。
+    取不到 tools/ 时退回「原样返回」，不影响其它功能。
+    """
+    global _VERSION_RULES
+    if _VERSION_RULES is None:
+        try:
+            tools_dir = os.path.join(BASE_DIR, "tools")
+            if tools_dir not in sys.path:
+                sys.path.insert(0, tools_dir)
+            from versioning import is_legacy_date, normalize_version
+            _VERSION_RULES = (normalize_version, is_legacy_date)
+        except Exception:
+            _VERSION_RULES = (lambda v: str(v or "").strip(), lambda v: False)
+    return _VERSION_RULES
+
 def current_app_version():
     version_file = os.path.join(BASE_DIR, "VERSION")
     try:
@@ -1598,7 +1621,8 @@ def current_app_version():
             with open(version_file, "r", encoding="utf-8") as f:
                 version = (f.read().strip().splitlines() or [""])[0].strip()
                 if version:
-                    return version
+                    normalize_version, _ = version_rules()
+                    return normalize_version(version) or version
     except Exception:
         pass
     try:
@@ -2462,7 +2486,17 @@ def check_update():
         if item and item["ok"] and item["version"]:
             if not best or version_gt(item["version"], best["version"]):
                 best = {"source": item["source"], "version": item["version"]}
-    update_available = bool(best and version_gt(best["version"], current))
+    _, is_legacy_date = version_rules()
+    # 版本号跨「日期制遗留 ↔ 三段式」时不能比数值：2026.08.30 恒大于 1.1.1。
+    # 所以两边体系不同时只认一个方向 —— 远端已是新方案、本地还是日期制，才算真有更新；
+    # 反过来（本地 1.1.1、远端还是旧日期）只是远端还没推新版号，不能报「有新版」。
+    remote_version = str(best.get("version") or "") if best else ""
+    if not best or not remote_version:
+        update_available = False
+    elif is_legacy_date(current) != is_legacy_date(remote_version):
+        update_available = not is_legacy_date(remote_version)
+    else:
+        update_available = version_gt(remote_version, current)
     notes_by_source: Dict[str, Any] = {}
     if best and best.get("version"):
         best_notes, notes_by_source = fetch_update_notes_with_fallback(str(best.get("source") or "github"), best["version"], timeout=3.0)

@@ -21,7 +21,9 @@ python3 main.py
 - 灵感库：[awesome-gpt-image-2](https://github.com/freestylefly/awesome-gpt-image-2) 541 个提示词案例 + 本地生成图，自动跟随上游更新
 - tools：Chrome 批量采集素材插件、PS 直连画布插件
 ## 自动更新
-修改 `VERSION` 为递增日期（`YYYY.MM.DD`）→ commit → push，软件内版本徽章自动检测新版本，支持一键更新与回滚。
+版本号是三段式，从 `1.1.1` 起算，末段满 10 自动进位（`1.1.9` → `1.2.0`、`1.9.9` → `2.0`、`9.9` → `10`）。
+升版本请用 `python tools/bump_version.py`，**不要手改 `VERSION`**（手写 `1.1.10` 这类非规范式会让更新检测陷入死循环）。
+升完 commit → push，软件内版本徽章与启动器会自动检测新版本，支持一键更新与回滚。
 ## API 配置
 在软件「API 设置」界面填写 Key / URL，勿写入代码或提交到仓库。
 ## 版权

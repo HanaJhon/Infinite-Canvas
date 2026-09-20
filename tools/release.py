@@ -18,6 +18,7 @@
 
 用法
 ----
+    python tools/bump_version.py                 # 先升版本号（改 VERSION），再打包
     python tools/release.py list                 # 只列出会进包的文件，不写盘
     python tools/release.py verify <zip 或目录>  # 校验已有包/目录是否含用户数据
     python tools/release.py build                # 生成干净包 + update.json
@@ -55,6 +56,16 @@ import subprocess
 import sys
 import zipfile
 from datetime import datetime
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from versioning import (  # noqa: E402
+    ACCEPTED_RE,
+    is_canonical,
+    is_legacy_date,
+    normalize_version,
+    parse_version,
+)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RELEASE_ROOT = os.path.join(ROOT, "output", "release")
@@ -130,6 +141,13 @@ EXCLUDE_PREFIXES = [
     "launcher/obj/",
     "dist/dist/",
     "tools/__pycache__/",
+    # ⚠️ build-launcher.ps1（以及等价的 dotnet publish -o dist）会把启动器的发布
+    #    产物写进根 dist\。其中 dist\InfiniteCanvasLauncher.exe 是 69 MB 的**重复
+    #    exe** —— 用户实际运行的是根目录的 Lochou启动器.exe，这个副本永远用不到，
+    #    随包分发会让安装包凭空涨 70 MB。
+    #    踩过（2026-09-18）：重编 exe 后打包，包体积从 111 MB 虚涨到 175 MB。
+    "dist/InfiniteCanvasLauncher.",
+    "dist/Microsoft.Web.WebView2.",
 ]
 
 # ---------------------------------------------------------------------------
@@ -257,22 +275,56 @@ def human(n: int) -> str:
 # 版本与说明
 # ---------------------------------------------------------------------------
 
-VERSION_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}$")
+# VERSION 可接受的写法：三段式（1.1.1）或日期制遗留（2026.09.20）。
+# 规则与进位逻辑见 tools/versioning.py。
+VERSION_RE = ACCEPTED_RE
 
 
 def read_version() -> str:
+    """读 VERSION 并折算成规范式。
+
+    规范式 = 按「满十进位」规则折算后的形式（1.1.10 → 1.2.0）。
+
+    ⚠️ 若 VERSION 里不是规范式，这里会**改写 VERSION 文件**。必须这么做：
+    update.json 的 version 与包内 VERSION 必须逐字一致，否则客户端装完新版
+    VERSION 仍是 1.1.10、比对结果永远是「有新版」，陷入更新死循环。
+    改写后会打印 [warn]，记得把它一起提交。
+    """
     path = os.path.join(ROOT, "VERSION")
     if not os.path.isfile(path):
         sys.exit("[FATAL] 找不到 VERSION 文件")
     text = open(path, encoding="utf-8").read().strip().splitlines()
     version = text[0].strip() if text else ""
+    if not version:
+        sys.exit("[FATAL] VERSION 文件是空的")
     if not VERSION_RE.match(version):
-        sys.exit(f"[FATAL] VERSION 格式应为 YYYY.MM.DD，实际为 {version!r}")
+        sys.exit(f"[FATAL] VERSION 格式无法识别：{version!r}\n"
+                 f"        应为三段式（如 1.1.1），或日期制遗留（如 2026.09.20）")
+
+    if is_legacy_date(version):
+        print(f"[warn] VERSION 仍是日期制遗留值 {version}，本次会按这个版本号打包。\n"
+              f"       若要切到三段式，请先执行："
+              f"python tools/bump_version.py --set 1.1.1")
+        return version
+
+    if not is_canonical(version):
+        canonical = normalize_version(version)
+        print(f"[warn] VERSION 不是规范式：{version} → {canonical}"
+              f"（已写回 VERSION 文件，记得一并提交）")
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(canonical + "\n")
+        return canonical
     return version
 
 
 def version_key(v: str) -> tuple:
-    return tuple(int(x) for x in v.split("."))
+    """版本排序键：按数字段逐段比较。
+
+    日期制遗留值天然排在前面（2026.09.20 → (2026, 9, 20) > (1, 1, 1)），
+    所以切到三段式后，旧的日期目录不会成为增量基线（find_previous_baseline
+    里另有显式跳过）。
+    """
+    return tuple(parse_version(v))
 
 
 def extract_notes_from_changelog() -> list[str]:
@@ -327,14 +379,26 @@ def _md_to_plain(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+# 「收尾话术」章节的标题关键词。这些章节写的是怎么升级/怎么装，不是本次改了什么，
+# 混进更新面板就会变成「推荐在启动器里点胶囊一键更新」这种冒充新功能的条目。
+# ⚠️ 只跳过**认识的**标题 —— 不认识的标题一律保留，宁可多显示也不悄悄漏掉真实条目。
+_SKIP_SECTION_KEYS = (
+    "升级", "安装", "下载", "注意", "说明",
+    "upgrade", "install", "download", "notes",
+)
+
+
 def read_notes_file(path: str) -> list[str]:
     """读 `--notes-file` 指定的 Markdown，产出**适合直接显示**的纯文本条目。
 
     ⚠️ 标题行（`#` / `##`）**不产出条目** —— 面板把每条渲染成一个圆点，
     标题当圆点就是「本次更新」「升级方式」这类噪音，还会把真正的内容挤出显示窗口。
     只在「整份文件只有标题」时才退回用标题，避免产出空列表。
+
+    ⚠️ 「升级方式」这类收尾章节的正文也**不产出条目**，见 `_SKIP_SECTION_KEYS`。
     """
     headings, body = [], []
+    skipping = False
     for line in open(path, encoding="utf-8", errors="replace").read().splitlines():
         s = line.strip()
         if not s:
@@ -343,6 +407,10 @@ def read_notes_file(path: str) -> list[str]:
             t = _md_to_plain(s.lstrip("# ").strip())
             if t:
                 headings.append(t)
+            low = t.lower()
+            skipping = any(k in low for k in _SKIP_SECTION_KEYS)
+            continue
+        if skipping:
             continue
         s = s.lstrip(">").strip()             # 引用块
         s = _LIST_MARKER.sub("", s)           # - / * / 1. 列表符号
@@ -415,6 +483,10 @@ def find_previous_baseline(current_version: str) -> tuple[str, dict] | None:
     best: tuple[str, dict] | None = None
     for name in os.listdir(RELEASE_ROOT):
         if not VERSION_RE.match(name) or name == current_version:
+            continue
+        # 日期制遗留目录（如 2026.09.20）不作为三段式的增量基线：
+        # 那个版本号没有真实用户装过，拿它做基线只会产出「没人能装」的增量包。
+        if is_legacy_date(name):
             continue
         if version_key(name) >= version_key(current_version):
             continue

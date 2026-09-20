@@ -1289,35 +1289,20 @@ sealed class LauncherHost : IDisposable
         Timeout = TimeSpan.FromMinutes(15),
     };
 
-    /// <summary>读本地 VERSION 文件（与 main.py 的 current_app_version() 同源）。</summary>
+    /// <summary>
+    /// 读本地 VERSION 文件（与 main.py 的 current_app_version() 同源），
+    /// 并折算成规范式（1.1.10 → 1.2.0）：胶囊上的 V 号与更新比对都用它。
+    /// 规则见 VersionUtil.cs。
+    /// </summary>
     private string LocalVersion()
     {
         try
         {
             var p = Path.Combine(root, "VERSION");
-            if (File.Exists(p)) return File.ReadAllText(p).Trim();
+            if (File.Exists(p)) return VersionUtil.NormalizeVersion(File.ReadAllText(p));
         }
         catch { }
         return "";
-    }
-
-    /// <summary>按点分数字比版本。a &gt; b 返回 1，相等 0，小于 -1。</summary>
-    private static int CompareVersion(string a, string b)
-    {
-        static int[] Parts(string s) => s
-            .Split('.', StringSplitOptions.RemoveEmptyEntries)
-            .Select(x => int.TryParse(x.Trim(), out var v) ? v : 0)
-            .ToArray();
-
-        var pa = Parts(a ?? "");
-        var pb = Parts(b ?? "");
-        for (var i = 0; i < Math.Max(pa.Length, pb.Length); i++)
-        {
-            var x = i < pa.Length ? pa[i] : 0;
-            var y = i < pb.Length ? pb[i] : 0;
-            if (x != y) return x > y ? 1 : -1;
-        }
-        return 0;
     }
 
     private async Task<object> HandleCheckUpdateAsync()
@@ -1370,7 +1355,12 @@ sealed class LauncherHost : IDisposable
                 ok = true,
                 current,
                 latest,
-                updateAvailable = CompareVersion(latest, current) > 0,
+                // 版本号跨「日期制遗留 ↔ 三段式」时不能比数值：2026.08.30 恒大于 1.1.1。
+                // 所以两边体系不同时只认一个方向 —— 远端已是新方案、本地还是日期制，
+                // 才算真有更新；反过来只是远端还没推新版号，不能报「有新版」。
+                updateAvailable = VersionUtil.IsLegacyDate(current) != VersionUtil.IsLegacyDate(latest)
+                    ? !VersionUtil.IsLegacyDate(latest)
+                    : VersionUtil.CompareVersion(latest, current) > 0,
                 notes,
                 size,
                 sha256 = sha,
