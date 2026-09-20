@@ -4,6 +4,12 @@ API/.env
 # 运行时数据
 assets/
 data/*
+# data/ 是混装目录：绝大多数是用户数据（api_providers.json 含 API 密钥、
+# canvases/ 画布、chat_*.json 会话、asset_library.json 素材库索引……），
+# 只有下面这一个文件是随程序分发的只读资源，才允许入库。
+# ⚠️ 不要往这里加例外 —— 加之前先确认该文件不含用户内容，
+#    并且覆盖安装时覆盖它不会损坏用户状态（asset_library.json 就踩过这个坑：
+#    它被用户写入后，覆盖安装会把素材库索引清回空骨架）。
 !data/inspire_prompt_zh.json
 
 # 系统文件

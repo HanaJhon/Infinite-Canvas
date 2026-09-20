@@ -100,10 +100,23 @@ PROGRAM_DIRS = [
     "python",
 ]
 
-# data/ 里属于「随程序分发的内置数据」的两个文件，其余 data/ 一律是用户数据
+# data/ 是「混装目录」：里面既有用户数据（api_providers.json 含 API 密钥、
+# canvases/ 画布、chat_*.json 会话、update_backups/ 恢复点……），也有少数
+# 随程序分发的只读内置数据。所以不能整目录复制，只能逐个登记。
+#
+# ⚠️ 登记前必须确认两件事：
+#   1) 该文件不含任何用户内容（密钥 / 画布 / 会话 / 本机路径）
+#   2) 覆盖安装时覆盖它不会损坏用户状态
+#
+# 📌 因此 data/asset_library.json **不在**清单里：
+#    它是素材库索引，用户新增素材后会被写回（items 不再是空数组）。
+#    虽然仓库里那份是「默认资产库 + 3 个空分类」的出厂骨架，但一旦随包分发，
+#    用户覆盖安装就会被清回空骨架 —— 素材文件还在 assets/library/ 下，
+#    索引却没了，等于素材库凭空清空。
+#    而且 main.py 的 load_asset_library() 在文件缺失时会自建默认库并落盘，
+#    本就不需要随包提供。见 main.py:7913-7917。
 DATA_SHIPPED_FILES = [
-    "data/asset_library.json",
-    "data/inspire_prompt_zh.json",
+    "data/inspire_prompt_zh.json",   # 灵感库中文提示词词典（665 KB），纯只读程序资源
 ]
 
 # 白名单目录里需要剔除的构建产物 / 临时物（相对项目根）
