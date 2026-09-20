@@ -52,16 +52,27 @@
 - ⚠️ **`git add -A <被 gitignore 的目录>/...` 会报 ignored 而失败** → 删已跟踪文件用 **`git add -u`**（`output/` 被 gitignore，其下 4 个 `step*.png` 却是跟踪状态）。
 - 2026-09-18 已执行零风险清理（363 路径 / 82.67 MB，commit `bbb7ab1`）；回收站 3121 条目 / 0.092 GB。清单与判据见 E+G。
 - ⚠️ **判「密钥残留」不能只认 `sk-` 前缀** —— `.env` 类文件必须同时按 `NAME=VALUE` 逐行解析，否则会漏掉纯数字/异形 key（踩过：漏掉 11 位纯数字的真 key，得出「无残留」假结论）。**查 git 暴露面必须连标签一起查**（`git log <tag> --find-object=<blob>`），只看分支会低估。项目内已无真 key；唯一真 key 在 git 历史且**已公开**（Public 仓库 + 4 标签）→ 只能轮换。见 D.2。
-- ⚠️ **绝不要 `git rm <文件>`**（实测整个父目录消失）；用 Python `os.remove` + `git add -A <目录>/`。
+- ⚠️ **绝不要用裸 `git rm <文件>` / `git rm -r`**（实测整个父目录连磁盘文件一起消失）；删文件用 Python `os.remove` + `git add -A <目录>/`。
+- ✅ **只想「取消跟踪、保留磁盘文件」→ 用 `git rm --cached <文件>`**（index-only，2026-09-20 实测安全）。**必须先做父目录快照**（文件名 + 大小 + md5 全量），操作后逐项比对，一致才算过；不一致立刻 `git reset -- <文件>` 回滚。别用裸 `git rm` 试。
 - 🚨 `.git` 曾于 2026-09-17 被递归搬进回收站（已还原）。防护：维护前 `git bundle create ../repo-<日期>.bundle --all`；瘦身在项目外副本做。
 - ⚠️ **工具会话内 `git push` 会无限挂起** → 推送必须由老板本人终端执行（裸 `git` 不可用，真身在 PortableGit 1.2.0）。详见 B/L。
 
-## 八、发布打包硬红线（2026-09-20 发现）
+## 八、发布打包硬红线（2026-09-20）
 
 - 🚨 **绝不能把工作目录整包压缩当发布包**。实测 `...Official.v1.1.zip`（798 MB）含 **528 MB `.git`**（含已公开的 Grsai 密钥 blob）+ 8 个作者画布 + `history.json` + **135.6 MB 作者个人图片**（`assets/output/online_*.png`）。→ 用户下载即得到作者私有数据，且更新功能会反复分发。
-- **打包必须用 allow-list 复制程序文件 + 断言 deny-list 未命中**（deny-list = `API/.env`、`data/**`、`assets/input|output/**`、`history.json`、`output/**`、`.git/**`、`*.exe.WebView2/**`、`launcher/bin|obj/**`）。干净包预计 150~200 MB。
+- ✅ **打包脚本 = `tools/release.py`**（子命令 `list` / `verify <zip|目录>` / `build`），**allow-list 复制 + deny-list 断言**。实测 **2011 文件 / 111.40 MB**（比预估的 150~200 MB 更好）。
+  - **allow-list 是主防线**（只复制认识的程序路径），deny-list 只是兜底断言 —— deny-list 漏写一项就出事。
+  - `build` 会 `compile()` 自检 `main.py`、断言 `REQUIRED` 齐全、校验 VERSION 格式；zip 条目时间固定 (2026,1,1) → 同内容可复现。
+  - **默认不重编 exe**（否则每次打包都改动被跟踪的 `Lochou启动器.exe`）；仅当 `launcher/Program.cs` 比 exe 新时 WARN，加 `--build-exe` 才真编。
+  - ⚠️ **有文件删除时不产出增量包**：增量包只表达「新增/修改」，表达不了「删除」→ 被删的旧 JS/CSS 会残留在用户目录与新版本混跑，**比不更新更危险**。
 - ⚠️ **不能简单「用 git 树当更新包」**：`dist/`（启动器 UI 资源）虽是程序文件，却被 `.gitignore` 忽略、不在 git 里。
-- ⚠️ **`assets/` 混装两类东西**（用户数据 `input|output` + README 说的内置灵感库资源）→ 同目录混装则永远无法安全更新它；要内置的资源应挪到 `static/bundled/` 之类。
-- 🚨 **更新源 URL 指向别人的 fork**：`main.py:207-210` 全指 `raw.githubusercontent.com/mufanmu/Infinite-Canvas-agent`（实测是 `hero8152/Infinite-Canvas` 的 fork，别人的号）→ **往自己仓库推版本，软件内更新检查看不到**；README 那条「改 VERSION → push → 自动检测」当前不成立。
-- 网页端自更新**只覆盖 `main.py` / `VERSION` / `static/**`**（`update_allowed_file()`，`main.py:2479`）；启动器本体、`python/`、`tools/`、`CLI/` 都更新不到。`launcher/Program.cs` **零更新逻辑**。
-- 详见 N / `output/更新功能设计方案-2026-09-20.md`。
+- 🚨 **混装的是 `data/` 不是 `assets/`**（2026-09-20 实测，推翻此前判断）：
+  - `assets/` **100% 是用户数据**（`input/` + `output/`，`library/`、`uploads/` 为空），无任何程序资源 → **整目录排除本来就是对的，无需拆分**。
+  - `data/` 13 个文件里 12 个是用户数据（`api_providers.json` 含密钥、`canvases/`、`chat_*.json`、`projects.json`、`prompt_libraries.json`、`media_previews/`），只有 `inspire_prompt_zh.json`（665 KB 灵感库中文词典）是随程序资源 → 只能**逐文件登记**（`DATA_SHIPPED_FILES`）。
+  - 🚨 **`data/asset_library.json` 是素材库索引，绝不能随包分发**：用户新增素材后会被写回，覆盖安装会把它清回空骨架 → 素材文件还在 `assets/library/` 下、索引却没了，表现为**素材库凭空清空**。且 `load_asset_library()`（`main.py:7913-7917`）在文件缺失时会自建默认库并落盘，本就不需要随包提供。它同时也已**取消 git 跟踪**（`.gitignore` 的 `data/*` 本就忽略它，只有 `inspire_prompt_zh.json` 有 `!` 例外）—— 否则老板往素材库加东西，`git add -A` 就会把索引推到公开仓库。
+- 🚨 **更新源曾指向别人的 fork**（已修）：`main.py:207-210` 原指 `raw.githubusercontent.com/mufanmu/Infinite-Canvas-agent`（实测是 `hero8152/Infinite-Canvas` 的 fork）→ 往自己仓库推版本软件内检测不到。2026-09-20 已改回 `HanaJhon/Infinite-Canvas`，**前端 `static/index.html` 另有 4 处硬编码 + `tools/` 3 处链接同样指向旧 fork，一并改了** —— 查更新源**必须连前端与 tools 一起查**，只改后端会漏。
+- 🚨 **上游留了引流广告**：`static/update-notes.json` 原文「此项目已停更，全新版本请前往：DX-OS.com下载。」，会被 `read_local_update_notes()` 读取并经 `GITHUB_UPDATE_NOTES_URL` 拉取 → 用户点「检查更新」直接看到，等于把用户往上游引流。已改写。同类残留还有 `static/css/api-settings.css` 146 行 `.dx-os-banner` 死 CSS、孤儿 `static/images/dx-os-logo.svg`（均已删）。
+- 网页端自更新**只覆盖 `main.py` / `VERSION` / `static/**`**（`update_allowed_file()`，`main.py:2479`）；启动器本体、`python/`、`tools/`、`CLI/` 都更新不到。`launcher/Program.cs` **零更新逻辑**（阶段 2 待做）。
+- ⚠️ **发布流程必须老板本人执行**：工具会话内 `git push` / `gh` 会挂起。`release-summary.txt` 里已生成可直接执行的 `gh release create` 命令。
+- 📌 `update.json` **必须作为 Release 资产上传** → 启动器从 `releases/latest/download/update.json` 取（该路径**不消耗** GitHub API 配额；实测 `api.github.com` 匿名调用已 403 rate limit）。
+- 详见 N / `output/更新功能设计方案-2026-09-20.md`（§9 为阶段 1 执行结果）。

@@ -738,7 +738,7 @@ r186 的 `build/` 已拆分，**不能单文件 vendoring**：`three.core.js`（
 
 | 来源 | 值 |
 |---|---|
-| `VERSION` 文件 | `2026.08.30` |
+| `VERSION` 文件 | `2026.09.20`（2026-09-20 由 `2026.08.30` bump，用于发布干净版） |
 | git tag | `Official.v1.1`（另有 `Official.v0.1`、`…Beta.V0.1`、`…-V0.1`、`archive-image2psd-20260917`） |
 | `main.py:204 APP_VERSION` | `"2026.08.29"`（兜底，与 VERSION 文件不一致） |
 
@@ -775,8 +775,60 @@ r186 的 `build/` 已拆分，**不能单文件 vendoring**：`three.core.js`（
 
 - **不需要安装包**；便携目录 + 自更新。Inno Setup 只在需要快捷方式/卸载项时才做。
 - 清单 `update.json` 放 Release 资产，用 **`releases/latest/download/update.json`** 取（**不消耗 API 配额、无需鉴权**）。
-- 包分 `delta`（日常，2~15 MB）与 `full`（首次/跨版本，150~200 MB）；都带 `size` + `sha256`。
+- 包分 `delta`（日常，2~15 MB）与 `full`（首次/跨版本）；都带 `size` + `sha256`。**实测 full = 111.40 MB**（见 N.7）。
 - **覆盖正在运行的 exe 必失败** → 必须派生独立进程（`.cmd` 或小 `updater.exe`）。
 - 替换阶段用 **allow-list**（只复制认识的程序路径），不用 deny-list。
 - 回滚复用网页端 `data/update_backups/`，让两处更新共用一套恢复点。
 - `API/.env` 只能追加缺失键，**绝不整文件覆盖**。
+
+### N.7 阶段 1 执行细节（2026-09-20）
+
+**提交**：`276623f`（更新源）/ `92305b3`（清上游引流）/ `ebd3420`（`tools/release.py` + VERSION）/ `8d74ae5`（`asset_library.json` 取消跟踪与分发）。
+
+**`tools/release.py` 关键设计**
+
+| 常量 | 内容 |
+|---|---|
+| `ROOT_FILES` | 22 个根文件（含 `Lochou启动器.exe`、`main.py`、`VERSION`、各平台脚本、`赞赏.png`） |
+| `PROGRAM_DIRS` | `static` `dist` `launcher` `tools` `workflows` `tests` `CLI` `packages` `python` |
+| `DATA_SHIPPED_FILES` | **只有** `data/inspire_prompt_zh.json`（`asset_library.json` 已剔除，见下） |
+| `EXCLUDE_PREFIXES` | `launcher/bin/` `launcher/obj/` `dist/dist/` `tools/__pycache__/` |
+| `DENY_PREFIXES` | `.git/` `.workbuddy-ai/` `.claude/` `API/` `assets/` `output/` `data/` |
+| `DENY_EXACT` | `history.json` `inspire_image_dims.json` `API/.env` `Lochou启动器.exe.WebView2` |
+| `REQUIRED` | `main.py` `VERSION` `Lochou启动器.exe` `static/index.html` `dist/launcher/index.html` |
+
+- **allow-list 是主防线**，deny-list 只作兜底断言 —— deny-list 漏写一项就出事。`build` 时若白名单里出现黑名单路径会**直接中止**（说明清单写错了）。
+- zip 条目时间固定 `(2026,1,1,0,0,0)` + `external_attr = 0o644 << 16` → 同内容可复现。
+- 增量包：与更早的 `file-hashes.json` 比对，**`changed` 为空不产出**；**`removed` 非空也不产出**（增量包表达不了删除）。
+- `--notes-file` 指定更新说明；不传则从 `CHANGELOG.md` 顶部第一个 `####` 段抓。
+- 实测：`list` 2011 文件 / 156.51 MB；`verify` 新包通过、旧包 798 条用户数据路径不通过；`build` 111.40 MB。
+
+**两个真 bug（本次修掉）**
+
+1. **有删除时产出增量包** → 被删的旧 JS/CSS 残留在用户目录与新版本混跑，比不更新更危险。改为 `removed` 非空即跳过。
+2. **`data/asset_library.json` 随包分发** → 它是**素材库索引**（用户新增素材后会被写回），覆盖安装会把它清回空骨架 → 素材文件还在 `assets/library/` 下、索引却没了 = **素材库凭空清空**。而 `load_asset_library()`（`main.py:7913-7917`）在文件缺失时会自建默认库并落盘，本就不需要随包提供。
+
+**混装目录结论（推翻原判断）**
+
+- `assets/` **100% 是用户数据**（`input/` 5 文件 0.71 MB、`output/` 16 文件 135.60 MB，`library/`、`uploads/` 空）→ 整目录排除本来就对，**无需拆分**。
+- `data/` 13 文件里 12 个是用户数据（`api_providers.json` 含密钥、`canvases/` 7 个、`chat_*.json`、`projects.json`、`prompt_libraries.json`、`media_previews/`），只有 `inspire_prompt_zh.json`（665 KB）是程序资源 → 只能**逐文件登记**。
+- `data/asset_library.json` 已 `git rm --cached` 取消跟踪（`.gitignore` 的 `data/*` 本就忽略它，只有 `inspire_prompt_zh.json` 有 `!` 例外）。**安全做法**：操作前对父目录做「文件名 + 大小 + md5」全量快照，操作后逐项比对，一致才算过；不一致 `git reset -- <文件>` 回滚。备份存 `output/_backup/asset_library.json.bak`。
+
+**上游引流残留（已清）**
+
+- `static/update-notes.json` 原文「此项目已停更，全新版本请前往：DX-OS.com下载。」→ 会被 `read_local_update_notes()`（`main.py:1648`）读取 + 经 `GITHUB_UPDATE_NOTES_URL` 拉取，用户点「检查更新」原样看到。已改写。
+- `static/css/api-settings.css` 146 行 `.dx-os-banner` 系列死 CSS（`index.html` 与 `static/js/` 零引用）；孤儿 `static/images/dx-os-logo.svg`。
+- ⚠️ **删 CSS 块的坑**：用「找下一个以 `}` 结尾的行」定位块尾会匹配到内层规则的收尾 `}`，少删 1 行留下孤立 `}`；且**搜关键字查不出来**（孤立大括号不含关键字）→ **删结构化文本必须做结构校验**（本次补了括号配平：最终深度 0、最低深度 0）。
+
+**更新源修正范围（易漏）**
+
+后端 4 个 `GITHUB_*` 常量之外，`static/index.html` 另有 4 处硬编码（`:1685` `PROJECT_URL`、`:2240/:2241` 连通性检测兜底 URL、`:2340/:2343` 提示文案），`tools/` 另有 3 处（`chrome-local-asset-importer/{popup,sidepanel}.html` 的按钮 title、`photoshop-asset-connector/js/app.js:399`）。**查更新源必须连前端与 tools 一起查。**
+
+**可达性实测**
+
+```
+raw.githubusercontent.com/HanaJhon/Infinite-Canvas/main/VERSION             → 200  2026.09.20
+raw.githubusercontent.com/HanaJhon/Infinite-Canvas/main/static/update-notes.json → 200
+api.github.com/repos/HanaJhon/Infinite-Canvas                               → 403  rate limit
+```
+→ 更新流程**不该依赖 GitHub API**；版本比对走 raw 静态文件、清单走 `releases/latest/download/`。
