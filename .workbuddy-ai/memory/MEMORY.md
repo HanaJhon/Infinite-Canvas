@@ -88,3 +88,14 @@
   - ⚠️ **Tailwind 4 的 `getComputedStyle().backgroundColor` 返回 `oklch()`/`oklab()` 而不是 `rgb()`** → 用 `rgba?\((\d+)` 正则判颜色一定漏判（实测 `bg-red-500` = `oklch(0.637 0.237 25.331)`）。量颜色要建 1×1 canvas 归一化成 rgb。
   - 更新区块抽成 `UpdateSection` 组件，首页浮层与设置弹窗**共用**，改一处即两处生效。
 - 详见 N / `output/更新功能设计方案-2026-09-20.md`（§9 阶段 1、§10 阶段 2 执行结果）。
+
+## 九、版本号与更新判定硬红线（2026-09-20）
+
+- 🚨 **不要手改 `VERSION`** —— 升版本一律 `python tools/bump_version.py`（`--dry-run` / `--times N` / `--set X` / `--self-test`）。规则：三段式起于 `1.1.1`，**每多进一级就少一段**（段数 3→2→1，只减不增）：`1.1.9`→`1.2.0`、`1.9.9`→`2.0`、`9.9`→`10`、`10`→`11`（**首段满 10 不再进位**）。
+- 🚨 **规则只有一份权威实现**：`tools/versioning.py`（Python）+ `launcher/VersionUtil.cs`（C#），自测向量共用 `tools/version_vectors.json`（32 条）。`main.py` 用 `version_rules()` 动态导入，取不到 tools/ 时退回「原样返回」。**改规则必须两边同改 + 跑两边向量**。
+- 🚨 **非规范式会造成「更新死循环」**：`VERSION` 写 `1.1.10` 而 `update.json` 写 `1.2.0` → 用户装完新版、`VERSION` 仍是 `1.1.10` → 比对永远「有新版」→ 无限提示更新。所以 `release.py:read_version()` 读到非规范式会**自动折算并写回 `VERSION` 文件**（会改文件，记得一并提交）。
+- 🚨 **跨「日期制遗留 ↔ 三段式」绝不能比数值**：`2026.08.30` 数值恒大于 `1.1.1`。判定必须**对称** —— 两边体系不同时**只认「远端是新方案、本地是旧日期」**这一个方向（`main.py` 的 `check_update()` 与 `Program.cs` 的 `HandleCheckUpdateAsync` **两处同步**）。日期制值**不参与进位换算**（`is_legacy_date()` 原样保留，否则 `2026.09.20` 会被算成 `2027.1`）。
+- 🚨 **`dist/InfiniteCanvasLauncher.*` 与 `dist/Microsoft.Web.WebView2.*` 不得进包**：`dotnet publish -o dist` 会把 68.91 MB **重复 exe** + `.pdb` + 3 个 WebView2 `.xml` 写进根 `dist\`，而 `dist` 在 `PROGRAM_DIRS` 白名单里 → 包从 111 MB **虚涨到 175 MB**。已加进 `EXCLUDE_PREFIXES`。
+- 🚨 **`read_notes_file()` 必须跳过收尾章节**（`升级`/`安装`/`下载`/`注意`/`说明`/`upgrade`/`install`/`download`/`notes`）：否则「升级方式」的正文会在更新面板里**冒充新功能**。只跳**认识的**标题，不认识的一律保留（宁可多显示也不悄悄漏真条目）。
+- ⚠️ **同一文件的多处 `Edit` 绝不能并行** —— 并行写会互相覆盖。本次丢了 3 处（`main.py` 的 `version_rules()` 定义 → `/api/check-update` 500 `NameError`；`Program.cs` 的 `LocalVersion` 规范化；`release.py` 的用法注释）。改完必须用 `re.findall` 逐条断言「期望 N 处 / 期望 0 处」。
+- ⚠️ **无头 Edge 探针：`--virtual-time-budget` 会被真实外链挂住**。启动器 `index.html` 的 `https://font.sec.miui.com/...` 字体请求让虚拟时钟迟迟不 settled → `--dump-dom` 在 React 回填数据前就结束，测到 `V—`（**而截图里明明正常**）。探针副本必须**剔除所有 `http(s)://` 外链**并把 budget 提到 40000。异步状态（`GET_VERSION`/`UPDATE_CHECK`）本就慢，别只靠加等待。**数据自相矛盾时先怀疑测量环境**。

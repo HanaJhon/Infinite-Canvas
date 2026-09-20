@@ -1014,3 +1014,72 @@ STALE      = static/js/obsolete.js / tools/gone/old.txt / launcher/obsolete.dll 
    可用于判断「不是启动即崩」。
 
 
+
+### N.7 版本号规则与双端规范化（2026-09-20，提交 `36051f0`）
+
+**规则（唯一一条）**：三段式起于 `1.1.1`，**每多进一级就少一段**（段数 3→2→1，只减不增）。
+首段满 10 **不再进位**。
+
+| 输入 | 输出 | 说明 |
+|---|---|---|
+| `1.1.9` → bump | `1.2.0` | 末段满 10 → 中段 +1、末段归 0，**保持三段** |
+| `1.1.10` → normalize | `1.2.0` | 同上（老板原话的写法） |
+| `1.9.9` → bump | `2.0` | 中段也满 → 首段 +1，**丢掉归零的末段**（缩成两段） |
+| `1.10.0` → normalize | `2.0` | 同上（老板原话的写法） |
+| `9.9` → bump | `10` | 首段满 10 → 缩成一段，**继续迭代** |
+| `10` → bump | `11` | 不再进位 |
+| `1.10.10` → normalize | `2.1` | 先处理末段、再处理中段 |
+| `10.0` → normalize | `10` | 首段溢出截断，丢掉右边归零段 |
+| `2026.09.20` → normalize | `2026.09.20` | 日期制遗留**原样保留**，不换算（否则变 `2027.1`） |
+
+**状态机**
+
+```
+parts = [a,b,c]
+loop:
+  over = [i for i,x in enumerate(parts) if x >= 10]
+  if not over: break
+  i = over[-1]                          # 取最靠右的溢出位
+  if i == 0: parts = parts[:1]; break   # 首段溢出 → 截断，不再进位
+  carry, parts[i] = divmod(parts[i], 10)
+  parts[i-1] += carry
+  if i < len(parts)-1: parts = parts[:i+1]   # 丢掉右边已归零的段
+```
+
+200 步连续进位实测：严格递增 ✓ / 规范式幂等 ✓ / 段数只减不增 ✓。
+节点：第 8 版 `1.1.9` → 第 9 版 `1.2.0`；第 19 版 `1.3.0`；第 89 版 `2.0`；
+第 169 版 `10`；第 170 版 `11`；第 200 版 `41`。
+
+**文件分工**
+
+| 文件 | 职责 |
+|---|---|
+| `tools/versioning.py` | 规则**单一权威**：`parse_version` / `is_legacy_date` / `normalize_version` / `bump_version` / `is_canonical` / `load_vectors` / `run_selftest` |
+| `tools/version_vectors.json` | Python + C# **共用** 32 条向量（normalize 16 / bump 16） |
+| `tools/bump_version.py` | CLI：`--dry-run` / `--times N` / `--set X` / `--self-test`；`newline="\n"` 防 CRLF |
+| `launcher/VersionUtil.cs` | C# 等价实现（`internal static`）：`IsLegacyDate` / `ParseVersion` / `NormalizeVersion` / `CompareVersion` |
+| `main.py` | `version_rules()` 动态导入 `tools/versioning.py`（取不到 tools/ 退回原样返回）；`current_app_version()` 规范化 |
+| `tools/release.py` | `VERSION_RE = ACCEPTED_RE`；`read_version()` 非规范式**自动折算并写回 VERSION** |
+
+**为什么必须规范化**：`VERSION` 写 `1.1.10` 而 `update.json` 写 `1.2.0` → 用户装完新版
+`VERSION` 仍是 `1.1.10` → 比对永远「有新版」→ **更新死循环**。
+
+**跨版本体系判定必须对称**（`main.py:check_update()` / `Program.cs:HandleCheckUpdateAsync`）：
+
+```python
+if is_legacy_date(current) != is_legacy_date(remote):
+    update_available = not is_legacy_date(remote)   # 只认「远端是新方案」这一个方向
+else:
+    update_available = version_gt(remote, current)
+```
+
+⚠️ 最初写成**不对称**（`version_gt(...) or (is_legacy_date(current) and not is_legacy_date(remote))`）
+→ 远端 `2026.08.30` 数值恒大于 `1.1.1` → **误报「有新版本」**。6 象限交叉验证后修正。
+
+**验证方式**：C# 自测项目**直接把生产源编进来**
+（`<Compile Include="../../launcher/VersionUtil.cs" />`），测的是真实现而非副本 → 45 条向量全过。
+
+**`read_notes_file()` 章节过滤**：更新面板把每条渲染成圆点，「升级方式」章节的正文混进去会
+**冒充新功能**（实测 9 条里 3 条是升级说明）。只跳过**认识的**标题关键词
+（`升级`/`安装`/`下载`/`注意`/`说明`/`upgrade`/`install`/`download`/`notes`），
+**不认识的标题一律保留**（宁可多显示也不悄悄漏真实条目）。
