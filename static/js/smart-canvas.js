@@ -22024,6 +22024,23 @@ function agentMessageHtml(msg){
     const imgs = (msg.images || []).filter(i => i?.url).map(i => `<img src="${escapeHtml(i.url)}" alt="" loading="lazy">`).join('');
     let _genNumOffset = 0;
     const gens = (msg.generations || []).map(g => { const html = agentGenCardHtml(g, _genNumOffset); _genNumOffset += (g.results || []).filter(r => r?.url).length; return html; }).join('');
+    // 本机工具调用记录：可折叠卡片（默认收起，点开看参数与输出）
+    const toolCards = (Array.isArray(msg.toolEvents) ? msg.toolEvents : []).map(ev => {
+        const name = ev?.label || ev?.name || tr('smart.asmToolCall');
+        const round = Number(ev?.round) || 0;
+        const argsText = ev?.args ? JSON.stringify(ev.args, null, 2) : '';
+        // tr() 不做 {n} 插值 → 占位符手工替换
+        const roundText = round ? escapeHtml(tr('smart.asmToolRound')).replace('{n}', String(round)) : '';
+        return `<details class="agent-tool-call${ev?.ok ? '' : ' failed'}">`
+            + `<summary><i data-lucide="terminal"></i><span class="agent-tool-call-name">${escapeHtml(name)}</span>`
+            + `<span class="agent-tool-call-brief">${escapeHtml(ev?.summary || '')}</span>`
+            + `${roundText ? `<span class="agent-tool-call-round">${roundText}</span>` : ''}</summary>`
+            + `<div class="agent-tool-call-body">`
+            + `<div class="agent-tool-call-label">${escapeHtml(tr('smart.asmToolArgs'))}</div><pre>${escapeHtml(argsText || tr('smart.asmToolNone'))}</pre>`
+            + `<div class="agent-tool-call-label">${escapeHtml(tr('smart.asmToolOutput'))}</div><pre>${escapeHtml(ev?.output || tr('smart.asmToolNoOutput'))}</pre>`
+            + `</div></details>`;
+    }).join('');
+    const toolWrap = toolCards ? `<div class="agent-tool-calls">${toolCards}</div>` : '';
     const actions = msg.text ? `<div class="agent-msg-actions"><button class="agent-msg-action-btn" type="button" data-agent-copy="${escapeHtml(msg.id)}" title="复制"><i data-lucide="copy"></i></button>${msg.role === 'assistant' ? `<button class="agent-msg-action-btn" type="button" data-agent-retry="${escapeHtml(msg.id)}" title="重试"><i data-lucide="refresh-cw"></i></button>` : ''}</div>` : '';
     // 结构化 options 字段（仅 assistant 消息，且 generations 为空时显示）
     const hasGenerations = Array.isArray(msg.generations) && msg.generations.length > 0;
@@ -22081,7 +22098,7 @@ function agentMessageHtml(msg){
         cardHtml = `<div class="agent-prompt-suggest-card"><div class="agent-prompt-suggest-body">${escapeHtml(msg.text)}</div><div class="agent-analysis-actions"><button class="agent-quick-btn primary" type="button" data-agent-card-gen="1"><i data-lucide="palette"></i><span>直接生图</span></button><button class="agent-quick-btn" type="button" data-agent-copy="${escapeHtml(msg.id)}"><i data-lucide="copy"></i><span>复制</span></button></div></div>`;
     }
     const bubbleHtml = (msg.text && !cardHtml) ? `<div class="agent-msg-bubble">${escapeHtml(msg.text)}</div>` : '';
-    return `<div class="agent-msg ${msg.role === 'user' ? 'user' : 'assistant'}">${bubbleHtml}${cardHtml}${imgs ? `<div class="agent-msg-thumbs">${imgs}</div>` : ''}${gens}${promptCardHtml}${optionsHtml}${actions}</div>`;
+    return `<div class="agent-msg ${msg.role === 'user' ? 'user' : 'assistant'}${toolWrap ? ' has-tools' : ''}">${bubbleHtml}${cardHtml}${imgs ? `<div class="agent-msg-thumbs">${imgs}</div>` : ''}${toolWrap}${gens}${promptCardHtml}${optionsHtml}${actions}</div>`;
 }
 function renderAgentMessages(){
     if(!agentMessages || !agentState) return;
@@ -23250,6 +23267,8 @@ const assistantMsg = {
     prompts:parsed.prompts || [], 
     generations:parsed.generations, 
     ts:Date.now(),
+    // 本机工具调用记录（后端 tool-calling 循环产出），随消息落盘，刷新后仍可回看
+    toolEvents: Array.isArray(result?.tool_events) ? result.tool_events : [],
     collected: parsed.collected || {},
     next_dimension: parsed.next_dimension || '',
     remaining_dimensions: parsed.remaining_dimensions || []
@@ -24478,6 +24497,11 @@ agentImageInput.value = '';
 document.getElementById('agentRefConfirmYes')?.addEventListener('click', () => hideImageRefConfirmPanel(true));
 document.getElementById('agentRefConfirmNo')?.addEventListener('click', () => hideImageRefConfirmPanel(false));
 document.getElementById('agentRefConfirmCancel')?.addEventListener('click', () => hideImageRefConfirmPanel(false));
+
+// ==================== Skill 市场 ====================
+// 入口按钮 #agentSkillMarketBtn 带 data-skill-market-open，由 static/js/skill-market.js
+// 自动绑定；浮层 DOM / 渲染 / 安装卸载全在那份共享模块里（gpt-chat 页用同一份）。
+// 这里不再保留任何市场代码 —— 原来那份 asm* 实现（约 220 行）已迁出。
 // 思维模式开关按钮
 const agentThinkingBtn = document.getElementById('agentThinkingBtn');
 function syncAgentThinkingBtn(){

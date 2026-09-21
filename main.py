@@ -29,6 +29,7 @@ import html
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional, Tuple
 from threading import Lock, Thread
+from concurrent.futures import ThreadPoolExecutor
 import httpx
 from PIL import Image, ImageOps
 from io import BytesIO
@@ -3400,6 +3401,10 @@ class AgentToolsRequest(BaseModel):
     level: str = ""
     max_rounds: Optional[int] = None
 
+class AgentSkillRequest(BaseModel):
+    """Skill 市场的安装 / 卸载请求。"""
+    id: str = ""
+
 class GeminiCliHelpRequest(BaseModel):
     command: str = ""
 
@@ -5966,6 +5971,724 @@ def codex_permission_args():
                 "sandbox_workspace_write.writable_roots=" + codex_toml_string_array(extra_roots),
             ])
     return args
+
+# ===================== Agent Skill 市场（数据源：SkillsMP） =====================
+# 1.1.4 之前这里是 34 个手工整理的 Skill，老板反馈「太少了」。1.1.5 起换成 SkillsMP
+# （https://skillsmp.com）的公开 JSON 接口 —— 它索引了 GitHub 上的海量 Agent Skill。
+#
+# 接口：GET https://skillsmp.com/api/skills?sortBy=<stars|recent>&limit=<≤48>&page=<n>
+#   · 返回 {skills:[…], pagination:{total, maxResults:1200}, filters:{…}}
+#   · 每条含 name / description / author / stars / forks / updatedAt / branch / route
+#     {ownerSlug, repoSlug, routeSlug, sourceSkillPath} —— 足够拼出 SKILL.md 的 raw 地址
+#   · 硬限制（实测）：limit ≤ 48（50 直接 400）；总量封顶 1200 条；
+#     **只有 stars / recent 两个排序有效**，其余候选值（updated / downloads / forks /
+#     name / trending / popular / newest / random）全部静默回退成 stars
+#   · 限流（实测）：并发 5~6 时 10 页稳定（约 21s），并发 8 时 10 页失败 5 页 ——
+#     但那是在**还没被惩罚**的前提下。连抓 24 页若干轮之后，429 会变成按 IP 累计的
+#     「硬封锁」：单请求也持续 429，冷却以十分钟计。见下面「限流防护」注释。
+#
+# ⚠️ 为什么两个排序都必须抓：`sortBy=stars` 是按**仓库** star 排的，1200 条只来自 4~7 个
+# 巨型仓库（affaan-m/ecc 一家就 903 条、openclaw 121 条），按仓库限量后剩不下几个；
+# `sortBy=recent` 按更新时间排，1200 条覆盖 278 个不同仓库 —— 多样性全靠它。
+# 两个都抓、再按仓库限量，才既有头部高质量仓库、又有足够宽度。
+#
+# ⚠️ 抓取和展示是两个层次：`static/skills-catalog.json` 是**随包分发的内置快照**（离线兜底、
+# 首屏秒开）；联网刷新的结果落在 `data/skills_market_cache.json`（含完整列表，优先于快照）。
+# 安装 = 把 SKILL.md 落到 data/agent_skills/<id>/；卸载 = 删掉该目录（都限制在 DATA_DIR 内）。
+SKILLSMP_API = "https://skillsmp.com/api/skills"
+SKILLSMP_SITE = "https://skillsmp.com"
+SKILLSMP_PAGE_SIZE = 48                  # 接口硬上限（50 直接 400）
+SKILLSMP_STAR_PAGES = 4                  # 按 star 排序取前 4 页：覆盖 star 最高的几个巨型仓库
+SKILLSMP_RECENT_PAGES = 20               # 按最近更新排序取 20 页：覆盖数百个仓库，保证多样性
+SKILL_PER_REPO_LIMIT = 8                 # 单仓库最多收录数：防「巨型仓库霸榜」
+SKILL_SNAPSHOT_LIMIT = 1200              # 清单总条数上限
+
+SKILLS_CATALOG_FILE = os.path.join(STATIC_DIR, "skills-catalog.json")
+AGENT_SKILLS_DIR = os.path.join(DATA_DIR, "agent_skills")
+AGENT_SKILLS_INDEX = os.path.join(AGENT_SKILLS_DIR, "index.json")
+SKILLS_MARKET_CACHE = os.path.join(DATA_DIR, "skills_market_cache.json")
+SKILLS_MARKET_STATE = os.path.join(DATA_DIR, "skills_market_state.json")
+SKILLS_MARKET_TTL = 6 * 3600             # 联网刷新缓存有效期（秒）
+SKILL_MARKET_TIMEOUT = 20                # 单次联网超时（秒）
+
+# ---------- 限流防护（2026-09-21 事故后加固）----------
+# 🚨 事故：连抓 24 页（并发 5、无节流、无重试）触发 SkillsMP 的 HTTP 429，
+# 15 页失败 → 清单从 615 条缩到 194 条，而 refresh 又把**不完整结果覆盖了缓存**。
+# 更糟的是 429 是**按 IP 累计惩罚**的：被限流后连「单请求」都持续 429（实测
+# 并发 2 + 间隔 1.0s 仍 24/24 全 429，之后单页请求也 429），冷却期以十分钟计。
+# 所以这里必须四件事一起做，缺一不可：
+#   ① 节流：所有请求过同一道全局闸，最小间隔 SKILL_MARKET_MIN_INTERVAL；
+#   ② 退避重试：429 只重试 1 次（带抖动），普通异常重试 2 次；
+#   ③ 快速中止 + 冷却：连续 2 页被限流就放弃剩余页，并写 cooldown_until 不再联网；
+#   ④ 防缩水：条数 / 失败页占比不达标就**保留旧数据**，绝不覆盖。
+SKILL_MARKET_WORKERS = 2                 # 并发（实测 8 必被限流；配合全局节流取 2）
+SKILL_MARKET_MIN_INTERVAL = 1.2          # 全局最小请求间隔（秒）
+SKILL_MARKET_RETRY = 2                   # 普通异常（网络抖动）重试次数
+# 429 **不重试**：实测被限流时重试从不成功（每次都还是 429），而 SkillsMP 的 429
+# 响应本身要 ~16s 才返回，重试一次就是把用户干等时间翻倍。改由「先探一页 + 快速中止
+# + 冷却」处理，见 skillsmp_fetch_all / build_skills_catalog_ex。
+SKILL_MARKET_THROTTLE_RETRY = 0          # 想改成 1 也可，配合下面的退避基数
+SKILL_MARKET_BACKOFF = (4.0,)            # 429 退避基数（秒），仅当 THROTTLE_RETRY ≥ 1 时用到
+SKILL_MARKET_ABORT_AFTER = 2             # 连续 N 页被限流 → 立刻中止整批，别把 24 页跑完
+SKILL_MARKET_COOLDOWN = 30 * 60          # 触发限流后的冷却期（秒）
+SKILL_MARKET_MIN_KEEP = 0.75             # 新结果 < 现有清单 × 该比例 → 判缩水，拒绝覆盖
+SKILL_MARKET_MAX_FAIL_RATIO = 0.15       # 失败页占比 > 该值 → 拒绝覆盖
+SKILL_DOWNLOAD_BYTES = 512 * 1024        # 单个 SKILL.md 允许的最大字节数
+SKILL_INJECT_CHARS = 40000               # 已安装 Skill 注入系统提示词的总字符上限
+# ⚠️ 必须带浏览器式 UA：SkillsMP 在 Cloudflare 后面，urllib 默认 UA 会被按指纹拦。
+SKILL_MARKET_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 InfiniteCanvasLauncher/1.0")
+
+# 领域标签：按「名称 + 说明」里的关键词归类（SkillsMP 不提供 tags）。
+# 每个 Skill 最多打 3 个标签，按命中关键词数从多到少取 —— 所以规则可以写得宽一点。
+SKILL_TAG_RULES = (
+    ("design", ("design", "ui", "ux", "css", "style", "visual", "figma", "typography",
+                "color palette", "layout", "theme", "animation")),
+    ("frontend", ("react", "vue", "svelte", "next.js", "nextjs", "frontend", "browser",
+                  "html", "dom", "tailwind", "component")),
+    ("backend", ("api", "server", "backend", "rest", "graphql", "database", "sql",
+                 "postgres", "django", "fastapi", "endpoint", "microservice")),
+    ("data", ("data", "analytics", "etl", "csv", "excel", "spreadsheet", "pandas",
+              "chart", "metric", "dashboard", "report")),
+    ("ai", ("llm", "prompt", "gpt", "claude", "embedding", "rag", "fine-tune",
+            "neural", "machine learning", "vision model", "inference")),
+    ("docs", ("documentation", "docs", "markdown", "readme", "writing", "blog",
+              "article", "copywriting", "changelog", "release note")),
+    ("test", ("test", "testing", "qa", "e2e", "unit test", "lint", "debug",
+              "regression", "coverage")),
+    ("devops", ("deploy", "docker", "kubernetes", "k8s", "ci/cd", "pipeline",
+                "infrastructure", "terraform", "aws", "monitoring", "github actions")),
+    ("security", ("security", "auth", "authentication", "secret", "vulnerability",
+                  "audit", "encryption", "permission", "token")),
+    ("productivity", ("workflow", "automation", "task", "todo", "productivity",
+                      "note", "calendar", "email", "template", "checklist")),
+    ("media", ("image", "video", "audio", "photo", "media", "svg", "gif",
+               "screenshot", "thumbnail")),
+    ("mobile", ("mobile", "ios", "android", "swift", "kotlin", "flutter", "react native")),
+    ("research", ("research", "analysis", "competitive", "benchmark", "survey",
+                  "interview", "requirement", "spec", "roadmap")),
+)
+
+def load_skills_catalog():
+    """读取内置 Skill 市场清单；文件缺失或损坏时返回空清单而不是抛错。"""
+    empty = {"schema": 2, "source": "skillsmp", "skills": [], "snapshot_at": ""}
+    try:
+        with open(SKILLS_CATALOG_FILE, "r", encoding="utf-8-sig") as f:
+            data = json.load(f) or {}
+    except Exception as exc:
+        print(f"加载 Skill 市场清单失败: {exc}")
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    if not isinstance(data.get("skills"), list):
+        data["skills"] = []
+    return data
+
+def skill_http_get(url, timeout=SKILL_MARKET_TIMEOUT):
+    """同步 GET（调用方用 asyncio.to_thread 包住，避免阻塞事件循环）。"""
+    req = urllib.request.Request(url, headers={
+        "User-Agent": SKILL_MARKET_UA,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+# ---------- SkillsMP 抓取（带全局节流 + 429 退避重试）----------
+
+_SKILL_MARKET_GATE = Lock()          # 所有 SkillsMP 请求共用的节流闸
+_SKILL_MARKET_LAST = [0.0]           # 上一次请求的起始时间（用列表包一层便于闭包写）
+
+def skill_market_pace():
+    """全局最小请求间隔闸门。
+
+    ⚠️ 必须**多线程共用**：并发抓页时若各线程各睡各的，瞬时速率依旧是并发的量级，
+    限流照样触发。这里持锁 sleep，等于把并发退化成「带流水线的串行」——并发只用来
+    吃掉网络延迟，速率仍被严格限制在 1 / SKILL_MARKET_MIN_INTERVAL。
+    """
+    with _SKILL_MARKET_GATE:
+        wait = SKILL_MARKET_MIN_INTERVAL - (time.time() - _SKILL_MARKET_LAST[0])
+        if wait > 0:
+            time.sleep(wait)
+        _SKILL_MARKET_LAST[0] = time.time()
+
+def skill_market_is_throttle(exc):
+    """判断异常是不是限流（429）。Cloudflare 偶尔用 403 + 特定文案表达限流。"""
+    if isinstance(exc, urllib.error.HTTPError):
+        return int(getattr(exc, "code", 0) or 0) == 429
+    return False
+
+def skillsmp_fetch_page(sort, page):
+    """抓一页，返回 (rows, error)。
+
+    - 成功：(list, None)
+    - 失败：([], 异常对象) —— 调用方据此统计失败页
+    ⚠️ 429 只重试 SKILL_MARKET_THROTTLE_RETRY 次（默认 1）就放弃：被限流时反复死磕
+    只会把 IP 的冷却期越拖越长（实测惩罚是累计的），快速失败交给上层中止才是正解。
+    """
+    url = f"{SKILLSMP_API}?sortBy={sort}&limit={SKILLSMP_PAGE_SIZE}&page={page}"
+    last = None
+    throttle_tries = 0
+    net_tries = 0
+    while True:
+        skill_market_pace()
+        try:
+            payload = json.loads(skill_http_get(url).decode("utf-8", "replace"))
+            rows = payload.get("skills")
+            return (rows if isinstance(rows, list) else []), None
+        except Exception as exc:
+            last = exc
+            if skill_market_is_throttle(exc):
+                if throttle_tries >= SKILL_MARKET_THROTTLE_RETRY:
+                    break
+                throttle_tries += 1
+                base = SKILL_MARKET_BACKOFF[min(throttle_tries - 1, len(SKILL_MARKET_BACKOFF) - 1)]
+                delay = base + random.uniform(0, base * 0.4)
+                print(f"SkillsMP 限流（{sort} 第 {page} 页）：{delay:.1f}s 后重试 "
+                      f"({throttle_tries}/{SKILL_MARKET_THROTTLE_RETRY})")
+            else:
+                if net_tries >= SKILL_MARKET_RETRY:
+                    break
+                net_tries += 1
+                delay = 1.5 * net_tries + random.uniform(0, 1.0)
+                print(f"SkillsMP 抓取异常（{sort} 第 {page} 页）：{delay:.1f}s 后重试 "
+                      f"({net_tries}/{SKILL_MARKET_RETRY}) {exc}")
+            time.sleep(delay)
+    print(f"SkillsMP 抓取失败（{sort} 第 {page} 页）: {last}")
+    return [], last
+
+def skillsmp_fetch_all(sort, pages, guard_state=None):
+    """批量抓某个排序的若干页，返回 (rows, stats)。
+
+    stats = {ok, fail, throttled, aborted}
+    guard_state 可跨批次共享（{"abort": bool, "streak": int}）—— 这样 stars 批次被
+    限流中止后，recent 批次会**直接跳过**，不会再撞一遍。
+    ⚠️ 带**快速中止**：连续 SKILL_MARKET_ABORT_AFTER 页被判限流就放弃剩余页。
+    没有这道闸，一次被限流的刷新要等 24 页 × 16s 的 429 响应（两分钟量级）才返回，
+    而且越撞冷却越深。
+    """
+    jobs = [(sort, page) for page in range(1, pages + 1)]
+    out = []
+    stats = {"ok": 0, "fail": 0, "throttled": 0, "aborted": False}
+    state = guard_state if guard_state is not None else {"abort": False, "streak": 0}
+    guard = Lock()
+
+    def work(job):
+        with guard:
+            if state["abort"]:
+                return [], None, True          # 已中止：跳过，且**不计入失败页**
+        rows, err = skillsmp_fetch_page(job[0], job[1])
+        return rows, err, False
+
+    try:
+        with ThreadPoolExecutor(max_workers=SKILL_MARKET_WORKERS) as pool:
+            for rows, err, skipped in pool.map(work, jobs):
+                if skipped:
+                    stats["aborted"] = True
+                    continue
+                if err is None:
+                    stats["ok"] += 1
+                    state["streak"] = 0
+                else:
+                    stats["fail"] += 1
+                    if skill_market_is_throttle(err):
+                        stats["throttled"] += 1
+                        state["streak"] += 1
+                        if state["streak"] >= SKILL_MARKET_ABORT_AFTER and not state["abort"]:
+                            state["abort"] = True
+                            print(f"SkillsMP 连续 {state['streak']} 页被限流 → 中止本次抓取"
+                                  f"（{sort}，已放弃剩余页）")
+                    else:
+                        state["streak"] = 0
+                out.extend(rows)
+    except Exception as exc:
+        print(f"SkillsMP 批量抓取失败（{sort}）: {exc}")
+        stats["fail"] += len(jobs) - stats["ok"] - stats["fail"]
+    return out, stats
+
+def skillsmp_skill_id(item):
+    """稳定的短 id：<name 的 slug>-<8 位哈希>。
+
+    ⚠️ 不要直接用 SkillsMP 的 id（形如 openclaw-openclaw-agents-skills-agent-transcript-skill-md），
+    它会变成 data/agent_skills/ 下的目录名，Windows 上容易顶到 MAX_PATH。
+    哈希源取 owner/repo/源文件路径 —— 刷新前后保持一致，已安装状态才不会丢。
+    """
+    route = item.get("route") or {}
+    key = "%s/%s/%s" % (
+        route.get("ownerSlug") or "",
+        route.get("repoSlug") or "",
+        route.get("sourceSkillPath") or item.get("name") or "",
+    )
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", str(item.get("name") or "skill")).strip("-").lower()[:40]
+    return f"{slug or 'skill'}-{digest}"
+
+def skillsmp_raw_url(item):
+    """由 route + branch 拼出 SKILL.md 的 raw 地址（实测可直连下载）。"""
+    route = item.get("route") or {}
+    owner = str(route.get("ownerSlug") or "").strip()
+    repo = str(route.get("repoSlug") or "").strip()
+    path = str(route.get("sourceSkillPath") or "").strip().lstrip("/")
+    branch = str(item.get("branch") or "main").strip() or "main"
+    if not (owner and repo and path):
+        return ""
+    return f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
+
+def skillsmp_source_url(item):
+    route = item.get("route") or {}
+    owner = str(route.get("ownerSlug") or "").strip()
+    repo = str(route.get("repoSlug") or "").strip()
+    route_slug = str(route.get("routeSlug") or "").strip()
+    if not (owner and repo and route_slug):
+        return SKILLSMP_SITE
+    return f"{SKILLSMP_SITE}/creators/{owner}/{repo}/{route_slug}"
+
+def skill_titleize(name):
+    """brainstorming -> Brainstorming；frontend-design -> Frontend Design。"""
+    text = str(name or "").strip()
+    if not text:
+        return ""
+    words = re.split(r"[-_\s]+", text)
+    return " ".join(w[:1].upper() + w[1:] for w in words if w)
+
+def skill_tags(name, summary):
+    """按关键词给 Skill 打领域标签（最多 3 个）。"""
+    haystack = f"{name or ''} {summary or ''}".lower()
+    scored = []
+    for tag, words in SKILL_TAG_RULES:
+        hits = sum(1 for word in words if word in haystack)
+        if hits:
+            scored.append((hits, tag))
+    scored.sort(key=lambda pair: (-pair[0], pair[1]))
+    return [tag for _, tag in scored[:3]]
+
+def skillsmp_normalize(item):
+    """把 SkillsMP 的一条记录转成市场内部结构；关键字段缺失时返回 None。"""
+    raw_url = skillsmp_raw_url(item)
+    name = str(item.get("name") or "").strip()
+    if not raw_url or not name:
+        return None
+    route = item.get("route") or {}
+    owner = str(route.get("ownerSlug") or item.get("author") or "").strip()
+    repo = str(route.get("repoSlug") or "").strip()
+    summary = str(item.get("description") or "").strip()
+    return {
+        "id": skillsmp_skill_id(item),
+        "name": name,
+        "title": skill_titleize(name) or name,
+        "summary": summary,
+        "tags": skill_tags(name, summary),
+        "repo": f"{owner}/{repo}" if (owner and repo) else owner,
+        "author": owner,
+        "repo_url": f"https://github.com/{owner}/{repo}" if (owner and repo) else "",
+        "source_url": skillsmp_source_url(item),
+        "raw_url": raw_url,
+        "stars": int(item.get("stars") or 0),
+        "forks": int(item.get("forks") or 0),
+        "updated_at": int(item.get("updatedAt") or 0),
+        "language": str(item.get("contentLanguage") or "").strip(),
+    }
+
+def build_skills_catalog_ex():
+    """抓 SkillsMP → 归一化 → 按仓库限量 → 按 star 降序。返回 (skills, stats)。
+
+    stats = {ok, fail, throttled, total_pages} —— 调用方（refresh_skills_market）
+    靠它判断这次抓取是否「不完整」，从而决定要不要覆盖旧数据。
+    """
+    raw = []
+    stats = {"ok": 0, "fail": 0, "throttled": 0, "aborted": False}
+
+    # 🔑 先探一页再批量：被限流时 SkillsMP 的 429 要 ~16s 才返回，直接开抓 24 页会
+    # 让用户干等两分钟才被告知「失败」。探针把最坏路径压到 ~16s。
+    # （健康时只多花 1 个请求，占 25 个请求的 4%，可以忽略。）
+    _, probe_err = skillsmp_fetch_page("stars", 1)
+    if probe_err is not None:
+        stats["fail"] = 1
+        stats["total_pages"] = 1
+        stats["throttled"] = 1 if skill_market_is_throttle(probe_err) else 0
+        stats["aborted"] = True
+        print("SkillsMP 探针失败 → 放弃本次刷新（未发起批量抓取）")
+        return [], stats
+
+    # guard 跨两个排序共享：stars 批次一旦被中止，recent 批次直接跳过
+    guard = {"abort": False, "streak": 0}
+    for sort, pages in (("stars", SKILLSMP_STAR_PAGES), ("recent", SKILLSMP_RECENT_PAGES)):
+        if guard["abort"]:
+            stats["aborted"] = True
+            continue
+        rows, sub = skillsmp_fetch_all(sort, pages, guard)
+        raw.extend(rows)
+        for key in ("ok", "fail", "throttled"):
+            stats[key] += int(sub.get(key) or 0)
+        stats["aborted"] = bool(stats["aborted"] or sub.get("aborted"))
+    # 探针那一页算一次成功（它确实抓到了数据），否则失败率会被算高一档
+    stats["ok"] += 1
+    # total_pages 只统计**真正发起过**的页（中止时剩余页没发请求，不该算进失败率）
+    stats["total_pages"] = stats["ok"] + stats["fail"]
+    if not raw:
+        return [], stats
+    # 先按 star 降序（同分再按更新时间、再按名称），保证同一仓库被收录的是更靠前的那几条
+    raw.sort(key=lambda it: (
+        -int(it.get("stars") or 0),
+        -int(it.get("updatedAt") or 0),
+        str(it.get("name") or ""),
+    ))
+    skills = []
+    seen = set()
+    per_repo = {}
+    for item in raw:
+        record = skillsmp_normalize(item)
+        if not record:
+            continue
+        skill_id = record["id"]
+        if skill_id in seen:
+            continue
+        repo = record["repo"] or skill_id
+        if per_repo.get(repo, 0) >= SKILL_PER_REPO_LIMIT:
+            continue
+        seen.add(skill_id)
+        per_repo[repo] = per_repo.get(repo, 0) + 1
+        skills.append(record)
+        if len(skills) >= SKILL_SNAPSHOT_LIMIT:
+            break
+    return skills, stats
+
+def build_skills_catalog():
+    """兼容入口（tools/build_skills_catalog.py 用）：只返回清单列表。"""
+    return build_skills_catalog_ex()[0]
+
+# ---------- 缓存 / 清单 ----------
+
+def load_skills_market_cache():
+    """联网刷新结果（含完整列表）。缺失 / 损坏时返回空。"""
+    try:
+        if os.path.exists(SKILLS_MARKET_CACHE):
+            with open(SKILLS_MARKET_CACHE, "r", encoding="utf-8-sig") as f:
+                data = json.load(f) or {}
+            if isinstance(data, dict) and isinstance(data.get("skills"), list):
+                return data
+    except Exception as exc:
+        print(f"加载 Skill 市场缓存失败: {exc}")
+    return {"skills": [], "refreshed_at": 0}
+
+def save_skills_market_cache(cache):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(SKILLS_MARKET_CACHE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+    except Exception as exc:
+        print(f"写入 Skill 市场缓存失败: {exc}")
+
+# ---------- 冷却状态（限流后不再联网）----------
+
+def load_skills_market_state():
+    """限流冷却状态。缺失 / 损坏时返回空 dict（不抛错）。"""
+    try:
+        if os.path.exists(SKILLS_MARKET_STATE):
+            with open(SKILLS_MARKET_STATE, "r", encoding="utf-8-sig") as f:
+                data = json.load(f) or {}
+            if isinstance(data, dict):
+                return data
+    except Exception as exc:
+        print(f"加载 Skill 市场状态失败: {exc}")
+    return {}
+
+def save_skills_market_state(state):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(SKILLS_MARKET_STATE, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        print(f"写入 Skill 市场状态失败: {exc}")
+
+def mark_skills_market_cooldown(state, reason, note, seconds=None):
+    """进入冷却期：期间 refresh 直接返回旧数据，不再发请求。
+
+    ⚠️ 这一步是「止损」而非「惩罚」—— 429 是按 IP 累计的，越撞冷却越久，
+    停下来等才是唯一能恢复的做法。
+    """
+    now = time.time()
+    span = int(seconds if seconds else SKILL_MARKET_COOLDOWN)
+    state = dict(state or {})
+    state.update({
+        "cooldown_until": now + span,
+        "cooldown_seconds": span,
+        "reason": reason,
+        "note": note,
+        "at": now,
+    })
+    save_skills_market_state(state)
+    print(f"SkillsMP 进入冷却 {span}s（{reason}）：{note}")
+    return state
+
+def clear_skills_market_cooldown(state):
+    state = dict(state or {})
+    state["cooldown_until"] = 0
+    state["reason"] = ""
+    state["note"] = ""
+    save_skills_market_state(state)
+
+def market_baseline_count():
+    """防缩水的比较基准：联网缓存与内置快照取**大**者。
+
+    用 max 而不是「当前生效清单」，是因为缓存可能已经被污染过（本次事故就是），
+    内置快照反而是更可信的底线。
+    """
+    return max(len(load_skills_market_cache().get("skills") or []),
+               len(load_skills_catalog().get("skills") or []))
+
+def refresh_skills_market(force=False):
+    """联网从 SkillsMP 重抓清单，返回 (cache, note)；note 为给前端的一句提示（成功时 None）。
+
+    🚨 铁律：**任何失败路径都不得覆盖已有数据** —— 见文件顶部「限流防护」注释。
+    ⚠️ 一次刷新要抓 24 页（节流后约 50~70s）—— 所以**默认不联网**，
+    只有前端点了「刷新」才走这里（force=True）。
+    """
+    cache = load_skills_market_cache()
+    now = time.time()
+    fresh = (now - float(cache.get("refreshed_at") or 0)) < SKILLS_MARKET_TTL
+    if fresh and not force:
+        return cache, None
+
+    state = load_skills_market_state()
+    cooldown_until = float(state.get("cooldown_until") or 0)
+    if now < cooldown_until:
+        left = int(cooldown_until - now)
+        print(f"SkillsMP 冷却中（还剩 {left}s），跳过联网刷新")
+        return cache, (f"SkillsMP 限流冷却中（约 {max(1, (left + 59) // 60)} 分钟后可再试），"
+                       f"本次沿用现有清单")
+
+    skills, stats = build_skills_catalog_ex()
+    ok = int(stats.get("ok") or 0)
+    fail = int(stats.get("fail") or 0)
+    total_pages = int(stats.get("total_pages") or 0) or 1
+    throttled = int(stats.get("throttled") or 0)
+    fail_ratio = fail / total_pages
+
+    # ① 一条都没抓到 → 判为限流 / 断网，进入冷却
+    if not skills:
+        note = "SkillsMP 抓取失败（可能被限流或网络不通），本次沿用现有清单"
+        mark_skills_market_cooldown(
+            state, "抓取失败", note,
+            SKILL_MARKET_COOLDOWN if throttled else 5 * 60)
+        return cache, note
+
+    # ② 失败页占比过高 → 结果不完整，拒绝覆盖
+    if fail_ratio > SKILL_MARKET_MAX_FAIL_RATIO:
+        note = (f"SkillsMP 抓取不完整（{fail}/{total_pages} 页失败），"
+                f"为避免清单缩水已保留现有 {market_baseline_count()} 个 Skill")
+        mark_skills_market_cooldown(
+            state, "抓取不完整", note,
+            SKILL_MARKET_COOLDOWN if throttled else 5 * 60)
+        return cache, note
+
+    # ③ 条数明显缩水 → 拒绝覆盖（接口结构变了也不该让用户的清单变少）
+    baseline = market_baseline_count()
+    if baseline and len(skills) < baseline * SKILL_MARKET_MIN_KEEP:
+        note = (f"SkillsMP 本次只返回 {len(skills)} 个（现有 {baseline} 个），"
+                f"疑似接口异常，已保留现有清单")
+        print(f"SkillsMP 刷新缩水被拒：{len(skills)} < {baseline} × {SKILL_MARKET_MIN_KEEP}")
+        mark_skills_market_cooldown(state, "结果缩水", note, 5 * 60)
+        return cache, note
+
+    result = {"skills": skills, "refreshed_at": time.time(), "stats": stats}
+    save_skills_market_cache(result)
+    clear_skills_market_cooldown(state)
+    print(f"SkillsMP 刷新成功：{len(skills)} 个 Skill（{ok}/{total_pages} 页成功）")
+    return result, None
+
+def market_skill_source():
+    """当前生效的清单：联网缓存优先，否则内置快照。"""
+    cached = load_skills_market_cache()
+    if cached.get("skills"):
+        return cached.get("skills") or [], float(cached.get("refreshed_at") or 0)
+    catalog = load_skills_catalog()
+    return catalog.get("skills") or [], 0.0
+
+def load_installed_skills():
+    try:
+        if os.path.exists(AGENT_SKILLS_INDEX):
+            with open(AGENT_SKILLS_INDEX, "r", encoding="utf-8-sig") as f:
+                data = json.load(f) or {}
+            if isinstance(data, dict) and isinstance(data.get("skills"), list):
+                return data
+    except Exception as exc:
+        print(f"加载已安装 Skill 失败: {exc}")
+    return {"skills": []}
+
+def save_installed_skills(data):
+    os.makedirs(AGENT_SKILLS_DIR, exist_ok=True)
+    with open(AGENT_SKILLS_INDEX, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def agent_skill_dir(skill_id):
+    """把 id 收敛成安全目录名，并强制落在 data/agent_skills/ 下，防止目录穿越。"""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "-", str(skill_id or "")).strip(".-")
+    root = os.path.abspath(AGENT_SKILLS_DIR)
+    if not safe:
+        raise HTTPException(status_code=400, detail="Skill id 不合法")
+    path = os.path.abspath(os.path.join(root, safe))
+    if os.path.dirname(path) != root:
+        raise HTTPException(status_code=400, detail="Skill id 不合法")
+    return path
+
+def find_market_skill(skill_id):
+    """在当前生效的清单里找一个 Skill（联网缓存优先，再内置快照）。
+
+    ⚠️ 别写成 `for source, _ in (load_skills_market_cache(), load_skills_catalog())` ——
+    那是把 dict 当二元组解包，迭代出来的是**键名**（"skills"/"refreshed_at"），
+    再往下就会对字符串调用 .get() 抛 AttributeError。必须显式取 ["skills"]。
+    """
+    for source in (load_skills_market_cache().get("skills") or [],
+                   load_skills_catalog().get("skills") or []):
+        for item in source:
+            if isinstance(item, dict) and str(item.get("id") or "") == skill_id:
+                return item
+    return None
+
+def skills_market_payload(refresh=False):
+    """市场清单：按热度（star + 收藏 × 2）从高到低排序，并带上本地安装态。
+
+    默认**不联网** —— 联网一次要抓 24 页（约 50s），会拖死首屏；这里直接用缓存或内置快照，
+    只有 refresh=True 才真的去联网（前端点「刷新」时才走）。
+    """
+    catalog = load_skills_catalog()
+    refresh_note = ""
+    if refresh:
+        _, refresh_note = refresh_skills_market(force=True)
+    if not refresh_note:
+        # 冷却期内也让用户看到原因 —— 否则点了「刷新」没反应，看起来像按钮坏了。
+        state = load_skills_market_state()
+        if float(state.get("cooldown_until") or 0) > time.time():
+            refresh_note = str(state.get("note") or "")
+    skills, refreshed_at = market_skill_source()
+    installed = {str(s.get("id") or ""): s for s in load_installed_skills().get("skills", [])}
+    records = []
+    for skill in skills:
+        skill_id = str(skill.get("id") or "")
+        if not skill_id:
+            continue
+        stars = int(skill.get("stars") or 0)
+        forks = int(skill.get("forks") or 0)
+        record = installed.get(skill_id)
+        records.append({
+            "id": skill_id,
+            "name": skill.get("name") or skill_id,
+            "title": skill.get("title") or skill.get("name") or skill_id,
+            "summary": skill.get("summary") or "",
+            "tags": skill.get("tags") or [],
+            "repo": skill.get("repo") or "",
+            "repo_url": skill.get("repo_url") or "",
+            "source_url": skill.get("source_url") or SKILLSMP_SITE,
+            "author": skill.get("author") or "",
+            "language": skill.get("language") or "",
+            "stars": stars,
+            "forks": forks,
+            # 热度 = star + 收藏 × 2（与前端一致）
+            "hotness": stars + forks * 2,
+            "updated_at": int(skill.get("updated_at") or 0),
+            "raw_url": skill.get("raw_url") or "",
+            "installed": bool(record),
+            "installed_at": (record or {}).get("installed_at"),
+            "installed_bytes": (record or {}).get("bytes"),
+        })
+    records.sort(key=lambda item: (-item["hotness"], -item["stars"], item["title"]))
+    return {
+        "skills": records,
+        "total": len(records),
+        "source": "skillsmp",
+        "source_name": "SkillsMP",
+        "source_url": SKILLSMP_SITE,
+        "snapshot_at": catalog.get("snapshot_at") or "",
+        # 缓存内部用秒（time.time()），对外统一换成毫秒（与项目 now_ms() 一致），
+        # 否则前端按毫秒解析会得到 1970 年。
+        "refreshed_at": int(refreshed_at * 1000) if refreshed_at else 0,
+        "online": bool(refreshed_at),
+        "stale": (time.time() - refreshed_at) >= SKILLS_MARKET_TTL if refreshed_at else False,
+        "ttl": SKILLS_MARKET_TTL,
+        # 刷新被拒 / 被冷却时给前端的一句人话（成功与「没点刷新」时为空串）
+        "refresh_note": refresh_note or "",
+    }
+
+async def install_market_skill(skill_id):
+    """从市场安装一个 Skill：下载 SKILL.md 落到 data/agent_skills/<id>/。"""
+    skill = find_market_skill(skill_id)
+    if not skill:
+        raise HTTPException(status_code=404, detail="市场清单里没有这个 Skill（可能已下架，点刷新重试）")
+    url = str(skill.get("raw_url") or "")
+    if not url:
+        raise HTTPException(status_code=400, detail="该 Skill 没有可下载地址")
+    try:
+        raw = await asyncio.to_thread(skill_http_get, url)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"下载 Skill 失败（该功能需要联网）：{exc}") from exc
+    if not raw:
+        raise HTTPException(status_code=502, detail="下载到的 Skill 内容为空")
+    if len(raw) > SKILL_DOWNLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Skill 文件超过 {SKILL_DOWNLOAD_BYTES // 1024} KB，已拒绝安装")
+    text = raw.decode("utf-8", "replace")
+    target = agent_skill_dir(skill_id)
+    os.makedirs(target, exist_ok=True)
+    with open(os.path.join(target, "SKILL.md"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+    index = load_installed_skills()
+    index["skills"] = [s for s in index.get("skills", []) if str(s.get("id") or "") != skill_id]
+    record = {
+        "id": skill_id,
+        "name": skill.get("name") or skill_id,
+        "title": skill.get("title") or skill_id,
+        "summary": skill.get("summary") or "",
+        "repo": skill.get("repo") or "",
+        "raw_url": url,
+        "bytes": len(raw),
+        "installed_at": now_ms(),
+        "source": "market",
+    }
+    index["skills"].append(record)
+    save_installed_skills(index)
+    return record
+
+def uninstall_market_skill(skill_id):
+    """卸载：从索引里移除并删掉 data/agent_skills/<id>/ 目录。"""
+    index = load_installed_skills()
+    before = len(index.get("skills", []))
+    index["skills"] = [s for s in index.get("skills", []) if str(s.get("id") or "") != skill_id]
+    if len(index["skills"]) == before:
+        raise HTTPException(status_code=404, detail="该 Skill 尚未安装")
+    save_installed_skills(index)
+    target = agent_skill_dir(skill_id)
+    if os.path.isdir(target) and os.path.dirname(target) == os.path.abspath(AGENT_SKILLS_DIR):
+        shutil.rmtree(target, ignore_errors=True)
+    return {"ok": True, "id": skill_id}
+
+def installed_skills_prompt_block():
+    """把已安装 Skill 的正文拼成一段系统提示词（有总长上限，超了截断）。"""
+    parts = []
+    used = 0
+    for item in load_installed_skills().get("skills", []):
+        skill_id = str(item.get("id") or "")
+        if not skill_id:
+            continue
+        path = os.path.join(agent_skill_dir(skill_id), "SKILL.md")
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8-sig") as f:
+                text = (f.read() or "").strip()
+        except Exception:
+            continue
+        if not text:
+            continue
+        remain = SKILL_INJECT_CHARS - used
+        if remain <= 0:
+            break
+        if len(text) > remain:
+            text = text[:remain] + "\n…（该 Skill 内容过长，已截断）"
+        used += len(text)
+        parts.append(f"### Skill: {item.get('title') or skill_id}\n{text}")
+    if not parts:
+        return ""
+    return "\n\n以下是用户已安装的 Skill 文档，请严格遵守其中的风格与流程要求：\n\n" + "\n\n".join(parts)
 
 async def run_codex_cli(prompt, model="", image_paths=None, timeout=None, output_last_message=True):
     exe = codex_cli_executable()
@@ -14446,6 +15169,28 @@ async def agent_tools_set(payload: AgentToolsRequest):
     data["saved"] = True
     return data
 
+@app.get("/api/skills/market")
+async def skills_market(refresh: bool = False):
+    """Skill 市场清单（数据源 SkillsMP，按 star + 收藏 热度排序）。refresh=true 时强制联网重抓。"""
+    return await asyncio.to_thread(skills_market_payload, refresh)
+
+@app.get("/api/skills/installed")
+async def skills_installed():
+    """已安装的 Skill 列表（安装后会被拼进画布 Agent 的系统提示词）。"""
+    skills = load_installed_skills().get("skills", [])
+    return {"skills": skills, "count": len(skills)}
+
+@app.post("/api/skills/install")
+async def skills_install(payload: AgentSkillRequest):
+    record = await install_market_skill(str(payload.id or "").strip())
+    return {"ok": True, "skill": record, "installed": load_installed_skills().get("skills", [])}
+
+@app.post("/api/skills/uninstall")
+async def skills_uninstall(payload: AgentSkillRequest):
+    result = uninstall_market_skill(str(payload.id or "").strip())
+    result["installed"] = load_installed_skills().get("skills", [])
+    return result
+
 @app.get("/api/gemini-cli/status")
 async def gemini_cli_status():
     exe = gemini_cli_executable()
@@ -17595,6 +18340,17 @@ async def canvas_llm_stream(task_id: str, payload: CanvasLLMRequest):
     # CLI 协议不支持流式，回退为普通调用
     if is_codex_provider(_provider) or is_gemini_cli_provider(_provider):
         return await canvas_llm(payload)
+    # 本机工具是 tool-calling 循环（多轮往返），与逐 token 流式无法混用：
+    # 开启工具时整体走非流式实现，拿到最终结果后一次性广播，前端表现一致。
+    if load_agent_tools_settings().get("enabled"):
+        result = await canvas_llm(payload)
+        text = str(result.get("text") or "")
+        if text:
+            try:
+                await manager.broadcast_agent_llm_token(task_id, text)
+            except Exception:
+                pass
+        return result
     chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model)
     _llm_provider = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
     _is_apimart = is_apimart_provider(_llm_provider)
@@ -17602,6 +18358,10 @@ async def canvas_llm_stream(task_id: str, payload: CanvasLLMRequest):
     if _is_apimart:
         return await canvas_llm(payload)
     system_prompt = (payload.system_prompt or "").strip()
+    # Skill 市场里已安装的 Skill 统一在这里注入（流式路径与非流式保持一致）
+    skill_block = installed_skills_prompt_block()
+    if skill_block:
+        system_prompt = (system_prompt + skill_block).strip()
     upstream_messages = [{"role": "system", "content": system_prompt}] if system_prompt else []
     for item in payload.messages[-MAX_HISTORY_MESSAGES:]:
         role = item.get("role")
@@ -17672,6 +18432,15 @@ async def canvas_llm(payload: CanvasLLMRequest):
     _llm_provider = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
     _is_apimart = is_apimart_provider(_llm_provider)
     system_prompt = (payload.system_prompt or "").strip()
+    # Skill 市场里已安装的 Skill 统一在这里注入，保证「安装即生效」，并与客户端挂载的 skill 文件叠加
+    skill_block = installed_skills_prompt_block()
+    if skill_block:
+        system_prompt = (system_prompt + skill_block).strip()
+    tool_settings = load_agent_tools_settings()
+    tools = agent_tool_schemas() if tool_settings.get("enabled") else []
+    if tools:
+        # 与 gpt-chat 页共用同一段工具说明，两处 agent 的行为保持一致
+        system_prompt = (system_prompt + AGENT_TOOLS_SYSTEM_HINT).strip()
     upstream_messages = [{"role": "system", "content": system_prompt}] if system_prompt else []
     for item in payload.messages[-MAX_HISTORY_MESSAGES:]:
         role = item.get("role")
@@ -17713,37 +18482,84 @@ async def canvas_llm(payload: CanvasLLMRequest):
     else:
         upstream_messages.append({"role": "user", "content": payload.message})
     raw = None
-    try:
-        async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
+    tool_events = []
+    rounds = max(1, int(tool_settings.get("max_rounds") or AGENT_TOOLS_DEFAULT_MAX_ROUNDS)) if tools else 1
+    exhausted = False
+    async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
+        for round_index in range(rounds + 1):
             req_body = {"model": model, "messages": upstream_messages}
             if _is_apimart:
                 req_body["stream"] = False   # APIMart 默认流式，强制关闭
-            response = await client.post(
-                f"{chat_base}/chat/completions",
-                headers=chat_hdrs,
-                json=req_body,
-            )
-            response.raise_for_status()
-            if not response.content:
-                raise HTTPException(status_code=502, detail="上游接口返回了空响应")
-            raw = response.json()
-    except httpx.HTTPStatusError as exc:
-        body = exc.response.text or ""
-        friendly = friendly_chat_error_detail(body, model, _llm_provider)
-        raise HTTPException(status_code=exc.response.status_code, detail=friendly or f"上游接口错误：{body}") from exc
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"请求上游接口失败：{exc}") from exc
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"解析上游响应失败：{exc}") from exc
+            if tools:
+                req_body["tools"] = tools
+                req_body["tool_choice"] = "auto"
+            try:
+                response = await client.post(
+                    f"{chat_base}/chat/completions",
+                    headers=chat_hdrs,
+                    json=req_body,
+                )
+                response.raise_for_status()
+                if not response.content:
+                    raise HTTPException(status_code=502, detail="上游接口返回了空响应")
+                raw = response.json()
+            except httpx.HTTPStatusError as exc:
+                body = exc.response.text or ""
+                # 上游不支持 tools 时清空工具、对**同一轮**重试，优雅回退成普通对话
+                if tools and not tool_events and agent_tools_unsupported(body):
+                    print("[canvas-agent-tools] 上游不支持 tools，回退为普通对话")
+                    tools = []
+                    continue
+                friendly = friendly_chat_error_detail(body, model, _llm_provider)
+                raise HTTPException(status_code=exc.response.status_code, detail=friendly or f"上游接口错误：{body}") from exc
+            except httpx.HTTPError as exc:
+                raise HTTPException(status_code=502, detail=f"请求上游接口失败：{exc}") from exc
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"解析上游响应失败：{exc}") from exc
+            if not tools:
+                break
+            response_data = unwrap_apimart_response(raw) if isinstance(raw, dict) else raw
+            choices = (response_data or {}).get("choices") or []
+            message = (choices[0].get("message") if choices else None) or {}
+            tool_calls = message.get("tool_calls") or []
+            if not tool_calls:
+                break
+            upstream_messages.append({
+                "role": "assistant",
+                "content": message.get("content") or "",
+                "tool_calls": tool_calls,
+            })
+            for call in tool_calls:
+                call = call if isinstance(call, dict) else {}
+                fn = call.get("function") or {}
+                name = str(fn.get("name") or "").strip()
+                args = agent_parse_tool_args(fn.get("arguments"))
+                result = await run_agent_tool(name, args)
+                event = agent_tool_event_from_result(call.get("id"), name, args, result, round_index)
+                tool_events.append(event)
+                upstream_messages.append({
+                    "role": "tool",
+                    "tool_call_id": event["id"],
+                    "content": (f"{event['summary']}\n{event['output']}").strip() or "（无输出）",
+                })
+        else:
+            exhausted = True
+    if exhausted:
+        return {
+            "text": f"已达到工具调用轮数上限（{rounds} 轮）仍未得到最终结论，请拆分任务后重试。",
+            "model": model,
+            "raw_usage": None,
+            "tool_events": tool_events,
+        }
     try:
         text = text_from_chat_response(raw).strip() if isinstance(raw, dict) else ""
         text = text or "接口返回了空回复。"
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"解析回复内容失败：{exc}") from exc
     raw_data = unwrap_apimart_response(raw) if isinstance(raw, dict) else {}
-    return {"text": text, "model": model, "raw_usage": raw_data.get("usage")}
+    return {"text": text, "model": model, "raw_usage": raw_data.get("usage"), "tool_events": tool_events}
 
 # --- 对话管理 ---
 

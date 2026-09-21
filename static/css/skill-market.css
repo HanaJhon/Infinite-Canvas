@@ -1,0 +1,115 @@
+/* ==================== Skill 市场（共享模块） ====================
+   由 static/js/skill-market.js 创建浮层 DOM，被两个页面共用：
+     · static/smart-canvas.html —— 画布页 AI Agent 工具栏
+     · static/gpt-chat.html     —— GPT 对话页（原来只有「本机工具」，没有市场入口）
+   面板做成视口居中浮层：画布页的 agent 面板只有 382px 宽，塞不下列表。
+
+   ⚠️ 为什么这里自带一套 --sm-* 变量，而不是直接用 --card / --line / --strong …
+   因为那套变量在两个页面里的**可见性不同**：
+     · smart-canvas.css 在 :root 和 .theme-dark 上定义了全套；
+     · theme.css 只在 `body.studio-theme-dark .shell.theme-dark` 下定义，
+       gpt-chat 的浅色主题**根本没有** --strong / --muted / --strong-text。
+   所以这里用 var(--card, 兜底值) 的形式取页面变量、缺失时落到自带兜底值，
+   再按主题补一层显式覆盖 —— 两个页面都能独立渲染正确，且画布页的观感与改造前一致。 */
+.agent-skill-market {
+    /* 浅色兜底值 = smart-canvas.css 的 :root 取值 */
+    --sm-card: var(--card, #fff);
+    --sm-line: var(--line, #e8edf3);
+    --sm-text: var(--text, #111827);
+    --sm-soft: var(--soft, #f8fafc);
+    --sm-strong: var(--strong, #111827);
+    --sm-strong-text: var(--strong-text, #fff);
+    --sm-muted: var(--muted, #64748b);
+
+    position:fixed; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:min(780px, calc(100vw - 48px)); max-height:min(660px, calc(100vh - 72px));
+    display:flex; flex-direction:column;
+    background:var(--sm-card); border:1px solid var(--sm-line); border-radius:16px;
+    box-shadow:0 28px 72px rgba(15,23,42,.22); z-index:120; overflow:hidden;
+    color:var(--sm-text);
+    font-family:inherit;
+}
+.agent-skill-market[hidden] { display:none; }
+
+/* 深色主题：theme.js 会同时在 <html> 和 <body> 上挂 studio-theme-dark / theme-dark，
+   两个页面都命中；取色与 smart-canvas.css 的 .theme-dark 完全一致。 */
+.theme-dark .agent-skill-market,
+.studio-theme-dark .agent-skill-market {
+    --sm-card:#171d29;
+    --sm-line:#2a3444;
+    --sm-text:#e5e9f0;
+    --sm-soft:#111722;
+    --sm-strong:#d8dee9;
+    --sm-strong-text:#10141d;
+    --sm-muted:#8f9aab;
+}
+
+.asm-head { display:flex; align-items:center; gap:8px; padding:12px 14px; border-bottom:1px solid var(--sm-line); }
+.asm-title { display:flex; align-items:center; gap:7px; flex:1; font-size:13px; font-weight:800; color:var(--sm-text); }
+.asm-title i, .asm-title svg { width:15px; height:15px; color:var(--sm-strong); }
+.asm-icon-btn { width:28px; height:28px; border-radius:8px; border:none; background:none; color:var(--sm-muted); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+.asm-icon-btn:hover { color:var(--sm-text); background:var(--sm-soft); }
+.asm-icon-btn i, .asm-icon-btn svg { width:14px; height:14px; }
+.asm-toolbar { display:flex; gap:8px; padding:10px 14px 0; }
+.asm-search { flex:1; min-width:0; display:flex; align-items:center; gap:6px; height:32px; padding:0 10px; border:1px solid var(--sm-line); border-radius:10px; background:var(--sm-soft); color:var(--sm-muted); }
+.asm-search i, .asm-search svg { width:13px; height:13px; flex:0 0 auto; }
+.asm-search input { flex:1; min-width:0; border:none; outline:none; background:none; color:var(--sm-text); font-size:12px; }
+.asm-select { height:32px; padding:0 8px; border:1px solid var(--sm-line); border-radius:10px; background:var(--sm-card); color:var(--sm-text); font-size:11.5px; }
+.asm-tabs { display:flex; flex-wrap:wrap; gap:6px; padding:10px 14px 0; }
+.asm-tab { padding:3px 9px; border-radius:999px; border:1px solid var(--sm-line); background:var(--sm-card); color:var(--sm-muted); font-size:10.5px; font-weight:700; cursor:pointer; }
+.asm-tab:hover { color:var(--sm-text); }
+.asm-tab.active { border-color:var(--sm-strong); color:var(--sm-text); background:var(--sm-soft); }
+.asm-meta { padding:8px 14px; font-size:10.5px; line-height:1.6; color:var(--sm-muted); }
+.asm-meta b { color:var(--sm-text); font-weight:800; font-variant-numeric:tabular-nums; }
+.asm-meta .asm-warn { color:#b45309; }
+.asm-list { flex:1; overflow:auto; padding:0 14px 14px; display:flex; flex-direction:column; gap:8px; }
+.asm-card { display:flex; gap:10px; padding:10px 12px; border:1px solid var(--sm-line); border-radius:12px; background:var(--sm-soft); }
+.asm-card.installed { border-color:var(--sm-strong); }
+.asm-card-main { flex:1; min-width:0; }
+.asm-card-head { display:flex; align-items:center; gap:7px; }
+.asm-card-title { font-size:12.5px; font-weight:850; color:var(--sm-text); }
+.asm-badge { font-size:9.5px; font-weight:900; padding:1px 6px; border-radius:999px; background:rgba(16,185,129,.16); color:#047857; }
+.asm-card-summary { margin-top:4px; font-size:11px; line-height:1.55; color:var(--sm-muted); }
+.asm-card-foot { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:6px; font-size:10.5px; color:var(--sm-muted); }
+.asm-stat { display:inline-flex; align-items:center; gap:3px; font-weight:750; font-variant-numeric:tabular-nums; }
+.asm-stat i, .asm-stat svg { width:11px; height:11px; }
+.asm-repo { font-weight:700; }
+.asm-tag { padding:1px 6px; border-radius:6px; background:var(--sm-card); border:1px solid var(--sm-line); font-size:10px; font-weight:700; }
+.asm-card-side { display:flex; align-items:center; }
+.asm-btn { height:30px; padding:0 12px; border-radius:9px; border:1px solid var(--sm-line); background:var(--sm-card); color:var(--sm-text); font-size:11.5px; font-weight:750; cursor:pointer; }
+.asm-btn:hover:not(:disabled) { border-color:var(--sm-strong); }
+.asm-btn.primary { border-color:transparent; background:var(--sm-strong); color:var(--sm-strong-text); }
+.asm-btn.danger { color:#b91c1c; }
+.asm-btn:disabled { opacity:.55; cursor:default; }
+.asm-empty { display:flex; flex-direction:column; align-items:center; gap:8px; padding:36px 0; color:var(--sm-muted); font-size:12px; }
+.asm-empty i, .asm-empty svg { width:22px; height:22px; }
+.asm-more { margin:2px 0 4px; height:32px; border:1px dashed var(--sm-line); border-radius:10px; background:none; color:var(--sm-muted); font-size:11.5px; font-weight:700; cursor:pointer; }
+.asm-more:hover { color:var(--sm-text); border-color:var(--sm-strong); }
+.asm-spin { animation:asm-spin 1s linear infinite; }
+@keyframes asm-spin { to { transform:rotate(360deg); } }
+/* 键盘焦点必须可见（WCAG 2.4.7 AA）—— 但**文本框不能用「外描边」**：
+   `input:focus-visible` 的 outline 是浮在框外 2px 的一圈**近白色矩形**（深色主题
+   --sm-strong = #d8dee9），在深色面板上看起来像「多出来的选中白框」（2026-09-21 老板反馈，
+   像素取证：描边芯色恰为 #d8dee9、位于搜索框外 2px、且只在输入框周围）。
+   文本框改走项目既有约定（smart-canvas.css 的 .agent-onebox:focus-within）——焦点画在
+   **框自身的边框**上，不再往外扩一圈；对比度 6.8:1，AA 依旧满足。
+   按钮 / 下拉仍保留 outline（它们只有键盘 Tab 才会命中 :focus-visible）。 */
+.agent-skill-market button:focus-visible,
+.agent-skill-market select:focus-visible { outline:2px solid var(--sm-strong); outline-offset:2px; }
+.agent-skill-market button:focus:not(:focus-visible),
+.agent-skill-market select:focus:not(:focus-visible) { outline:none; }
+.agent-skill-market input { outline:none; }
+.asm-search:focus-within { border-color:var(--sm-strong); }
+/* 深色主题：只调对比度不足的几处，颜色仍走变量 */
+.theme-dark .agent-skill-market,
+.studio-theme-dark .agent-skill-market { box-shadow:0 28px 72px rgba(0,0,0,.5); }
+.theme-dark .asm-badge,
+.studio-theme-dark .asm-badge { background:rgba(16,185,129,.22); color:#6ee7b7; }
+.theme-dark .asm-btn.danger,
+.studio-theme-dark .asm-btn.danger { color:#fca5a5; }
+.theme-dark .asm-meta .asm-warn,
+.studio-theme-dark .asm-meta .asm-warn { color:#fbbf24; }
+
+/* ⚠️ 这里**不要**给 [data-skill-market-open] 定图标尺寸：两个页面的入口按钮外观各自
+   由本页样式负责（画布页 .agent-skill-market-btn 是 12px，gpt-chat 复用 .agent-tools-button
+   是 14px）。共享规则会因源码顺序靠后而盖掉它们。 */

@@ -150,23 +150,84 @@ internal sealed class LauncherForm : Form
         public int bottom;
     }
 
-    [DllImport("gdi32.dll")]
-    private static extern IntPtr CreateRoundRectRgn(int x1, int y1, int x2, int y2, int cx, int cy);
-
-    [DllImport("user32.dll")]
-    private static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
-
-    [DllImport("gdi32.dll")]
-    private static extern bool DeleteObject(IntPtr hObject);
+    // ⚠️ 旧的 SetWindowRgn / CreateRoundRectRgn / DeleteObject 三个 P/Invoke 已随「1 位掩码圆角」
+    // 一起移除（它天生无抗锯齿）。圆角改由网页 CSS border-radius + DWM 逐像素合成实现，
+    // 见 EnablePerPixelCorners()。需要回退时不要只把这三行加回来，还要把 OnHandleCreated /
+    // UpdateFormRegion / WebView2 背景色 / 注入的 CSS 一并改回。
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MARGINS
+    {
+        public int cxLeftWidth;
+        public int cxRightWidth;
+        public int cyTopHeight;
+        public int cyBottomHeight;
+    }
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref MARGINS margins);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    private const int GWL_EXSTYLE = -20;
+    private const int WS_EX_LAYERED = 0x00080000;
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOZORDER = 0x0004;
+    private const uint SWP_NOACTIVATE = 0x0010;
+    private const uint SWP_FRAMECHANGED = 0x0020;
+
+    /// <summary>
+    /// CSS 里圆角的像素值。真正的圆角由网页绘制（border-radius 自带抗锯齿），
+    /// 再靠 DWM 的逐像素合成透出桌面 —— 详见 <see cref="EnablePerPixelCorners"/>。
+    /// </summary>
+    public const string CornerRadiusCss = "18px";
+
+    // ⚠️ 这里曾有 `public const string CornerInsetCss = "2px";`（右/下内缩量）。
+    // 2026-09-21 改为**由网页按 devicePixelRatio 自己算**（见注入脚本里的
+    // __launcherApplyCornerInset）：压平只发生在非整数 DPI 缩放，而修好它需要的
+    // 「设备像素」内缩量基本恒定（实测 2 设备px 在 1.25 / 1.665 下都最优），
+    // 所以 CSS 值必须是 2/dpr，不能写死 2px —— 固定值在 125% 缩放下偏小（弧仍被
+    // 压平）、在 150% 缩放下偏大（把本来正常的四角反而弄坏：极差 0 → 2）。
+    // 详见注入样式里的 ③ 段与 tools/__probe.py 的实测表。
+
+    /// <summary>
+    /// 圆角状态变化时回调（true = 圆角，false = 最大化贴边）。
+    /// 由宿主在创建 WebView2 之后挂上，这样窗体不必直接依赖 WebView2 字段。
+    /// </summary>
+    public Action<bool>? CornerRadiusChanged { get; set; }
+
+    /// <summary>当前网页里生效的圆角状态（最大化时贴边、圆角归零）。</summary>
+    private bool cornersRounded = true;
 
     private const int WM_GETMINMAXINFO = 0x24;
     private const int WM_SIZING = 0x0214;
     private const int WS_MINIMIZEBOX = 0x20000;
     private const int WS_MAXIMIZEBOX = 0x10000;
-    private const int CS_DROPSHADOW = 0x20000;
+
+    // ⚠️ 这里曾有 `private const int CS_DROPSHADOW = 0x20000;` 并在 CreateParams 里
+    // `cp.ClassStyle |= CS_DROPSHADOW;`。2026-09-21 老板反馈「启动器有三个角出现了奇怪的边」，
+    // 逐像素取证（读老板截图 output/__corners_2x2.png）结论：
+    //   · 四角圆弧本身**完全对称且平滑**（左/右内缩量 18→17→12→11→9→7→6→5→4→2→2→1→1→0）；
+    //   · 但**右边和底边各多出一条 4~6px 浅灰渐变带**（亮度 12→45→156→193→229→247→255），
+    //     **左边和上边完全没有**。
+    // 这正是 CS_DROPSHADOW 的行为 —— 它画的是**右下偏移投影**（"shadow is drawn on the right
+    // and bottom edges"），不是 DWM 那种四边对称阴影。偏移投影是**按窗口矩形**投的，
+    // 网页画的圆角它不知道，于是圆角外侧的透明区被方形阴影填上 → 右上 / 左下 / 右下
+    // 三个角出现"方形浅色角"（老板圈出的正好是这三个角，左上角干净）。
+    // ⇒ 圆角要平滑，**窗口就不能有 CS_DROPSHADOW**。改回圆角方案时也不要把它加回来。
+    // 若日后想要阴影，只能用「窗口比内容大一圈 + 网页 box-shadow 自绘」（阴影跟随 border-radius），
+    // 不能再依赖 CS_DROPSHADOW。
 
     private const int WMSZ_LEFT = 1;
     private const int WMSZ_RIGHT = 2;
@@ -180,19 +241,19 @@ internal sealed class LauncherForm : Form
     private const double TargetAspectRatio = 16.0 / 9.0;
 
     /// <summary>
-    /// 窗口圆角半径（逻辑像素，以 96 DPI 为基准）。真正下发给 SetWindowRgn 时会乘以当前
-    /// 显示器的 DPI 缩放比 —— Region 是 1 位掩码、<b>完全没有抗锯齿</b>，如果半径写死成
-    /// 设备像素，高分屏下圆弧跨越的像素数变少，锯齿会格外明显。
+    /// ⚠️ 这里曾经用 <c>SetWindowRgn(CreateRoundRectRgn(...))</c> 做圆角，老板反馈「依旧有锯齿」——
+    /// 因为 Region 是 <b>1 位掩码</b>，圆弧上的像素只能整块取舍，<b>天生没有抗锯齿</b>，
+    /// 把半径按 DPI 放大也只是让锯齿颗粒变小，消不掉。
+    ///
+    /// 现在改成「逐像素透明」方案：<see cref="EnablePerPixelCorners"/> 把 DWM 玻璃框扩到整窗，
+    /// 网页用 CSS <c>border-radius</c> 画圆角（浏览器自带抗锯齿，边缘是部分透明像素），
+    /// 由 DWM 按 alpha 通道逐像素合成 → 圆角平滑。<b>不再调用 SetWindowRgn。</b>
     /// </summary>
-    private const int CornerRadiusDip = 12;
-
     public LauncherForm()
     {
         FormBorderStyle = FormBorderStyle.None;
         DoubleBuffered = true;
         SetStyle(ControlStyles.ResizeRedraw | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
-        // 拖到另一块不同 DPI 的显示器时，圆角半径要按新显示器重算
-        DpiChanged += (_, _) => UpdateFormRegion();
     }
 
     protected override CreateParams CreateParams
@@ -201,7 +262,8 @@ internal sealed class LauncherForm : Form
         {
             var cp = base.CreateParams;
             cp.Style |= WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
-            cp.ClassStyle |= CS_DROPSHADOW;
+            // ⚠️ 不要加 `cp.ClassStyle |= CS_DROPSHADOW;` —— 它的右下偏移投影会盖在
+            // 网页圆角外侧的透明区上，形成方形浅色角。原因详见上面 CS_DROPSHADOW 的注释。
             return cp;
         }
     }
@@ -216,7 +278,62 @@ internal sealed class LauncherForm : Form
             DwmSetWindowAttribute(Handle, 33, ref preference, sizeof(int));
         }
         catch {}
+        EnablePerPixelCorners();
         UpdateFormRegion();
+    }
+
+    /// <summary>
+    /// 开启「逐像素透明」合成，让网页画的圆角能带抗锯齿。
+    ///
+    /// 原理：<c>DwmExtendFrameIntoClientArea</c> 传 -1 边距 = 告诉 DWM「整个客户区都当玻璃处理」，
+    /// 于是 DWM 不再按矩形裁剪窗口，而是按客户区的 alpha 通道逐像素合成。配合
+    /// WebView2 的 <c>DefaultBackgroundColor = Transparent</c>，网页里 CSS border-radius
+    /// 产生的**部分透明边缘像素**会被原样保留 → 圆角是平滑的，不再是 1 位掩码的台阶。
+    ///
+    /// ⚠️ 副作用与配套要求（改这里前务必一起看）：
+    ///   1. 客户区里「纯黑」的像素会被 DWM 判为完全透明 → 窗体的 BackColor 必须是黑，
+    ///      否则 WebView2 透明区域透不出桌面（圆角就白设了）。
+    ///   2. 网页的 html/body 背景必须透明，背景色只能画在带 border-radius 的根容器上。
+    ///   3. 与 WS_EX_LAYERED 互斥：分层窗口用 LWA_ALPHA 整窗统一透明度，会盖掉逐像素 alpha。
+    ///      所以淡入结束后必须 <see cref="EnsurePerPixelAlpha"/> 把该样式摘掉。
+    /// </summary>
+    private void EnablePerPixelCorners()
+    {
+        try
+        {
+            var margins = new MARGINS
+            {
+                cxLeftWidth = -1,
+                cxRightWidth = -1,
+                cyTopHeight = -1,
+                cyBottomHeight = -1,
+            };
+            DwmExtendFrameIntoClientArea(Handle, ref margins);
+        }
+        catch {}
+        // 黑色 = 透明色（见上面第 1 条）
+        BackColor = Color.Black;
+    }
+
+    /// <summary>
+    /// 摘掉 WS_EX_LAYERED。WinForms 的 Form.Opacity 淡入靠的是分层窗口，
+    /// 而 LWA_ALPHA 是「整窗一个透明度」，会让 DWM 的逐像素 alpha 失效（圆角又变回方块）。
+    /// 淡入收尾（Opacity 到 1.0）后调用一次，之后圆角才真正平滑。
+    /// </summary>
+    public void EnsurePerPixelAlpha()
+    {
+        if (!IsHandleCreated) return;
+        try
+        {
+            int exStyle = GetWindowLong(Handle, GWL_EXSTYLE);
+            if ((exStyle & WS_EX_LAYERED) != 0)
+            {
+                SetWindowLong(Handle, GWL_EXSTYLE, exStyle & ~WS_EX_LAYERED);
+                SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            }
+        }
+        catch {}
     }
 
     protected override void OnResize(EventArgs e)
@@ -225,20 +342,17 @@ internal sealed class LauncherForm : Form
         UpdateFormRegion();
     }
 
+    /// <summary>
+    /// 圆角改由网页绘制，这里只负责「最大化时贴边、还原时回到圆角」——
+    /// 通过改 CSS 变量 <c>--launcher-corner</c> 实现（注入的样式表里用的是
+    /// <c>border-radius: var(--launcher-corner, 18px) !important</c>）。
+    /// </summary>
     public void UpdateFormRegion()
     {
-        if (WindowState == FormWindowState.Maximized)
-        {
-            SetWindowRgn(Handle, IntPtr.Zero, true);
-            return;
-        }
-
-        // 半径按当前显示器 DPI 缩放（4K @150% → 12 逻辑像素 = 18 设备像素），
-        // 圆弧直接在原生分辨率上绘制，锯齿最小。
-        int diameter = Math.Max(2, (int)Math.Round(CornerRadiusDip * DeviceDpi / 96.0) * 2);
-        IntPtr hRgn = CreateRoundRectRgn(0, 0, Width + 1, Height + 1, diameter, diameter);
-        SetWindowRgn(Handle, hRgn, true);
-        DeleteObject(hRgn);
+        bool rounded = WindowState != FormWindowState.Maximized;
+        if (rounded == cornersRounded) return;
+        cornersRounded = rounded;
+        try { CornerRadiusChanged?.Invoke(rounded); } catch {}
     }
 
     protected override void WndProc(ref Message m)
@@ -358,7 +472,10 @@ sealed class LauncherHost : IDisposable
             Height = initialHeight,
             MinimumSize = new Size(960, 540),
             StartPosition = FormStartPosition.CenterScreen,
-            BackColor = Color.FromArgb(9, 10, 15),
+            // ⚠️ BackColor 必须是**纯黑**：启用逐像素透明后（EnablePerPixelCorners），
+            // DWM 把客户区里的纯黑像素判为完全透明。若这里填 #090a0f，WebView2 的透明区域
+            // （圆角外那几块）就透不出桌面，圆角等于没做。
+            BackColor = Color.Black,
             Icon = applicationIcon,
             Opacity = 0.0 // 初始完全透明，等页面渲染就绪后平滑渐显，杜绝白屏/黑屏闪烁
         };
@@ -366,9 +483,28 @@ sealed class LauncherHost : IDisposable
         webView = new WebView2
         {
             Dock = DockStyle.Fill,
-            DefaultBackgroundColor = Color.FromArgb(9, 10, 15) // 设置 WebView2 底层画板默认背景为深色
+            // 透明背景 → WebView2 会把网页的真实 alpha 交给合成器，
+            // CSS border-radius 的抗锯齿边缘才能保留（这是圆角不再锯齿的关键一环）。
+            DefaultBackgroundColor = Color.Transparent
         };
         form.Controls.Add(webView);
+        // 最大化 / 还原时同步网页里的圆角与内缩量（网页侧靠 CSS 变量 --launcher-corner /
+        // --launcher-inset 生效）。最大化时必须**同时**把内缩归零，否则右/下会露出 2px 桌面。
+        // 最大化 / 还原时同步网页里的圆角。内缩量**不在这里写死** —— 它要按
+        // devicePixelRatio 换算成「2 设备px 的 CSS 等值」，所以交给网页侧的
+        // __launcherApplyCornerInset() 自己算（见注入脚本）。这里只要改完
+        // --launcher-corner 再让它重算一次即可。
+        form.CornerRadiusChanged = rounded =>
+        {
+            try
+            {
+                webView?.CoreWebView2?.ExecuteScriptAsync(
+                    "document.documentElement.style.setProperty('--launcher-corner', '"
+                    + (rounded ? LauncherForm.CornerRadiusCss : "0px") + "');"
+                    + "if (window.__launcherApplyCornerInset) { window.__launcherApplyCornerInset(); }");
+            }
+            catch {}
+        };
         form.FormClosing += OnFormClosing;
         form.Shown += async (_, _) => await InitializeLauncherAsync();
 
@@ -399,10 +535,68 @@ sealed class LauncherHost : IDisposable
             const style = document.createElement('style');
             style.id = 'launcher-corner-style';
             style.textContent = `
-                html, body, #root {
-                    border-radius: 18px !important;
+                /* ⚠️ 圆角靠「DWM 逐像素合成」实现，所以：
+                   ① html/body 必须透明，背景色只能画在带 border-radius 的根容器上，
+                      否则圆角外面那几块仍然是不透明的深色 → 看不出圆角；
+                   ② 半径走 CSS 变量 --launcher-corner，最大化时由宿主改成 0px 贴边。
+                   ③ 🚨 右/下各内缩 --launcher-inset（由 __launcherApplyCornerInset()
+                      按 devicePixelRatio 算成 2 设备px 的 CSS 等值）：Chromium 在
+                      **非整数 DPI 缩放**下会把贴住视口右/下边缘的圆角弧压平 ——
+                      实测（窗口 1161x730 逻辑px）四角「对角透明长度」d 为
+                        dsf=1.25  贴边 7/6/6/5（极差 2）→ 内缩 2 设备px 后 7/7/7/7（0）
+                        dsf=1.5   贴边 8/8/8/8（极差 0）→ 内缩 2 设备px 后 8/8/9/10（2）
+                        dsf=1.665 贴边 9/8/7/6（极差 3）→ 内缩 2 设备px 后 9/9/8/8（1）
+                      内缩 2 设备px 是三个 dsf 下的综合最优（最差极差 2，且只有 1.5
+                      会退化）；3 设备px 能让 1.665 变 0/0，但会让 1.25/1.5 明显变差。
+                      ⚠️ 换裁切机制无效：clip-path:inset(0 round 18px)、mask-image
+                      （内联 SVG 圆角矩形 / 四角 radial-gradient）、clip-path:url(#svg)
+                      在真实启动器页面上都仍被压平。
+                   ④ 🚨 内缩留下的缝用两条**直边补条**补（body::before 补右 /
+                      body::after 补底），两端各避开 --launcher-corner。
+                      ⚠️ 补条必须是**纯矩形**（加圆角会被压平得更狠），且**相切点一端
+                      必须用 linear-gradient 渐显**：2026-09-21 老板反馈「圆角边缘
+                      （除左上角）都还存在小尖角」，根因就是补条从相切点突然开始，
+                      形状边界从「弧（内缩 N px）」在 1 行内跳到「直边（贴边）」，
+                      留下一个 N 设备px 的 90° 台阶（左上角两条边都不内缩、没有补条，
+                      所以只有它干净）。渐显后台阶被抹成柔和过渡，肉眼不可见。 */
+                html, body {
+                    background: transparent !important;
+                }
+                #root {
+                    border-radius: var(--launcher-corner, 18px) !important;
                     overflow: hidden !important;
                     background-color: #090a0f !important;
+                    width: calc(100vw - var(--launcher-inset, 0px)) !important;
+                    height: calc(100vh - var(--launcher-inset, 0px)) !important;
+                }
+                /* 补条：竖条补右侧、横条补底部。两端各避开 --launcher-corner，正好接在
+                   圆角弧的相切点上；相切点一端用 linear-gradient 渐显（透明 → 不透明），
+                   把「弧 → 直边」的硬台阶抹成柔和过渡。
+                   ⚠️ 必须用单引号：这里是 C# verbatim 字符串，写双引号会被解成单引号，
+                       CSS 声明失效 → 补条整条不生效（这个坑真踩过）。 */
+                body::before, body::after {
+                    content: '';
+                    position: fixed;
+                    background-color: #090a0f;
+                    pointer-events: none;
+                }
+                body::before {
+                    right: 0;
+                    top: calc(var(--launcher-corner, 18px) - var(--launcher-inset, 0px));
+                    bottom: calc(var(--launcher-corner, 18px) + var(--launcher-inset, 0px));
+                    width: var(--launcher-inset, 0px);
+                    background: linear-gradient(to bottom,
+                        rgba(9, 10, 15, 0) 0,
+                        rgba(9, 10, 15, 1) var(--launcher-inset, 0px));
+                }
+                body::after {
+                    bottom: 0;
+                    left: calc(var(--launcher-corner, 18px) - var(--launcher-inset, 0px));
+                    right: calc(var(--launcher-corner, 18px) + var(--launcher-inset, 0px));
+                    height: var(--launcher-inset, 0px);
+                    background: linear-gradient(to right,
+                        rgba(9, 10, 15, 0) 0,
+                        rgba(9, 10, 15, 1) var(--launcher-inset, 0px));
                 }
                 *:focus, *:focus-visible, button:focus, button:focus-visible {
                     outline: none !important;
@@ -411,10 +605,57 @@ sealed class LauncherHost : IDisposable
             `;
             document.head.appendChild(style);
         }
+
+        /* 再把 html/body 的背景压成透明（每次调用都设，幂等）。
+           两层保险：
+             ① 注入样式表里的 `html, body { background: transparent !important }` 本身就够 ——
+                页面自带的内联 `<style>html,body,#root{background-color:#090a0f!important}</style>`
+                是个**选择器列表**，对 `html` 元素只有 `html` 这一支生效，特异性同样是 (0,0,1)，
+                与注入规则**打平** → 靠**源顺序**决胜。所以注入样式**必须追加在 head 末尾**
+                （`document.head.appendChild` / `</head>` 前插入），否则会输给页面的 `<style>`。
+                已实测：只注入样式表、完全不跑 JS，`getComputedStyle(html).backgroundColor`
+                就是 `rgba(0, 0, 0, 0)`（技能脚本 verify-launcher-corners-web.py）。
+             ② 这里再用**行内 + !important** 兜一层（author 层最高优先级），
+                这样即使以后页面把自带 `<style>` 挪到注入样式之后、或加了更强的规则，也压得过。
+           ⚠️ 注意 `#root` 的 (1,0,0) 那条**不能**压掉 —— 圆角盒的背景必须留它。 */
+        document.documentElement.style.setProperty('background-color', 'transparent', 'important');
+        if (document.body) {
+            document.body.style.setProperty('background-color', 'transparent', 'important');
+        }
+    }
+
+    /* 把「右/下内缩量」写成 CSS 变量 --launcher-inset。
+       🚨 为什么按 devicePixelRatio 算：压平只发生在**非整数 DPI 缩放**下，而且修好它
+          需要的「设备像素」内缩量基本恒定（实测 2 设备px 在 1.25 / 1.665 下都是最优）。
+          所以内缩量应该用设备px 表达，即 2 / dpr 个 CSS px。
+       最大化（--launcher-corner = 0px）时归零，否则右/下会露出 2 设备px 的桌面。
+       ⚠️ setProperty 改的是 documentElement.style，而 MutationObserver 只监听
+          childList/subtree（不含 attributes），所以不会自激。 */
+    function applyCornerInset() {
+        const root = document.documentElement;
+        // ⚠️ 变量**未设置**时（宿主还没同步过）必须按「有圆角」处理 —— CSS 里的
+        // var(--launcher-corner, 18px) 就是这个语义。否则初始状态下不内缩 → 弧被压平。
+        const raw = getComputedStyle(root).getPropertyValue('--launcher-corner').trim() || '18px';
+        const radius = parseFloat(raw);
+        if (isNaN(radius) || radius <= 0) {
+            root.style.setProperty('--launcher-inset', '0px');
+            return;
+        }
+        const dpr = window.devicePixelRatio || 1;
+        root.style.setProperty('--launcher-inset', (2 / dpr) + 'px');
+    }
+    window.__launcherApplyCornerInset = applyCornerInset;
+
+    /* ⚠️ setupWindowBridge 会被 MutationObserver 反复调用，这里必须自己加锁，
+       否则每次 DOM 变动都会再挂一个 resize 监听。 */
+    if (!window.__launcherInsetBound) {
+        window.__launcherInsetBound = true;
+        window.addEventListener('resize', applyCornerInset);
     }
 
     function setupWindowBridge() {
         injectGlobalStyles();
+        applyCornerInset();
 
         // 绑定 Header 拖拽与双击最大化
         const header = document.querySelector('header');
@@ -577,6 +818,10 @@ sealed class LauncherHost : IDisposable
         }
         catch (Exception ex)
         {
+            // ⚠️ 兜底：逐像素透明方案下，客户区里的纯黑像素会被 DWM 判为完全透明。
+            // 万一页面根本没加载出来（没有内容覆盖客户区），窗口就会变成「一片透明」，
+            // 看起来像没启动。所以失败时立刻把底色改回不透明深色，保证窗口可见。
+            try { form.BackColor = Color.FromArgb(9, 10, 15); } catch {}
             FadeInWindow();
             MessageBox.Show($"启动器界面初始化失败: {ex.Message}", LauncherHost.Title, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
@@ -1657,7 +1902,12 @@ sealed class LauncherHost : IDisposable
     {
         form.BeginInvoke(() =>
         {
-            if (form.Opacity >= 1.0) return;
+            if (form.Opacity >= 1.0)
+            {
+                // 已经是全不透明（比如超时保底路径），也要确认分层样式已摘掉
+                form.EnsurePerPixelAlpha();
+                return;
+            }
 
             var fadeTimer = new System.Windows.Forms.Timer { Interval = 16 }; // ~60fps
             fadeTimer.Tick += (s, _) =>
@@ -1670,6 +1920,9 @@ sealed class LauncherHost : IDisposable
                 {
                     fadeTimer.Stop();
                     fadeTimer.Dispose();
+                    // ⚠️ 淡入用的是 WS_EX_LAYERED + LWA_ALPHA（整窗统一透明度），
+                    // 它会盖掉 DWM 的逐像素 alpha —— 不摘掉的话圆角会一直退化成方块。
+                    form.EnsurePerPixelAlpha();
                 }
             };
             fadeTimer.Start();
@@ -1685,6 +1938,7 @@ sealed class LauncherHost : IDisposable
         {
             form.Opacity = 1.0;
         }
+        form.EnsurePerPixelAlpha();
     }
 
     private void ExitFromTray()

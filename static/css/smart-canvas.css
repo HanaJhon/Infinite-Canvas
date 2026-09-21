@@ -2158,3 +2158,33 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 /* ⚠️ 不要再给 .smart3d-fovval 加深色覆盖（曾经有过 `.theme-dark { color:var(--faint) }`）。
    实测：--faint 在深色面板上只有 3.49:1，低于 AA 的 4.5:1；--muted 是 5.93:1。
    焦距读数是功能性信息，浅色下本来就是 --muted（4.74:1），深色必须同档，否则「深色反而更难读」。 */
+
+/* ==================== Skill 市场 ====================
+   浮层样式已迁到 static/css/skill-market.css（画布页与 GPT 对话页共用同一份，
+   且那份自带 --sm-* 变量兜底 —— theme.css 在浅色主题下并不提供 --strong / --muted）。
+   入口按钮本身的外观（.agent-toolbar-btn）仍留在本文件。 */
+.agent-skill-market-btn i, .agent-skill-market-btn svg { width:12px; height:12px; }
+/* ==================== Agent 本机工具调用卡片 ====================
+   与 gpt-chat 页保持一致的折叠形态；失败态必须有独立配色，否则和中性态分不清。 */
+.agent-tool-calls { display:flex; flex-direction:column; gap:6px; margin:6px 0; }
+.agent-tool-call { border:1px solid var(--line); border-radius:10px; background:var(--soft); overflow:hidden; }
+.agent-tool-call.failed { border-color:rgba(185,28,28,.42); }
+.agent-tool-call > summary { display:flex; align-items:center; gap:6px; padding:6px 9px; cursor:pointer; font-size:10.5px; color:var(--muted); list-style:none; }
+.agent-tool-call > summary::-webkit-details-marker { display:none; }
+.agent-tool-call > summary i, .agent-tool-call > summary svg { width:12px; height:12px; flex:0 0 auto; color:var(--strong); }
+.agent-tool-call-name { font-weight:850; color:var(--text); }
+.agent-tool-call-brief { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.agent-tool-call-round { flex:0 0 auto; font-size:9.5px; font-weight:800; padding:1px 5px; border-radius:999px; background:var(--card); border:1px solid var(--line); }
+.agent-tool-call.failed .agent-tool-call-brief { color:#b91c1c; }
+.agent-tool-call-body { padding:2px 9px 9px; border-top:1px solid var(--line); }
+.agent-tool-call-label { margin:7px 0 3px; font-size:9.5px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); }
+.agent-tool-call-body pre { margin:0; max-height:200px; overflow:auto; padding:7px 8px; border-radius:8px; background:var(--card); border:1px solid var(--line); color:var(--text); font-size:10.5px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+.agent-tool-call > summary:focus-visible { outline:2px solid var(--strong); outline-offset:-2px; }
+.agent-tool-call > summary:focus:not(:focus-visible) { outline:none; }
+.theme-dark .agent-tool-call.failed { border-color:rgba(252,165,165,.42); }
+.theme-dark .agent-tool-call.failed .agent-tool-call-brief { color:#fca5a5; }
+/* 带工具调用的消息整行铺满：默认 .agent-msg 是 shrink-to-fit（实测 180px），
+   命令行输出 / 文件内容挤在 180px 里没法读；文字气泡仍保持贴左不拉伸。 */
+.agent-msg.has-tools { align-self:stretch; max-width:100%; }
+.agent-msg.has-tools .agent-msg-bubble { align-self:flex-start; }
+.agent-msg.has-tools .agent-tool-calls { width:100%; }
