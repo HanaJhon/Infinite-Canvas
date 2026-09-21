@@ -154,6 +154,60 @@
         .thumb.file-thumb i,.thumb.file-thumb svg { width:15px; height:15px; flex:0 0 auto; color:var(--chat-muted); }
         .thumb-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .assistant .thumb { border-color:var(--chat-line); }
+        .agent-tools { position:relative; }
+        .agent-tools-button { display:flex; align-items:center; gap:6px; height:34px; padding:0 10px; border-radius:12px; border:1px solid var(--chat-line); background:var(--chat-panel); color:var(--chat-muted); font-size:11px; font-weight:850; }
+        .agent-tools-button:hover { background:var(--chat-soft); color:var(--chat-text); border-color:var(--chat-line-2); }
+        .agent-tools-button i,.agent-tools-button svg { width:14px; height:14px; flex:0 0 auto; }
+        .agent-tools-button.on { color:var(--chat-text); border-color:var(--chat-line-2); background:var(--chat-soft); }
+        .agent-tools-state { font-size:10px; font-weight:900; letter-spacing:.06em; padding:1px 5px; border-radius:6px; background:rgba(148,163,184,.18); color:var(--chat-muted); }
+        .agent-tools-button.on .agent-tools-state { background:rgba(16,185,129,.16); color:#047857; }
+        .agent-tools-popover { position:fixed; left:var(--agent-tools-left,12px); top:var(--agent-tools-top,12px); width:var(--agent-tools-width,min(392px,calc(100vw - 32px))); max-height:min(540px,calc(100vh - 32px)); overflow:auto; display:none; flex-direction:column; gap:10px; padding:12px; background:rgba(248,250,252,.97); border:1px solid var(--chat-line); border-radius:16px; color:var(--chat-text); box-shadow:0 22px 54px rgba(15,23,42,.16); backdrop-filter:blur(18px); z-index:76; }
+        .agent-tools-popover.open { display:flex; animation:popIn .16s var(--ease); }
+        .agent-tools-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+        .agent-tools-head .rail-close { display:flex; }
+        .agent-tools-kicker { font-size:11px; font-weight:950; letter-spacing:.14em; text-transform:uppercase; color:var(--chat-faint); }
+        .agent-tools-hint { margin-top:3px; font-size:11px; line-height:1.5; color:var(--chat-muted); }
+        .agent-tools-toggle { display:flex; align-items:center; gap:8px; padding:9px 10px; border-radius:12px; border:1px solid var(--chat-line); background:var(--chat-panel); font-size:12px; font-weight:800; cursor:pointer; }
+        .agent-tools-toggle input { width:15px; height:15px; flex:0 0 auto; accent-color:var(--chat-strong); }
+        .agent-tools-section-title { font-size:10px; font-weight:950; letter-spacing:.14em; text-transform:uppercase; color:var(--chat-faint); padding:2px 2px 0; }
+        .agent-tools-levels { display:flex; flex-direction:column; gap:6px; }
+        .agent-tools-level { text-align:left; padding:8px 10px; border-radius:12px; border:1px solid var(--chat-line); background:var(--chat-panel); color:var(--chat-muted); }
+        .agent-tools-level:hover { border-color:var(--chat-line-2); color:var(--chat-text); }
+        .agent-tools-level.active { border-color:var(--chat-strong); background:var(--chat-soft); color:var(--chat-text); }
+        .agent-tools-level b { display:block; font-size:12px; font-weight:900; }
+        .agent-tools-level small { display:block; margin-top:3px; font-size:10px; line-height:1.45; font-weight:500; color:var(--chat-muted); }
+        .agent-tools-rounds { display:flex; align-items:center; gap:8px; }
+        .agent-tools-rounds input { width:88px; height:32px; padding:0 10px; border-radius:10px; border:1px solid var(--chat-line); background:var(--chat-panel); color:var(--chat-text); font-size:12px; font-weight:800; }
+        .agent-tools-rounds span { font-size:11px; color:var(--chat-muted); }
+        .agent-tools-list { display:flex; flex-wrap:wrap; gap:6px; }
+        .agent-tools-chip { font-size:10px; font-weight:850; padding:3px 8px; border-radius:999px; border:1px solid var(--chat-line); color:var(--chat-muted); background:var(--chat-panel); }
+        .agent-tools-chip.off { opacity:.45; text-decoration:line-through; }
+        .tool-calls { display:flex; flex-direction:column; gap:6px; margin-top:10px; }
+        .tool-calls-head { font-size:10px; font-weight:950; letter-spacing:.12em; text-transform:uppercase; color:#5a6474; }
+        .tool-call { border:1px solid var(--chat-line); border-radius:12px; background:rgba(148,163,184,.07); overflow:hidden; }
+        .tool-call.is-error { border-color:rgba(220,38,38,.38); background:rgba(220,38,38,.06); }
+        .tool-call > summary { display:flex; align-items:center; gap:8px; padding:8px 10px; cursor:pointer; list-style:none; font-size:11px; font-weight:850; color:var(--chat-text); }
+        .tool-call > summary::-webkit-details-marker { display:none; }
+        .tool-call > summary i,.tool-call > summary svg { width:13px; height:13px; flex:0 0 auto; color:var(--chat-muted); }
+        .tool-call.is-error > summary i,.tool-call.is-error > summary svg { color:#b91c1c; }
+        .tool-call-name { flex:0 0 auto; }
+        .tool-call-summary { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; color:#5a6474; }
+        .tool-call-chevron { flex:0 0 auto; color:var(--chat-faint); transition:transform .16s var(--ease); }
+        .tool-call[open] .tool-call-chevron { transform:rotate(180deg); }
+        .tool-call-body { padding:0 10px 10px; display:flex; flex-direction:column; gap:6px; }
+        .tool-call-args { margin:0; padding:7px 9px; border-radius:9px; background:rgba(15,23,42,.06); color:var(--chat-text); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11px; line-height:1.55; white-space:pre-wrap; word-break:break-all; }
+        .tool-call-output { margin:0; max-height:220px; overflow:auto; padding:7px 9px; border-radius:9px; background:var(--chat-panel); border:1px solid var(--chat-line); color:#5a6474; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11px; line-height:1.55; white-space:pre-wrap; word-break:break-all; }
+        .tool-call-error { font-size:11px; font-weight:800; color:#b91c1c; }
+        .agent-tools button:focus,
+        .agent-tools input:focus,
+        .agent-tools-popover button:focus,
+        .agent-tools-popover input:focus,
+        .tool-call > summary:focus { outline:2px solid var(--chat-strong); outline-offset:2px; }
+        .agent-tools button:focus:not(:focus-visible),
+        .agent-tools input:focus:not(:focus-visible),
+        .agent-tools-popover button:focus:not(:focus-visible),
+        .agent-tools-popover input:focus:not(:focus-visible),
+        .tool-call > summary:focus:not(:focus-visible) { outline:none; }
         .composer-wrap { min-height:0; padding:10px 30px 18px; background:linear-gradient(to top,var(--chat-bg) 82%,rgba(238,242,246,0)); border-top:0; z-index:6; }
         .composer { width:min(var(--chat-width),calc(100% - 60px)); margin:0 auto; min-height:0; max-height:min(34vh,310px); background:rgba(248,250,252,.94); border:1px solid var(--chat-line); border-radius:18px; box-shadow:0 14px 36px var(--chat-shadow); padding:8px; display:flex; flex-direction:column; gap:8px; backdrop-filter:blur(14px); overflow:hidden; }
         .mode-switch { display:none; }
@@ -291,6 +345,38 @@
         body.studio-theme-dark .system-prompt-popover,
         html.theme-dark body .system-prompt-popover,
         body.theme-dark .system-prompt-popover { background:rgba(23,29,41,.96) !important; border-color:var(--chat-line) !important; box-shadow:0 22px 54px rgba(0,0,0,.36) !important; color:var(--chat-text) !important; }
+        html.studio-theme-dark body .agent-tools-popover,
+        body.studio-theme-dark .agent-tools-popover,
+        html.theme-dark body .agent-tools-popover,
+        body.theme-dark .agent-tools-popover { background:rgba(23,29,41,.96) !important; border-color:var(--chat-line) !important; box-shadow:0 22px 54px rgba(0,0,0,.36) !important; color:var(--chat-text) !important; }
+        html.studio-theme-dark body .agent-tools-button.on .agent-tools-state,
+        body.studio-theme-dark .agent-tools-button.on .agent-tools-state,
+        html.theme-dark body .agent-tools-button.on .agent-tools-state,
+        body.theme-dark .agent-tools-button.on .agent-tools-state { color:#34d399; }
+        html.studio-theme-dark body .tool-call-args,
+        body.studio-theme-dark .tool-call-args,
+        html.theme-dark body .tool-call-args,
+        body.theme-dark .tool-call-args { background:rgba(148,163,184,.14); }
+        html.studio-theme-dark body .tool-calls-head,
+        body.studio-theme-dark .tool-calls-head,
+        html.theme-dark body .tool-calls-head,
+        body.theme-dark .tool-calls-head,
+        html.studio-theme-dark body .tool-call-summary,
+        body.studio-theme-dark .tool-call-summary,
+        html.theme-dark body .tool-call-summary,
+        body.theme-dark .tool-call-summary,
+        html.studio-theme-dark body .tool-call-output,
+        body.studio-theme-dark .tool-call-output,
+        html.theme-dark body .tool-call-output,
+        body.theme-dark .tool-call-output { color:var(--chat-muted); }
+        html.studio-theme-dark body .tool-call.is-error > summary i,
+        body.studio-theme-dark .tool-call.is-error > summary i,
+        html.theme-dark body .tool-call.is-error > summary i,
+        body.theme-dark .tool-call.is-error > summary i,
+        html.studio-theme-dark body .tool-call-error,
+        body.studio-theme-dark .tool-call-error,
+        html.theme-dark body .tool-call-error,
+        body.theme-dark .tool-call-error { color:#fca5a5; }
         html.studio-theme-dark body .composer-wrap,
         body.studio-theme-dark .composer-wrap,
         html.theme-dark body .composer-wrap,
@@ -411,6 +497,7 @@
             .chat-shell { display:block; }
             .chat-rail { position:absolute; top:48px; right:0; left:auto; bottom:auto; z-index:70; width:min(330px,calc(100vw - 28px)); max-height:calc(100vh - 86px); transform:none; box-shadow:0 22px 54px rgba(15,23,42,.18); transition:none; }
             .system-prompt-popover { top:48px; right:0; width:min(330px,calc(100vw - 28px)); max-height:calc(100vh - 86px); }
+            .agent-tools-popover { width:min(330px,calc(100vw - 28px)); max-height:calc(100vh - 110px); }
             .chat-rail.open { display:flex; transform:none; }
             .chat-main { height:calc(100vh / var(--studio-ui-scale, 1)); }
             .topbar { min-height:66px; padding-left:16px; padding-right:16px; }
@@ -512,6 +599,35 @@
                                     <button type="button" class="upload-btn" onclick="document.getElementById('attachmentInput')?.click()" title="上传附件" aria-label="上传附件">
                                         <i data-lucide="paperclip"></i>
                                     </button>
+                                    <div id="agentTools" class="agent-tools">
+                                        <button id="agentToolsBtn" type="button" class="agent-tools-button" onclick="event.stopPropagation();toggleAgentTools()" title="本机工具（终端 / 文件）" data-i18n-title="agent.toolsTitle">
+                                            <i data-lucide="terminal"></i>
+                                            <span data-i18n="agent.tools">本机工具</span>
+                                            <span id="agentToolsState" class="agent-tools-state">关</span>
+                                        </button>
+                                        <div id="agentToolsPopover" class="agent-tools-popover" onclick="event.stopPropagation()">
+                                            <div class="agent-tools-head">
+                                                <div>
+                                                    <div class="agent-tools-kicker" data-i18n="agent.toolsTitle">本机工具</div>
+                                                    <div id="agentToolsHint" class="agent-tools-hint"></div>
+                                                </div>
+                                                <button type="button" class="rail-close" onclick="event.stopPropagation();toggleAgentTools(false)" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
+                                            </div>
+                                            <label class="agent-tools-toggle">
+                                                <input id="agentToolsEnabled" type="checkbox" onchange="setAgentToolsEnabled(this.checked)">
+                                                <span data-i18n="agent.toolsEnable">允许 Agent 调用本机工具（终端 / 文件）</span>
+                                            </label>
+                                            <div class="agent-tools-section-title" data-i18n="agent.permissionTitle">本机权限档位</div>
+                                            <div id="agentToolsLevels" class="agent-tools-levels"></div>
+                                            <div class="agent-tools-section-title" data-i18n="agent.maxRounds">工具调用轮数上限</div>
+                                            <div class="agent-tools-rounds">
+                                                <input id="agentToolsRounds" type="number" min="1" max="20" step="1" onchange="setAgentToolsRounds(this.value)">
+                                                <span data-i18n="agent.maxRoundsUnit">轮（1~20）</span>
+                                            </div>
+                                            <div class="agent-tools-section-title" data-i18n="agent.toolListTitle">工具清单</div>
+                                            <div id="agentToolsList" class="agent-tools-list"></div>
+                                        </div>
+                                    </div>
                                     <div id="modelPicker" class="model-picker">
                                         <button id="modelPickerBtn" class="model-picker-button" onclick="event.stopPropagation();toggleModelPicker()" title="选择平台和模型">
                                             <i data-lucide="boxes"></i>
@@ -607,6 +723,9 @@
     <script>
         lucide.createIcons();
         function tr(key){ return window.StudioI18n ? StudioI18n.t(key) : key; }
+        function trf(key, values = {}){
+            return String(tr(key)).replace(/\{(\w+)\}/g, (match, name) => (name in values ? values[name] : match));
+        }
         function defaultTitle(){ return tr('chat.newConversation'); }
         function setChatTitle(title){
             document.getElementById('chatTitle').textContent = title || defaultTitle();
@@ -616,6 +735,10 @@
             document.title = tr('chat.title');
             if(!currentConversation?.title || currentConversation.title === '新对话' || currentConversation.title === 'New Chat') setChatTitle('');
             renderThreads();
+            renderAgentTools();
+            if((currentConversation?.messages || []).some(item => item?.tool_events?.length)){
+                renderMessages(currentConversation.messages);
+            }
         }
         window.addEventListener('message', event => {
             if(event.data?.type === 'studio-lang') applyLanguage(event.data.lang);
@@ -624,10 +747,15 @@
             document.title = tr('chat.title');
             if(!currentConversation?.title || currentConversation.title === '新对话' || currentConversation.title === 'New Chat') setChatTitle('');
             renderThreads();
+            renderAgentTools();
+            if((currentConversation?.messages || []).some(item => item?.tool_events?.length)){
+                renderMessages(currentConversation.messages);
+            }
         });
         window.addEventListener('resize', () => {
             if(document.getElementById('modelPicker')?.classList.contains('open')) positionModelPicker();
             if(document.getElementById('resolutionPicker')?.classList.contains('open')) positionResolutionPicker();
+            if(document.getElementById('agentToolsPopover')?.classList.contains('open')) positionAgentTools();
         });
         function uuid(){
             if(crypto?.randomUUID) return crypto.randomUUID();
@@ -828,6 +956,198 @@
             if(kind === 'image' && !models.includes(activeImageModel)) activeImageModel = models[0] || config.image_model;
             if(kind !== 'image' && !models.includes(activeChatModel)) activeChatModel = chatProviderModels[provider] && models.includes(chatProviderModels[provider]) ? chatProviderModels[provider] : (models[0] || config.chat_model);
             renderModelPicker();
+        }
+
+        const AGENT_TOOL_LABEL_KEYS = {
+            run_shell: 'agent.tool.run_shell',
+            read_file: 'agent.tool.read_file',
+            write_file: 'agent.tool.write_file',
+            list_dir: 'agent.tool.list_dir'
+        };
+        let agentToolsState = { enabled: false, level: 'workspace-write', max_rounds: 8, levels: [], all_tools: [], available_tools: [], loaded: false };
+
+        function toggleAgentTools(force){
+            const home = document.getElementById('agentTools');
+            const pop = document.getElementById('agentToolsPopover');
+            if(!pop || !home) return;
+            const next = typeof force === 'boolean' ? force : !pop.classList.contains('open');
+            pop.classList.toggle('open', next);
+            if(next){
+                // .composer 带 overflow:hidden，浮层必须移到 body 上用 fixed 定位，否则会被裁掉。
+                if(pop.parentElement !== document.body) document.body.appendChild(pop);
+                loadAgentTools();
+                positionAgentTools();
+                requestAnimationFrame(positionAgentTools);
+                lucide.createIcons();
+            } else if(pop.parentElement === document.body){
+                home.appendChild(pop);
+            }
+        }
+
+        function positionAgentTools(){
+            const btn = document.getElementById('agentToolsBtn');
+            const pop = document.getElementById('agentToolsPopover');
+            if(!btn || !pop || !pop.classList.contains('open')) return;
+            const rect = btn.getBoundingClientRect();
+            const viewportW = window.visualViewport?.width || window.innerWidth;
+            const viewportH = window.visualViewport?.height || window.innerHeight;
+            const width = Math.min(392, Math.max(280, viewportW - 32));
+            const left = Math.min(Math.max(12, rect.left), Math.max(12, viewportW - width - 12));
+            pop.style.setProperty('--agent-tools-left', `${Math.round(left)}px`);
+            pop.style.setProperty('--agent-tools-width', `${Math.round(width)}px`);
+            const box = pop.getBoundingClientRect();
+            const top = Math.max(12, Math.min(rect.top - box.height - 10, viewportH - box.height - 12));
+            pop.style.setProperty('--agent-tools-top', `${Math.round(top)}px`);
+        }
+
+        async function loadAgentTools(){
+            try {
+                const data = await fetch('/api/agent/tools').then(r => r.ok ? r.json() : null);
+                if(data) applyAgentToolsData(data);
+            } catch(e) {}
+        }
+
+        function applyAgentToolsData(data){
+            agentToolsState = { ...agentToolsState, ...data, loaded: true };
+            renderAgentTools();
+        }
+
+        function agentToolAvailable(name){
+            return !!agentToolsState.enabled && (agentToolsState.available_tools || []).includes(name);
+        }
+
+        function agentToolLabel(name){
+            return tr(AGENT_TOOL_LABEL_KEYS[name] || 'agent.tool.unknown');
+        }
+
+        function renderAgentTools(){
+            const state = agentToolsState;
+            document.getElementById('agentToolsBtn')?.classList.toggle('on', !!state.enabled);
+            const badge = document.getElementById('agentToolsState');
+            if(badge) badge.textContent = state.enabled ? tr('agent.on') : tr('agent.off');
+            const checkbox = document.getElementById('agentToolsEnabled');
+            if(checkbox) checkbox.checked = !!state.enabled;
+            const rounds = document.getElementById('agentToolsRounds');
+            if(rounds){
+                rounds.value = state.max_rounds || 8;
+                rounds.max = state.max_rounds_limit || 20;
+            }
+            const hint = document.getElementById('agentToolsHint');
+            if(hint){
+                hint.textContent = state.enabled
+                    ? trf('agent.hintOn', { level: state.level_label || state.level || '' })
+                    : tr('agent.hintOff');
+            }
+            const levels = document.getElementById('agentToolsLevels');
+            if(levels){
+                levels.innerHTML = '';
+                (state.levels || []).forEach(level => {
+                    const item = document.createElement('button');
+                    item.type = 'button';
+                    item.className = `agent-tools-level${level.id === state.level ? ' active' : ''}`;
+                    const title = document.createElement('b');
+                    title.textContent = level.label || level.id;
+                    const desc = document.createElement('small');
+                    desc.textContent = level.desc || '';
+                    item.appendChild(title);
+                    item.appendChild(desc);
+                    item.onclick = () => saveAgentTools({ level: level.id });
+                    levels.appendChild(item);
+                });
+            }
+            const list = document.getElementById('agentToolsList');
+            if(list){
+                list.innerHTML = '';
+                (state.all_tools || []).forEach(tool => {
+                    const chip = document.createElement('span');
+                    chip.className = `agent-tools-chip${agentToolAvailable(tool.name) ? '' : ' off'}`;
+                    chip.textContent = agentToolLabel(tool.name);
+                    chip.title = tool.desc || '';
+                    list.appendChild(chip);
+                });
+            }
+        }
+
+        async function saveAgentTools(payload){
+            try {
+                const data = await fetch('/api/agent/tools', {
+                    method:'POST', headers:headers(), body:JSON.stringify(payload)
+                }).then(async r => { if(!r.ok) throw new Error((await r.json()).detail || tr('chat.requestFailed')); return r.json(); });
+                applyAgentToolsData(data);
+            } catch(e) {
+                await loadAgentTools();
+            }
+        }
+
+        function setAgentToolsEnabled(enabled){ return saveAgentTools({ enabled: !!enabled }); }
+        function setAgentToolsRounds(value){
+            const parsed = parseInt(value, 10);
+            return saveAgentTools({ max_rounds: Number.isFinite(parsed) ? parsed : 8 });
+        }
+
+        function toolCallHeadline(event){
+            const args = event?.args || {};
+            if(event?.name === 'run_shell') return String(args.command || '').trim();
+            if(args.path) return String(args.path);
+            if(args._raw) return String(args._raw);
+            return '';
+        }
+
+        function renderToolCalls(bubble, events){
+            if(!Array.isArray(events) || !events.length) return;
+            const wrap = document.createElement('div');
+            wrap.className = 'tool-calls';
+            const head = document.createElement('div');
+            head.className = 'tool-calls-head';
+            head.textContent = trf('agent.callsTitle', { count: events.length });
+            wrap.appendChild(head);
+            events.forEach(event => {
+                const details = document.createElement('details');
+                details.className = `tool-call${event.ok ? '' : ' is-error'}`;
+                const summary = document.createElement('summary');
+                const icon = document.createElement('i');
+                icon.setAttribute('data-lucide', event.name === 'run_shell' ? 'terminal' : 'file-text');
+                const name = document.createElement('span');
+                name.className = 'tool-call-name';
+                name.textContent = agentToolLabel(event.name);
+                const meta = document.createElement('span');
+                meta.className = 'tool-call-summary';
+                meta.textContent = event.summary || '';
+                const chevron = document.createElement('i');
+                chevron.className = 'tool-call-chevron';
+                chevron.setAttribute('data-lucide', 'chevron-down');
+                summary.appendChild(icon);
+                summary.appendChild(name);
+                summary.appendChild(meta);
+                summary.appendChild(chevron);
+                details.appendChild(summary);
+
+                const body = document.createElement('div');
+                body.className = 'tool-call-body';
+                const headline = toolCallHeadline(event);
+                if(headline){
+                    const argsEl = document.createElement('pre');
+                    argsEl.className = 'tool-call-args';
+                    argsEl.textContent = (event.name === 'run_shell' ? '$ ' : '') + headline;
+                    body.appendChild(argsEl);
+                }
+                if(event.output){
+                    const outEl = document.createElement('pre');
+                    outEl.className = 'tool-call-output';
+                    outEl.textContent = event.output;
+                    body.appendChild(outEl);
+                }
+                if(!event.ok && !event.output){
+                    const errEl = document.createElement('div');
+                    errEl.className = 'tool-call-error';
+                    errEl.textContent = event.summary || '';
+                    body.appendChild(errEl);
+                }
+                details.appendChild(body);
+                wrap.appendChild(details);
+            });
+            bubble.appendChild(wrap);
+            lucide.createIcons();
         }
 
         function validateSavedProviderState(){
@@ -1133,6 +1453,11 @@
             const actions = document.querySelector('.top-actions');
             if(rail?.classList.contains('open') && !rail.contains(event.target) && actions && !actions.contains(event.target)) toggleHistory(false);
         });
+        document.addEventListener('click', (event) => {
+            const tools = document.getElementById('agentTools');
+            const popover = document.getElementById('agentToolsPopover');
+            if(popover?.classList.contains('open') && tools && !tools.contains(event.target) && !popover.contains(event.target)) toggleAgentTools(false);
+        });
 
         function setMode(next, persist = true){
             mode = next;
@@ -1381,6 +1706,9 @@
                     grid.appendChild(img);
                 });
                 bubble.appendChild(grid);
+            }
+            if(msg.role === 'assistant' && Array.isArray(msg.tool_events) && msg.tool_events.length){
+                renderToolCalls(bubble, msg.tool_events);
             }
             // Show model badge for assistant messages
             if(msg.role === 'assistant' && msg.model){
@@ -1675,6 +2003,7 @@
             setChatRatio(chatRatio);
             setChatResolution(chatResolution);
             await loadConfig();
+            await loadAgentTools();
             await loadConversations();
             updateComposerOverflow();
         };

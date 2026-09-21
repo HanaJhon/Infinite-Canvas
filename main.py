@@ -3395,6 +3395,11 @@ class CodexHelpRequest(BaseModel):
 class CodexPermissionRequest(BaseModel):
     level: str = ""
 
+class AgentToolsRequest(BaseModel):
+    enabled: Optional[bool] = None
+    level: str = ""
+    max_rounds: Optional[int] = None
+
 class GeminiCliHelpRequest(BaseModel):
     command: str = ""
 
@@ -5577,6 +5582,372 @@ def codex_permission_payload():
                 "desc": value["desc"],
                 "sandbox": value["sandbox"],
                 "network_access": bool(value["network"]),
+            }
+            for key, value in CODEX_PERMISSION_LEVELS.items()
+        ],
+    }
+
+# ===================== Agent 本机工具（终端 / 文件） =====================
+# 项目原有的 agent 只有「一次意图判定」，没有任何工具调用能力，因此无法执行 Windows 终端命令。
+# 这里为 OpenAI 兼容通道补一个 tool-calling 循环，让模型可以真正操作本机。
+# 权限档位**复用** CODEX_PERMISSION_LEVELS 的四档语义（同一份 data/codex_permissions.json），
+# 避免出现「两套权限、两处配置」。
+AGENT_TOOLS_FILE = os.path.join(DATA_DIR, "agent_tools.json")
+AGENT_TOOLS_DEFAULT_ENABLED = False
+AGENT_TOOLS_DEFAULT_MAX_ROUNDS = 8
+AGENT_TOOLS_MAX_ROUNDS_LIMIT = 20
+AGENT_TOOL_READ_BYTES = 200_000          # read_file 单次最多读取的字节数
+AGENT_TOOL_OUTPUT_LIMIT = 12_000         # 单次工具结果回灌给模型的最大字符数
+AGENT_TOOL_SHELL_TIMEOUT = 120           # run_shell 默认超时（秒）
+AGENT_TOOL_SHELL_TIMEOUT_LIMIT = 600
+AGENT_TOOL_PATH_MAX = 4096
+
+AGENT_TOOL_SPECS = [
+    {
+        "name": "run_shell",
+        "label": "执行命令",
+        "desc": "在本机 Windows 上执行一条命令并返回输出（默认 cmd.exe；需要 PowerShell 时把 command 写成 powershell -NoProfile -Command \"...\"）。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "要执行的完整命令行"},
+                "cwd": {"type": "string", "description": "工作目录，默认项目根目录"},
+                "timeout": {"type": "integer", "description": "超时秒数，默认 120，最大 600"},
+            },
+            "required": ["command"],
+        },
+    },
+    {
+        "name": "read_file",
+        "label": "读取文件",
+        "desc": "读取本机文本文件的全部或部分内容。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "文件路径，相对路径按项目根目录解析"},
+                "max_bytes": {"type": "integer", "description": "最多读取的字节数，默认 200000"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "write_file",
+        "label": "写入文件",
+        "desc": "把内容写入本机文件（覆盖写入，自动创建父目录）。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "文件路径，相对路径按项目根目录解析"},
+                "content": {"type": "string", "description": "要写入的完整内容"},
+            },
+            "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "list_dir",
+        "label": "列目录",
+        "desc": "列出本机某个目录下的文件与子目录（含大小与修改时间）。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "目录路径，默认项目根目录"},
+            },
+        },
+    },
+]
+AGENT_TOOL_NAMES = [spec["name"] for spec in AGENT_TOOL_SPECS]
+
+AGENT_TOOLS_SYSTEM_HINT = (
+    "\n\n你可以调用本机工具来完成任务：run_shell（执行 Windows 命令）、read_file、write_file、list_dir。"
+    "需要了解文件内容或执行命令时直接调用工具，不要凭空猜测；工具返回失败时说明原因并给出替代方案。"
+    "不要调用与用户请求无关的工具，也不要在回复里伪造工具输出。"
+)
+
+def agent_decode_bytes(data):
+    """命令输出按 UTF-8 → GBK 依次尝试解码：中文 Windows 的 cmd.exe 默认输出 GBK。"""
+    raw = data or b""
+    if not raw:
+        return ""
+    for encoding in ("utf-8", "gbk"):
+        try:
+            return raw.decode(encoding).strip()
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace").strip()
+
+def agent_truncate(text, limit=AGENT_TOOL_OUTPUT_LIMIT):
+    text = str(text or "")
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n…（已截断，原文共 {len(text)} 字符）"
+
+def load_agent_tools_settings():
+    settings = {
+        "enabled": AGENT_TOOLS_DEFAULT_ENABLED,
+        "max_rounds": AGENT_TOOLS_DEFAULT_MAX_ROUNDS,
+    }
+    try:
+        if os.path.exists(AGENT_TOOLS_FILE):
+            with open(AGENT_TOOLS_FILE, "r", encoding="utf-8-sig") as f:
+                raw = json.load(f) or {}
+            if isinstance(raw, dict):
+                settings["enabled"] = bool(raw.get("enabled", settings["enabled"]))
+                rounds = raw.get("max_rounds")
+                if isinstance(rounds, int) and 1 <= rounds <= AGENT_TOOLS_MAX_ROUNDS_LIMIT:
+                    settings["max_rounds"] = rounds
+    except Exception as exc:
+        print(f"加载 Agent 工具设置失败: {exc}")
+    return settings
+
+def save_agent_tools_settings(enabled=None, max_rounds=None):
+    settings = load_agent_tools_settings()
+    if enabled is not None:
+        settings["enabled"] = bool(enabled)
+    if max_rounds is not None:
+        rounds = int(max_rounds)
+        if not 1 <= rounds <= AGENT_TOOLS_MAX_ROUNDS_LIMIT:
+            raise HTTPException(status_code=400, detail=f"工具调用轮数需在 1~{AGENT_TOOLS_MAX_ROUNDS_LIMIT} 之间")
+        settings["max_rounds"] = rounds
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(AGENT_TOOLS_FILE, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
+    return settings
+
+def agent_allowed_roots():
+    """按当前权限档位返回允许访问的根目录；返回 None 表示不限制。"""
+    level = load_codex_permission()
+    if level == "danger-full-access":
+        return None
+    roots = [BASE_DIR]
+    if level == "workspace-write-network":
+        roots.extend(codex_permission_extra_roots())
+    return roots
+
+def agent_resolve_path(raw_path, roots):
+    """把模型给的路径解析为绝对路径；越出允许根目录时抛 403。"""
+    text = str(raw_path or "").strip().strip('"').strip("'")
+    if not text:
+        raise HTTPException(status_code=400, detail="路径不能为空")
+    if len(text) > AGENT_TOOL_PATH_MAX:
+        raise HTTPException(status_code=400, detail="路径过长")
+    text = os.path.expanduser(os.path.expandvars(text))
+    path = text if os.path.isabs(text) else os.path.join(BASE_DIR, text)
+    path = os.path.abspath(path)
+    if roots is None:
+        return path
+    for root in roots:
+        root_abs = os.path.abspath(root)
+        if path == root_abs or path.startswith(root_abs + os.sep):
+            return path
+    raise HTTPException(
+        status_code=403,
+        detail=f"路径越界：当前权限档位只允许访问项目目录（{path}）",
+    )
+
+def agent_tool_schemas(level=None):
+    """按权限档位裁剪工具集：只读档不给 run_shell / write_file。"""
+    level = level or load_codex_permission()
+    denied = {"read-only": {"run_shell", "write_file"}}.get(level, set())
+    schemas = []
+    for spec in AGENT_TOOL_SPECS:
+        if spec["name"] in denied:
+            continue
+        schemas.append({
+            "type": "function",
+            "function": {
+                "name": spec["name"],
+                "description": spec["desc"],
+                "parameters": spec["parameters"],
+            },
+        })
+    return schemas
+
+async def agent_tool_run_shell(args):
+    if load_codex_permission() == "read-only":
+        return {
+            "ok": False,
+            "summary": "当前权限档位为「只读」，已拒绝执行命令",
+            "output": "请在 agent 对话页或「API 设置 → OpenAI CLI 账户」把权限放宽到「工作区可写」以上。",
+        }
+    command = str(args.get("command") or "").strip()
+    if not command:
+        return {"ok": False, "summary": "缺少 command 参数", "output": ""}
+    roots = agent_allowed_roots()
+    cwd = agent_resolve_path(args.get("cwd") or BASE_DIR, roots)
+    if not os.path.isdir(cwd):
+        cwd = BASE_DIR
+    try:
+        timeout = int(args.get("timeout") or AGENT_TOOL_SHELL_TIMEOUT)
+    except (TypeError, ValueError):
+        timeout = AGENT_TOOL_SHELL_TIMEOUT
+    timeout = max(1, min(timeout, AGENT_TOOL_SHELL_TIMEOUT_LIMIT))
+    started = time.time()
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except Exception as exc:
+        return {"ok": False, "summary": f"命令启动失败：{exc}", "output": ""}
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return {
+            "ok": False,
+            "summary": f"命令超时（{timeout}s 未结束）",
+            "output": f"cwd: {cwd}\ncommand: {command}",
+        }
+    out_text = agent_decode_bytes(stdout)
+    err_text = agent_decode_bytes(stderr)
+    exit_code = proc.returncode
+    combined = out_text
+    if err_text:
+        combined = (combined + "\n[stderr]\n" + err_text).strip()
+    elapsed = time.time() - started
+    summary = f"exit={exit_code} · {elapsed:.1f}s"
+    if not combined:
+        combined = "（命令没有产生任何输出）"
+    return {
+        "ok": exit_code == 0,
+        "summary": summary,
+        "output": agent_truncate(combined),
+        "exit_code": exit_code,
+        "cwd": cwd,
+    }
+
+def agent_tool_read_file(args, roots):
+    path = agent_resolve_path(args.get("path"), roots)
+    if not os.path.exists(path):
+        return {"ok": False, "summary": "文件不存在", "output": path}
+    if os.path.isdir(path):
+        return {"ok": False, "summary": "这是一个目录，请改用 list_dir", "output": path}
+    try:
+        limit = int(args.get("max_bytes") or AGENT_TOOL_READ_BYTES)
+    except (TypeError, ValueError):
+        limit = AGENT_TOOL_READ_BYTES
+    limit = max(1, min(limit, AGENT_TOOL_READ_BYTES))
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(limit + 1)
+    except Exception as exc:
+        return {"ok": False, "summary": f"读取失败：{exc}", "output": path}
+    truncated = len(raw) > limit
+    text = agent_decode_bytes(raw[:limit])
+    if truncated:
+        text += "\n…（文件较大，已按字节截断）"
+    size = os.path.getsize(path)
+    return {
+        "ok": True,
+        "summary": f"{size} 字节",
+        "output": agent_truncate(text),
+        "path": path,
+    }
+
+def agent_tool_write_file(args, roots):
+    if load_codex_permission() == "read-only":
+        return {
+            "ok": False,
+            "summary": "当前权限档位为「只读」，已拒绝写入文件",
+            "output": "请先把权限放宽到「工作区可写」以上。",
+        }
+    path = agent_resolve_path(args.get("path"), roots)
+    content = args.get("content")
+    if content is None:
+        return {"ok": False, "summary": "缺少 content 参数", "output": ""}
+    content = str(content)
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(content)
+    except Exception as exc:
+        return {"ok": False, "summary": f"写入失败：{exc}", "output": path}
+    return {
+        "ok": True,
+        "summary": f"已写入 {len(content.encode('utf-8'))} 字节",
+        "output": path,
+        "path": path,
+    }
+
+def agent_tool_list_dir(args, roots):
+    path = agent_resolve_path(args.get("path") or BASE_DIR, roots)
+    if not os.path.isdir(path):
+        return {"ok": False, "summary": "目录不存在", "output": path}
+    try:
+        names = sorted(os.listdir(path))
+    except Exception as exc:
+        return {"ok": False, "summary": f"列目录失败：{exc}", "output": path}
+    lines = []
+    for name in names[:400]:
+        full = os.path.join(path, name)
+        try:
+            if os.path.isdir(full):
+                lines.append(f"[DIR ] {name}")
+            else:
+                lines.append(f"[FILE] {name}  {os.path.getsize(full)} B")
+        except Exception:
+            lines.append(f"[????] {name}")
+    if len(names) > 400:
+        lines.append(f"…（共 {len(names)} 项，已列出前 400 项）")
+    return {
+        "ok": True,
+        "summary": f"{len(names)} 项",
+        "output": agent_truncate("\n".join(lines) or "（空目录）"),
+        "path": path,
+    }
+
+async def run_agent_tool(name, args):
+    """执行一次工具调用；任何异常都转成 ok=False 的结果，避免打断整轮对话。"""
+    tool_name = str(name or "").strip()
+    if tool_name not in AGENT_TOOL_NAMES:
+        return {"ok": False, "summary": f"未知工具：{tool_name}", "output": ""}
+    if not isinstance(args, dict):
+        args = {}
+    roots = agent_allowed_roots()
+    try:
+        if tool_name == "run_shell":
+            return await agent_tool_run_shell(args)
+        if tool_name == "read_file":
+            return agent_tool_read_file(args, roots)
+        if tool_name == "write_file":
+            return agent_tool_write_file(args, roots)
+        return agent_tool_list_dir(args, roots)
+    except HTTPException as exc:
+        return {"ok": False, "summary": str(exc.detail), "output": ""}
+    except Exception as exc:
+        return {"ok": False, "summary": f"工具执行异常：{exc}", "output": ""}
+
+def agent_tools_payload():
+    settings = load_agent_tools_settings()
+    level = load_codex_permission()
+    current = CODEX_PERMISSION_LEVELS[level]
+    return {
+        "enabled": bool(settings["enabled"]),
+        "max_rounds": int(settings["max_rounds"]),
+        "default_enabled": AGENT_TOOLS_DEFAULT_ENABLED,
+        "default_max_rounds": AGENT_TOOLS_DEFAULT_MAX_ROUNDS,
+        "max_rounds_limit": AGENT_TOOLS_MAX_ROUNDS_LIMIT,
+        "level": level,
+        "level_label": current["label"],
+        "level_desc": current["desc"],
+        "default_level": CODEX_DEFAULT_PERMISSION,
+        "available_tools": [item["function"]["name"] for item in agent_tool_schemas(level)],
+        "all_tools": [
+            {"name": spec["name"], "label": spec["label"], "desc": spec["desc"]}
+            for spec in AGENT_TOOL_SPECS
+        ],
+        "levels": [
+            {
+                "id": key,
+                "label": value["label"],
+                "desc": value["desc"],
             }
             for key, value in CODEX_PERMISSION_LEVELS.items()
         ],
@@ -12492,6 +12863,133 @@ async def decide_chat_agent_action(payload, conversation, refs):
         fallback["router_model"] = model
         return fallback
 
+def agent_tool_label(name):
+    for spec in AGENT_TOOL_SPECS:
+        if spec["name"] == name:
+            return spec["label"]
+    return name or "工具"
+
+def agent_parse_tool_args(raw_args):
+    """模型给的 arguments 是 JSON 字符串；解析失败时退化成 {"_raw": ...} 交给工具报错。"""
+    if isinstance(raw_args, dict):
+        return raw_args
+    text = str(raw_args or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return {"_raw": text}
+    return parsed if isinstance(parsed, dict) else {"_raw": text}
+
+def agent_tools_unsupported(body):
+    """判断上游是不是「不支持 tools / function calling」，用于优雅回退成普通对话。"""
+    text = str(body or "").lower()
+    if not text or ("tool" not in text and "function" not in text):
+        return False
+    for hint in ("not support", "unsupported", "unrecognized", "unknown", "invalid", "unexpected"):
+        if hint in text:
+            return True
+    return False
+
+def agent_tool_event_from_result(call_id, name, args, result, round_index):
+    return {
+        "id": call_id or uuid.uuid4().hex,
+        "name": name,
+        "label": agent_tool_label(name),
+        "args": args,
+        "ok": bool(result.get("ok")),
+        "summary": str(result.get("summary") or ""),
+        "output": agent_truncate(result.get("output"), 4000),
+        "round": round_index + 1,
+    }
+
+async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, is_apimart, chat_base, chat_hdrs, model, tool_settings):
+    """带本机工具（终端 / 文件）的聊天：跑一个 tool-calling 循环，直到模型给出最终文字回复。"""
+    level = load_codex_permission()
+    tools = agent_tool_schemas(level)
+    upstream_messages = [{"role": "system", "content": chat_system_prompt(payload) + AGENT_TOOLS_SYSTEM_HINT}]
+    for item in conversation["messages"][-MAX_HISTORY_MESSAGES:]:
+        msg = upstream_message_from_record(item)
+        if msg:
+            upstream_messages.append(msg)
+    rounds = max(1, int(tool_settings.get("max_rounds") or AGENT_TOOLS_DEFAULT_MAX_ROUNDS))
+    tool_events = []
+    last_raw = None
+    last_usage = None
+    async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
+        for round_index in range(rounds + 1):
+            req_body = {"model": model, "messages": upstream_messages}
+            if is_apimart:
+                req_body["stream"] = False
+            if tools:
+                req_body["tools"] = tools
+                req_body["tool_choice"] = "auto"
+            try:
+                response = await client.post(f"{chat_base}/chat/completions", headers=chat_hdrs, json=req_body)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                body = exc.response.text or ""
+                if tools and not tool_events and agent_tools_unsupported(body):
+                    print("[agent-tools] 上游不支持 tools，回退为普通对话")
+                    tools = []
+                    continue
+                friendly = friendly_chat_error_detail(body, model, provider_cfg)
+                raise HTTPException(status_code=exc.response.status_code, detail=friendly or f"上游接口错误：{body}") from exc
+            except httpx.HTTPError as exc:
+                raise HTTPException(status_code=502, detail=f"请求上游接口失败：{exc}") from exc
+            raw = response.json()
+            raw_data = unwrap_apimart_response(raw) if isinstance(raw, dict) else raw
+            last_raw = raw
+            if isinstance(raw_data, dict):
+                last_usage = raw_data.get("usage")
+            choices = (raw_data or {}).get("choices") or []
+            message = (choices[0].get("message") if choices else None) or {}
+            tool_calls = message.get("tool_calls") or []
+            if tool_calls and tools:
+                upstream_messages.append({
+                    "role": "assistant",
+                    "content": message.get("content") or "",
+                    "tool_calls": tool_calls,
+                })
+                for call in tool_calls:
+                    call = call if isinstance(call, dict) else {}
+                    fn = call.get("function") or {}
+                    name = str(fn.get("name") or "").strip()
+                    args = agent_parse_tool_args(fn.get("arguments"))
+                    result = await run_agent_tool(name, args)
+                    event = agent_tool_event_from_result(call.get("id"), name, args, result, round_index)
+                    tool_events.append(event)
+                    upstream_messages.append({
+                        "role": "tool",
+                        "tool_call_id": event["id"],
+                        "content": (f"{event['summary']}\n{event['output']}").strip() or "（无输出）",
+                    })
+                continue
+            text = text_from_chat_response(raw).strip()
+            if not text and tool_events:
+                text = "（已执行工具，但模型没有给出文字结论）"
+            return {
+                "id": uuid.uuid4().hex,
+                "role": "assistant",
+                "content": text or "接口返回了空回复。",
+                "created_at": now_ms(),
+                "model": model,
+                "raw_usage": last_usage,
+                "raw": last_raw,
+                "tool_events": tool_events,
+            }
+    return {
+        "id": uuid.uuid4().hex,
+        "role": "assistant",
+        "content": f"已达到工具调用轮数上限（{rounds} 轮）仍未得到最终结论，请拆分任务后重试。",
+        "created_at": now_ms(),
+        "model": model,
+        "raw_usage": last_usage,
+        "raw": last_raw,
+        "tool_events": tool_events,
+    }
+
 async def build_chat_text_reply(payload, conversation):
     provider_cfg = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
     if is_codex_provider(provider_cfg):
@@ -12522,6 +13020,11 @@ async def build_chat_text_reply(payload, conversation):
         }
     chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model)
     is_apimart = is_apimart_provider(provider_cfg)
+    tool_settings = load_agent_tools_settings()
+    if tool_settings.get("enabled"):
+        return await build_chat_text_reply_with_tools(
+            payload, conversation, provider_cfg, is_apimart, chat_base, chat_hdrs, model, tool_settings
+        )
     upstream_messages = [{"role": "system", "content": chat_system_prompt(payload)}]
     for item in conversation["messages"][-MAX_HISTORY_MESSAGES:]:
         msg = upstream_message_from_record(item)
@@ -13920,6 +14423,26 @@ async def codex_permissions_set(payload: CodexPermissionRequest):
     """设置 OpenAI CLI（Codex）的沙箱权限级别；下次调用 codex exec 时生效。"""
     save_codex_permission(payload.level)
     data = codex_permission_payload()
+    data["saved"] = True
+    return data
+
+@app.get("/api/agent/tools")
+async def agent_tools_get():
+    """读取 agent 本机工具（终端 / 文件）的开关、轮数上限与权限档位。"""
+    return agent_tools_payload()
+
+@app.post("/api/agent/tools")
+async def agent_tools_set(payload: AgentToolsRequest):
+    """设置 agent 本机工具开关 / 轮数 / 权限档位。
+
+    权限档位与 Codex CLI 共用同一份 data/codex_permissions.json，
+    这样「本机权限」只有一个真相来源。
+    """
+    if payload.level:
+        save_codex_permission(payload.level)
+    if payload.enabled is not None or payload.max_rounds is not None:
+        save_agent_tools_settings(enabled=payload.enabled, max_rounds=payload.max_rounds)
+    data = agent_tools_payload()
     data["saved"] = True
     return data
 
