@@ -13,6 +13,9 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <ApplicationIcon>icon.ico</ApplicationIcon>
+    <!-- 高分屏（4K）必须按显示器原生 DPI 渲染：默认的 SystemAware 在「非系统 DPI 的显示器」
+         上会被 Windows 整体位图拉伸 → 文字发虚、窗口圆角（1 位区域掩码）被放大成明显锯齿。 -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />

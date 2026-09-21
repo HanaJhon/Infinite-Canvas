@@ -178,13 +178,21 @@ internal sealed class LauncherForm : Form
     private const int WMSZ_BOTTOMRIGHT = 8;
 
     private const double TargetAspectRatio = 16.0 / 9.0;
-    private const int CornerRadius = 24;
+
+    /// <summary>
+    /// 窗口圆角半径（逻辑像素，以 96 DPI 为基准）。真正下发给 SetWindowRgn 时会乘以当前
+    /// 显示器的 DPI 缩放比 —— Region 是 1 位掩码、<b>完全没有抗锯齿</b>，如果半径写死成
+    /// 设备像素，高分屏下圆弧跨越的像素数变少，锯齿会格外明显。
+    /// </summary>
+    private const int CornerRadiusDip = 12;
 
     public LauncherForm()
     {
         FormBorderStyle = FormBorderStyle.None;
         DoubleBuffered = true;
         SetStyle(ControlStyles.ResizeRedraw | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+        // 拖到另一块不同 DPI 的显示器时，圆角半径要按新显示器重算
+        DpiChanged += (_, _) => UpdateFormRegion();
     }
 
     protected override CreateParams CreateParams
@@ -222,13 +230,15 @@ internal sealed class LauncherForm : Form
         if (WindowState == FormWindowState.Maximized)
         {
             SetWindowRgn(Handle, IntPtr.Zero, true);
+            return;
         }
-        else
-        {
-            IntPtr hRgn = CreateRoundRectRgn(0, 0, Width + 1, Height + 1, CornerRadius, CornerRadius);
-            SetWindowRgn(Handle, hRgn, true);
-            DeleteObject(hRgn);
-        }
+
+        // 半径按当前显示器 DPI 缩放（4K @150% → 12 逻辑像素 = 18 设备像素），
+        // 圆弧直接在原生分辨率上绘制，锯齿最小。
+        int diameter = Math.Max(2, (int)Math.Round(CornerRadiusDip * DeviceDpi / 96.0) * 2);
+        IntPtr hRgn = CreateRoundRectRgn(0, 0, Width + 1, Height + 1, diameter, diameter);
+        SetWindowRgn(Handle, hRgn, true);
+        DeleteObject(hRgn);
     }
 
     protected override void WndProc(ref Message m)
