@@ -3530,6 +3530,10 @@ class AgentSkillRequest(BaseModel):
     """Skill 市场的安装 / 卸载请求。"""
     id: str = ""
 
+class SkillI18nRequest(BaseModel):
+    """Skill 简介翻译请求：[{id, summary}, ...]。"""
+    items: list = []
+
 class GeminiCliHelpRequest(BaseModel):
     command: str = ""
 
@@ -6098,7 +6102,7 @@ def codex_permission_args():
     return args
 
 # ===================== Agent Skill 市场（数据源：SkillsMP） =====================
-# 1.1.4 之前这里是 34 个手工整理的 Skill，老板反馈「太少了」。1.1.5 起换成 SkillsMP
+# 1.1.4 之前这里是 34 个手工整理的 Skill，老板反馈「太少了」。1.1.4 起换成 SkillsMP
 # （https://skillsmp.com）的公开 JSON 接口 —— 它索引了 GitHub 上的海量 Agent Skill。
 #
 # 接口：GET https://skillsmp.com/api/skills?sortBy=<stars|recent>&limit=<≤48>&page=<n>
@@ -6136,6 +6140,17 @@ SKILLS_MARKET_STATE = os.path.join(DATA_DIR, "skills_market_state.json")
 SKILLS_MARKET_TTL = 6 * 3600             # 联网刷新缓存有效期（秒）
 SKILL_MARKET_TIMEOUT = 20                # 单次联网超时（秒）
 
+# ---------- 中文简介（2026-09-22 新增）----------
+# ① 离线表随包发布（static/），覆盖内置快照里的全部 Skill —— 零配置、断网也能看中文；
+# ② 联网缓存（data/）存「全站搜索搜出来的、离线表里没有的」那些，靠已配置的对话模型翻。
+# ⚠️ 离线表必须是**独立文件**：skills-catalog.json 由 tools/build_skills_catalog.py 重刷覆盖，
+#    把译文写进去会被整份清掉。
+SKILLS_I18N_FILE = os.path.join(STATIC_DIR, "skills-i18n-zh.json")
+SKILLS_MARKET_I18N_CACHE = os.path.join(DATA_DIR, "skills_market_i18n.json")
+SKILL_I18N_BATCH = 24                    # 一次送给模型翻译多少条（太多会超上下文/漏翻）
+SKILL_I18N_MAX_ITEMS = 48                # 单次请求最多翻多少条（= 全站搜索一页的上限）
+SKILL_I18N_TIMEOUT = 60                  # 单批翻译的模型调用超时（秒）
+
 # ---------- 限流防护（2026-09-21 事故后加固）----------
 # 🚨 事故：连抓 24 页（并发 5、无节流、无重试）触发 SkillsMP 的 HTTP 429，
 # 15 页失败 → 清单从 615 条缩到 194 条，而 refresh 又把**不完整结果覆盖了缓存**。
@@ -6158,41 +6173,111 @@ SKILL_MARKET_ABORT_AFTER = 2             # 连续 N 页被限流 → 立刻中�
 SKILL_MARKET_COOLDOWN = 30 * 60          # 触发限流后的冷却期（秒）
 SKILL_MARKET_MIN_KEEP = 0.75             # 新结果 < 现有清单 × 该比例 → 判缩水，拒绝覆盖
 SKILL_MARKET_MAX_FAIL_RATIO = 0.15       # 失败页占比 > 该值 → 拒绝覆盖
+
+# ---------- 全站搜索（2026-09-22 新增）----------
+# 🚨 背景：内置快照只有 615 条（star 前 4 页 + 最近更新 20 页，按仓库限量后 218 个仓库），
+# 而不传 search 的榜单被巨型仓库霸榜、API 硬封顶 1200 条 —— 所以 `JuliusBrussee/caveman`
+# 这类不在快照里的 Skill，本地怎么搜都搜不到（实测搜 `cave` → 0 条）。
+# SkillsMP 的 **`search=` 参数是服务端全站过滤**，能突破 1200 上限
+# （实测 search=caveman 覆盖 458~106187 star 的几十个仓库）。所以搜索改为
+# 「输入 ≥2 字符 → 走全站；失败/过短 → 回落本地子串过滤」。
+# ⚠️ 参数名就是 `search`；`q` / `query` / `keyword` **全部无效**（静默返回未过滤榜单）。
+# ⚠️ `search` 同时匹配 name 与 description，会有噪声（搜 caveman 会混进 orch / sphinx）。
+# ⚠️ `pagination.total` 不可信（totalIsExact:false），翻页只认 hasNext。
+SKILL_MARKET_SEARCH_MIN_CHARS = 2        # 少于 2 字符不查全站（省请求，也避免无意义结果）
+SKILL_MARKET_SEARCH_MAX_CHARS = 64       # 超长 query 直接截断
+SKILL_MARKET_SEARCH_LIMIT = SKILLSMP_PAGE_SIZE   # 接口硬上限 48（50 会 400）
+SKILL_MARKET_SEARCH_TTL = 5 * 60         # 同一关键词的结果缓存有效期（秒）
 SKILL_DOWNLOAD_BYTES = 512 * 1024        # 单个 SKILL.md 允许的最大字节数
 SKILL_INJECT_CHARS = 40000               # 已安装 Skill 注入系统提示词的总字符上限
 # ⚠️ 必须带浏览器式 UA：SkillsMP 在 Cloudflare 后面，urllib 默认 UA 会被按指纹拦。
 SKILL_MARKET_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 InfiniteCanvasLauncher/1.0")
 
-# 领域标签：按「名称 + 说明」里的关键词归类（SkillsMP 不提供 tags）。
-# 每个 Skill 最多打 3 个标签，按命中关键词数从多到少取 —— 所以规则可以写得宽一点。
-SKILL_TAG_RULES = (
-    ("design", ("design", "ui", "ux", "css", "style", "visual", "figma", "typography",
-                "color palette", "layout", "theme", "animation")),
-    ("frontend", ("react", "vue", "svelte", "next.js", "nextjs", "frontend", "browser",
-                  "html", "dom", "tailwind", "component")),
-    ("backend", ("api", "server", "backend", "rest", "graphql", "database", "sql",
-                 "postgres", "django", "fastapi", "endpoint", "microservice")),
-    ("data", ("data", "analytics", "etl", "csv", "excel", "spreadsheet", "pandas",
-              "chart", "metric", "dashboard", "report")),
-    ("ai", ("llm", "prompt", "gpt", "claude", "embedding", "rag", "fine-tune",
-            "neural", "machine learning", "vision model", "inference")),
-    ("docs", ("documentation", "docs", "markdown", "readme", "writing", "blog",
-              "article", "copywriting", "changelog", "release note")),
-    ("test", ("test", "testing", "qa", "e2e", "unit test", "lint", "debug",
-              "regression", "coverage")),
-    ("devops", ("deploy", "docker", "kubernetes", "k8s", "ci/cd", "pipeline",
-                "infrastructure", "terraform", "aws", "monitoring", "github actions")),
-    ("security", ("security", "auth", "authentication", "secret", "vulnerability",
-                  "audit", "encryption", "permission", "token")),
-    ("productivity", ("workflow", "automation", "task", "todo", "productivity",
-                      "note", "calendar", "email", "template", "checklist")),
-    ("media", ("image", "video", "audio", "photo", "media", "svg", "gif",
-               "screenshot", "thumbnail")),
-    ("mobile", ("mobile", "ios", "android", "swift", "kotlin", "flutter", "react native")),
-    ("research", ("research", "analysis", "competitive", "benchmark", "survey",
-                  "interview", "requirement", "spec", "roadmap")),
+# ---------- 两级分类体系（2026-09-22 新增）----------
+# 大分类 → 子分类。子分类就是原来的「领域标签」，现在按大分类归组：
+#   大分类 = 前端第一行 tab（实用 / 设计 / 视觉 / 其他）
+#   子分类 = 前端第二行 chips（随选中的大分类变化）
+# `other` 是兜底大分类 —— **不写规则**，没命中任何子分类的 Skill 落到这里。
+#
+# ⚠️ 命中判定是**子串包含**（不是分词），所以规则里宁可写长一点的短语：
+#    短词会误伤（`api` 命中 `rapid`、`review` 命中 `preview`）。写规则时务必拿真数据试。
+SKILL_TAXONOMY = (
+    ("utility", (
+        ("agent-optimize", ("agent", "subagent", "sub-agent", "multi-agent", "orchestrat",
+                            "context engineering", "prompt optimiz", "self-improv",
+                            "agent skill", "workflow agent", "tool use")),
+        ("token-save", ("token", "compress", "compression", "caveman", "concise", "verbos",
+                        "shrink", "context window", "distill", "terse", "minimal output")),
+        ("productivity", ("workflow", "automation", "task", "todo", "productivity",
+                          "note", "calendar", "email", "checklist", "reminder")),
+        ("docs", ("documentation", "docs", "docx", "pdf", "markdown", "readme", "writing",
+                  "blog", "article", "copywriting", "changelog", "release note", "summar",
+                  "slide", "presentation", "office")),
+        ("ai", ("llm", "prompt", "gpt", "claude", "embedding", "rag", "fine-tune",
+                "neural", "machine learning", "inference", "model context")),
+        ("test", ("test", "testing", "qa", "e2e", "unit test", "lint", "debug",
+                  "regression", "coverage")),
+        ("devops", ("deploy", "docker", "kubernetes", "k8s", "ci/cd", "pipeline",
+                    "infrastructure", "terraform", "aws", "monitoring", "github actions")),
+        ("security", ("security", "auth", "authentication", "secret", "vulnerability",
+                      "audit", "encryption", "permission")),
+        ("data", ("data", "analytics", "etl", "csv", "excel", "spreadsheet", "pandas",
+                  "chart", "metric", "dashboard", "report")),
+        ("backend", ("api", "server", "backend", "rest", "graphql", "database", "sql",
+                     "postgres", "django", "fastapi", "endpoint", "microservice")),
+        ("research", ("research", "analysis", "competitive", "benchmark", "survey",
+                      "interview", "requirement", "spec", "roadmap")),
+    )),
+    ("design", (
+        ("ui-design", ("ui design", "user interface", "interface design", "component library",
+                       "design system", "figma", "wireframe", "mockup", "prototype")),
+        ("ux-design", ("ux", "user experience", "usability", "accessib", "interaction design",
+                       "user flow", "persona", "journey map", "a/b test")),
+        ("product-design", ("product design", "prd", "product spec", "product requirement",
+                            "feature spec", "product strategy")),
+        ("miniprogram-design", ("mini program", "miniprogram", "wechat mini", "小程序",
+                                "weapp", "taro", "uni-app")),
+        ("app-page-design", ("mobile app", "app screen", "app page", "ios", "android",
+                             "swift", "kotlin", "flutter", "react native", "screen design")),
+        ("web-design", ("web design", "website", "landing page", "web page", "homepage",
+                        "responsive", "html", "css", "tailwind", "frontend", "browser",
+                        "react", "vue", "svelte", "next.js", "dom")),
+        ("design", ("design", "style", "visual", "typography", "color palette", "layout",
+                    "theme", "animation", "icon")),
+    )),
+    ("visual", (
+        ("ecommerce-page", ("ecommerce", "e-commerce", "电商", "shopify", "amazon listing",
+                            "taobao", "tmall", "storefront", "product page", "listing page",
+                            "详情页", "主图", "商品")),
+        ("product-shot", ("product photo", "product shot", "主图", "packshot", "still life",
+                          "product image", "white background", "commercial photo", "产品图")),
+        ("product-detail", ("detail page", "详情页", "product detail", "infographic",
+                            "卖点", "a+ content", "long image", "长图")),
+        ("cross-border", ("cross-border", "跨境", "aliexpress", "temu", "shein",
+                          "海外", "amazon")),
+        ("image-video", ("image", "video", "audio", "photo", "media", "svg", "gif",
+                         "screenshot", "thumbnail", "poster", "banner", "render",
+                         "midjourney", "stable diffusion", "comfyui")),
+    )),
 )
+
+# 子分类 → 大分类 的反查表（由 SKILL_TAXONOMY 派生，别手写）
+SKILL_TAG_CATEGORY = {tag: category for category, subs in SKILL_TAXONOMY for tag, _ in subs}
+# 大分类的固定展示顺序（= 前端 tab 顺序）；other 恒在最后
+SKILL_CATEGORY_KEYS = ("utility", "design", "visual", "other")
+# 子分类权重：越「具体」的越该决定大分类归属。
+# 没有它的话，宽泛的 `image` / `design` 会把「电商视觉」类 Skill 抢到设计去。
+SKILL_TAG_WEIGHT = {
+    "ecommerce-page": 3, "product-shot": 3, "product-detail": 3, "cross-border": 3,
+    "miniprogram-design": 3, "token-save": 3,
+    "agent-optimize": 2, "ui-design": 2, "ux-design": 2, "product-design": 2,
+    "web-design": 2, "app-page-design": 2,
+    # ⚠️ `design` / `image-video` 必须保持 1：它俩的关键词（design / image / video）太常见，
+    # 给 2 会把「电商视觉」和「图像生成」类 Skill 大批抢到「设计」去（实测 视觉 只剩 16 条）。
+}
+# 扁平化规则表：skill_tags() 只认它（(子分类, 关键词元组)）
+SKILL_TAG_RULES = tuple((tag, words) for _cat, subs in SKILL_TAXONOMY for tag, words in subs)
 
 def load_skills_catalog():
     """读取内置 Skill 市场清单；文件缺失或损坏时返回空清单而不是抛错。"""
@@ -6209,6 +6294,76 @@ def load_skills_catalog():
         data["skills"] = []
     return data
 
+# ---------- 中文简介：离线表 + 联网缓存 ----------
+
+_SKILL_I18N_CACHE = {"stamps": None, "map": {}}
+
+def load_skills_i18n():
+    """中文简介总表 = 随包离线表 ∪ 联网翻译缓存（**缓存优先**，同 id 以缓存为准）。
+
+    ⚠️ 按两个文件的 mtime 做进程内缓存：市场清单一次要问 615 次译文，每次读盘会拖慢首屏。
+    任何异常都退化成「没有译文」（前端回落英文原文），绝不让市场因此打不开。
+    """
+    stamps = []
+    for path in (SKILLS_I18N_FILE, SKILLS_MARKET_I18N_CACHE):
+        try:
+            stamps.append((path, os.path.getmtime(path)))
+        except OSError:
+            stamps.append((path, 0))
+    if _SKILL_I18N_CACHE["stamps"] == stamps:
+        return _SKILL_I18N_CACHE["map"]
+    merged = {}
+    for path, _stamp in stamps:            # 顺序即优先级：先离线表，后联网缓存覆盖
+        try:
+            with open(path, "r", encoding="utf-8-sig") as f:
+                data = json.load(f) or {}
+        except Exception:
+            continue
+        entries = data.get("entries") if isinstance(data, dict) else None
+        if not isinstance(entries, dict):
+            continue
+        for key, value in entries.items():
+            text = str(value or "").strip()
+            if key and text:
+                merged[str(key)] = text
+    _SKILL_I18N_CACHE["stamps"] = stamps
+    _SKILL_I18N_CACHE["map"] = merged
+    return merged
+
+def skill_taxonomy_meta():
+    """大分类 → 子分类 的**静态结构**，供前端渲染两行筛选（前端不硬编码分类表）。"""
+    out = []
+    for key in SKILL_CATEGORY_KEYS:
+        subs = next((subs for cat, subs in SKILL_TAXONOMY if cat == key), ())
+        out.append({"key": key, "tags": [tag for tag, _ in subs]})
+    return out
+
+def skill_category_meta(records):
+    """当前清单里每个大分类 / 子分类各有多少条（固定顺序，含 0 的也返回，前端好渲染）。
+
+    ⚠️ 子分类计数**只算属于该大分类的标签**：一条记录的 `category` 是它「最强标签」的大分类，
+    但它的 tags 里可能混着别的大分类的标签（如 category=utility 却带 design 标签）。
+    不筛的话「实用」下面会冒出「设计」这个子分类芯片，点了却和「设计」大分类语义冲突。
+    """
+    counts, tag_counts = {}, {}
+    for item in records:
+        cat = item.get("category") or "other"
+        counts[cat] = counts.get(cat, 0) + 1
+        for tag in (item.get("tags") or []):
+            if (SKILL_TAG_CATEGORY.get(tag) or "other") != cat:
+                continue
+            bucket = tag_counts.setdefault(cat, {})
+            bucket[tag] = bucket.get(tag, 0) + 1
+    return [
+        {
+            "key": key,
+            "count": counts.get(key, 0),
+            "tags": [{"key": tag, "count": num} for tag, num in
+                     sorted((tag_counts.get(key) or {}).items(), key=lambda p: (-p[1], p[0]))],
+        }
+        for key in SKILL_CATEGORY_KEYS
+    ]
+
 def skill_http_get(url, timeout=SKILL_MARKET_TIMEOUT):
     """同步 GET（调用方用 asyncio.to_thread 包住，避免阻塞事件循环）。"""
     req = urllib.request.Request(url, headers={
@@ -6223,6 +6378,12 @@ def skill_http_get(url, timeout=SKILL_MARKET_TIMEOUT):
 
 _SKILL_MARKET_GATE = Lock()          # 所有 SkillsMP 请求共用的节流闸
 _SKILL_MARKET_LAST = [0.0]           # 上一次请求的起始时间（用列表包一层便于闭包写）
+
+# 全站搜索结果缓存：{归一化 query: (过期时间, records)}。
+# ⚠️ 只放内存不落盘 —— 它只是「打字防抖」的副产品，重启即失效无妨，
+# 落盘反而会留一堆没人看的文件。
+_SKILL_MARKET_SEARCH_CACHE = {}
+_SKILL_MARKET_SEARCH_LOCK = Lock()
 
 def skill_market_pace():
     """全局最小请求间隔闸门。
@@ -6243,15 +6404,18 @@ def skill_market_is_throttle(exc):
         return int(getattr(exc, "code", 0) or 0) == 429
     return False
 
-def skillsmp_fetch_page(sort, page):
+def skillsmp_fetch_page(sort, page, search=""):
     """抓一页，返回 (rows, error)。
 
     - 成功：(list, None)
     - 失败：([], 异常对象) —— 调用方据此统计失败页
     ⚠️ 429 只重试 SKILL_MARKET_THROTTLE_RETRY 次（默认 1）就放弃：被限流时反复死磕
     只会把 IP 的冷却期越拖越长（实测惩罚是累计的），快速失败交给上层中止才是正解。
+    `search` 非空时走服务端全站过滤（见 SKILL_MARKET_SEARCH_* 注释）。
     """
     url = f"{SKILLSMP_API}?sortBy={sort}&limit={SKILLSMP_PAGE_SIZE}&page={page}"
+    if search:
+        url += "&search=" + urllib.parse.quote(str(search), safe="")
     last = None
     throttle_tries = 0
     net_tries = 0
@@ -6377,15 +6541,51 @@ def skill_titleize(name):
     return " ".join(w[:1].upper() + w[1:] for w in words if w)
 
 def skill_tags(name, summary):
-    """按关键词给 Skill 打领域标签（最多 3 个）。"""
+    """按关键词给 Skill 打**子分类**标签（最多 3 个）。
+
+    得分 = 命中关键词数 × 子分类权重 —— 权重让「电商页 / Token节省 / 小程序」这类
+    具体子分类压过宽泛的 `image` / `design`，否则卡片上的标签永远只有那几个泛词。
+    """
     haystack = f"{name or ''} {summary or ''}".lower()
     scored = []
     for tag, words in SKILL_TAG_RULES:
         hits = sum(1 for word in words if word in haystack)
         if hits:
-            scored.append((hits, tag))
-    scored.sort(key=lambda pair: (-pair[0], pair[1]))
-    return [tag for _, tag in scored[:3]]
+            scored.append((hits * int(SKILL_TAG_WEIGHT.get(tag, 1)), hits, tag))
+    scored.sort(key=lambda row: (-row[0], -row[1], row[2]))
+    return [tag for _, _, tag in scored[:3]]
+
+# 标签计算 memo：清单每次请求都要重算 615 条的标签（约 14 万次子串判定），
+# 不缓存的话每次打开市场都白烧几十毫秒。键是 name+summary，清空即重算，无一致性风险。
+_SKILL_TAG_MEMO = {}
+_SKILL_TAG_MEMO_LOCK = Lock()
+
+def skill_tags_cached(name, summary):
+    key = f"{name or ''}\x00{summary or ''}"
+    hit = _SKILL_TAG_MEMO.get(key)
+    if hit is not None:
+        return hit
+    tags = skill_tags(name, summary)
+    with _SKILL_TAG_MEMO_LOCK:
+        if len(_SKILL_TAG_MEMO) > 4000:
+            _SKILL_TAG_MEMO.clear()
+        _SKILL_TAG_MEMO[key] = tags
+    return tags
+
+def skill_category(tags):
+    """由已命中的子分类反推大分类：取**权重最高**的子分类所属大分类。
+
+    ⚠️ 不能简单取 `tags[0]`：tags 按得分排序，而宽泛标签（design / image）往往得分更高。
+    实测「电商详情页」类 Skill 会被打成 `[design, ecommerce-page, product-shot]`，
+    取 tags[0] 就归到「设计」了 —— 而老板要的是「视觉」。权重相同时取靠前的那个。
+    """
+    best, best_weight = "other", 0
+    for tag in (tags or []):
+        weight = int(SKILL_TAG_WEIGHT.get(tag, 1))
+        if weight > best_weight:
+            best_weight = weight
+            best = SKILL_TAG_CATEGORY.get(tag) or "other"
+    return best
 
 def skillsmp_normalize(item):
     """把 SkillsMP 的一条记录转成市场内部结构；关键字段缺失时返回 None。"""
@@ -6402,7 +6602,7 @@ def skillsmp_normalize(item):
         "name": name,
         "title": skill_titleize(name) or name,
         "summary": summary,
-        "tags": skill_tags(name, summary),
+        "tags": skill_tags_cached(name, summary),
         "repo": f"{owner}/{repo}" if (owner and repo) else owner,
         "author": owner,
         "repo_url": f"https://github.com/{owner}/{repo}" if (owner and repo) else "",
@@ -6630,6 +6830,378 @@ def market_skill_source():
     catalog = load_skills_catalog()
     return catalog.get("skills") or [], 0.0
 
+def market_record(skill, installed, i18n=None):
+    """把内部清单条目转成前端展示记录（含本地安装态）。
+
+    市场清单与全站搜索结果**共用同一形状** —— 前端因此能复用同一套卡片渲染与安装逻辑。
+    `i18n` 是「skill id → 中文简介」总表（load_skills_i18n() 的返回值）；没传就不带译文。
+    """
+    skill_id = str(skill.get("id") or "")
+    if not skill_id:
+        return None
+    stars = int(skill.get("stars") or 0)
+    forks = int(skill.get("forks") or 0)
+    record = installed.get(skill_id)
+    # ⚠️ 标签**每次现算**，不用清单里存的那份 —— 内置快照与联网缓存里的 `tags` 是生成时按
+    # 当时的规则算好的，改了分类规则而这里读旧值，新规则就「不生效」（实测残留 frontend/media）。
+    # 只有 name 与 summary **都为空**时才退回存的那份（此时现算必然为空，没有别的信息可用）。
+    name = skill.get("name") or ""
+    summary = skill.get("summary") or ""
+    tags = skill_tags_cached(name, summary)
+    if not tags and not name and not summary:
+        tags = skill.get("tags") or []
+    return {
+        "id": skill_id,
+        "name": name or skill_id,
+        "title": skill.get("title") or name or skill_id,
+        "summary": summary,
+        # 中文简介：离线表 / 联网缓存里没有就留空串，前端回落英文原文
+        "summary_zh": str((i18n or {}).get(skill_id) or ""),
+        "tags": tags,
+        "category": skill_category(tags),
+        "repo": skill.get("repo") or "",
+        "repo_url": skill.get("repo_url") or "",
+        "source_url": skill.get("source_url") or SKILLSMP_SITE,
+        "author": skill.get("author") or "",
+        "language": skill.get("language") or "",
+        "stars": stars,
+        "forks": forks,
+        # 热度 = star + 收藏 × 2（与前端一致）
+        "hotness": stars + forks * 2,
+        "updated_at": int(skill.get("updated_at") or 0),
+        "raw_url": skill.get("raw_url") or "",
+        "installed": bool(record),
+        "installed_at": (record or {}).get("installed_at"),
+        "installed_bytes": (record or {}).get("bytes"),
+    }
+
+def skillsmp_search(query):
+    """按关键词在 SkillsMP **全站**搜索（服务端过滤）。返回 (rows, error)。
+
+    ⚠️ 只发 1 个请求（page=1, limit=48）：搜索是「打字即搜」的高频路径，必须克制。
+    多翻页会把限流风险放大数倍，而 48 条对定位目标已经足够。
+    """
+    skill_market_pace()          # 与刷新共用同一道全局节流闸
+    url = (f"{SKILLSMP_API}?search={urllib.parse.quote(str(query), safe='')}"
+           f"&sortBy=stars&limit={SKILL_MARKET_SEARCH_LIMIT}&page=1")
+    try:
+        payload = json.loads(skill_http_get(url).decode("utf-8", "replace"))
+    except Exception as exc:
+        print(f"SkillsMP 全站搜索失败（{query!r}）: {exc}")
+        return [], exc
+    rows = payload.get("skills")
+    return (rows if isinstance(rows, list) else []), None
+
+# ---------- 内置榜单的定向补充（2026-09-22 新增）----------
+# 🚨 背景：内置快照 = 「star 榜 4 页 + 最近更新 20 页」，**天然偏向开发者工具**。
+# 实测 615 条里 `主图` / `详情页` / `packshot` / `product photo` / `product image`
+# **全部 0 命中** —— 于是「视觉」大分类下老板点名的「产品主图 / 产品详情页」
+# 两个子分类**恒为空**（不是规则写错，是清单里根本没有这类 Skill）。
+#
+# 但 SkillsMP 的 `search=` 是全站过滤，能挖到榜单外的一大票电商/设计类 Skill
+# （实测 `电商` → ecommerce-full-pipeline / ecommerce-copywriter / 数字人带货视频；
+#  `ecommerce listing` → ecommerce-image-workflow / fal-tryon / product(审详情页)）。
+# 所以快照构建时按主题**定向补抓**一轮，与榜单合并去重后再落盘。
+#
+# ⚠️ 查询词要**具体**：`主图` / `详情页` 这种单词在 SkillsMP 上退化成泛匹配
+# （返回 Swift 并发、知识星球笔记…），而 `电商` / `ecommerce listing` 效果好。
+# ⚠️ 补抓走 `skillsmp_search()`，因此**共用同一道全局节流闸**；被限流立刻中止整批。
+SKILL_CATALOG_SUPPLEMENTS = (
+    "电商", "电商主图", "商品详情页", "跨境电商", "小程序",
+    "ecommerce listing", "ecommerce image", "product photography",
+    "product image", "virtual try-on", "amazon listing", "shopify",
+    "landing page design", "ui design", "ux design",
+)
+# 只保留落在「设计 / 视觉」两棵子树上的结果：补抓的目的就是填这两个大分类的盲区，
+# 别把 `shopify` 顺带捞到的 Admin API 类后端 Skill 也塞进快照（会稀释清单）。
+SKILL_CATALOG_SUPPLEMENT_KEEP = frozenset(
+    tag for category, subs in SKILL_TAXONOMY if category in ("design", "visual")
+    for tag, _words in subs
+)
+SKILL_CATALOG_SUPPLEMENT_PER_REPO = 3     # 单个仓库最多补几条（防某个巨型仓库刷屏）
+
+def build_skills_catalog_supplement(queries=None, stats=None):
+    """按主题定向补抓「设计 / 视觉」类 Skill。返回归一化后的条目列表。
+
+    `stats` 传入字典时会被就地填充（queries / raw / kept / fail / throttled），
+    供构建脚本打印。被限流（429）立刻中止剩余查询 —— 别把限流惩罚放大。
+    """
+    queries = tuple(queries or SKILL_CATALOG_SUPPLEMENTS)
+    st = stats if stats is not None else {}
+    st.update({"queries": len(queries), "raw": 0, "kept": 0, "fail": 0, "throttled": False})
+    out, seen, per_repo = [], set(), {}
+    for query in queries:
+        rows, err = skillsmp_search(query)
+        if err is not None:
+            st["fail"] += 1
+            if skill_market_is_throttle(err):
+                st["throttled"] = True
+                print(f"定向补充被限流，中止剩余 {len(queries)} 个查询")
+                break
+            continue
+        st["raw"] += len(rows)
+        for item in rows:
+            record = skillsmp_normalize(item)
+            if not record or record["id"] in seen:
+                continue
+            if not (set(record["tags"]) & SKILL_CATALOG_SUPPLEMENT_KEEP):
+                continue
+            repo = record["repo"]
+            if per_repo.get(repo, 0) >= SKILL_CATALOG_SUPPLEMENT_PER_REPO:
+                continue
+            per_repo[repo] = per_repo.get(repo, 0) + 1
+            seen.add(record["id"])
+            out.append(record)
+    st["kept"] = len(out)
+    return out
+
+def supplement_skills_catalog(payload, extra):
+    """把补充条目并进快照 payload（按 id 去重、重算统计），返回新 payload。
+
+    ⚠️ 已存在的条目**保留原样**（榜单条目带的是榜单口径的 star/forks，别被搜索结果覆盖）。
+    """
+    if not extra:
+        return payload, 0
+    merged = list(payload.get("skills") or [])
+    have = {str(s.get("id") or "") for s in merged}
+    added = [s for s in extra if str(s.get("id") or "") not in have]
+    if not added:
+        return payload, 0
+    merged.extend(added)
+    merged.sort(key=lambda s: (-int(s.get("stars") or 0), str(s.get("name") or "")))
+    new = dict(payload)
+    new["skills"] = merged
+    new["total"] = len(merged)
+    new["repo_count"] = len({s.get("repo") for s in merged if s.get("repo")})
+    new["supplement_at"] = datetime.date.today().isoformat()
+    new["supplement_added"] = len(added)
+    return new, len(added)
+
+def search_skills_market(query):
+    """全站搜索的对外载荷。**任何失败都降级**（返回空 + 一句 note），绝不抛错。
+
+    前端据此决定：有 skills → 用全站结果；note 非空 → 提示原因并回落本地过滤。
+    """
+    raw_query = str(query or "").strip()
+    text = raw_query[:SKILL_MARKET_SEARCH_MAX_CHARS]     # 截断超长输入（防滥用）
+    key = text.lower()
+    empty = {"query": text, "skills": [], "total": 0, "online": False, "cached": False, "note": ""}
+
+    if len(text) < SKILL_MARKET_SEARCH_MIN_CHARS:
+        empty["note"] = f"至少输入 {SKILL_MARKET_SEARCH_MIN_CHARS} 个字符才能搜全站"
+        return empty
+
+    now = time.time()
+    with _SKILL_MARKET_SEARCH_LOCK:
+        hit = _SKILL_MARKET_SEARCH_CACHE.get(key)
+    if hit and hit[0] > now:
+        return {"query": text, "skills": hit[1], "total": len(hit[1]),
+                "online": True, "cached": True, "note": ""}
+
+    # 冷却期内不联网 —— 与刷新共用同一份冷却状态，避免「刷新刚被限流、搜索又去撞」
+    state = load_skills_market_state()
+    cooldown_until = float(state.get("cooldown_until") or 0)
+    if now < cooldown_until:
+        left = int(cooldown_until - now)
+        empty["note"] = (f"SkillsMP 限流冷却中（约 {max(1, (left + 59) // 60)} 分钟后可再试），"
+                         f"当前只在本机清单里搜索")
+        return empty
+
+    rows, err = skillsmp_search(text)
+    if err is not None:
+        if skill_market_is_throttle(err):
+            mark_skills_market_cooldown(state, "搜索被限流",
+                                        "SkillsMP 全站搜索被限流，已暂停联网约 30 分钟", None)
+            empty["note"] = "SkillsMP 限流中，已暂停全站搜索约 30 分钟，当前只在本机清单里搜索"
+        else:
+            empty["note"] = "全站搜索失败（网络不通？），当前只在本机清单里搜索"
+        return empty
+
+    installed = {str(s.get("id") or ""): s for s in load_installed_skills().get("skills", [])}
+    i18n = load_skills_i18n()
+    records, seen = [], set()
+    for item in rows:
+        record = market_record(skillsmp_normalize(item) or {}, installed, i18n)
+        if not record:
+            continue
+        # 同一仓库的同名 Skill 只留一条：SkillsMP 会把同一份文件按多条路径各收一次
+        # （如 plugins/caveman/skills/caveman 与 skills/caveman），不去重就是满屏重复卡片
+        dedupe_key = (record["repo"], record["name"])
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        records.append(record)
+
+    # 🚨 **搜索必须按相关性排，不能按 star 排** —— 实测教训：搜 `cave` 时
+    # `affaan-m/ecc`（260918 star）的**全部** Skill 都命中，因为 SkillsMP 的 search
+    # 会子串匹配**仓库说明**，而那个仓库的说明里含 `caveat`（"cave" 是它的子串）。
+    # 于是按 star 排的前 5 名全是这个仓库的无关 Skill，真正的 caveman 被挤到第 6 名开外。
+    # 所以：名字命中 > 说明命中 > 其余，桶内再按热度。
+    query_lower = key            # 已在上面归一化成小写
+    def relevance(record):
+        name_hit = query_lower in str(record["name"]).lower()
+        summary_hit = query_lower in str(record["summary"]).lower()
+        bucket = 0 if name_hit else (1 if summary_hit else 2)
+        return (bucket, -record["hotness"], -record["stars"], record["title"])
+    records.sort(key=relevance)
+
+    with _SKILL_MARKET_SEARCH_LOCK:
+        _SKILL_MARKET_SEARCH_CACHE[key] = (now + SKILL_MARKET_SEARCH_TTL, records)
+        if len(_SKILL_MARKET_SEARCH_CACHE) > 200:        # 简单防膨胀：超上限就整表清掉
+            _SKILL_MARKET_SEARCH_CACHE.clear()
+            _SKILL_MARKET_SEARCH_CACHE[key] = (now + SKILL_MARKET_SEARCH_TTL, records)
+    return {"query": text, "skills": records, "total": len(records),
+            "online": True, "cached": False, "note": ""}
+
+# ---------- 中文简介：联网翻译兜底 ----------
+# 内置快照的 615 条由随包离线表覆盖；**全站搜索搜出来的新 Skill** 离线表里没有，
+# 这时用老板已配置的对话模型按需翻译，结果落到 data/skills_market_i18n.json 长期复用。
+
+SKILL_I18N_SYSTEM_PROMPT = (
+    "You translate software documentation into Simplified Chinese. "
+    "Output JSON only — no markdown fence, no explanation. "
+    "Keep every key exactly as given. "
+    "Keep technical terms, product names, CLI commands and file paths in English. "
+    "Keep the original tone: a noun phrase stays a noun phrase, an imperative stays an imperative. "
+    "Each value at most 60 Chinese characters."
+)
+
+def pick_translate_provider():
+    """挑一个能用来翻译的对话平台：启用中、非 CLI、非 gemini 协议、配了对话模型且有 Key。
+
+    ⚠️ gemini 协议必须跳过：它的 base 是 `/v1beta` + `generateContent`，请求体形状与
+    本处的 OpenAI 兼容调用完全不同，硬发过去只会 400。
+    """
+    for provider in load_api_providers():
+        if not provider.get("enabled", True):
+            continue
+        if is_codex_provider(provider) or is_gemini_cli_provider(provider):
+            continue
+        if not (provider.get("chat_models") or []):
+            continue
+        try:
+            model = preferred_chat_model(provider)
+            if effective_protocol(provider, model) == "gemini":
+                continue
+            api_headers(provider=provider, model=model)   # 没配 Key 会抛 HTTPException
+        except Exception:
+            continue
+        return provider
+    return None
+
+def save_skills_i18n_cache(entries):
+    """把新翻好的译文并进联网缓存（读-改-写）。失败只打日志，绝不抛。"""
+    if not entries:
+        return
+    data = {"schema": 1, "source": "skillsmp", "lang": "zh", "entries": {}}
+    try:
+        if os.path.exists(SKILLS_MARKET_I18N_CACHE):
+            with open(SKILLS_MARKET_I18N_CACHE, "r", encoding="utf-8-sig") as f:
+                old = json.load(f) or {}
+            if isinstance(old.get("entries"), dict):
+                data["entries"].update(old["entries"])
+    except Exception as exc:
+        print(f"读取 Skill 中文简介缓存失败（将重建）: {exc}")
+    data["entries"].update(entries)
+    data["updated_at"] = int(time.time())
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(SKILLS_MARKET_I18N_CACHE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=1)
+    except Exception as exc:
+        print(f"写入 Skill 中文简介缓存失败: {exc}")
+
+def parse_translation_reply(text):
+    """从模型回复里抠出 {id: 中文}。模型爱包 ```json 围栏或加客套话，这里都兜住。
+
+    ⚠️ 只收**含中文**的条目：模型偶尔会把原文原样回显（等于没翻），把它当译文缓存下来
+    会让那条 Skill 永远显示英文，而且再也不会重试。
+    """
+    raw = str(text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
+        raw = re.sub(r"```\s*$", "", raw).strip()
+    data = None
+    try:
+        data = json.loads(raw)
+    except Exception:
+        start, end = raw.find("{"), raw.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(raw[start:end + 1])
+            except Exception:
+                data = None
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for key, value in data.items():
+        clean = str(value or "").strip()
+        if key and clean and re.search(r"[\u4e00-\u9fff]", clean):
+            out[str(key)] = clean
+    return out
+
+async def translate_skill_summaries(items):
+    """对缺中文的 Skill 简介调用已配置的对话模型批量翻译，成功则写进联网缓存。
+
+    任何失败都**降级**（ok=false + 一句 note），绝不抛错 —— 翻译是锦上添花，
+    不能因为它把市场面板搞崩。返回 {ok, items:{id:中文}, translated, note}。
+    """
+    known = load_skills_i18n()
+    pending, seen = [], set()
+    for item in (items or [])[:SKILL_I18N_MAX_ITEMS]:
+        if not isinstance(item, dict):
+            continue
+        skill_id = str(item.get("id") or "").strip()
+        summary = str(item.get("summary") or "").strip()
+        if not skill_id or not summary or skill_id in seen:
+            continue
+        seen.add(skill_id)
+        if skill_id not in known:                 # 已有译文（离线表/缓存）不再送模型
+            pending.append((skill_id, summary[:400]))
+    if not pending:
+        return {"ok": True, "items": {}, "translated": 0, "note": ""}
+    provider = pick_translate_provider()
+    if not provider:
+        return {"ok": False, "items": {}, "translated": 0,
+                "note": "未配置可用的对话模型，暂时显示英文原文"
+                        "（在 API 设置里填一个平台的 Key 与对话模型即可自动翻译）"}
+    try:
+        chat_base, chat_hdrs, model = resolve_chat_provider(provider["id"], "", "")
+    except Exception as exc:
+        return {"ok": False, "items": {}, "translated": 0, "note": f"翻译通道不可用：{exc}"}
+
+    done = {}
+    for start in range(0, len(pending), SKILL_I18N_BATCH):
+        batch = pending[start:start + SKILL_I18N_BATCH]
+        allowed = {skill_id for skill_id, _ in batch}
+        body = {
+            "model": model,
+            "temperature": 0,
+            "messages": [
+                {"role": "system", "content": SKILL_I18N_SYSTEM_PROMPT},
+                {"role": "user", "content": json.dumps({k: v for k, v in batch}, ensure_ascii=False)},
+            ],
+        }
+        try:
+            async with httpx.AsyncClient(timeout=SKILL_I18N_TIMEOUT) as client:
+                response = await client.post(f"{chat_base}/chat/completions", headers=chat_hdrs, json=body)
+                response.raise_for_status()
+                data = response.json()
+        except Exception as exc:
+            print(f"Skill 简介翻译失败（provider={provider.get('id')}）: {exc}")
+            if not done:                          # 一批都没成 → 如实报失败
+                return {"ok": False, "items": {}, "translated": 0,
+                        "note": f"翻译失败（{type(exc).__name__}），暂时显示英文原文"}
+            break                                 # 已经翻好一部分 → 先把那部分留下
+        content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        # 只收「确实在我们请求里」的 id：模型偶尔会自作主张改 key
+        for key, value in parse_translation_reply(content).items():
+            if key in allowed:
+                done[key] = value
+    if done:
+        save_skills_i18n_cache(done)
+    return {"ok": True, "items": done, "translated": len(done), "note": ""}
+
 def load_installed_skills():
     try:
         if os.path.exists(AGENT_SKILLS_INDEX):
@@ -6688,39 +7260,20 @@ def skills_market_payload(refresh=False):
             refresh_note = str(state.get("note") or "")
     skills, refreshed_at = market_skill_source()
     installed = {str(s.get("id") or ""): s for s in load_installed_skills().get("skills", [])}
+    i18n = load_skills_i18n()
     records = []
     for skill in skills:
-        skill_id = str(skill.get("id") or "")
-        if not skill_id:
-            continue
-        stars = int(skill.get("stars") or 0)
-        forks = int(skill.get("forks") or 0)
-        record = installed.get(skill_id)
-        records.append({
-            "id": skill_id,
-            "name": skill.get("name") or skill_id,
-            "title": skill.get("title") or skill.get("name") or skill_id,
-            "summary": skill.get("summary") or "",
-            "tags": skill.get("tags") or [],
-            "repo": skill.get("repo") or "",
-            "repo_url": skill.get("repo_url") or "",
-            "source_url": skill.get("source_url") or SKILLSMP_SITE,
-            "author": skill.get("author") or "",
-            "language": skill.get("language") or "",
-            "stars": stars,
-            "forks": forks,
-            # 热度 = star + 收藏 × 2（与前端一致）
-            "hotness": stars + forks * 2,
-            "updated_at": int(skill.get("updated_at") or 0),
-            "raw_url": skill.get("raw_url") or "",
-            "installed": bool(record),
-            "installed_at": (record or {}).get("installed_at"),
-            "installed_bytes": (record or {}).get("bytes"),
-        })
+        record = market_record(skill, installed, i18n)   # 与全站搜索结果共用同一形状
+        if record:
+            records.append(record)
     records.sort(key=lambda item: (-item["hotness"], -item["stars"], item["title"]))
     return {
         "skills": records,
         "total": len(records),
+        # 两级分类：taxonomy 是静态结构（大分类 → 子分类），categories 是当前清单的计数
+        "taxonomy": skill_taxonomy_meta(),
+        "categories": skill_category_meta(records),
+        "translated": sum(1 for item in records if item.get("summary_zh")),
         "source": "skillsmp",
         "source_name": "SkillsMP",
         "source_url": SKILLSMP_SITE,
@@ -15298,6 +15851,25 @@ async def agent_tools_set(payload: AgentToolsRequest):
 async def skills_market(refresh: bool = False):
     """Skill 市场清单（数据源 SkillsMP，按 star + 收藏 热度排序）。refresh=true 时强制联网重抓。"""
     return await asyncio.to_thread(skills_market_payload, refresh)
+
+@app.get("/api/skills/search")
+async def skills_search(q: str = ""):
+    """按关键词在 SkillsMP **全站**搜索（服务端过滤，能搜到内置快照之外的 Skill）。
+
+    ⚠️ 与 `/api/skills/market` 不同，这里**每次都会联网**（只发 1 个请求）——
+    所以前端必须做防抖；后端侧有 5 分钟结果缓存 + 全局节流闸 + 限流冷却兜底。
+    失败时返回空 skills + 一句 note，前端据此回落本地过滤。
+    """
+    return await asyncio.to_thread(search_skills_market, q)
+
+@app.post("/api/skills/i18n")
+async def skills_i18n(payload: SkillI18nRequest):
+    """给缺中文简介的 Skill 批量翻译（用已配置的对话模型），结果缓存到 data/。
+
+    ⚠️ 只翻「离线表与缓存里都没有」的那些 —— 内置 615 条走随包离线表，这里几乎不触发；
+    真正会用到它的是**全站搜索**搜出来的、离线表之外的新 Skill。
+    """
+    return await translate_skill_summaries(payload.items)
 
 @app.get("/api/skills/installed")
 async def skills_installed():

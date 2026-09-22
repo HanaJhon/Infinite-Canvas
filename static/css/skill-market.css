@@ -55,13 +55,27 @@
 .asm-search i, .asm-search svg { width:13px; height:13px; flex:0 0 auto; }
 .asm-search input { flex:1; min-width:0; border:none; outline:none; background:none; color:var(--sm-text); font-size:12px; }
 .asm-select { height:32px; padding:0 8px; border:1px solid var(--sm-line); border-radius:10px; background:var(--sm-card); color:var(--sm-text); font-size:11.5px; }
-.asm-tabs { display:flex; flex-wrap:wrap; gap:6px; padding:10px 14px 0; }
-.asm-tab { padding:3px 9px; border-radius:999px; border:1px solid var(--sm-line); background:var(--sm-card); color:var(--sm-muted); font-size:10.5px; font-weight:700; cursor:pointer; }
+/* 第一行：大分类（全部 / 实用 / 设计 / 视觉 / 其他）—— 分段按钮 + 计数 */
+.asm-cats { display:flex; flex-wrap:wrap; gap:6px; padding:10px 14px 0; }
+.asm-cat { display:inline-flex; align-items:center; gap:5px; padding:4px 11px; border-radius:9px;
+           border:1px solid var(--sm-line); background:var(--sm-card); color:var(--sm-muted);
+           font-size:11.5px; font-weight:800; cursor:pointer; }
+.asm-cat:hover { color:var(--sm-text); border-color:var(--sm-strong); }
+.asm-cat.active { background:var(--sm-strong); color:var(--sm-strong-text); border-color:transparent; }
+.asm-cat.is-empty { opacity:.5; }
+.asm-cat-n { font-size:9.5px; font-weight:800; font-variant-numeric:tabular-nums; opacity:.72; }
+/* 第二行：子分类 —— **单行横向滚动**（子分类有二十来个，wrap 会把面板撑高一大截） */
+.asm-tabs { display:flex; flex-wrap:nowrap; gap:6px; padding:8px 14px 0; overflow-x:auto;
+            scrollbar-width:thin; -webkit-overflow-scrolling:touch; }
+.asm-tabs:empty { display:none; }
+.asm-tab { flex:0 0 auto; white-space:nowrap; padding:3px 9px; border-radius:999px; border:1px solid var(--sm-line); background:var(--sm-card); color:var(--sm-muted); font-size:10.5px; font-weight:700; cursor:pointer; }
 .asm-tab:hover { color:var(--sm-text); }
 .asm-tab.active { border-color:var(--sm-strong); color:var(--sm-text); background:var(--sm-soft); }
 .asm-meta { padding:8px 14px; font-size:10.5px; line-height:1.6; color:var(--sm-muted); }
 .asm-meta b { color:var(--sm-text); font-weight:800; font-variant-numeric:tabular-nums; }
 .asm-meta .asm-warn { color:#b45309; }
+/* 「全站搜索」状态行：信息态（区别于 asm-warn 的告警态） */
+.asm-meta .asm-online { color:#1d4ed8; }
 .asm-list { flex:1; overflow:auto; padding:0 14px 14px; display:flex; flex-direction:column; gap:8px; }
 .asm-card { display:flex; gap:10px; padding:10px 12px; border:1px solid var(--sm-line); border-radius:12px; background:var(--sm-soft); }
 .asm-card.installed { border-color:var(--sm-strong); }
@@ -70,6 +84,8 @@
 .asm-card-title { font-size:12.5px; font-weight:850; color:var(--sm-text); }
 .asm-badge { font-size:9.5px; font-weight:900; padding:1px 6px; border-radius:999px; background:rgba(16,185,129,.16); color:#047857; }
 .asm-card-summary { margin-top:4px; font-size:11px; line-height:1.55; color:var(--sm-muted); }
+/* 中文简介（离线表 / 联网补译）比英文原文短且更易读，给它稍高一点的对比度 */
+.asm-card-summary.is-zh { color:var(--sm-text); opacity:.86; }
 .asm-card-foot { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:6px; font-size:10.5px; color:var(--sm-muted); }
 .asm-stat { display:inline-flex; align-items:center; gap:3px; font-weight:750; font-variant-numeric:tabular-nums; }
 .asm-stat i, .asm-stat svg { width:11px; height:11px; }
@@ -109,6 +125,8 @@
 .studio-theme-dark .asm-btn.danger { color:#fca5a5; }
 .theme-dark .asm-meta .asm-warn,
 .studio-theme-dark .asm-meta .asm-warn { color:#fbbf24; }
+.theme-dark .asm-meta .asm-online,
+.studio-theme-dark .asm-meta .asm-online { color:#93c5fd; }
 
 /* ⚠️ 这里**不要**给 [data-skill-market-open] 定图标尺寸：两个页面的入口按钮外观各自
    由本页样式负责（画布页 .agent-skill-market-btn 是 12px，gpt-chat 复用 .agent-tools-button

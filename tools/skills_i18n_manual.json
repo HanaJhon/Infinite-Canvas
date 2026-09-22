@@ -1,0 +1,10 @@
+{
+  "_note": "模型始终翻不出来的少数条目在此手工补译文（上游对它们稳定返回空）。键 = Skill id，与 static/skills-catalog.json 一致；值必须含中文，否则会被忽略。tools/translate_skills.py 会把这些条目并进 static/skills-i18n-zh.json。",
+  "entries": {
+    "mtg-secret-lair-bonus-audit-ab576d8d": "审计 mtg-sealed-content 与 magic-search-engine 中 Secret Lair 赠卡的归属、finishes 与推定配版。用于逐批次补充包建模、stained-glass／地牌／Sliver 赠卡清理，以及未决赠卡研究。",
+    "wpts-document-hooks-e5f98105": "盘点、评估并记录 WP Trip Summary 插件所拥有的 WordPress action 与 filter 派发点。用于审计 `abp01_*` 钩子、找出缺失的行内钩子文档注释、按代码上下文起草其契约，或在不重命名钩子的前提下维护钩子文档。",
+    "identity-threat-investigation-ceaacdfa": "排查 Entra ID（Azure AD）、Okta、Google Workspace 或本地 Active Directory 中疑似账号／身份被攻陷的事件：分析登录日志里的不可能旅行、新国家或 ASN、MFA 疲劳轰炸、旧式认证、token 重放与 AiTM 会话劫持；检查高风险 OAuth 授权与 MFA 方法变更等迹象。",
+    "malware-triage-bd74f5ee": "对可疑文件、哈希或沙箱报告做安全的静态研判，全程不执行样本：哈希查询、magic 判型、熵与加壳指标、PE/ELF/LNK/PDF/Office/压缩包元数据、可疑字符串与 IOC，以及沙箱报告解读（Tria.ge、ANY.RUN、VMRay、Hybrid Analysis 等）。",
+    "sdlc-hooks-a646a8c1": "用 hooks 把规则变成确定性约束——阻止对受保护路径的修改、编辑后自动跑格式化、避免凭据进入 diff、在指定的人批准前暂停动作。适用于策略必须无例外生效、skill 或 CLAUDE.md 指令总被忽略、或某个操作需人工审批的场景。"
+  }
+}

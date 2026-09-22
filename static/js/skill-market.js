@@ -105,11 +105,12 @@
             +     '<option value="installed" data-asm-opt="asmSortInstalled"></option>'
             +   '</select>'
             + '</div>'
+            + '<div class="asm-cats" data-asm="cats"></div>'
             + '<div class="asm-tabs" data-asm="tabs"></div>'
             + '<div class="asm-meta" data-asm="meta"></div>'
             + '<div class="asm-list" data-asm="list"></div>';
         document.body.appendChild(overlay);
-        ['title', 'refresh', 'close', 'search', 'sort', 'tabs', 'meta', 'list'].forEach(function (key) {
+        ['title', 'refresh', 'close', 'search', 'sort', 'cats', 'tabs', 'meta', 'list'].forEach(function (key) {
             nodes[key] = overlay.querySelector('[data-asm="' + key + '"]');
         });
         nodes.title.textContent = T('smart.asmTitle');
@@ -125,6 +126,7 @@
         nodes.search.addEventListener('input', function () {
             state.query = nodes.search.value || '';
             state.limit = RENDER_STEP;
+            scheduleRemoteSearch();
             render();
         });
         nodes.sort.addEventListener('change', function () {
@@ -137,11 +139,23 @@
     // ---------- 状态 ----------
 
     var state = {
-        skills: [], meta: null, query: '', sort: 'hot', tag: '',
-        loading: false, loaded: false, refreshing: false, error: '', limit: 0
+        skills: [], meta: null, query: '', sort: 'hot', tag: '', cat: '',
+        // taxonomy = 后端给的「大分类 → 子分类」静态结构（前端不硬编码分类表）
+        taxonomy: [],
+        loading: false, loaded: false, refreshing: false, error: '', limit: 0,
+        // —— 全站搜索（SkillsMP 服务端过滤）——
+        // remoteQuery 是 remote 对应的关键词：与当前输入不一致就视为过期，
+        // 用户改了字不该再看到旧结果。remoteBusy 只是「正在查」的指示。
+        remote: null, remoteQuery: '', remoteBusy: false, remoteNote: '', remoteTimer: 0,
+        // —— 中文简介的联网补译（只对离线表里没有的 Skill 触发，见 ensureSummaries）——
+        i18nBusy: false, i18nNote: '', i18nAsked: ''
     };
     var busy = new Set();
     var RENDER_STEP = 120;   // 一次最多渲染多少张卡片（清单可达上千条，全量塞 DOM 会卡）
+    // 本地清单只有 615 条内置快照，搜不到快照之外的 Skill（如 caveman）→ 输入够长就走
+    // 服务端全站搜索。⚠️ 阈值必须与后端 SKILL_MARKET_SEARCH_MIN_CHARS 保持一致。
+    var REMOTE_MIN_CHARS = 2;
+    var REMOTE_DEBOUNCE_MS = 450;   // 打字防抖：既省请求，也避免撞 SkillsMP 的限流
 
     function count(n) {
         var v = Number(n) || 0;
@@ -162,17 +176,82 @@
         var text = T('smart.asmTag.' + tag);
         return text === 'smart.asmTag.' + tag ? tag : text;   // 没有词条时回落到原始标签
     }
+    function catLabel(key) {
+        var text = T('smart.asmCat.' + key);
+        return text === 'smart.asmCat.' + key ? key : text;
+    }
+
+    // 当前列表来源：全站搜索结果 or 本机清单
+    function currentSource() { return remoteActive() ? state.remote : state.skills; }
+
+    // 某个大分类下允许出现的子分类（'' = 全部大分类 → 所有子分类，按 taxonomy 顺序）
+    function subTagsOf(catKey) {
+        var out = [];
+        (state.taxonomy || []).forEach(function (item) {
+            if (catKey && item.key !== catKey) return;
+            (item.tags || []).forEach(function (t) { if (out.indexOf(t) < 0) out.push(t); });
+        });
+        return out;
+    }
+
+    // 子分类 → 大分类 的反查（由 taxonomy 派生，别手写）
+    function tagCatOf(tag) {
+        var found = '';
+        (state.taxonomy || []).forEach(function (item) {
+            if (!found && (item.tags || []).indexOf(tag) >= 0) found = item.key;
+        });
+        return found;
+    }
+
+    // 卡片上显示哪些标签：**只显示与该条记录同一个大分类的子分类**。
+    // 卡片本来就挂在某个大分类下（或在「全部」里带着自己的 category），把别的
+    // 大分类的子分类也贴上来是噪声 —— 实测「视觉」里会冒出「后端服务」这种芯片。
+    // 过滤后为空就回落到原标签（宁可多显示，也别让卡片光秃秃）。
+    function cardTags(s) {
+        var all = s.tags || [];
+        var own = s.category || 'other';
+        var same = all.filter(function (t) { return (tagCatOf(t) || 'other') === own; });
+        return same.length ? same : all;
+    }
+
+    // 大分类计数：**按当前列表算**（不是按整份清单），否则全站搜索时计数会对不上
+    function categoryCounts() {
+        var out = {};
+        (currentSource() || []).forEach(function (s) {
+            var key = s.category || 'other';
+            out[key] = (out[key] || 0) + 1;
+        });
+        return out;
+    }
+
+    // 当前是否在展示「全站搜索结果」（关键词够长 且 有对应该关键词的结果）
+    function remoteActive() {
+        var q = state.query.trim();
+        return q.length >= REMOTE_MIN_CHARS && !!state.remote && state.remoteQuery === q;
+    }
 
     function visible() {
         var q = state.query.trim().toLowerCase();
-        var list = state.skills.slice();
-        if (state.tag) list = list.filter(function (s) { return (s.tags || []).indexOf(state.tag) >= 0; });
-        if (q) {
+        var remote = remoteActive();
+        var list = (remote ? state.remote : state.skills).slice();
+        // 大分类 / 子分类筛选对**本地与全站结果都生效**：后端给每条记录都打了
+        // category 与 tags，所以全站结果也能筛（早先「全站搜索时隐藏标签行」的做法已废弃）。
+        if (state.cat) {
+            list = list.filter(function (s) { return (s.category || 'other') === state.cat; });
+        }
+        if (state.tag) {
+            list = list.filter(function (s) { return (s.tags || []).indexOf(state.tag) >= 0; });
+        }
+        if (!remote && q) {
+            // 全站结果已由服务端过滤，不再套本地子串过滤（那只对内置清单有意义）
             list = list.filter(function (s) {
-                return [s.title, s.name, s.summary, s.repo, (s.tags || []).join(' ')]
+                return [s.title, s.name, s.summary, s.summary_zh, s.repo, (s.tags || []).join(' ')]
                     .join(' ').toLowerCase().indexOf(q) >= 0;
             });
         }
+        // 全站结果由后端按「名字命中 > 说明命中 > 其余」排好序 —— 默认排序下**保持原序**。
+        // 这里若照常按热度重排，巨仓会重新霸榜（搜 cave 的前 5 名会变成无关 Skill）。
+        if (remote && state.sort === 'hot') return list;
         // 热度 = star + 收藏 × 2（与后端一致），同分再比 star、再比名称，保证顺序稳定
         var hot = function (a, b) {
             return (b.hotness - a.hotness) || (b.stars - a.stars)
@@ -186,10 +265,109 @@
         return list;
     }
 
+    // ---------- 全站搜索（输入防抖 → /api/skills/search）----------
+
+    function resetRemote() {
+        if (state.remoteTimer) { clearTimeout(state.remoteTimer); state.remoteTimer = 0; }
+        state.remote = null;
+        state.remoteQuery = '';
+        state.remoteBusy = false;
+        state.remoteNote = '';
+    }
+
+    function scheduleRemoteSearch() {
+        if (state.remoteTimer) { clearTimeout(state.remoteTimer); state.remoteTimer = 0; }
+        var q = state.query.trim();
+        if (q.length < REMOTE_MIN_CHARS) { resetRemote(); render(); return; }
+        if (state.remote && state.remoteQuery === q) return;    // 这个词已经有结果了
+        state.remoteTimer = setTimeout(function () {
+            state.remoteTimer = 0;
+            remoteSearch(q);
+        }, REMOTE_DEBOUNCE_MS);
+    }
+
+    async function remoteSearch(q) {
+        if (state.remoteQuery === q && state.remote) return;
+        state.remoteBusy = true;
+        state.remoteNote = '';
+        render();
+        try {
+            var res = await fetch('/api/skills/search?q=' + encodeURIComponent(q));
+            if (!res.ok) throw new Error(await errorMessage(res, T('smart.asmLoadFail')));
+            var data = await res.json();
+            // 用户已经改了字 → 这份结果过期，直接丢掉（否则会闪回旧结果）
+            if (state.query.trim() !== q) return;
+            state.remote = Array.isArray(data.skills) ? data.skills : [];
+            state.remoteQuery = q;
+            state.remoteNote = data.note || '';
+            // 全站结果是离线表覆盖不到的主要来源 → 补一次中文简介
+            ensureSummaries(state.remote);
+        } catch (e) {
+            if (state.query.trim() !== q) return;
+            state.remote = null;
+            state.remoteQuery = '';
+            state.remoteNote = T('smart.asmSearchFail');
+        } finally {
+            if (state.query.trim() === q) state.remoteBusy = false;
+            render();
+        }
+    }
+
+    // ---------- 中文简介的联网补译（只补离线表里没有的）----------
+    // 内置 615 条走随包离线表（零配置、断网可用）；**全站搜索搜出来的新 Skill** 离线表里没有，
+    // 这里把它们丢给 /api/skills/i18n，后端用老板配置的对话模型翻好并缓存到 data/。
+    // 没配对话模型时后端返回 ok=false + note，这里只把 note 显示出来，绝不反复重试。
+
+    async function ensureSummaries(list) {
+        var missing = (list || []).filter(function (s) {
+            return !String(s.summary_zh || '').trim() && String(s.summary || '').trim();
+        });
+        if (!missing.length) return;
+        var key = missing.map(function (s) { return s.id; }).sort().join(',');
+        if (state.i18nAsked === key) return;      // 同一批只问一次，避免失败后反复打后端
+        state.i18nAsked = key;
+        state.i18nBusy = true;
+        state.i18nNote = '';
+        render();
+        try {
+            var res = await fetch('/api/skills/i18n', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    items: missing.slice(0, 48).map(function (s) {
+                        return { id: s.id, summary: s.summary };
+                    })
+                })
+            });
+            if (!res.ok) throw new Error(await errorMessage(res, T('smart.asmLoadFail')));
+            var data = await res.json();
+            var map = data.items || {};
+            var hit = 0;
+            [state.skills, state.remote].forEach(function (arr) {
+                (arr || []).forEach(function (s) {
+                    if (map[s.id]) { s.summary_zh = map[s.id]; hit++; }
+                });
+            });
+            // 一条都没翻到 → 把后端的原因（通常是「未配置对话模型」）留在 meta 行上
+            if (!hit) state.i18nNote = data.note || T('smart.asmTranslateFail');
+        } catch (e) {
+            state.i18nNote = T('smart.asmTranslateFail');
+        } finally {
+            state.i18nBusy = false;
+            render();
+        }
+    }
+
     function cardHtml(s) {
-        var tags = (s.tags || []).map(function (t) {
+        var tags = cardTags(s).map(function (t) {
             return '<span class="asm-tag">' + esc(tagLabel(t)) + '</span>';
         }).join('');
+        // 简介优先显示中文：summary_zh 来自随包离线表或 /api/skills/i18n 的联网补译；
+        // 两者都没有时回落英文原文（并把原文挂到 title 上，鼠标悬停仍可看全）
+        var zh = String(s.summary_zh || '').trim();
+        var en = String(s.summary || '').trim();
+        var summaryHtml = '<div class="asm-card-summary' + (zh ? ' is-zh' : '') + '"'
+            + (zh && en ? ' title="' + esc(en) + '"' : '') + '>' + esc(zh || en) + '</div>';
         var isBusy = busy.has(s.id);
         var action = s.installed
             ? '<button class="asm-btn danger" type="button" data-asm-uninstall="' + esc(s.id) + '"'
@@ -201,7 +379,7 @@
             +   '<div class="asm-card-head"><span class="asm-card-title">' + esc(s.title) + '</span>'
             +     (s.installed ? '<span class="asm-badge">' + esc(T('smart.asmInstalled')) + '</span>' : '')
             +   '</div>'
-            +   '<div class="asm-card-summary">' + esc(s.summary) + '</div>'
+            +   summaryHtml
             +   '<div class="asm-card-foot">'
             +     '<span class="asm-stat" title="' + esc(T('smart.asmStarsTip')) + '"><i data-lucide="star"></i>' + count(s.stars) + '</span>'
             +     '<span class="asm-stat" title="' + esc(T('smart.asmDownloadsTip')) + '"><i data-lucide="git-fork"></i>' + count(s.forks) + '</span>'
@@ -231,18 +409,65 @@
         if (state.error) html += '<br><span class="asm-warn">' + esc(state.error) + '</span>';
         // 后端拒绝刷新时的说明（限流冷却 / 抓取不完整 / 结果缩水）—— 常驻显示，不随 toast 消失
         else if (meta.refresh_note) html += '<br><span class="asm-warn">' + esc(meta.refresh_note) + '</span>';
+        // 全站搜索状态：进行中 / 命中数 / 降级原因（限流、断网、关键词太短）
+        if (remoteActive()) {
+            html += '<br><span class="asm-online">'
+                + esc(Tf('smart.asmSearchOnline', { q: state.remoteQuery, n: state.remote.length }))
+                + '</span>';
+        } else if (state.remoteBusy) {
+            html += '<br><span class="asm-online">'
+                + esc(Tf('smart.asmSearching', { q: state.query.trim() })) + '</span>';
+        }
+        if (state.remoteNote) html += '<br><span class="asm-warn">' + esc(state.remoteNote) + '</span>';
+        // 中文简介的补译状态：只补「离线表里没有」的那些（一般是全站搜索搜出来的新 Skill）
+        if (state.i18nBusy) {
+            html += '<br><span class="asm-online">' + esc(T('smart.asmTranslateBusy')) + '</span>';
+        } else if (state.i18nNote) {
+            html += '<br><span class="asm-warn">' + esc(state.i18nNote) + '</span>';
+        }
         nodes.meta.innerHTML = html;
     }
 
+    // 第一行：大分类（全部 / 实用 / 设计 / 视觉 / 其他）
+    function renderCats() {
+        if (!nodes.cats) return;
+        var counts = categoryCounts();
+        var html = '<button class="asm-cat' + (state.cat ? '' : ' active') + '" type="button" data-asm-cat="">'
+            + esc(T('smart.asmAll')) + '</button>';
+        html += (state.taxonomy || []).map(function (item) {
+            var n = counts[item.key] || 0;
+            return '<button class="asm-cat' + (state.cat === item.key ? ' active' : '')
+                + (n ? '' : ' is-empty') + '" type="button" data-asm-cat="' + esc(item.key) + '">'
+                + esc(catLabel(item.key)) + '<span class="asm-cat-n">' + n + '</span></button>';
+        }).join('');
+        nodes.cats.innerHTML = html;
+        nodes.cats.querySelectorAll('[data-asm-cat]').forEach(function (btn) {
+            btn.onclick = function () {
+                state.cat = btn.dataset.asmCat || '';
+                // ⚠️ 换大分类必须清掉子分类：旧的子分类不属于新大分类，
+                // 留着会变成「选了实用 + 设计子分类」这种筛不出东西的组合。
+                state.tag = '';
+                state.limit = RENDER_STEP;
+                render();
+            };
+        });
+    }
+
+    // 第二行：子分类（只显示当前大分类下的，且只在当前列表里真有内容时才显示）
     function renderTabs() {
         if (!nodes.tabs) return;
-        var tags = [];
-        state.skills.forEach(function (s) {
-            (s.tags || []).forEach(function (t) { if (tags.indexOf(t) < 0) tags.push(t); });
+        var allowed = subTagsOf(state.cat);
+        var counts = {};
+        (currentSource() || []).forEach(function (s) {
+            (s.tags || []).forEach(function (t) {
+                if (allowed.indexOf(t) < 0) return;
+                counts[t] = (counts[t] || 0) + 1;
+            });
         });
-        tags.sort(function (a, b) { return String(a).localeCompare(String(b)); });
+        var tags = allowed.filter(function (t) { return counts[t]; });
+        if (!tags.length) { nodes.tabs.innerHTML = ''; return; }
         var html = '<button class="asm-tab' + (state.tag ? '' : ' active') + '" type="button" data-asm-tag="">'
-            + esc(T('smart.asmAll')) + '</button>';
+            + esc(T('smart.asmAllSub')) + '</button>';
         html += tags.map(function (t) {
             return '<button class="asm-tab' + (state.tag === t ? ' active' : '') + '" type="button" data-asm-tag="'
                 + esc(t) + '">' + esc(tagLabel(t)) + '</button>';
@@ -259,6 +484,7 @@
 
     function render() {
         renderMeta();
+        renderCats();
         renderTabs();
         if (!nodes.list) return;
         if (!state.skills.length) {
@@ -267,8 +493,14 @@
         } else {
             var list = visible();
             if (!list.length) {
-                nodes.list.innerHTML = '<div class="asm-empty"><i data-lucide="search-x"></i><span>'
-                    + esc(T('smart.asmEmpty')) + '</span></div>';
+                if (state.remoteBusy) {
+                    // 本地也没命中、全站结果还没回来 → 明确告诉用户在查全站，别显示「没有匹配」
+                    nodes.list.innerHTML = '<div class="asm-empty"><i data-lucide="loader" class="asm-spin"></i><span>'
+                        + esc(T('smart.asmSearchingShort')) + '</span></div>';
+                } else {
+                    nodes.list.innerHTML = '<div class="asm-empty"><i data-lucide="search-x"></i><span>'
+                        + esc(T(remoteActive() ? 'smart.asmEmptyOnline' : 'smart.asmEmpty')) + '</span></div>';
+                }
             } else {
                 var shown = list.slice(0, state.limit || RENDER_STEP);
                 var html = shown.map(cardHtml).join('');
@@ -318,6 +550,8 @@
             var data = await res.json();
             state.skills = Array.isArray(data.skills) ? data.skills : [];
             state.meta = data;
+            // 大分类 → 子分类 的结构由后端下发（前端不硬编码分类表，改规则只改 main.py）
+            if (Array.isArray(data.taxonomy) && data.taxonomy.length) state.taxonomy = data.taxonomy;
             state.loaded = true;
             state.limit = RENDER_STEP;
         } catch (e) {
@@ -327,6 +561,8 @@
             state.refreshing = false;
             render();
         }
+        // 清单里若有没中文简介的（联网缓存里新收录的），补一次翻译
+        ensureSummaries(state.skills);
     }
 
     async function install(id) {
@@ -404,6 +640,8 @@
         overlay.hidden = false;
         nodes.search.value = state.query;
         nodes.sort.value = state.sort;
+        // 上次是带着关键词关掉的 → 重开时补一次全站搜索（结果可能已被缓存，几乎瞬时）
+        if (state.query.trim().length >= REMOTE_MIN_CHARS && !state.remote) scheduleRemoteSearch();
         render();
         // ⚠️ 这里曾有一句 `nodes.search.focus()`。**不要加回来**：
         // 文本框一旦获得焦点就必然命中 `:focus-visible`（规范如此，鼠标/程序化聚焦也算），
