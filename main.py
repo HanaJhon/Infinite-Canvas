@@ -2310,11 +2310,45 @@ async def inspire_localize(payload: InspireLocalizeRequest):
         raise HTTPException(status_code=502, detail=f"图片本地化失败：{e}")
     return {"url": output_url_for(filename, "output"), "cached": False}
 
+def _root_fingerprint() -> str:
+    """返回当前进程所在项目根目录的稳定指纹。
+
+    用于让启动器识别「127.0.0.1:3000 上跑的服务是不是我自己这一份」。
+    同一个物理目录在不同写法下（盘符大小写、8.3 短名、`..`、软链接、
+    末尾分隔符）会得到同一个指纹，避免误判为「不同 root」而反复重启服务。
+    """
+    try:
+        canonical = os.path.normcase(os.path.realpath(BASE_DIR))
+        return hashlib.sha1(canonical.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+    except Exception:
+        try:
+            return hashlib.sha1(os.path.normcase(BASE_DIR).encode("utf-8", "replace")).hexdigest()[:16]
+        except Exception:
+            return ""
+
+
 @app.get("/api/app-info")
 def app_info():
     version = current_app_version()
     return {
         "version": version,
+        # ---------------------------------------------------------------
+        # 进程身份指纹（供启动器判断「3000 上跑的是不是我这一份」）
+        #
+        # 🚨 为什么需要：启动器 HandleStartServerAsync 过去只要探测到
+        #    127.0.0.1:3000 有服务就无条件复用，完全不校验那个服务是从哪个
+        #    目录（root）起的。于是出现经典串台：
+        #      · 老板装的是「安装目录」的启动器；但 3000 上跑着的是
+        #        「开发仓库」的 main.py（python/python.exe main.py）；
+        #      · 启动器保存配置写的是 <安装目录>/data/api_providers.json；
+        #      · 而被复用的服务读的是 <开发仓库>/data/api_providers.json（空）；
+        #      · 结果：启动器里保存的 API 服务在 127.0.0.1:3000 里读不到。
+        #    现在启动器会比对 root_fingerprint / BASE_DIR，不一致就不复用、
+        #    改为自己拉起本目录的服务，从根上消除串台。
+        # ---------------------------------------------------------------
+        "app_root": BASE_DIR,
+        "root_fingerprint": _root_fingerprint(),
+        "pid": os.getpid(),
         "repo_url": GITHUB_REPO_URL,
         "version_url": GITHUB_VERSION_URL,
         "tree_url": GITHUB_TREE_URL,
@@ -2521,6 +2555,32 @@ def update_allowed_file(path: str) -> bool:
         return False
     return path in {"main.py", "VERSION"} or path.startswith("static/")
 
+# 恢复点目录下**不是**用户文件的元数据，回退时绝不能还原到安装根目录。
+ROLLBACK_BACKUP_METADATA = {"manifest.json", "apply-info.json"}
+
+# 回退时永不写入的顶层目录（与启动器 UpdateApplier 的 ForbiddenRoots 一致）。
+ROLLBACK_FORBIDDEN_ROOTS = {"data", "assets", "output", "API", ".git", ".workbuddy-ai"}
+
+def rollback_allowed_file(path: str) -> bool:
+    """回退（从**本机恢复点**还原）允许写入的文件范围。
+
+    🚨 为什么不能复用 update_allowed_file：那个白名单是为「从网络下载更新」
+    设的信任边界，只放行 main.py / VERSION / static/。但回退的来源是**用户本机
+    已有的恢复点**，信任边界不同 —— 启动器建的恢复点里有 Lochou启动器.exe、
+    launcher/、tools/ 等，若沿用窄白名单，回退会**静默跳过这些文件**，
+    用户以为退回去了、其实只退了一半（版本号变了但 exe 还是新的）。
+
+    仍然保留两道保护：元数据文件不还原；禁用目录永不写入。
+    """
+    rel = str(path or "").replace("\\", "/").lstrip("/")
+    if not rel or any(part in {"", ".", ".."} for part in rel.split("/")):
+        return False
+    if "/" not in rel and rel in ROLLBACK_BACKUP_METADATA:
+        return False
+    if rel.split("/")[0] in ROLLBACK_FORBIDDEN_ROOTS:
+        return False
+    return True
+
 # 缓存 GitHub Tree API 响应（含 ETag），减少限流压力
 GITHUB_TREE_CACHE: Dict[str, Any] = {"etag": "", "data": None, "expires_at": 0.0}
 
@@ -2646,6 +2706,17 @@ def safe_update_target(path: str) -> str:
     base = os.path.abspath(BASE_DIR)
     if os.path.commonpath([base, target]) != base:
         raise ValueError(f"更新路径不安全：{rel}")
+    return target
+
+def safe_rollback_target(path: str) -> str:
+    """回退专用：白名单更宽（见 rollback_allowed_file），路径安全校验同 safe_update_target。"""
+    rel = str(path or "").replace("\\", "/").lstrip("/")
+    if not rollback_allowed_file(rel):
+        raise ValueError(f"回退文件不在允许范围：{rel}")
+    target = os.path.abspath(os.path.join(BASE_DIR, *rel.split("/")))
+    base = os.path.abspath(BASE_DIR)
+    if os.path.commonpath([base, target]) != base:
+        raise ValueError(f"回退路径不安全：{rel}")
     return target
 
 def safe_static_dir() -> str:
@@ -2900,16 +2971,25 @@ def create_update_backup(
     target_version: str = "",
     parent_backup: str = "",
     update_notes: Optional[Dict[str, Any]] = None,
+    wide_scope: bool = False,
 ) -> Dict[str, Any]:
-    """Create a complete, self-describing restore point before replacing update payloads."""
+    """Create a complete, self-describing restore point before replacing update payloads.
+
+    ``wide_scope=False``（默认，更新路径）：只接受 update_allowed_file 放行的文件
+    （main.py / VERSION / static/），因为文件来自网络下载。
+    ``wide_scope=True``（回退路径）：用 rollback_allowed_file，可涵盖
+    Lochou启动器.exe、launcher/、tools/ 等 —— 回退前的安全快照必须包含它们，
+    否则「回退的回退」会把 exe 留在中间版本。
+    """
     backup_root_abs = update_backup_root()
     backup_dir = os.path.abspath(backup_dir)
     if os.path.commonpath([backup_root_abs, backup_dir]) != backup_root_abs:
         raise ValueError("备份路径不安全")
     if os.path.exists(backup_dir):
         raise FileExistsError("备份目录已存在")
-    clean_root_files = sorted({str(item or "").replace("\\", "/") for item in root_files if update_allowed_file(item) and not str(item).startswith("static/")})
-    clean_static_files = sorted({str(item or "").replace("\\", "/") for item in static_files if str(item).startswith("static/") and update_allowed_file(item)})
+    allow = rollback_allowed_file if wide_scope else update_allowed_file
+    clean_root_files = sorted({str(item or "").replace("\\", "/") for item in root_files if allow(item) and not str(item).startswith("static/")})
+    clean_static_files = sorted({str(item or "").replace("\\", "/") for item in static_files if str(item).startswith("static/") and allow(item)})
     manifest: Dict[str, Any] = {
         "format": UPDATE_BACKUP_FORMAT,
         "state": "creating",
@@ -2941,6 +3021,11 @@ def create_update_backup(
             shutil.copytree(static_dir, backup_static_dir)
             manifest["static_snapshot"] = {
                 "exists": True,
+                # 🚨 complete=True 是「回退时可以整目录 rmtree+copytree」的唯一许可。
+                # 这里确实 copytree 了整个 static/，所以是完整的。
+                # 启动器早期版本只备份「变更过的」static 文件（14~18/74），那种恢复点
+                # 绝不能整目录替换 —— 会把 static 里其余文件全抹掉，直接毁掉前端。
+                "complete": True,
                 "file_count": count_regular_files(backup_static_dir),
             }
         manifest["state"] = "ready"
@@ -3161,7 +3246,18 @@ def rollback_update(req: RollbackRequest):
         if manifest and manifest.get("state") != "ready":
             raise HTTPException(status_code=409, detail="备份尚未完整创建，不能还原")
         manifest_roots = manifest.get("root_files") if isinstance(manifest.get("root_files"), dict) else {}
-        root_files = sorted(manifest_roots.keys()) if manifest_roots else ["main.py", "VERSION"]
+        if manifest_roots:
+            root_files = sorted(manifest_roots.keys())
+        else:
+            # legacy 恢复点（旧版启动器建的，只有 apply-info.json）没有 root_files：
+            # 用备份目录里实际存在的文件兜底。否则安全快照只会记下 main.py/VERSION，
+            # 「回退的回退」就再也救不回 Lochou启动器.exe 等文件。
+            root_files = sorted({
+                os.path.relpath(os.path.join(dp, fn), backup_dir).replace("\\", "/")
+                for dp, _, fns in os.walk(backup_dir) for fn in fns
+            } - ROLLBACK_BACKUP_METADATA)
+            root_files = [r for r in root_files
+                          if rollback_allowed_file(r) and not r.startswith("static/")]
         # Restoring is itself a risky operation. Preserve the live version first so
         # the user can roll forward again if the selected historical build is worse.
         rollback_backup_dir = next_update_backup_dir("rollback-")
@@ -3173,6 +3269,9 @@ def rollback_update(req: RollbackRequest):
             source="local-rollback",
             target_version=str(manifest.get("from_version") or "").strip(),
             parent_backup=req.name,
+            # 回退来源是本机恢复点，不是网络下载 —— 必须用宽白名单，否则
+            # 安全快照会漏掉 exe / launcher/ / tools/。
+            wide_scope=True,
             update_notes={
                 "version": current_app_version(),
                 "items": [{"type": "rollback", "text": f"还原恢复点 {req.name}"}],
@@ -3182,7 +3281,12 @@ def rollback_update(req: RollbackRequest):
         skipped = []
         removed = []
         backup_static_dir = os.path.join(backup_dir, "static")
-        if os.path.isdir(backup_static_dir):
+        static_snapshot = manifest.get("static_snapshot") if isinstance(manifest.get("static_snapshot"), dict) else {}
+        # 🚨 只有清单明确声明「完整快照」才允许整目录替换。
+        # 启动器早期版本只备份「变更过的」static 文件（实测 14~18 / 74），
+        # 对它做 rmtree+copytree 会把 static 里其余文件全部抹掉 → 直接毁掉前端。
+        static_complete = bool(static_snapshot.get("complete"))
+        if os.path.isdir(backup_static_dir) and static_complete:
             static_dir = safe_static_dir()
             if os.path.isdir(static_dir):
                 shutil.rmtree(static_dir)
@@ -3196,6 +3300,27 @@ def rollback_update(req: RollbackRequest):
                 for fn in filenames:
                     src = os.path.join(dirpath, fn)
                     restored.append(os.path.relpath(src, backup_dir).replace("\\", "/"))
+            print(f"[update] static 整目录还原（清单声明为完整快照）")
+        elif os.path.isdir(backup_static_dir):
+            # 非完整快照（含所有 legacy 恢复点）：逐文件复制，**绝不删除**备份外的文件。
+            copied = 0
+            for dirpath, _, filenames in os.walk(backup_static_dir):
+                for fn in filenames:
+                    src = os.path.join(dirpath, fn)
+                    rel = os.path.relpath(src, backup_dir).replace("\\", "/")
+                    try:
+                        target = safe_rollback_target(rel)
+                    except ValueError:
+                        skipped.append(rel)
+                        continue
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    temp_path = f"{target}.rollback_tmp"
+                    with open(src, "rb") as fin, open(temp_path, "wb") as fout:
+                        shutil.copyfileobj(fin, fout)
+                    os.replace(temp_path, target)
+                    restored.append(rel)
+                    copied += 1
+            print(f"[update] static 逐文件还原 {copied} 个（非完整快照，未删除任何文件）")
         elif manifest and isinstance(manifest.get("static_snapshot"), dict) and not manifest["static_snapshot"].get("exists"):
             static_dir = safe_static_dir()
             if os.path.isdir(static_dir):
@@ -3207,11 +3332,11 @@ def rollback_update(req: RollbackRequest):
                 rel = os.path.relpath(src, backup_dir).replace("\\", "/")
                 if rel.startswith("static/"):
                     continue
-                if not update_allowed_file(rel):
+                if not rollback_allowed_file(rel):
                     skipped.append(rel)
                     continue
                 try:
-                    target = safe_update_target(rel)
+                    target = safe_rollback_target(rel)
                 except ValueError:
                     skipped.append(rel)
                     continue
@@ -3222,11 +3347,11 @@ def rollback_update(req: RollbackRequest):
                 os.replace(temp_path, target)
                 restored.append(rel)
         for rel, info in manifest_roots.items():
-            if not update_allowed_file(rel) or str(rel).startswith("static/"):
+            if not rollback_allowed_file(rel) or str(rel).startswith("static/"):
                 continue
             if bool((info or {}).get("existed")):
                 continue
-            target = safe_update_target(rel)
+            target = safe_rollback_target(rel)
             if os.path.isfile(target):
                 os.remove(target)
                 removed.append(rel)
@@ -21622,9 +21747,24 @@ def run_workflow(name: str, payload: WorkflowRunRequest):
     return generate(req)
 
 if __name__ == "__main__":
+    import argparse
     import uvicorn
+
+    # ------------------------------------------------------------------
+    # 端口可覆盖：默认仍是 3000（保持所有既有用法不变）。
+    #
+    # 🚨 为什么需要 --port：启动器发现 127.0.0.1:3000 被「别的目录的无限画布」
+    #    占用时，不会再去复用那个服务（否则会读到别人目录里的 api_providers.json
+    #    —— 这正是「启动器里保存的 API 服务在 3000 读不到」的根因）。它会改为
+    #    在自动挑一个空闲端口把自己的服务拉起来，并通过 --port 传进来。
+    # ------------------------------------------------------------------
+    _parser = argparse.ArgumentParser(add_help=False)
+    _parser.add_argument("--port", type=int, default=3000)
+    _args, _unknown = _parser.parse_known_args()
+    _port = _args.port if 1 <= _args.port <= 65535 else 3000
+
     # 关闭服务端协议级 WebSocket ping：部分客户端（如 PS UXP 面板）不会自动回 pong，
     # 默认 20s ping/20s 超时会把这些连接每隔一会儿就踢掉造成"频繁断连"。
     # 客户端有自己的应用层心跳 + 断线重连兜底，这里禁用协议 ping 更稳。
-    uvicorn.run(app, host="0.0.0.0", port=3000,
+    uvicorn.run(app, host="0.0.0.0", port=_port,
                 ws_ping_interval=None, ws_ping_timeout=None)

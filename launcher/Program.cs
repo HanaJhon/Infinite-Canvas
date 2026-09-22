@@ -26,6 +26,39 @@ internal static class Program
             return;
         }
 
+        // 回退执行器模式：同样必须赶在单实例互斥量之前处理 ——
+        // 此时旧启动器/服务可能还没退干净，走正常分支会被互斥量挡下并弹「已在运行中」。
+        if (UpdateApplier.IsRollbackMode(args))
+        {
+            Environment.Exit(UpdateApplier.RunRollback(args));
+            return;
+        }
+
+        // 诊断模式：列出指定安装目录下的恢复点后直接退出（不建窗口、不抢单实例互斥量）。
+        // 例：Lochou启动器.exe --list-restore-points "D:\...\Infinite-Canvas"
+        // 用途：界面里看不到恢复点时，确认「到底扫到几个、是 format 2 还是 legacy」。
+        if (args.Length > 0 && args[0].Equals("--list-restore-points", StringComparison.OrdinalIgnoreCase))
+        {
+            var listDir = args.Length > 1 && !string.IsNullOrWhiteSpace(args[1])
+                ? args[1]
+                : AppContext.BaseDirectory;
+            var points = UpdateApplier.ListRestorePoints(listDir);
+            var json = System.Text.Json.JsonSerializer.Serialize(points, new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            });
+            // GUI 子系统没有控制台，直接写标准输出流（重定向到文件时可用）
+            var bytes = System.Text.Encoding.UTF8.GetBytes(json + Environment.NewLine);
+            using (var stdout = Console.OpenStandardOutput())
+            {
+                stdout.Write(bytes, 0, bytes.Length);
+                stdout.Flush();
+            }
+            Environment.Exit(0);
+            return;
+        }
+
         ApplicationConfiguration.Initialize();
         using var mutex = new Mutex(true, "InfiniteCanvasLauncher.SingleInstance", out var isOwner);
         if (!isOwner)
@@ -415,16 +448,36 @@ sealed class LauncherHost : IDisposable
 {
     public const string Title = "CANVAS · LOCHOU LAUNCHER";
     private readonly string root;
-    private readonly string appUrl;
+    /// <summary>
+    /// 后端服务地址。默认 http://127.0.0.1:3000/，但**可变**：
+    /// 若 3000 被「别的目录的无限画布」占用（见 HandleStartServerAsync 的身份校验），
+    /// 启动器会改用自动挑选的空闲端口，这里随之更新。
+    /// </summary>
+    private string appUrl;
+    /// <summary>当前使用的后端端口（与 appUrl 保持一致，便于传 --port 给 main.py）。</summary>
+    private int port = 3000;
     private readonly LauncherForm form;
     private readonly Icon applicationIcon;
     private readonly WebView2 webView;
     private readonly NotifyIcon tray;
     private readonly string preferencePath;
     private readonly string apiProvidersPath;
-        private readonly string apiEnvPath;
-        private static readonly HttpClient _pingHttpClient = new HttpClient();
-        private Process? server;
+    private readonly string apiEnvPath;
+    private static readonly HttpClient _pingHttpClient = new HttpClient();
+    private Process? server;
+
+    /// <summary>
+    /// UI 线程的同步上下文（在构造函数里从当前线程捕获）。
+    ///
+    /// 🚨 为什么需要它：后台线程（<c>Task.Run</c> 里的下载循环）要把消息推给前端时，
+    /// **不能**用 <c>webView.BeginInvoke(...)</c> —— WebView2 的 HWND 是异步创建的，
+    /// 在句柄尚未创建/尚未就绪时调用 `BeginInvoke` 会抛 `InvalidOperationException`，
+    /// 而原来的 `catch {}` 会**静默吞掉**这个异常 → 所有进度/日志推送全部丢失
+    /// （现象：下载进度条整程停在 0%，日志区也一片空白；下载本身却成功了）。
+    /// 改用 <c>SynchronizationContext.Post</c> 投递到 UI 线程：
+    /// 只要 UI 消息泵在跑（WinForms 消息循环始终在跑），回调就一定会执行。
+    /// </summary>
+    private readonly SynchronizationContext? uiContext;
     private bool ownsServer;
     private bool forceExit;
     private bool disposed;
@@ -446,6 +499,11 @@ sealed class LauncherHost : IDisposable
     {
         root = projectRoot;
         appUrl = canvasUrl;
+        port = ParsePortFromUrl(canvasUrl);
+        // 🚨 必须在 UI 线程（构造函数由 Application.Run 的线程调用）里捕获。
+        //    WindowsFormsSynchronizationContext 会把 Post 回调投递到消息泵，
+        //    这是后台线程给 WebView2 推消息唯一可靠的方式（见字段注释）。
+        uiContext = SynchronizationContext.Current;
         preferencePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "InfiniteCanvasLauncher", "preferences.json");
         apiProvidersPath = Path.Combine(root, "data", "api_providers.json");
         apiEnvPath = Path.Combine(root, "API", ".env");
@@ -912,6 +970,12 @@ sealed class LauncherHost : IDisposable
                         break;
                     case "UPDATE_START":
                         result = await HandleStartUpdateAsync(payload);
+                        break;
+                    case "ROLLBACK_LIST":
+                        result = HandleRollbackList();
+                        break;
+                    case "ROLLBACK_START":
+                        result = await HandleStartRollbackAsync(payload);
                         break;
                     default:
                         result = new { acknowledged = true };
@@ -1452,12 +1516,49 @@ sealed class LauncherHost : IDisposable
     {
         SendLog("[启动] 正在检查 Infinite Canvas 环境与依赖...");
 
+        // -----------------------------------------------------------------
+        // 🚨 端口复用必须先「验身份」，不能只看端口活没活。
+        //
+        // 老逻辑：ProbeAsync(appUrl) 返回 true（3000 上有任何 HTTP 服务）就直接
+        // 复用 + 打开浏览器。这会造成串台：
+        //   · 老板装的是「安装目录」的启动器（写配置到 <安装目录>/data/api_providers.json）；
+        //   · 但 3000 上跑着的其实是「开发仓库」的 main.py；
+        //   · 被复用的服务读的是 <开发仓库>/data/api_providers.json（空的）；
+        //   · 现象 = 「启动器里保存的 API 服务在 127.0.0.1:3000 读不到」。
+        //
+        // 新逻辑：要么拿到对方的 root 指纹并确认与我同源，才复用；要么对方
+        // 压根不提供指纹（旧版服务 / 别的程序占了 3000），一律不复用，改为
+        // 自己拉起本目录的服务。宁可多起一个进程，也不能读到别人的配置。
+        // -----------------------------------------------------------------
         var existing = await ProbeAsync(appUrl, TimeSpan.FromSeconds(2), CancellationToken.None);
         if (existing)
         {
-            SendLog("检测到已有后端服务 (127.0.0.1:3000)，正在使用系统默认浏览器打开...");
-            OpenInDefaultBrowser(appUrl);
-            return new { running = true, url = appUrl };
+            var remote = await FetchRemoteIdentityAsync(appUrl, TimeSpan.FromSeconds(3));
+            if (remote != null)
+            {
+                if (string.Equals(remote.Value.Fingerprint, LocalRootFingerprint, StringComparison.OrdinalIgnoreCase))
+                {
+                    SendLog($"检测到同源后端服务已在运行 (127.0.0.1:3000，root={remote.Value.Root})，直接复用，正在使用系统默认浏览器打开...");
+                    OpenInDefaultBrowser(appUrl);
+                    return new { running = true, url = appUrl, reused = true, root = remote.Value.Root };
+                }
+
+                SendLog($"⚠️ 127.0.0.1:3000 已被「另一个」无限画布占用：");
+                SendLog($"   占用者 root = {remote.Value.Root}");
+                SendLog($"   当前启动器 root = {root}");
+                SendLog("   → 不复用它（否则会读到别的目录的配置）。");
+            }
+            else
+            {
+                SendLog("⚠️ 127.0.0.1:3000 端口被占用，但对方没有返回可识别的无限画布身份信息（可能是旧版本或其它程序）。");
+                SendLog("   → 为安全起见不复用。");
+            }
+
+            // 3000 被外人占着，自己再起也绑不上 —— 自动挑一个空闲端口，
+            // 保证「本目录的服务 + 本目录的配置」一定能起来（见 main.py --port）。
+            port = PickFreePort();
+            appUrl = $"http://127.0.0.1:{port}/";
+            SendLog($"   → 将在空闲端口 {port} 上启动本目录（{root}）的服务，这样读到的一定是你自己的配置。");
         }
 
         var python = FindPython(root) ?? throw new InvalidOperationException("未找到可用的 Python。请安装 Python 3.10+ 或放入便携 Python。");
@@ -1473,13 +1574,94 @@ sealed class LauncherHost : IDisposable
         server.BeginOutputReadLine();
         server.BeginErrorReadLine();
 
-        SendLog("等待 127.0.0.1:3000 服务就绪...");
+        SendLog($"等待 127.0.0.1:{port} 服务就绪...");
         var ready = await WaitForServerAsync(appUrl, TimeSpan.FromSeconds(45), CancellationToken.None);
         if (!ready) throw new InvalidOperationException("服务启动超时 (45s)");
 
         SendLog("🚀 服务就绪，正在使用系统默认浏览器打开无限画布页面...");
         OpenInDefaultBrowser(appUrl);
-        return new { running = true, url = appUrl };
+        return new { running = true, url = appUrl, reused = false, root, port };
+    }
+
+    /// <summary>
+    /// 向系统要一个当前空闲的端口（让 OS 分配后立刻释放，再用它去启动服务）。
+    /// 有小概率被别的进程抢占，那种情况下服务启动会失败并由超时兜底报错。
+    /// </summary>
+    private static int PickFreePort()
+    {
+        try
+        {
+            var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            listener.Start();
+            var free = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+            listener.Stop();
+            return free;
+        }
+        catch { return 3001; }
+    }
+
+    /// <summary>远端服务的身份信息（root 路径 + 指纹 + 版本 + pid）。</summary>
+    private readonly struct RemoteIdentity
+    {
+        public RemoteIdentity(string root, string fingerprint, string version, int pid)
+        {
+            Root = root; Fingerprint = fingerprint; Version = version; Pid = pid;
+        }
+        public string Root { get; }
+        public string Fingerprint { get; }
+        public string Version { get; }
+        public int Pid { get; }
+    }
+
+    /// <summary>本机项目根的指纹，算法必须与 main.py 的 _root_fingerprint() 一致。</summary>
+    private string LocalRootFingerprint => ComputeRootFingerprint(root);
+
+    /// <summary>
+    /// 规范化路径后取 sha1 前 16 位（小写十六进制）。
+    /// 与 main.py 对应实现保持同构：normcase(realpath(path)) → utf-8 → sha1[:16]。
+    /// 这样同一个物理目录的多种写法（大小写、`..`、末尾斜杠、软链接）会得到同一指纹。
+    /// </summary>
+    private static string ComputeRootFingerprint(string path)
+    {
+        try
+        {
+            var canonical = Path.GetFullPath(path ?? "");
+            // C# 没有 os.path.normcase 的直接等价物：Windows 上全部转小写，
+            // 并把分隔符统一为 '\\'（Path.GetFullPath 已做后者）。
+            canonical = canonical.Replace('/', '\\').TrimEnd('\\').ToLowerInvariant();
+            using var sha1 = System.Security.Cryptography.SHA1.Create();
+            var bytes = sha1.ComputeHash(System.Text.Encoding.UTF8.GetBytes(canonical));
+            var sb = new System.Text.StringBuilder(16);
+            for (int i = 0; i < 8; i++) sb.Append(bytes[i].ToString("x2"));
+            return sb.ToString();
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>
+    /// 读取 127.0.0.1:3000 上服务的身份信息（GET /api/app-info）。
+    /// 拿不到（超时 / 非 JSON / 不是无限画布）时返回 null —— 调用方必须把
+    /// null 当作「不可复用」，绝不能在身份未知的情况下复用别人的服务。
+    /// </summary>
+    private static async Task<RemoteIdentity?> FetchRemoteIdentityAsync(string appUrl, TimeSpan timeout)
+    {
+        try
+        {
+            var infoUrl = appUrl.TrimEnd('/') + "/api/app-info";
+            using var client = new HttpClient { Timeout = timeout };
+            using var response = await client.GetAsync(infoUrl);
+            if (!response.IsSuccessStatusCode) return null;
+            var body = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(body);
+            var rootEl = doc.RootElement;
+            var rootPath = rootEl.TryGetProperty("app_root", out var rp) ? (rp.GetString() ?? "") : "";
+            var fp = rootEl.TryGetProperty("root_fingerprint", out var f) ? (f.GetString() ?? "") : "";
+            if (string.IsNullOrWhiteSpace(fp) && string.IsNullOrWhiteSpace(rootPath)) return null;
+            var ver = rootEl.TryGetProperty("version", out var v) ? (v.GetString() ?? "") : "";
+            var pid = rootEl.TryGetProperty("pid", out var p) && p.TryGetInt32(out var pv) ? pv : 0;
+            return new RemoteIdentity(rootPath, fp, ver, pid);
+        }
+        catch { return null; }
     }
 
     private object HandleStopServer()
@@ -1640,6 +1822,16 @@ sealed class LauncherHost : IDisposable
                 updateAvailable = VersionUtil.IsLegacyDate(current) != VersionUtil.IsLegacyDate(latest)
                     ? !VersionUtil.IsLegacyDate(latest)
                     : VersionUtil.CompareVersion(latest, current) > 0,
+                // 本地版本**高于**线上最新版（开发机、或线上还没发新版时会出现）。
+                // 只在**同一体系**内比较；跨体系（如 2026.08.30 vs 1.1.4）不表态，避免误判。
+                // ⚠️ 必须挡空串：CompareVersion("1.1.4", "") 会返回 1（空侧按 0 补位），
+                //    不加守卫会把「清单没写版本号」误报成「本机版本更高」。
+                // 用途：界面据此把「最新版本 1.1.3」解释清楚，不让用户以为数字填错了。
+                localAhead = !string.IsNullOrWhiteSpace(current)
+                    && !string.IsNullOrWhiteSpace(latest)
+                    && !VersionUtil.IsLegacyDate(current)
+                    && !VersionUtil.IsLegacyDate(latest)
+                    && VersionUtil.CompareVersion(current, latest) > 0,
                 notes,
                 size,
                 sha256 = sha,
@@ -1677,6 +1869,90 @@ sealed class LauncherHost : IDisposable
         //    进度与错误一律走 UPDATE_PROGRESS 推送。
         _ = Task.Run(() => RunUpdateAsync(url, expectedSha, expectedSize, targetVersion));
         return Task.FromResult<object>(new { ok = true, started = true, version = targetVersion });
+    }
+
+    /// <summary>
+    /// 列出可回退的恢复点。纯本地目录扫描（&lt;root&gt;/data/update_backups），不走网络，
+    /// 所以断网时也能回退 —— 这正是「更新后起不来」时最需要的救援通道。
+    /// </summary>
+    private object HandleRollbackList()
+    {
+        try
+        {
+            var points = UpdateApplier.ListRestorePoints(root);
+            var items = points.Select(p => new
+            {
+                name = p.Name,
+                kind = p.Kind,
+                format = p.Format,
+                createdAt = p.CreatedAt,
+                fromVersion = p.FromVersion,
+                targetVersion = p.TargetVersion,
+                affectedCount = p.AffectedCount,
+                staticComplete = p.StaticComplete,
+                // legacy 恢复点（旧版启动器建的，只有 apply-info.json）只能做部分还原：
+                // 它删不掉「更新新增的文件」。UI 要据此提示用户。
+                partial = p.Partial,
+            }).ToList();
+            return new { ok = true, current = LocalVersion(), count = items.Count, points = items };
+        }
+        catch (Exception ex)
+        {
+            return new { ok = false, error = ex.Message, points = Array.Empty<object>() };
+        }
+    }
+
+    /// <summary>
+    /// 启动回退：停服务 → 派生脱离进程执行还原 → 启动器自己退出。
+    ///
+    /// 与更新同构（见 <see cref="HandleStartUpdateAsync"/>）：前端 callNative 的超时只有
+    /// 30s，而还原要等进程退出 + 可能拷 70MB 的 exe，远超此值 —— 所以这里立刻返回，
+    /// 真正的还原在派生进程里做，用户看到的是「启动器关闭 → 一会儿自动重开」。
+    /// </summary>
+    private Task<object> HandleStartRollbackAsync(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object)
+            return Task.FromResult<object>(new { ok = false, error = "缺少回退参数" });
+
+        var name = payload.TryGetProperty("name", out var nProp) ? (nProp.GetString() ?? "") : "";
+        if (string.IsNullOrWhiteSpace(name))
+            return Task.FromResult<object>(new { ok = false, error = "缺少恢复点名称" });
+
+        // 防并发：与更新共用同一把判据（data/_apply_update_*.exe 正在运行 = 有任务在跑）。
+        // 更新与回退同时往同一个安装目录写会把目录写坏，必须互斥。
+        if (Program.IsUpdateInProgress(root))
+            return Task.FromResult<object>(new { ok = false, error = "已有一个更新或回退正在进行中，请等它完成后重启启动器再试。" });
+
+        var selfPath = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(selfPath) || !File.Exists(selfPath))
+            return Task.FromResult<object>(new { ok = false, error = "定位不到启动器自身路径，无法派生回退进程" });
+
+        try
+        {
+            var applierPath = Path.Combine(root, "data", $"_apply_update_{Environment.ProcessId}.exe");
+            File.Copy(selfPath, applierPath, overwrite: true);
+
+            SendLog($"[回退] 准备还原恢复点：{name}");
+            var pids = PrepareForUpdate();
+            var psi = new ProcessStartInfo
+            {
+                FileName = applierPath,
+                Arguments = $"--rollback \"{name}\" \"{root}\" \"{string.Join(",", pids)}\" \"{selfPath}\"",
+                WorkingDirectory = root,
+                UseShellExecute = false,
+            };
+            Process.Start(psi);
+            SendLog("回退进程已启动，启动器即将退出以释放文件占用；还原完成后会自动重新打开。");
+            SendToWebView("ROLLBACK_PROGRESS", new { phase = "started", name });
+            ScheduleExit(1500);
+            return Task.FromResult<object>(new { ok = true, started = true, name });
+        }
+        catch (Exception ex)
+        {
+            SendLog($"[回退失败] {ex.Message}");
+            SendToWebView("ROLLBACK_PROGRESS", new { phase = "error", error = ex.Message });
+            return Task.FromResult<object>(new { ok = false, error = ex.Message });
+        }
     }
 
     private async Task RunUpdateAsync(string url, string expectedSha, long expectedSize, string targetVersion)
@@ -1840,16 +2116,75 @@ sealed class LauncherHost : IDisposable
         catch { }
     }
 
+    /// <summary>
+    /// 把一条消息推给网页（前端 <c>window.chrome.webview</c> 的 <c>message</c> 事件）。
+    ///
+    /// 🚨 为什么**不能**用 <c>webView.BeginInvoke(...)</c>：
+    /// <c>WebView2</c> 虽然是 <c>Control</c> 的子类，但它的 HWND 由控件**异步创建**，而且
+    /// 它内部还有一层跨进程消息泵。从 <c>Task.Run</c> 的后台线程调 <c>webView.BeginInvoke</c>
+    /// 时，一旦该控件的句柄尚未就绪（或正处于重入状态），会抛
+    /// <c>InvalidOperationException</c>（"Invoke or BeginInvoke cannot be called on a control
+    /// until the window handle has been created"）—— 而这里的 <c>catch {}</c> 会把它**静默吞掉**，
+    /// 表现为「所有推送都丢失」：更新弹窗的进度条永远停在本地初值 0%。
+    ///
+    /// ✅ 正解：走 <c>form.BeginInvoke</c>（窗体的句柄在 <c>Application.Run</c> 前就已创建，稳定），
+    /// 并且**递归降级**到 <c>SynchronizationContext</c> / 直接调用，保证 UI 线程上一定送达。
+    /// </summary>
     private void SendToWebView(string type, object payload)
     {
         if (form.IsDisposed) return;
+        string json;
         try
         {
-            var json = JsonSerializer.Serialize(new { type, payload });
-            if (webView.CoreWebView2 != null)
-                webView.BeginInvoke(() => webView.CoreWebView2.PostWebMessageAsJson(json));
+            json = JsonSerializer.Serialize(new { type, payload });
         }
-        catch { }
+        catch
+        {
+            return;
+        }
+        PostJsonToWebView(json);
+    }
+
+    /// <summary>
+    /// 在 UI 线程上把 JSON 投给 WebView2。见 <see cref="SendToWebView"/> 的说明。
+    /// </summary>
+    private void PostJsonToWebView(string json)
+    {
+        void Deliver()
+        {
+            try
+            {
+                var core = webView?.CoreWebView2;
+                if (core != null) core.PostWebMessageAsJson(json);
+            }
+            catch { }
+        }
+
+        try
+        {
+            if (form.InvokeRequired)
+            {
+                // 优先走窗体（句柄稳定）；窗体不可用时退回 SynchronizationContext。
+                if (form.IsHandleCreated)
+                {
+                    form.BeginInvoke((Action)Deliver);
+                }
+                else if (uiContext != null)
+                {
+                    uiContext.Post(_ => Deliver(), null);
+                }
+            }
+            else
+            {
+                Deliver();
+            }
+        }
+        catch
+        {
+            // BeginInvoke 抛错（句柄未就绪/正在关闭）时，最后再试一次直接投递，
+            // 宁可偶尔在非 UI 线程上投，也不要静默丢掉进度消息。
+            try { uiContext?.Post(_ => Deliver(), null); } catch { }
+        }
     }
 
     private static string Sha256File(string path)
@@ -1873,10 +2208,9 @@ sealed class LauncherHost : IDisposable
                 type = "LOG",
                 payload = $"[{DateTime.Now:HH:mm:ss}] {message}"
             });
-            if (webView.CoreWebView2 != null)
-            {
-                webView.BeginInvoke(() => webView.CoreWebView2.PostWebMessageAsJson(json));
-            }
+            // 🚨 与 SendToWebView 同一机制：**不能**用 webView.BeginInvoke（句柄异步创建，
+            //    会抛 InvalidOperationException 并被 catch 静默吞掉）。见 PostJsonToWebView。
+            PostJsonToWebView(json);
         }
         catch {}
     }
@@ -2123,7 +2457,18 @@ sealed class LauncherHost : IDisposable
         return await RunAsync(python, $"-m pip install {args}", root, token, true);
     }
 
-    private static Process StartServer(string root, string python) => StartProcess(python, "main.py", root, true);
+    private Process StartServer(string root, string python) => StartProcess(python, $"main.py --port {port}", root, true);
+
+    /// <summary>从形如 http://127.0.0.1:3000/ 的 URL 里解析端口，失败回退 3000。</summary>
+    private static int ParsePortFromUrl(string url)
+    {
+        try
+        {
+            if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Port > 0) return uri.Port;
+        }
+        catch { }
+        return 3000;
+    }
     private static Process StartProcess(string file, string args, string cwd, bool redirect)
     {
         return Process.Start(new ProcessStartInfo(file, args) { WorkingDirectory = cwd, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = redirect, RedirectStandardError = redirect }) ?? throw new InvalidOperationException($"无法启动 {file}");
