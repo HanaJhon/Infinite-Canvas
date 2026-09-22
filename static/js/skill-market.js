@@ -133,6 +133,7 @@
             state.sort = nodes.sort.value || 'hot';
             state.limit = RENDER_STEP;
             render();
+            resetListScroll();
         });
     }
 
@@ -230,6 +231,35 @@
         return q.length >= REMOTE_MIN_CHARS && !!state.remote && state.remoteQuery === q;
     }
 
+    // ---------- 同仓错峰 ----------
+    // 🚨 为什么必须有这一步：star / fork / 热度**都是仓库级指标**（同一个仓库下的每条 Skill
+    // 数值完全相同），所以按分数排序后，同一仓库的条目必然连成一片。实测 `openclaw/openclaw`
+    // 一个仓库就有 11 条、且分数并列全站第一 —— 于是「按热度 / 按 star 数 / 按收藏数」的前
+    // **14 条一模一样**，用户切换排序时整个首屏毫无变化，会直接判定「排序坏了」
+    //（老板 2026-09-22 原话：「右上角的筛选功能失去了效果」）。
+    // 做法：同一仓库**连续出现不超过 2 条**，超了就往后顺延找下一个别家仓库的条目。
+    // ⚠️ 只打散「并列块」的展示顺序，主排序不变 —— 分数高的整体仍然靠前；
+    //    没触到上限时（绝大多数仓库只有 1~2 条）顺序与严格排序完全一致。
+    var REPO_RUN_MAX = 2;
+    function spreadByRepo(list) {
+        if (!list || list.length < 3) return list;
+        var rest = list.slice(), out = [], lastRepo = null, streak = 0;
+        while (rest.length) {
+            var pick = -1;
+            for (var i = 0; i < rest.length; i++) {
+                var repo = rest[i].repo || '';
+                if (repo !== lastRepo || streak < REPO_RUN_MAX) { pick = i; break; }
+            }
+            if (pick < 0) pick = 0;                     // 全是同一家 → 只能继续
+            var item = rest.splice(pick, 1)[0];
+            var own = item.repo || '';
+            streak = own === lastRepo ? streak + 1 : 1;
+            lastRepo = own;
+            out.push(item);
+        }
+        return out;
+    }
+
     function visible() {
         var q = state.query.trim().toLowerCase();
         var remote = remoteActive();
@@ -262,7 +292,8 @@
         else if (state.sort === 'installed') {
             list.sort(function (a, b) { return (Number(!!b.installed) - Number(!!a.installed)) || hot(a, b); });
         } else list.sort(hot);
-        return list;
+        // 排完再错峰，否则同一仓库（分数完全相同）会占满整个首屏，换排序看不出变化
+        return spreadByRepo(list);
     }
 
     // ---------- 全站搜索（输入防抖 → /api/skills/search）----------
@@ -419,11 +450,13 @@
                 + esc(Tf('smart.asmSearching', { q: state.query.trim() })) + '</span>';
         }
         if (state.remoteNote) html += '<br><span class="asm-warn">' + esc(state.remoteNote) + '</span>';
-        // 中文简介的补译状态：只补「离线表里没有」的那些（一般是全站搜索搜出来的新 Skill）
+        // 中文简介的补译：**只显示「正在翻译」这一个瞬时状态**。
+        // 🚨 不要在这里回显 state.i18nNote（「简介翻译失败，暂时显示英文原文」）：
+        //    离线表已覆盖 826/827 条，只差一两条没译文也会触发补译；没配对话模型时后端
+        //    返回 ok=false，这行黄字就**常驻**挂在面板上，看着像出错了 —— 老板 2026-09-22
+        //    反馈的「黄色文字」就是它。绝大多数卡片本来就有中文简介，这行提示纯噪声。
         if (state.i18nBusy) {
             html += '<br><span class="asm-online">' + esc(T('smart.asmTranslateBusy')) + '</span>';
-        } else if (state.i18nNote) {
-            html += '<br><span class="asm-warn">' + esc(state.i18nNote) + '</span>';
         }
         nodes.meta.innerHTML = html;
     }
@@ -449,6 +482,7 @@
                 state.tag = '';
                 state.limit = RENDER_STEP;
                 render();
+                resetListScroll();
             };
         });
     }
@@ -478,8 +512,15 @@
                 state.tag = btn.dataset.asmTag || '';
                 state.limit = RENDER_STEP;
                 render();
+                resetListScroll();
             };
         });
+    }
+
+    // 换排序 / 换筛选后把列表滚回顶部：否则用户停在第 5 屏时重排，视口还停在中间那段，
+    // 看起来「没变化」——内容其实变了，只是没回到顶部。
+    function resetListScroll() {
+        if (nodes.list) nodes.list.scrollTop = 0;
     }
 
     function render() {

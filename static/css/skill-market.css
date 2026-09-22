@@ -64,9 +64,18 @@
 .asm-cat.active { background:var(--sm-strong); color:var(--sm-strong-text); border-color:transparent; }
 .asm-cat.is-empty { opacity:.5; }
 .asm-cat-n { font-size:9.5px; font-weight:800; font-variant-numeric:tabular-nums; opacity:.72; }
-/* 第二行：子分类 —— **单行横向滚动**（子分类有二十来个，wrap 会把面板撑高一大截） */
-.asm-tabs { display:flex; flex-wrap:nowrap; gap:6px; padding:8px 14px 0; overflow-x:auto;
-            scrollbar-width:thin; -webkit-overflow-scrolling:touch; }
+/* 第二行：子分类 —— **换行铺开**（子分类有二十来个，实测 24 个芯片排成 3 行）。
+   🚨 不要改回「单行 + overflow-x:auto + 横向滚动条」，有两个实测后果：
+     ① **芯片会被整个压扁到看不见**。列方向 flex 容器里所有子项默认 `flex-shrink:1`；
+        而 `overflow-x:auto` 会把 `overflow-y` 一并算成 `auto`（CSS 规范如此），
+        于是这一行成了滚动容器 —— 滚动容器的 `min-height:auto` 解析为 **0**（别的行是
+        「内容高度」所以压不动）。面板高度吃紧时它被压到 **0.69px**：实测 24 个芯片的按钮
+        只剩 padding+border 的 8px，文字全被裁掉，原位**只留下一条孤零零的横向滚动条**
+        —— 老板 2026-09-22 截图里「多余无用的滑条」就是它（不是多余的，是后面的芯片被压没了）。
+     ② 横向滚动条要鼠标滚轮才能摸到后面的芯片，发现性差。
+   换行后既没有滚动条、芯片也全可见；代价只是固定行高 +44px（列表仍能显示 6 张卡片）。
+   `flex:0 0 auto` 是双保险：固定行一律保持自然高度，纵向伸缩只由 .asm-list 承担。 */
+.asm-tabs { display:flex; flex-wrap:wrap; gap:6px; padding:8px 14px 0; flex:0 0 auto; }
 .asm-tabs:empty { display:none; }
 .asm-tab { flex:0 0 auto; white-space:nowrap; padding:3px 9px; border-radius:999px; border:1px solid var(--sm-line); background:var(--sm-card); color:var(--sm-muted); font-size:10.5px; font-weight:700; cursor:pointer; }
 .asm-tab:hover { color:var(--sm-text); }

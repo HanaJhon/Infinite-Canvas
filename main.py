@@ -6194,71 +6194,197 @@ SKILL_INJECT_CHARS = 40000               # 已安装 Skill 注入系统提示词
 SKILL_MARKET_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 InfiniteCanvasLauncher/1.0")
 
-# ---------- 两级分类体系（2026-09-22 新增）----------
+# ---------- 两级分类体系（2026-09-22 新增，2026-09-22 二次重写）----------
 # 大分类 → 子分类。子分类就是原来的「领域标签」，现在按大分类归组：
 #   大分类 = 前端第一行 tab（实用 / 设计 / 视觉 / 其他）
 #   子分类 = 前端第二行 chips（随选中的大分类变化）
 # `other` 是兜底大分类 —— **不写规则**，没命中任何子分类的 Skill 落到这里。
 #
-# ⚠️ 命中判定是**子串包含**（不是分词），所以规则里宁可写长一点的短语：
-#    短词会误伤（`api` 命中 `rapid`、`review` 命中 `preview`）。写规则时务必拿真数据试。
+# 🚨 写规则的六条铁律（全部是拿 827 条真实清单试出来的血泪，改表前必读）
+#
+#   1. **命中按「整词」判定，不是裸子串**（实现见 skill_keyword_re）。但仍然
+#      **不要把「技术栈」写进分类关键词**：`ios`/`android`/`kotlin`/`swift`/
+#      `flutter`/`react native`/`react`/`vue`/`svelte`/`next.js`/`html`/`css`/
+#      `tailwind`/`dom`/`browser`/`frontend` 描述的是**用什么写**，不是**在做什么**。
+#      实测代价：`shepherd-prs`（PR 自动化）只因提到 flutter 就进了「应用页面设计」，
+#      `with-tanstack-virtual`（虚拟滚动库）只因提到 react/css 就进了「网页设计」，
+#      `html-to-markdown` 只因提到 html 就进了「网页设计」。
+#
+#   2. **裸品牌词必须限定语境**：`amazon` 会把 AWS GuardDuty / Macie / Prowler /
+#      SageMaker 全拉进「跨境电商」，`shopify` 会把 Admin API 工具拉进「电商页面」，
+#      `e-commerce` 会把 Apify / BrightData 这类**爬虫**拉进来。改用
+#      `amazon seller` / `amazon marketplace` / `shopify storefront` / `跨境电商`。
+#
+#   3. **中文词同样要够具体**：`商品` 会命中「**股债商品**配置」「商品管理页面（CRUD
+#      生成器）」，`跨境` 会命中「**走私**」「数据跨境合规」「跨境交易异常监测」。
+#      改用 `商品图` / `电商` / `跨境电商` / `亚马逊` / `跨境电商` 这类。
+#
+#   4. **短词不必怕**——整词判定后 `api`/`ux`/`ui`/`qa`/`rag`/`orm`/`iam` 都是安全的
+#      （`api` 不再命中 `rapid`/`apify`，`ux` 不再命中 `linux`/`lux`）。真正危险的是
+#      **长词被短词包含**（`amazon` ⊂ `Amazon GuardDuty`），那种只能靠限定语境解决。
+#
+#   5. **结尾带 `*` 的关键词 = 前缀命中**（`accessib*` 命中 accessibility、`deploy*`
+#      命中 deployment）。含中日韩字符的关键词按**子串**处理（中文没有词边界）。
+#      英文整词命中会自动容忍词尾变化（token→tokens、test→testing、deploy→deployed）。
+#
+#   6. **泛词要克制**：`design` / `image` / `media` / `layout` / `style` / `render`
+#      满屏都是。它们要么权重保持 1，要么干脆不写（`media`/`render`/`style` 已删）。
+#      另见 SKILL_TAG_SOFT —— `design` / `image-video` 不能单独决定大分类。
 SKILL_TAXONOMY = (
     ("utility", (
-        ("agent-optimize", ("agent", "subagent", "sub-agent", "multi-agent", "orchestrat",
-                            "context engineering", "prompt optimiz", "self-improv",
-                            "agent skill", "workflow agent", "tool use")),
-        ("token-save", ("token", "compress", "compression", "caveman", "concise", "verbos",
-                        "shrink", "context window", "distill", "terse", "minimal output")),
-        ("productivity", ("workflow", "automation", "task", "todo", "productivity",
-                          "note", "calendar", "email", "checklist", "reminder")),
-        ("docs", ("documentation", "docs", "docx", "pdf", "markdown", "readme", "writing",
-                  "blog", "article", "copywriting", "changelog", "release note", "summar",
-                  "slide", "presentation", "office")),
-        ("ai", ("llm", "prompt", "gpt", "claude", "embedding", "rag", "fine-tune",
-                "neural", "machine learning", "inference", "model context")),
-        ("test", ("test", "testing", "qa", "e2e", "unit test", "lint", "debug",
-                  "regression", "coverage")),
-        ("devops", ("deploy", "docker", "kubernetes", "k8s", "ci/cd", "pipeline",
-                    "infrastructure", "terraform", "aws", "monitoring", "github actions")),
-        ("security", ("security", "auth", "authentication", "secret", "vulnerability",
-                      "audit", "encryption", "permission")),
-        ("data", ("data", "analytics", "etl", "csv", "excel", "spreadsheet", "pandas",
-                  "chart", "metric", "dashboard", "report")),
-        ("backend", ("api", "server", "backend", "rest", "graphql", "database", "sql",
-                     "postgres", "django", "fastapi", "endpoint", "microservice")),
-        ("research", ("research", "analysis", "competitive", "benchmark", "survey",
-                      "interview", "requirement", "spec", "roadmap")),
+        ("agent-optimize", ("agent", "subagent", "sub-agent", "multi-agent", "orchestrat*",
+                            "agentic", "agent skill", "agent skills", "skill authoring",
+                            "tool use", "tool calling", "function calling",
+                            "context engineering", "prompt engineering", "prompt optimiz*",
+                            "self-improv*", "harness")),
+        # ⚠️ 不能只写 `token`：`design token`（设计令牌）与 `access token` 会误伤，
+        #    实测 `zrp-design-system`（设计系统）被打成 token-save。必须带语境。
+        ("token-save", ("output token", "token usage", "token cost", "token budget",
+                        "token consumption", "save token", "saves token", "reduce token",
+                        "cut token", "fewer token", "token-efficient", "token efficiency",
+                        "token count", "context window", "compress*", "compression",
+                        "caveman", "concise", "verbose", "terse", "shrink", "distill*",
+                        "minimal output")),
+        # ⚠️ 裸 `task` / `note` 太泛（"the task involves…" / "note that…"），已删。
+        ("productivity", ("workflow", "automat*", "productivity", "checklist", "todo",
+                          "to-do", "kanban", "project management", "issue tracker",
+                          "task management", "task list", "reminder", "calendar",
+                          "schedul*", "inbox", "time tracking", "note-taking",
+                          "note taking", "notebook", "gtd", "email", "standup",
+                          "daily brief*")),
+        # ⚠️ 裸 `writing` / `office` 会误伤（"before writing or editing" / "office hours"）。
+        ("docs", ("documentation", "docs", "docx", "markdown", "readme", "changelog",
+                  "release note*", "pdf", "slide", "presentation", "deck", "blog",
+                  "article", "copywriting", "summar*", "newsletter", "whitepaper",
+                  "proofread*", "translat*", "technical writing", "content writing",
+                  "editorial", "powerpoint", "word document")),
+        ("ai", ("llm", "large language model*", "gpt", "claude", "gemini", "openai",
+                "anthropic", "embedding", "rag", "retrieval-augmented", "fine-tun*",
+                "machine learning", "neural network*", "inference", "vector database",
+                "vector store", "model context", "foundation model", "diffusion model",
+                "prompt")),
+        # ⚠️ 整词判定后 `test` 不再命中 `latest`，可以放心用。`testing` 不必单列
+        #    （词尾变化已覆盖 test/tests/testing/tested/tester）。
+        ("test", ("test", "qa", "e2e", "regression", "lint", "debug*", "tdd", "pytest",
+                  "jest", "vitest", "cypress", "playwright", "assertion", "verif*")),
+        # ⚠️ `pipeline` / `monitoring` 语义偏泛（"Bước 1 pipeline" / "monitoring"），
+        #    但都是真实信号，保留；靠整词判定已排除大量误伤。
+        ("devops", ("deploy*", "docker", "kubernetes", "k8s", "helm", "ci/cd",
+                    "continuous integration", "continuous delivery", "pipeline",
+                    "infrastructure", "terraform", "ansible", "aws", "azure", "gcp",
+                    "google cloud", "cloudformation", "monitoring", "observability",
+                    "github actions", "gitlab ci", "nginx", "serverless", "vps",
+                    "hosting", "cdn")),
+        # ⚠️ 裸 `auth` 已删（"Linux auth" / "route, auth, pairing" 都会误伤）。
+        ("security", ("security", "oauth", "authenticat*", "authoriz*", "credential*",
+                      "secret", "vulnerabilit*", "pentest", "penetration test*",
+                      "encryption", "cryptograph*", "permission", "access control",
+                      "threat", "malware", "phishing", "hardening", "zero trust",
+                      "compliance", "audit", "exploit", "cve", "forensic*",
+                      "incident response", "iam")),
+        ("data", ("data", "dataset", "analytics", "etl", "csv", "excel", "spreadsheet",
+                  "pandas", "dataframe", "chart", "dashboard", "metric", "report",
+                  "bigquery", "snowflake", "dbt", "tableau", "power bi", "statistic*",
+                  "visualiz*", "data model*", "data pipeline")),
+        # ⚠️ 裸 `server` / `rest` 已删：`Test Server`、`MCP server`、`the rest of`
+        #    全是噪声；`api` 保留（整词判定后不再命中 `rapid`/`apify`）。
+        ("backend", ("api", "rest api", "restful", "graphql", "endpoint", "backend",
+                     "server-side", "api server", "web server", "http server", "database",
+                     "sql", "postgres", "mysql", "mongodb", "redis", "django", "fastapi",
+                     "flask", "express", "node.js", "microservice*", "grpc", "webhook",
+                     "sdk", "orm")),
+        ("research", ("research", "analysis", "analyz*", "competitive analysis",
+                      "competitor*", "benchmark", "survey", "interview", "requirement*",
+                      "user story", "user stories", "roadmap", "feasibility",
+                      "literature review", "spec", "specification*", "due diligence")),
     )),
     ("design", (
-        ("ui-design", ("ui design", "user interface", "interface design", "component library",
-                       "design system", "figma", "wireframe", "mockup", "prototype")),
-        ("ux-design", ("ux", "user experience", "usability", "accessib", "interaction design",
-                       "user flow", "persona", "journey map", "a/b test")),
-        ("product-design", ("product design", "prd", "product spec", "product requirement",
-                            "feature spec", "product strategy")),
-        ("miniprogram-design", ("mini program", "miniprogram", "wechat mini", "小程序",
-                                "weapp", "taro", "uni-app")),
-        ("app-page-design", ("mobile app", "app screen", "app page", "ios", "android",
-                             "swift", "kotlin", "flutter", "react native", "screen design")),
-        ("web-design", ("web design", "website", "landing page", "web page", "homepage",
-                        "responsive", "html", "css", "tailwind", "frontend", "browser",
-                        "react", "vue", "svelte", "next.js", "dom")),
-        ("design", ("design", "style", "visual", "typography", "color palette", "layout",
-                    "theme", "animation", "icon")),
+        # ⚠️ 裸 `prototype` / `interface` / `ui` 已删：`single-sided prototypes`（PCB）、
+        #    `3D game prototypes`、`Control UI browser`（排障工具）都会误伤。
+        #    `ui` 只在「ui design / ui component / web ui / mobile ui」这类语境里才算。
+        ("ui-design", ("ui design", "ui designer", "user interface", "interface design",
+                       "ui/ux", "ux/ui", "component library", "component libraries",
+                       "design system", "design token*", "figma", "wireframe", "mockup",
+                       "ui component*", "ui kit", "shadcn")),
+        # ⚠️ 裸 `persona` 已删（`multi-persona debate` 会误伤）；改 `user persona*`。
+        ("ux-design", ("ux", "user experience", "usability", "accessib*", "wcag", "aria",
+                       "interaction design", "user flow*", "user persona*",
+                       "buyer persona*", "journey map", "a/b test",
+                       "information architecture", "heuristic evaluation",
+                       "user research", "ux writing", "ux research")),
+        ("product-design", ("product design", "product requirement*", "product spec*",
+                            "product strategy", "product discovery", "feature spec*",
+                            "prd", "product manager", "product thinking")),
+        # ⚠️ 裸 `taro` / `uni-app` 已删：那是技术栈，`mall4cloud`（Java 微服务商城）
+        #    只因提到 uni-app 就进了「小程序设计」。
+        ("miniprogram-design", ("mini program*", "miniprogram*", "wechat mini",
+                                "weixin mini", "微信小程序", "小程序", "weapp")),
+        # 🚨 本子分类是「技术栈当分类」的重灾区：原来写 `ios`/`android`/`swift`/
+        #    `kotlin`/`flutter`/`react native`，把 android-clean-architecture、
+        #    shepherd-prs、fix-github-issue、virtual-agent-ios 全拉了进来。
+        #    现在只认「界面/屏幕」语境。
+        ("app-page-design", ("mobile app*", "mobile ui", "mobile design", "app screen*",
+                             "app page*", "screen design", "mobile screen*",
+                             "mobile interface", "mobile layout", "app design", "app ui",
+                             "swiftui", "jetpack compose", "compose ui")),
+        # 🚨 同上：原来写 `html`/`css`/`tailwind`/`react`/`vue`/`svelte`/`next.js`/
+        #    `dom`/`browser`/`frontend`/`responsive`/`website`，把 html-to-markdown、
+        #    extracting-tables、data-flow、playwright-cli、brightdata-web-mcp 全拉了进来。
+        #    现在只认「网页/落地页/界面」语境。
+        ("web-design", ("web design", "website design", "web page design",
+                        "webpage design", "landing page*", "homepage", "home page",
+                        "web interface", "web layout", "responsive design",
+                        "responsive layout", "frontend design", "front-end design",
+                        "web frontend", "web component*", "web template*", "web theme*",
+                        "web animation", "single page")),
+        # ⚠️ 本子分类是**软标签**（见 SKILL_TAG_SOFT）：`design` / `visual` 这类词
+        #    满屏都是，权重恒为 1，且不能单独决定大分类。裸 `style` / `layout` 已删
+        #    （`coding style` / `route layout` 会误伤）。
+        ("design", ("design", "visual design", "visual style", "visual language",
+                    "visual identity", "visual", "typography", "typeface",
+                    "font pairing", "font family", "color palette", "colour palette",
+                    "color scheme", "palette", "layout design", "page layout",
+                    "ui layout", "grid layout", "theme", "animation", "motion design",
+                    "icon", "iconography", "brand identity", "branding", "aesthetic",
+                    "art direction", "graphic design", "illustration")),
     )),
     ("visual", (
-        ("ecommerce-page", ("ecommerce", "e-commerce", "电商", "shopify", "amazon listing",
-                            "taobao", "tmall", "storefront", "product page", "listing page",
-                            "详情页", "主图", "商品")),
-        ("product-shot", ("product photo", "product shot", "主图", "packshot", "still life",
-                          "product image", "white background", "commercial photo", "产品图")),
-        ("product-detail", ("detail page", "详情页", "product detail", "infographic",
-                            "卖点", "a+ content", "long image", "长图")),
-        ("cross-border", ("cross-border", "跨境", "aliexpress", "temu", "shein",
-                          "海外", "amazon")),
-        ("image-video", ("image", "video", "audio", "photo", "media", "svg", "gif",
-                         "screenshot", "thumbnail", "poster", "banner", "render",
-                         "midjourney", "stable diffusion", "comfyui")),
+        # 🚨 原来写裸 `ecommerce`/`e-commerce`/`shopify`/`商品`/`storefront`，把
+        #    Mailchimp CLI、业务逻辑漏洞测试、Apify/BrightData 爬虫、股债商品配置
+        #    全拉进了「电商页」。现在只认**店铺/平台/页面**语境。
+        ("ecommerce-page", ("电商", "跨境电商", "电商主图", "电商详情", "电商套图",
+                            "电商视觉", "ecommerce store", "ecommerce site",
+                            "ecommerce page", "ecommerce product", "ecommerce image",
+                            "ecommerce listing", "ecommerce visual", "ecommerce platform",
+                            "online store", "online shop", "shopify storefront",
+                            "shopify theme", "shopify store", "hydrogen storefront",
+                            "headless storefront", "amazon listing", "amazon seller",
+                            "amazon marketplace", "listing page", "product page",
+                            "product listing", "taobao", "tmall", "淘宝",
+                            "天猫", "拼多多", "抖音小店", "京东", "1688", "店铺", "旗舰店",
+                            "独立站", "选品")),
+        ("product-shot", ("product photo*", "product shot*", "product photography",
+                          "product image*", "packshot", "pack shot*", "white background",
+                          "still life", "commercial photo*", "hero image*", "try-on",
+                          "产品图", "商品图", "主图", "产品摄影", "商品摄影", "模特图")),
+        ("product-detail", ("detail page*", "product detail*", "详情页", "详情图",
+                            "infographic", "卖点", "a+ content", "long image", "长图",
+                            "卖点图")),
+        # 🚨 原来写裸 `cross-border`/`跨境`/`amazon`/`海外`，把走私、数据跨境合规、
+        #    跨境交易异常监测、AWS GuardDuty/Macie/Prowler/SageMaker 全拉了进来。
+        #    现在只认**电商平台/卖家**语境。
+        ("cross-border", ("跨境电商", "跨境卖家", "跨境选品", "跨境独立站", "独立站",
+                          "海外仓", "亚马逊", "amazon seller", "amazon marketplace",
+                          "amazon fba", "amazon listing", "amazon ads", "aliexpress",
+                          "temu", "shein", "tiktok shop", "shopee", "lazada", "etsy",
+                          "walmart marketplace")),
+        # ⚠️ 本子分类是**软标签**（见 SKILL_TAG_SOFT）。裸 `media` / `render` 已删：
+        #    `social media` / `media mix` / `render index.html` 全是噪声。
+        ("image-video", ("image", "video", "audio", "photo", "svg", "gif", "screenshot",
+                         "poster", "banner", "thumbnail", "wallpaper", "meme",
+                         "midjourney", "stable diffusion", "comfyui", "nano banana",
+                         "text-to-image", "image-to-image", "imagegen",
+                         "短视频", "视频生成", "视频创作", "文生视频", "图生视频")),
     )),
 )
 
@@ -6273,9 +6399,15 @@ SKILL_TAG_WEIGHT = {
     "miniprogram-design": 3, "token-save": 3,
     "agent-optimize": 2, "ui-design": 2, "ux-design": 2, "product-design": 2,
     "web-design": 2, "app-page-design": 2,
-    # ⚠️ `design` / `image-video` 必须保持 1：它俩的关键词（design / image / video）太常见，
-    # 给 2 会把「电商视觉」和「图像生成」类 Skill 大批抢到「设计」去（实测 视觉 只剩 16 条）。
+    # ⚠️ `design` / `image-video` 必须保持 1：它俩的关键词（design / visual / image /
+    # video / photo）太常见，给 2 会把「电商视觉」和「图像生成」类 Skill 大批抢到
+    # 「设计」去（实测 视觉 只剩 16 条）。
 }
+# 软标签：关键词太泛，**不能单独决定大分类**。
+# 一条记录只要有硬标签，就以硬标签判归属；一个硬标签都没有，才退回软标签。
+# 例：`brainstorming`（提到 design 的头脑风暴）→ 有 research 硬标签 → 实用；
+#     `board`（"Create a structured visual board"）→ 只有软标签 → 设计。
+SKILL_TAG_SOFT = ("design", "image-video")
 # 扁平化规则表：skill_tags() 只认它（(子分类, 关键词元组)）
 SKILL_TAG_RULES = tuple((tag, words) for _cat, subs in SKILL_TAXONOMY for tag, words in subs)
 
@@ -6540,16 +6672,71 @@ def skill_titleize(name):
     words = re.split(r"[-_\s]+", text)
     return " ".join(w[:1].upper() + w[1:] for w in words if w)
 
+# ---------- 关键词命中判定：整词，不是裸子串 ----------
+# 🚨 这一层是「分类准不准」的命门。裸子串判定的实测代价：
+#      api  → rapid / apify / capital     （把爬虫 apify 打成「后端」）
+#      test → latest / contest            （把一切带 latest 的描述打成「测试」）
+#      dom  → domain / domestic / subdomain（把排障工具、PR 自动化打成「网页设计」）
+#      ux   → linux / lux / flux          （把日志取证、Docker 打成「UX 设计」）
+#      ios  → scenarios / studios         （把 PowerToys 验证打成「应用页面设计」）
+#      qa   → qatar / quality（部分）      （PCB 的 "visual QA" 被打成「测试」）
+# 改成整词判定后，这些短词全都可以放心写进规则表了。
+_SKILL_WORD_RE = {}                 # 关键词 → 编译好的正则；None 表示按裸子串处理
+_SKILL_WORD_RE_LOCK = Lock()
+# 允许的词尾变化：token→tokens、test→testing/tester、deploy→deployed、
+# compress→compression、deploy→deployment。
+# ⚠️ **故意不含单独的 `e`**：否则葡语 `teste` 会命中 `test`（实测 Meta Ads 那两个
+#    葡语 Skill 就是这样被打上「测试」标签的）。
+_SKILL_WORD_TAIL = r"(?:s|es|ing|ed|er|ers|ion|ions|ment|ments)?"
+
+def skill_keyword_re(word):
+    """把一个关键词编译成「整词命中」正则；返回 None 表示按裸子串处理。
+
+    - 含中日韩字符（`电商` / `详情页` / `卖点`）→ 裸子串。中文没有词边界。
+    - 结尾带 `*`（`accessib*` / `deploy*`）→ **前缀命中**，只要求左侧是词边界。
+    - 其余英文词 → 两侧都是词边界，词尾允许 _SKILL_WORD_TAIL 里的屈折变化。
+    """
+    cached = _SKILL_WORD_RE.get(word, False)
+    if cached is not False:
+        return cached
+    text = str(word or "").strip()
+    if not text:
+        rex = None
+    elif any("\u4e00" <= ch <= "\u9fff" for ch in text):
+        rex = None
+    else:
+        stem = text[:-1] if text.endswith("*") else text
+        # 词间分隔符要同时容忍空格 / 连字符 / 下划线：Skill 名字大量是连字符写法
+        # （`frontend-design` / `mini-program` / `landing-page`），只写 `\s+` 会漏掉它们。
+        body = re.escape(stem).replace("\\ ", "[\\s\\-_]+")
+        if text.endswith("*"):
+            # 前缀命中：**只要求左侧是词边界**，右侧完全放开
+            # （`compress*` 要能命中 compressed/compression，`verif*` 要能命中 verify）
+            rex = re.compile(r"(?<![a-z0-9])" + body)
+        else:
+            rex = re.compile(r"(?<![a-z0-9])" + body + _SKILL_WORD_TAIL + r"(?![a-z0-9])")
+    with _SKILL_WORD_RE_LOCK:
+        _SKILL_WORD_RE[word] = rex
+    return rex
+
+def skill_keyword_hit(word, haystack):
+    """关键词是否命中 haystack（haystack 必须已 lower）。"""
+    rex = skill_keyword_re(word)
+    if rex is None:
+        return str(word or "").strip().lower() in haystack
+    return rex.search(haystack) is not None
+
 def skill_tags(name, summary):
     """按关键词给 Skill 打**子分类**标签（最多 3 个）。
 
     得分 = 命中关键词数 × 子分类权重 —— 权重让「电商页 / Token节省 / 小程序」这类
     具体子分类压过宽泛的 `image` / `design`，否则卡片上的标签永远只有那几个泛词。
+    ⚠️ 命中是**整词**判定（skill_keyword_hit），不是裸子串。
     """
     haystack = f"{name or ''} {summary or ''}".lower()
     scored = []
     for tag, words in SKILL_TAG_RULES:
-        hits = sum(1 for word in words if word in haystack)
+        hits = sum(1 for word in words if skill_keyword_hit(word, haystack))
         if hits:
             scored.append((hits * int(SKILL_TAG_WEIGHT.get(tag, 1)), hits, tag))
     scored.sort(key=lambda row: (-row[0], -row[1], row[2]))
@@ -6573,19 +6760,39 @@ def skill_tags_cached(name, summary):
     return tags
 
 def skill_category(tags):
-    """由已命中的子分类反推大分类：取**权重最高**的子分类所属大分类。
+    """由已命中的子分类反推大分类：**按大分类累加子分类权重**，最高者胜。
 
-    ⚠️ 不能简单取 `tags[0]`：tags 按得分排序，而宽泛标签（design / image）往往得分更高。
+    ⚠️ 为什么不是「取权重最高的单个子分类」：那会被**单票否决**。实测 `qa`
+    （"rate this landing page" 是它的触发词）拿到 `[test, web-design, productivity]`，
+    单个 web-design 权重 2 就压过 test+productivity，把 QA 工具判成了「设计」。
+    累加后 实用=2 > 设计=2 → 靠命中数决胜，判成「实用」，符合直觉。
+    实测 `think-tank`（提到 design 的头脑风暴）、`ui-walkthrough` 同样因此归位。
+
+    ⚠️ 也不能简单取 `tags[0]`：tags 按得分排序，而宽泛标签（design / image）往往得分更高。
     实测「电商详情页」类 Skill 会被打成 `[design, ecommerce-page, product-shot]`，
-    取 tags[0] 就归到「设计」了 —— 而老板要的是「视觉」。权重相同时取靠前的那个。
+    取 tags[0] 就归到「设计」了 —— 而老板要的是「视觉」（累加后 视觉=6 > 设计=1 ✓）。
+
+    ⚠️ 软标签（SKILL_TAG_SOFT = design / image-video）**不能单独决定大分类**：
+    有硬标签时以硬标签为准，一个硬标签都没有才退回软标签。否则「一篇恰好提到
+    design 的头脑风暴文档」也会被算成「设计」。
+
+    决胜顺序：累加权重 → 命中标签数 → 在分类表里靠前的那个（同分时实用 > 设计 > 视觉）。
     """
-    best, best_weight = "other", 0
-    for tag in (tags or []):
-        weight = int(SKILL_TAG_WEIGHT.get(tag, 1))
-        if weight > best_weight:
-            best_weight = weight
-            best = SKILL_TAG_CATEGORY.get(tag) or "other"
-    return best
+    pool = [t for t in (tags or []) if t not in SKILL_TAG_SOFT] or list(tags or [])
+    if not pool:
+        return "other"
+    stat = {}                       # 大分类 → [权重和, 命中标签数, 首次出现下标]
+    for idx, tag in enumerate(pool):
+        cat = SKILL_TAG_CATEGORY.get(tag) or "other"
+        cur = stat.setdefault(cat, [0, 0, idx])
+        cur[0] += int(SKILL_TAG_WEIGHT.get(tag, 1))
+        cur[1] += 1
+    best_cat, best_key = "other", None
+    for cat, (weight_sum, count, idx) in stat.items():
+        key = (-weight_sum, -count, idx)
+        if best_key is None or key < best_key:
+            best_key, best_cat = key, cat
+    return best_cat
 
 def skillsmp_normalize(item):
     """把 SkillsMP 的一条记录转成市场内部结构；关键字段缺失时返回 None。"""

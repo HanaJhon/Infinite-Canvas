@@ -378,12 +378,77 @@ check("不再产出旧标签 frontend", "frontend" not in t_web, t_web)
 t_img = app.skill_tags("meme-maker", "Search meme templates and generate images")
 check("图像类命中 image-video", "image-video" in t_img, t_img)
 check("旧标签 media 已消失", "media" not in t_img, t_img)
-t_mob = app.skill_tags("android-clean-architecture", "Clean Architecture for Android and Kotlin")
-check("移动端归到 app-page-design（旧 mobile 消失）",
-      "app-page-design" in t_mob and "mobile" not in t_mob, t_mob)
-check("所有标签都在分类表里", all(t in allowed for t in t_web + t_img + t_mob), t_web + t_img + t_mob)
+check("所有标签都在分类表里", all(t in allowed for t in t_web + t_img), t_web + t_img)
 
-print("\n=== U. 大分类判定：权重最高的子分类说了算 ===")
+print("\n=== T2. 关键词命中必须是「整词」，不是裸子串（2026-09-22 重写） ===")
+# 裸子串判定的实测代价（全部来自真实清单）：api→rapid/apify、test→latest、
+# dom→domain/domestic/subdomain、ux→linux/lux、ios→scenarios、qa→qatar。
+check("整词：api 不命中 rapid / apify",
+      not app.skill_keyword_hit("api", "rapid prototyping with apify"), "")
+check("整词：api 命中 api / apis",
+      app.skill_keyword_hit("api", "a rest api") and app.skill_keyword_hit("api", "two apis"), "")
+check("整词：test 不命中 latest", not app.skill_keyword_hit("test", "the latest release"), "")
+check("整词：test 命中 testing / tester",
+      app.skill_keyword_hit("test", "testing") and app.skill_keyword_hit("test", "a tester"), "")
+check("整词：dom 不命中 domain / domestic / subdomain",
+      not app.skill_keyword_hit("dom", "domain domestic subdomain"), "")
+check("整词：ux 不命中 linux / lux", not app.skill_keyword_hit("ux", "linux luminance lux"), "")
+check("整词：ios 不命中 scenarios", not app.skill_keyword_hit("ios", "two scenarios"), "")
+check("整词：qa 不命中 qatar", not app.skill_keyword_hit("qa", "qatar airways"), "")
+check("整词：ui 不命中 build / quick / guide",
+      not app.skill_keyword_hit("ui", "build a quick guide"), "")
+check("前缀词：accessib* 命中 accessibility", app.skill_keyword_hit("accessib*", "improve accessibility"), "")
+check("前缀词：compress* 命中 compressed", app.skill_keyword_hit("compress*", "ultra compressed mode"), "")
+check("前缀词：deploy* 命中 deployment", app.skill_keyword_hit("deploy*", "the deployment pipeline"), "")
+check("前缀词：verif* 命中 verify / verification",
+      app.skill_keyword_hit("verif*", "verify this") and app.skill_keyword_hit("verif*", "verification"), "")
+check("中文按子串：电商 命中 跨境电商", app.skill_keyword_hit("电商", "跨境电商平台"), "")
+check("多词短语容忍连字符：frontend design 命中 frontend-design",
+      app.skill_keyword_hit("frontend design", "the frontend-design skill"), "")
+check("多词短语容忍空格：frontend design 命中 frontend design",
+      app.skill_keyword_hit("frontend design", "a frontend design skill"), "")
+
+print("\n=== T3. 技术栈不当分类 + 裸品牌词必须限定语境（实测错分全修复） ===")
+check("纯技术栈不再归 app-page-design",
+      app.skill_tags("android-clean-architecture", "Clean Architecture for Android and Kotlin") == [],
+      app.skill_tags("android-clean-architecture", "Clean Architecture for Android and Kotlin"))
+check("提到 flutter 的 PR 自动化不再归设计",
+      app.skill_tags("shepherd-prs", "Automate landing open PRs in the flutter/flutter repository")
+      == ["productivity"],
+      app.skill_tags("shepherd-prs", "Automate landing open PRs in the flutter/flutter repository"))
+check("提到 react/css 的虚拟滚动库不再归设计",
+      "web-design" not in app.skill_tags("with-tanstack-virtual", "Preact Table through React compatibility and css"),
+      app.skill_tags("with-tanstack-virtual", "Preact Table through React compatibility and css"))
+check("Amazon GuardDuty（AWS 云服务）不进跨境电商",
+      "cross-border" not in app.skill_tags(
+          "detecting-cloud-threats", "Deploy Amazon GuardDuty for AWS S3, EKS and Lambda"),
+      app.skill_tags("detecting-cloud-threats", "Deploy Amazon GuardDuty for AWS S3, EKS and Lambda"))
+check("Shopify Admin API 工具不进电商页",
+      "ecommerce-page" not in app.skill_tags(
+          "shopify", "Query Shopify Admin/Storefront GraphQL APIs via curl"),
+      app.skill_tags("shopify", "Query Shopify Admin/Storefront GraphQL APIs via curl"))
+check("爬虫（Apify）不进电商页",
+      "ecommerce-page" not in app.skill_tags(
+          "apify", "Scrapes social platforms, business data, and e-commerce via Apify actors"),
+      app.skill_tags("apify", "Scrapes social platforms, business data, and e-commerce via Apify actors"))
+check("股债商品配置不进电商页",
+      "ecommerce-page" not in app.skill_tags(
+          "macro-asset-allocation", "生成股票、债券、商品配置策略"),
+      app.skill_tags("macro-asset-allocation", "生成股票、债券、商品配置策略"))
+check("走私 / 数据跨境合规不进跨境电商",
+      "cross-border" not in app.skill_tags(
+          "border-crossing", "Cross-border logistics: smuggling, border, customs, concealment"),
+      app.skill_tags("border-crossing", "Cross-border logistics: smuggling, border, customs, concealment"))
+check("排障工具（提到 Control UI / iOS / Android）不再归设计",
+      app.skill_tags("node-connect",
+                     "Diagnose OpenClaw Control UI browser and native Android, iOS node failures") == [],
+      app.skill_tags("node-connect",
+                     "Diagnose OpenClaw Control UI browser and native Android, iOS node failures"))
+check("真电商主图仍命中 product-shot",
+      "product-shot" in app.skill_tags("ecom-shot", "e-commerce product photography main image"),
+      app.skill_tags("ecom-shot", "e-commerce product photography main image"))
+
+print("\n=== U. 大分类判定：按大分类累加子分类权重（+ 软标签不单独决定） ===")
 check("UI 设计 → design", app.skill_category(["design", "ui-design"]) == "design")
 check("电商详情页 → visual（不能被宽泛的 design 抢走）",
       app.skill_category(["design", "ecommerce-page", "product-shot"]) == "visual")
@@ -393,6 +458,16 @@ check("Agent 优化 → utility", app.skill_category(["agent-optimize"]) == "uti
 check("小程序设计 → design", app.skill_category(["miniprogram-design"]) == "design")
 check("无标签 → other", app.skill_category([]) == "other")
 check("未知标签 → other", app.skill_category(["nope"]) == "other")
+check("单票否决已修：一个 web-design 压不过 test+productivity",
+      app.skill_category(["test", "web-design", "productivity"]) == "utility")
+check("软标签不单独决定：design+research → utility",
+      app.skill_category(["design", "research"]) == "utility")
+check("软标签不单独决定：design+docs → utility",
+      app.skill_category(["design", "docs"]) == "utility")
+check("只有软标签时退回软标签：design → design",
+      app.skill_category(["design"]) == "design")
+check("只有软标签时退回软标签：image-video → visual",
+      app.skill_category(["image-video"]) == "visual")
 
 print("\n=== V. market_record：标签现算（不吃清单里的旧标签）+ category + summary_zh ===")
 stale = {"id": "s1", "name": "caveman", "title": "Caveman",
