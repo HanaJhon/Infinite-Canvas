@@ -3527,8 +3527,19 @@ class AgentToolsRequest(BaseModel):
     max_rounds: Optional[int] = None
 
 class AgentSkillRequest(BaseModel):
-    """Skill 市场的安装 / 卸载请求。"""
+    """Skill 市场的安装 / 卸载请求。
+
+    🚨 `raw_url` / `name` / `title` / `summary` / `repo` 是给**全站搜索结果**兜底用的：
+    那类记录只活在 `/api/skills/search` 的返回里，**既不在内置清单、也不在联网缓存**，
+    只传 id 的话后端 `find_market_skill()` 找不到它 → 404「市场清单里没有这个 Skill」
+    （老板 2026-09-22 反馈的「skill 安装失败」就是这条）。
+    """
     id: str = ""
+    raw_url: str = ""
+    name: str = ""
+    title: str = ""
+    summary: str = ""
+    repo: str = ""
 
 class SkillI18nRequest(BaseModel):
     """Skill 简介翻译请求：[{id, summary}, ...]。"""
@@ -6496,6 +6507,21 @@ def skill_category_meta(records):
         for key in SKILL_CATEGORY_KEYS
     ]
 
+# 🚨 Skill 正文只允许从 GitHub raw 下载（实测内置 827 条的 raw_url **全部**是
+# raw.githubusercontent.com）。安装全站搜索的结果时 `raw_url` 由**前端回传** —— 不校验就等于
+# 让本机去 GET 任意 URL（SSRF）。所以白名单只放这一个域名，其余一律拒绝。
+SKILL_RAW_URL_HOSTS = ("raw.githubusercontent.com",)
+
+def skill_raw_url_ok(url):
+    """Skill 下载地址是否可信（只允许 GitHub raw）。"""
+    try:
+        parts = urllib.parse.urlsplit(str(url or "").strip())
+    except Exception:
+        return False
+    if parts.scheme not in ("http", "https"):
+        return False
+    return (parts.hostname or "").lower() in SKILL_RAW_URL_HOSTS
+
 def skill_http_get(url, timeout=SKILL_MARKET_TIMEOUT):
     """同步 GET（调用方用 asyncio.to_thread 包住，避免阻塞事件循环）。"""
     req = urllib.request.Request(url, headers={
@@ -7495,14 +7521,23 @@ def skills_market_payload(refresh=False):
         "refresh_note": refresh_note or "",
     }
 
-async def install_market_skill(skill_id):
-    """从市场安装一个 Skill：下载 SKILL.md 落到 data/agent_skills/<id>/。"""
+async def install_market_skill(skill_id, hint=None):
+    """从市场安装一个 Skill：下载 SKILL.md 落到 data/agent_skills/<id>/。
+
+    `hint` = 前端回传的那条记录（含 raw_url）。**全站搜索的结果必须靠它**：那类记录不在
+    内置清单、也不在联网缓存里，`find_market_skill()` 必然找不到 → 会误报「已下架」。
+    内置清单优先（服务端自己抓的地址更可信），找不到才用 hint。
+    """
     skill = find_market_skill(skill_id)
+    if not skill and hint:
+        skill = hint
     if not skill:
         raise HTTPException(status_code=404, detail="市场清单里没有这个 Skill（可能已下架，点刷新重试）")
     url = str(skill.get("raw_url") or "")
     if not url:
         raise HTTPException(status_code=400, detail="该 Skill 没有可下载地址")
+    if not skill_raw_url_ok(url):
+        raise HTTPException(status_code=400, detail="该 Skill 的下载地址不受支持（只允许 GitHub raw）")
     try:
         raw = await asyncio.to_thread(skill_http_get, url)
     except Exception as exc:
@@ -16086,7 +16121,17 @@ async def skills_installed():
 
 @app.post("/api/skills/install")
 async def skills_install(payload: AgentSkillRequest):
-    record = await install_market_skill(str(payload.id or "").strip())
+    skill_id = str(payload.id or "").strip()
+    # 前端回传的记录：只有在内置清单 / 联网缓存里都找不到时才用（见 install_market_skill）
+    hint = {
+        "id": skill_id,
+        "raw_url": str(payload.raw_url or "").strip(),
+        "name": payload.name or "",
+        "title": payload.title or "",
+        "summary": payload.summary or "",
+        "repo": payload.repo or "",
+    }
+    record = await install_market_skill(skill_id, hint if hint["raw_url"] else None)
     return {"ok": True, "skill": record, "installed": load_installed_skills().get("skills", [])}
 
 @app.post("/api/skills/uninstall")

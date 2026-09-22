@@ -173,6 +173,15 @@
             + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
     }
     function skillById(id) { return state.skills.find(function (s) { return s.id === id; }) || null; }
+    // 🚨 找记录必须**同时看全站搜索结果**：`state.skills` 里只有本机清单，全站搜到的条目在
+    // `state.remote` 里。只查 state.skills 的话，安装全站搜到的 Skill 时拿不到 raw_url
+    // → 后端找不到这条记录 → 误报「市场清单里没有这个 Skill」
+    //（老板 2026-09-22 反馈的「skill 的安装问题」就是这条）。
+    function recordById(id) {
+        return state.skills.find(function (s) { return s.id === id; })
+            || (state.remote || []).find(function (s) { return s.id === id; })
+            || null;
+    }
     function tagLabel(tag) {
         var text = T('smart.asmTag.' + tag);
         return text === 'smart.asmTag.' + tag ? tag : text;   // 没有词条时回落到原始标签
@@ -608,18 +617,27 @@
 
     async function install(id) {
         if (!id || busy.has(id)) return;
+        var skill = recordById(id) || {};
         busy.add(id);
         render();
         try {
             var res = await fetch('/api/skills/install', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: id })
+                // 🚨 必须把整条记录一起回传：全站搜索的结果不在后端的内置清单 / 联网缓存里，
+                // 只传 id 的话后端 find_market_skill() 找不到 → 404「市场清单里没有这个 Skill」。
+                body: JSON.stringify({
+                    id: id,
+                    raw_url: skill.raw_url || '',
+                    name: skill.name || '',
+                    title: skill.title || '',
+                    summary: skill.summary || '',
+                    repo: skill.repo || ''
+                })
             });
             if (!res.ok) throw new Error(await errorMessage(res, T('smart.asmInstallFail')));
             var data = await res.json();
             applyInstalled(data.installed || []);
-            var skill = skillById(id);
             pageToast(T('smart.asmInstallDone') + ((skill && skill.title) || id));
         } catch (e) {
             pageToast(T('smart.asmInstallFail') + '：' + String(e && e.message ? e.message : e).slice(0, 200));
