@@ -234,10 +234,22 @@
         return out;
     }
 
-    // 当前是否在展示「全站搜索结果」（关键词够长 且 有对应该关键词的结果）
-    function remoteActive() {
+    // 本次关键词是否**真的联网搜成功**（区别于被限流 / 请求失败）。
+    // 🚨 判据必须带 `Array.isArray` + `!state.remoteNote`，**不能只写 `!!state.remote`**：
+    //    限流时后端**仍返回 HTTP 200**，只是 `skills = []` + `note = "限流冷却中…"`，
+    //    而**空数组是 truthy** → 会被误判成「有全站结果」。后果有两个，都很难查：
+    //      ① `currentSource()` 拿到空数组 → 列表不再回落本机清单，直接一片空白，
+    //         哪怕本机清单里明明有匹配（老板 2026-09-22 反馈的「联网搜索又失效了」）；
+    //      ② 空态文案变成「SkillsMP 全站也没有匹配的 Skill」—— 其实**根本没搜成**。
+    function remoteSearched() {
         var q = state.query.trim();
-        return q.length >= REMOTE_MIN_CHARS && !!state.remote && state.remoteQuery === q;
+        return q.length >= REMOTE_MIN_CHARS && Array.isArray(state.remote)
+            && state.remoteQuery === q && !state.remoteNote;
+    }
+
+    // 当前是否在展示「全站搜索结果」= 搜成功 **且真有结果**（空结果必须回落本机清单）
+    function remoteActive() {
+        return remoteSearched() && state.remote.length > 0;
     }
 
     // ---------- 同仓错峰 ----------
@@ -450,7 +462,9 @@
         // 后端拒绝刷新时的说明（限流冷却 / 抓取不完整 / 结果缩水）—— 常驻显示，不随 toast 消失
         else if (meta.refresh_note) html += '<br><span class="asm-warn">' + esc(meta.refresh_note) + '</span>';
         // 全站搜索状态：进行中 / 命中数 / 降级原因（限流、断网、关键词太短）
-        if (remoteActive()) {
+        // ⚠️ 这里用 `remoteSearched()`（**搜成功即可，哪怕 0 条**）而不是 `remoteActive()`：
+        //    「命中 0 个」本身是有用信息（说明确实搜过了）；只有**限流 / 失败**时才不该报命中数。
+        if (remoteSearched()) {
             html += '<br><span class="asm-online">'
                 + esc(Tf('smart.asmSearchOnline', { q: state.remoteQuery, n: state.remote.length }))
                 + '</span>';
@@ -549,7 +563,7 @@
                         + esc(T('smart.asmSearchingShort')) + '</span></div>';
                 } else {
                     nodes.list.innerHTML = '<div class="asm-empty"><i data-lucide="search-x"></i><span>'
-                        + esc(T(remoteActive() ? 'smart.asmEmptyOnline' : 'smart.asmEmpty')) + '</span></div>';
+                        + esc(T(remoteSearched() ? 'smart.asmEmptyOnline' : 'smart.asmEmpty')) + '</span></div>';
                 }
             } else {
                 var shown = list.slice(0, state.limit || RENDER_STEP);
