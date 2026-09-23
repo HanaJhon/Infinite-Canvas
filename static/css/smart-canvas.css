@@ -1601,6 +1601,7 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
     box-shadow:0 4px 12px rgba(0,0,0,.25);
 }
 .agent-thinking-btn:hover .agent-thinking-tooltip { opacity:1; visibility:visible; transform:translateY(0); }
+.agent-dev-mode-btn .agent-thinking-tooltip { left:auto; right:0; }
 .agent-tooltip-title { font-size:12px; font-weight:700; }
 .agent-tooltip-sub { font-size:10px; opacity:.7; margin-top:3px; }
 

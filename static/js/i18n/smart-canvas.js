@@ -435,6 +435,8 @@
         "smart.3dNoVisionModel": { zh: "请先在 API 设置中配置支持图片输入的模型", en: "Configure an image-capable model in API settings first" },
         "smart.3dFov": { zh: "焦距", en: "Focal length" },
         "smart.3dFovReset": { zh: "重置焦距", en: "Reset focal length" },
-        "smart.3dRunPrompt": { zh: "请识别这张图片的主体，按系统提示的 JSON 结构输出 three.js 场景。", en: "Recognize the subject of this image and output a three.js scene using the JSON structure from the system prompt." }
+        "smart.3dRunPrompt": { zh: "请识别这张图片的主体，按系统提示的 JSON 结构输出 three.js 场景。", en: "Recognize the subject of this image and output a three.js scene using the JSON structure from the system prompt." },
+        "smart.agentDevModeTitle": { zh: "开发模式", en: "Dev Mode" },
+        "smart.agentDevModeSub": { zh: "开启后 AI 可直接在画布中创建、连接或修改节点", en: "AI can create, connect, or modify nodes directly on the canvas" }
     });
 })();

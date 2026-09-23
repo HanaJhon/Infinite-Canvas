@@ -19420,6 +19420,86 @@ function createNodeFromMenu(type){
     createMenuGroupId = '';
     return created;
 }
+// AI Agent 画布操作执行器（开发模式 / canvas_ops 协议）
+function applyAgentCanvasOps(ops){
+    if(!Array.isArray(ops) || !ops.length) return 0;
+    pushUndo();
+    let appliedCount = 0;
+    const findNodeByRef = ref => {
+        if(!ref) return null;
+        const str = String(ref).trim().toLowerCase();
+        let target = nodes.find(n => n.id && n.id.toLowerCase() === str);
+        if(target) return target;
+        target = nodes.find(n => n.title && n.title.toLowerCase() === str);
+        if(target) return target;
+        target = nodes.find(n => n.title && n.title.toLowerCase().includes(str));
+        return target || null;
+    };
+
+    ops.forEach(op => {
+        if(!op || typeof op !== 'object') return;
+        const action = String(op.op || op.action || '').trim().toLowerCase();
+        if(action === 'create_node'){
+            const type = String(op.type || 'image').trim().toLowerCase();
+            let p = viewportCenter();
+            if(Array.isArray(op.position) && op.position.length >= 2){
+                p = { x: Number(op.position[0]) || p.x, y: Number(op.position[1]) || p.y };
+            } else if(typeof op.position === 'string'){
+                const pos = op.position.toLowerCase();
+                if(pos === 'left') p.x -= 420;
+                else if(pos === 'right') p.x += 420;
+                else if(pos === 'top') p.y -= 320;
+                else if(pos === 'bottom') p.y += 320;
+            }
+            let created = null;
+            if(type.includes('prompt')) created = createPromptNode(p.x - 158, p.y - 97, {skipUndo:true});
+            else if(type.includes('loop')) created = createLoopNode(p.x - 135, p.y - 95, {skipUndo:true});
+            else if(type.includes('minimax')) created = createMinimaxNode(p.x - 520, p.y - 320, {skipUndo:true});
+            else if(type.includes('3d')) created = create3DNode(p.x - 280, p.y - 235, {skipUndo:true});
+            else if(type.includes('group')) created = createSmartGroupNode(p.x - 170, p.y - 110, {skipUndo:true});
+            else created = createImageNodeAt(p, [], {skipUndo:true});
+
+            if(created){
+                if(op.title && typeof op.title === 'string') created.title = op.title;
+                if(op.text && typeof op.text === 'string' && created.type === 'smart-prompt') created.text = op.text;
+                appliedCount++;
+            }
+        } else if(action === 'connect'){
+            const fromNode = findNodeByRef(op.from);
+            const toNode = findNodeByRef(op.to);
+            if(fromNode && toNode && fromNode.id !== toNode.id){
+                const ok = connectInputNode(fromNode.id, toNode.id);
+                if(!ok) addConnection(fromNode.id, toNode.id, op.kind || 'input');
+                appliedCount++;
+            }
+        } else if(action === 'update_node'){
+            const target = findNodeByRef(op.id || op.target || op.title);
+            if(target){
+                if(op.title && typeof op.title === 'string') target.title = op.title;
+                if(op.text && typeof op.text === 'string' && target.type === 'smart-prompt') target.text = op.text;
+                if(Number.isFinite(Number(op.x))) target.x = Number(op.x);
+                if(Number.isFinite(Number(op.y))) target.y = Number(op.y);
+                appliedCount++;
+            }
+        } else if(action === 'remove_node' || action === 'delete_node'){
+            const target = findNodeByRef(op.id || op.target || op.title);
+            if(target){
+                deleteNode(target.id);
+                appliedCount++;
+            }
+        }
+    });
+
+    if(appliedCount > 0){
+        commitPendingUndo();
+        render();
+        scheduleSave();
+        toast(`开发模式：已在画布中执行 ${appliedCount} 项节点操作`);
+    } else {
+        discardPendingUndo();
+    }
+    return appliedCount;
+}
 shell.addEventListener('mousedown', e => {
     if(!zoomPreviewState) return;
     if(e.button !== 0) return;
@@ -20832,15 +20912,26 @@ B. 主体更换（use_last_outputs必须为true）：
 通用规则：
 1. 绝对不要添加用户没要求的内容，特别是：动画帧、序列帧、多角度视图、动作分解、分镜
 2. 判断依据：如果新主体和原主体是不同的物体/生物/人物 → 主体更换(B)；如果只是改变同一个主体的呈现方式 → 风格修改(A)
-3. 无论A还是B，都使用use_last_outputs: true引用原图，区别在于prompt的写法不同`;
+3. 无论A还是B，都使用use_last_outputs: true引用原图，区别在于prompt的写法不同
+
+【画布操作协议 / Canvas Ops】
+当用户要求在当前画布中创建、修改、连接或删除节点时，必须在返回的 JSON 中包含 "canvas_ops" 数组，严禁调用本机文件或命令行工具（如 run_shell / list_dir / rg）去搜索项目画布文件！
+格式示例：
+"canvas_ops": [
+  {"op":"create_node", "type":"image|prompt|loop|minimax|3d|group", "title":"标题", "text":"提示词文本(可选)", "position":"center|left|right|[x,y]"},
+  {"op":"connect", "from":"from_node_id_or_title", "to":"to_node_id_or_title", "kind":"input"},
+  {"op":"update_node", "id":"node_id_or_title", "title":"新标题", "text":"新文本"},
+  {"op":"remove_node", "id":"node_id_or_title"}
+]`;
 // OFF模式系统提示词：快速执行器（理解意图但不改写prompt）
 const AGENT_OFF_MODE_INSTRUCTION = `你是一个图像生成 Agent 的意图决策器。分析用户输入+上下文，决定下一步行动。仅返回原始 JSON，不要 markdown。
 
 【输出格式】
-{"intent":"...","reply":"...","prompts":[],"use_attachments":false,"attachment_roles":{},"use_last_outputs":false,"text_only":false,"analysis":"","options":[]}
+{"intent":"...","reply":"...","prompts":[],"use_attachments":false,"attachment_roles":{},"use_last_outputs":false,"text_only":false,"analysis":"","options":[],"canvas_ops":[]}
 
 【intent 类型】
 - generate: 用户想生成新图（给了视觉描述或生图指令）
+- canvas_op: 用户想在画布中创建、修改、连接或删除节点
 - edit: 用户想修改已有的图（"改成/换成/调整/加/去掉"）
 - analyze: 用户想分析/反推/描述/识别图片（不生图）
 - refine: 用户想扩写/优化/翻译提示词（不生图）
@@ -20910,7 +21001,7 @@ let agentSaveTimer = null;
 let agentState = null;
 let agentMentionIdx = -1;
 function agentDefaultState(){
-    return {skills:[], attachments:[], messages:[], conversations:[], activeConversationId:'', chatProvider:'', chatModel:'', genProvider:'', genModel:'', genRatio:'square', genResolution:'1k', genCount:1, genQuality:'', autoContext:true, inputHeight:0};
+    return {skills:[], attachments:[], messages:[], conversations:[], activeConversationId:'', chatProvider:'', chatModel:'', genProvider:'', genModel:'', genRatio:'square', genResolution:'1k', genCount:1, genQuality:'', autoContext:true, inputHeight:0, devMode:false};
 }
 // 将 prompts 规范化为对象数组（兼容旧格式 string[]）
 // 每个 prompt 对象：{prompt, count, use_last_outputs, use_attachments, status}
@@ -22533,6 +22624,23 @@ Fields: "reply"=对话回复; "options"=[{label,value}]按钮选项; "collected"
     } else {
         parts.push(AGENT_FORMAT_INSTRUCTION);
     }
+    // 注入开发模式指令：当开启开发模式时，强化画布节点操作规则
+    if(agentState?.devMode){
+        parts.push(`【开发模式 / Dev Mode 已开启】
+你现在具有直接操作当前项目画布节点的能力！
+当用户要求在画布中创建、修改、连接、删除节点（例如"在左侧建一个快速生图节点"、"建一个提示词节点并连接到快速生图"、"把节点标题改为X"）时：
+1. 必须在 JSON 中返回 "canvas_ops" 数组，严禁调用本机文件搜索、命令行工具（run_shell / list_dir / rg）去排查画布文件！
+2. 节点类型 type 支持：
+   - image (快速生图节点)
+   - prompt (提示词节点)
+   - loop (循环节点)
+   - minimax (MiniMax 视频节点)
+   - 3d (3D预览节点)
+   - group (智能分组)
+3. 示例：
+   用户："在画布左侧建一个快速生图节点"
+   返回：{"reply":"已为您在画布左侧创建快速生图节点。","options":[],"prompts":[],"generations":[],"canvas_ops":[{"op":"create_node","type":"image","position":"left"}]}`);
+    }
     // 注入最终出图数量（前端已决策：输入框显式要求 > 工具栏设置）
     // LLM 无需自行判断数量，只需按此数量返回对应条数
     const _finalCount = Math.max(1, Math.min(8, Number(finalCount) || Number(agentState?.genCount) || 1));
@@ -22940,19 +23048,22 @@ function parseAgentResponse(raw, lastUserText){
             const collected = (data.collected && typeof data.collected === 'object') ? data.collected : {};
             const nextDimension = typeof data.next_dimension === 'string' ? data.next_dimension : '';
             const remainingDimensions = Array.isArray(data.remaining_dimensions) ? data.remaining_dimensions : [];
-            parsedCandidates.push({reply, options, prompts, generations, collected, next_dimension, remainingDimensions});
+            const canvas_ops = Array.isArray(data.canvas_ops) ? data.canvas_ops.filter(o => o && typeof o === 'object') : [];
+            parsedCandidates.push({reply, options, prompts, generations, collected, next_dimension: nextDimension, remainingDimensions, canvas_ops});
         } catch(e) { /* 尝试下一个候选 */ }
     }
     // 如果有多个解析成功的候选，按优先级选择：
     // 1. 优先选择有 options 且无 generations 的（思维模式维度选择轮次）
-    // 2. 其次选择有 options 的
-    // 3. 其次选择有 prompts 的
-    // 4. 其次选择有 generations 的
-    // 5. 最后选择有 reply 的
+    // 2. 其次选择有 canvas_ops 的（开发模式操作）
+    // 3. 其次选择有 options 的
+    // 4. 其次选择有 prompts 的
+    // 5. 其次选择有 generations 的
+    // 6. 最后选择有 reply 的
     if(parsedCandidates.length > 0){
         const score = c => {
             let s = 0;
             if(c.options.length > 0 && c.generations.length === 0) s += 100; // 思维模式维度选择
+            if(c.canvas_ops && c.canvas_ops.length > 0) s += 80; // 画布节点操作
             else if(c.options.length > 0) s += 50;
             if(c.prompts.length > 0) s += 30;
             if(c.generations.length > 0) s += 20;
@@ -22973,6 +23084,7 @@ function parseAgentResponse(raw, lastUserText){
         if(regexResult.options.length > 0 && regexResult.options.length < 8 && !regexResult.options.some(o => o.value === 'CUSTOM_INPUT')){
             regexResult.options.push({label:'自定义输入', value:'CUSTOM_INPUT'});
         }
+        if(!Array.isArray(regexResult.canvas_ops)) regexResult.canvas_ops = [];
         console.info('[parseAgentResponse] 正则提取成功:', {options:regexResult.options.length, prompts:regexResult.prompts.length, generations:regexResult.generations.length});
         return regexResult;
     }
@@ -22983,7 +23095,7 @@ function parseAgentResponse(raw, lastUserText){
         if(fallbackOptions.length > 0 && fallbackOptions.length < 8 && !fallbackOptions.some(o => o.value === 'CUSTOM_INPUT')){
             fallbackOptions.push({label:'自定义输入', value:'CUSTOM_INPUT'});
         }
-        return {reply:numberedFallback.reply || text, options:fallbackOptions, prompts:[], generations:[], collected:{}, next_dimension:'', remaining_dimensions:[]};
+        return {reply:numberedFallback.reply || text, options:fallbackOptions, prompts:[], generations:[], collected:{}, next_dimension:'', remaining_dimensions:[], canvas_ops:[]};
     }
     const clarifyOptions = extractClarifyOptions(text, lastUserText);
     if(clarifyOptions){
@@ -22992,9 +23104,9 @@ function parseAgentResponse(raw, lastUserText){
         if(fallbackOptions.length > 0 && fallbackOptions.length < 8 && !fallbackOptions.some(o => o.value === 'CUSTOM_INPUT')){
             fallbackOptions.push({label:'自定义输入', value:'CUSTOM_INPUT'});
         }
-        return {reply:text, options:fallbackOptions, prompts:[], generations:[], collected:{}, next_dimension:'', remaining_dimensions:[]};
+        return {reply:text, options:fallbackOptions, prompts:[], generations:[], collected:{}, next_dimension:'', remaining_dimensions:[], canvas_ops:[]};
     }
-    return {reply:text, options:[], prompts:[], generations:[], collected:{}, next_dimension:'', remaining_dimensions:[]};
+    return {reply:text, options:[], prompts:[], generations:[], collected:{}, next_dimension:'', remaining_dimensions:[], canvas_ops:[]};
 }
 // 处理 LLM 返回结果：解析、兜底、创建 assistant 消息、运行生图
 // 提取为独立函数，以便刷新恢复时复用
@@ -23004,6 +23116,7 @@ const parsed = parseAgentResponse(result.text || '', text);
 if(!Array.isArray(parsed.options)) parsed.options = [];
 if(!Array.isArray(parsed.prompts)) parsed.prompts = [];
 if(!Array.isArray(parsed.generations)) parsed.generations = [];
+if(!Array.isArray(parsed.canvas_ops)) parsed.canvas_ops = [];
 // 提前计算思维模式状态，使兜底逻辑能感知
     const bypassThinking = userMsg?.bypassThinking === true;
     const thinkingModeOn = agentState?.thinkingMode && !bypassThinking;
@@ -23287,6 +23400,9 @@ const assistantMsg = {
     agentThinking = false;
     renderAgentMessages();
     saveAgentState();
+    if(parsed.canvas_ops && parsed.canvas_ops.length > 0){
+        applyAgentCanvasOps(parsed.canvas_ops);
+    }
     if(assistantMsg.generations.length && assistantMsg.prompts.length === 0) await runAgentGenerations(assistantMsg, userMsg);
 }
 // 快捷操作辅助：设置输入框文本并触发发送
@@ -24718,6 +24834,22 @@ agentThinkingBtn?.addEventListener('click', () => {
     syncAgentThinkingBtn();
     saveAgentState();
     toast(agentState.thinkingMode ? '思维模式 ON：AI 会多轮追问补充细节，适合灵感探索' : '思维模式 OFF：直接执行，适合明确需求');
+});
+
+// 开发模式开关按钮：支持直接在画布中创建、连接或修改节点
+const agentDevModeBtn = document.getElementById('agentDevModeBtn');
+function syncAgentDevModeBtn(){
+    if(agentDevModeBtn){
+        agentDevModeBtn.classList.toggle('active', !!agentState?.devMode);
+    }
+}
+syncAgentDevModeBtn();
+agentDevModeBtn?.addEventListener('click', () => {
+    if(!agentState) return;
+    agentState.devMode = !agentState.devMode;
+    syncAgentDevModeBtn();
+    saveAgentState();
+    toast(agentState.devMode ? '开发模式 ON：AI 可直接在画布中创建/连接/修改节点' : '开发模式 OFF：已关闭画布节点操作');
 });
     agentInput?.addEventListener('input', () => {
         const val = agentInput.value;
