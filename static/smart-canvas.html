@@ -289,7 +289,20 @@
                     <textarea id="agentInput" rows="2" data-i18n-placeholder="smart.agentPlaceholder" placeholder="输入需求，@ 引用画布图片..."></textarea>
                     <div class="agent-toolbar">
                         <button id="agentAttachBtn" class="agent-toolbar-icon" type="button" data-i18n-title="smart.agentAttach" title="添加图片或 Skill"><i data-lucide="paperclip"></i></button>
-                        <button id="agentSkillMarketBtn" class="agent-toolbar-btn agent-skill-market-btn" type="button" data-skill-market-open data-i18n-title="smart.asmOpen" title="Skill 市场（来源 SkillsMP）：按 star / 收藏挑选并安装 Skill"><i data-lucide="store"></i><span data-i18n="smart.asmTitle">Skill 市场</span></button>
+                        <button id="agentSkillMarketBtn" class="agent-toolbar-icon agent-skill-market-btn" type="button" data-skill-market-open>
+                            <i data-lucide="store"></i>
+                            <div class="agent-toolbar-tooltip">
+                                <div class="agent-tooltip-title" data-i18n="smart.asmTitle">Skill 市场</div>
+                                <div class="agent-tooltip-sub">挑选并安装各种专业 Skill 扩展能力</div>
+                            </div>
+                        </button>
+                        <button id="agentThinkingBtn" class="agent-thinking-btn" type="button">
+                            <i data-lucide="brain" class="agent-thinking-icon"></i>
+                            <div class="agent-thinking-tooltip">
+                                <div class="agent-tooltip-title">思维模式</div>
+                                <div class="agent-tooltip-sub">开启后 AI 会多轮追问补充细节。如果你已有明确描述，建议关闭（可能过度改写）</div>
+                            </div>
+                        </button>
                         <div class="agent-toolbar-dropdown-wrap">
                             <button id="agentModelBtn" class="agent-toolbar-btn" type="button"><span id="agentModelLabel">模型</span><i data-lucide="chevron-down"></i></button>
                             <div id="agentModelPanel" class="agent-dropdown-panel" hidden>
@@ -347,14 +360,6 @@
                             </div>
                         </div>
                         <div class="agent-toolbar-spacer"></div>
-                        <button id="agentThinkingBtn" class="agent-thinking-btn" type="button">
-                            <i data-lucide="brain" class="agent-thinking-icon"></i>
-                            <span class="agent-thinking-label">思维</span>
-                            <div class="agent-thinking-tooltip">
-                                <div class="agent-tooltip-title">思维模式</div>
-                                <div class="agent-tooltip-sub">开启后 AI 会多轮追问补充细节。如果你已有明确描述，建议关闭（可能过度改写）</div>
-                            </div>
-                        </button>
                         <button id="agentSendBtn" class="agent-send-btn" type="button" data-i18n-title="smart.agentSend" title="发送"><i data-lucide="send"></i></button>
                     </div>
                 </div>
