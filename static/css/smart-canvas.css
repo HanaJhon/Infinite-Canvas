@@ -1572,17 +1572,17 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-msg-option-btn { min-height:28px; height:auto; padding:6px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:10.5px; font-weight:700; cursor:pointer; text-align:left; white-space:normal; word-break:break-word; line-height:1.4; transition:border-color .14s ease, background .14s ease; }
 .agent-msg-option-btn:hover { border-color:var(--strong); background:var(--soft); }
 
-/* 思维模式开关按钮 */
+/* 思考 / 画布控制 开关按钮（图标 + 文字） */
 .agent-thinking-btn {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 28px; height: 28px; padding: 0; border-radius: 8px; border: 1px solid transparent;
+    display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+    height: 28px; padding: 0 8px; border-radius: 8px; border: 1px solid transparent;
     background: transparent; color: var(--muted);
-    font-size: 10.5px; font-weight: 700; cursor: pointer; position: relative;
-    transition: all .14s ease; white-space: nowrap; flex-shrink: 0;
+    font-size: 10.5px; font-weight: 650; cursor: pointer; position: relative;
+    transition: all .14s ease; white-space: nowrap; flex: 0 1 auto; min-width: 0;
 }
 .agent-thinking-btn:hover { color: var(--text); background: var(--soft); }
-.agent-thinking-btn .agent-thinking-icon { width: 14px; height: 14px; flex-shrink: 0; }
-.agent-thinking-btn .agent-thinking-label { display: none; }
+.agent-thinking-btn .agent-thinking-icon { width: 12px; height: 12px; flex-shrink: 0; }
+.agent-thinking-btn .agent-thinking-label { display: inline-block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-thinking-btn.active {
     background: var(--strong); color: var(--strong-text); border-color: var(--strong);
 }
@@ -1766,7 +1766,31 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-ref-confirm-btn.primary:hover { opacity:.88; }
 .agent-ref-confirm-btn.secondary { background:var(--soft); color:var(--text); }
 .agent-ref-confirm-btn.secondary:hover { opacity:.88; }
-.agent-onebox textarea { display:block; width:100%; min-width:0; resize:none; max-height:200px; border:none; background:transparent; color:var(--text); padding:8px 12px; font-size:11.5px; line-height:1.5; outline:none; font-family:inherit; }
+.agent-onebox textarea { display:block; width:100%; min-width:0; resize:none; max-height:200px; border:none; background:transparent; color:var(--text); padding:6px 12px 8px; font-size:11.5px; line-height:1.5; outline:none; font-family:inherit; }
+
+/* 输入框顶部固定栏：模型 / 参数 */
+.agent-topbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 7px 8px 2px;
+}
+.agent-topbar .agent-toolbar-btn {
+    height: 24px;
+    padding: 0 9px;
+    border-radius: 999px;
+    background: var(--soft);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    gap: 4px;
+}
+.agent-topbar .agent-toolbar-btn:hover { background: var(--line); color: var(--text); }
+.agent-topbar .agent-toolbar-btn i,
+.agent-topbar .agent-toolbar-btn svg { width: 11px; height: 11px; }
+.agent-topbar .agent-toolbar-btn span { max-width: 118px; }
+
 .agent-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:4px; row-gap:6px; padding:4px 8px 6px; }
 .agent-toolbar-icon { width:28px; height:28px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; border:none; background:none; color:var(--muted); cursor:pointer; transition:color .14s ease, background .14s ease; flex-shrink:0; position:relative; }
 .agent-toolbar-icon:hover { color:var(--text); background:var(--soft); }
@@ -1783,7 +1807,8 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
     z-index:9999;
     box-shadow:0 4px 12px rgba(0,0,0,.25);
 }
-.agent-toolbar-icon:hover .agent-toolbar-tooltip { opacity:1; visibility:visible; transform:translateY(0); }
+.agent-toolbar-icon:hover .agent-toolbar-tooltip,
+.agent-toolbar-btn:hover .agent-toolbar-tooltip { opacity:1; visibility:visible; transform:translateY(0); }
 .agent-toolbar-dropdown-wrap { position:relative; min-width:0; }
 .agent-toolbar-btn { display:inline-flex; align-items:center; gap:3px; height:28px; padding:0 8px; border-radius:8px; border:none; background:none; color:var(--muted); font-size:10.5px; font-weight:650; cursor:pointer; transition:color .14s ease, background .14s ease; white-space:nowrap; min-width:0; max-width:100%; }
 .agent-toolbar-btn span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

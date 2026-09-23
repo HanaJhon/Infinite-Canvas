@@ -436,7 +436,11 @@
         "smart.3dFov": { zh: "焦距", en: "Focal length" },
         "smart.3dFovReset": { zh: "重置焦距", en: "Reset focal length" },
         "smart.3dRunPrompt": { zh: "请识别这张图片的主体，按系统提示的 JSON 结构输出 three.js 场景。", en: "Recognize the subject of this image and output a three.js scene using the JSON structure from the system prompt." },
-        "smart.agentDevModeTitle": { zh: "开发模式", en: "Dev Mode" },
-        "smart.agentDevModeSub": { zh: "开启后 AI 可直接在画布中创建、连接或修改节点", en: "AI can create, connect, or modify nodes directly on the canvas" }
+        "smart.agentDevModeTitle": { zh: "画布控制", en: "Canvas Control" },
+        "smart.agentDevModeSub": { zh: "开启后 AI 可直接在画布中创建、连接或修改节点", en: "AI can create, connect, or modify nodes directly on the canvas" },
+        "smart.agentDevModeLabel": { zh: "画布控制", en: "Canvas" },
+        "smart.agentThinkingTitle": { zh: "思考", en: "Think" },
+        "smart.agentThinkingSub": { zh: "开启后 AI 会多轮追问补充细节。如果你已有明确描述，建议关闭（可能过度改写）", en: "When on, the AI asks follow-up questions to fill in details. Turn it off if your description is already specific." },
+        "smart.agentSkillLabel": { zh: "Skill 市场", en: "Skills" }
     });
 })();

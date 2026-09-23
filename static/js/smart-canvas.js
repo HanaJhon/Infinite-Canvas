@@ -21708,11 +21708,45 @@ function resolveFinalGenCount(text){
 // 判断输入是否"模糊"（缺风格维度），用于思维模式前端兜底
 // 判断标准：字数少 + 不含风格/艺术流派关键词
 // 返回 true 表示需要先走阶段一（返回 options 让用户选风格）
+// 判断是否为「画布/节点操作」类请求：这类请求与生图风格无关，绝不能给「选风格」类选项
+function isCanvasOpRequest(text){
+    const t = String(text || '').trim();
+    if(!t) return false;
+    // 画布结构对象（节点 / 连线 / 工作流）
+    const hasNodeNoun = /节点|连线|工作流|流程图/i.test(t);
+    const hasCanvasWord = /画布/i.test(t);
+    if(!hasNodeNoun && !hasCanvasWord) return false;
+    // 结构性操作动词（刻意不含「改成/改为」——那通常是在改图，不是在改节点）
+    const structuralVerb = /创建|新建|建立|建一|搭建|添加|增加|加一|删掉|删除|移除|连接|连到|接到|连上|清空|排列|对齐|分组|排布|布局|改名|重命名|改标题|改名字|标题|名称|名字/i;
+    // 节点类型词本身就是「建节点」的强信号
+    const nodeTypeWord = /快速生图|提示词节点|循环节点|视频节点|3d|3D|智能分组/i;
+    if(hasNodeNoun) return structuralVerb.test(t) || nodeTypeWord.test(t);
+    // 只提到「画布」时，必须有结构性操作动词，避免把「在画布上画一张图」误判为节点操作
+    return structuralVerb.test(t);
+}
+// 与当前任务相关的建议选项（画布操作类请求用，替代一味的「生图风格」选项）
+function agentCanvasOpSuggestions(){
+    return [
+        {label:'建一个快速生图节点', value:'在画布中创建一个快速生图节点'},
+        {label:'建一个提示词节点', value:'在画布中创建一个提示词节点'},
+        {label:'提示词节点 → 快速生图（连线）', value:'在画布中创建一个提示词节点，并连接到快速生图节点'},
+        {label:'把节点标题改成新名称', value:'把画布中第一个节点的标题改成新名称'}
+    ];
+}
+// 选项是否属于「生图风格」类建议（用于识别并纠正跑偏的推荐）
+function looksLikeStyleSuggestions(options){
+    const s = (Array.isArray(options) ? options : []).map(o => String(o?.label || '') + String(o?.value || '')).join(' ');
+    return /油画|水墨|赛博|卡通|写实|插画|摄影|像素|水彩|素描|涂鸦|浮世绘|吉卜力|风格|画风|艺术流派/.test(s);
+}
 function isVagueImageRequest(text){
     const t = String(text || '').trim();
     if(!t) return false;
     // 修改请求不算模糊（有明确的修改方向）
     if(/改成|换成|转换成|修改为|变成|转为|改为|转成|调整|重新画|重画/i.test(t)) return false;
+    // 画布/节点操作类请求：与生图风格无关，不能走「选风格」流程
+    if(isCanvasOpRequest(t)) return false;
+    // 提到节点/工作流/连线等画布结构概念的，也不是「模糊生图」请求
+    if(/节点|工作流|流程图|连线|连上|接线/.test(t)) return false;
     // 风格/艺术流派关键词
     const styleKeywords = ['风','风格','主义','流派','艺术','画法','画风','渲染','摄影','插画','海报','logo','标志','图标','3d','3D','写实','动漫','水墨','油画','水彩','素描','速写','像素','赛博','蒸汽波','极简','极繁','扁平','卡通','可爱','复古','复古风','霓虹','蒸汽','lowpoly','low poly','波普','波普艺术','印象派','抽象','超现实','涂鸦','手绘','国风','中国风','日式','和风','美式','欧式','赛博朋克','蒸汽朋克','未来主义','装饰艺术','artdeco','art deco','bauhaus','包豪斯','印象','点彩','浮世绘','赛璐珞','吉卜力','新海诚','皮克斯','迪士尼','漫威','dc','chibi','q版','q版','q版','q版','q版'];
     const hasStyle = styleKeywords.some(k => t.toLowerCase().includes(k.toLowerCase()));
@@ -22651,7 +22685,15 @@ Fields: "reply"=对话回复; "options"=[{label,value}]按钮选项; "collected"
     }
     // P1-9: 系统提示词动态化 —— 根据思维模式开关追加不同指令（thinkingModeOn 已在上方计算）
     if(thinkingModeOn){
-        parts.push(`当前为思维模式（渐进式多维采集模式）。核心原则：通过多轮提问逐步收集用户需求，所有维度确认后生成详细提示词。
+        parts.push(`★★★ 前置判断：先分清任务类型（最高优先级）★★★
+如果用户的请求与「生成图片」无关，例如：
+- 在画布中创建 / 连接 / 修改 / 删除 / 重命名节点，或调整工作流结构（→ intent="canvas_op"，返回 canvas_ops）
+- 询问信息、让你分析画布或工作流、让你解释某功能
+那么：绝对不要进入下面的「风格 / 场景 / 构图」多轮追问流程，也不要给出「水墨风 / 油画风 / 赛博朋克 / Q版卡通」这类画风选项。
+options 只允许给与「用户当前任务」直接相关的建议（画布操作就给节点类型、连线方式、位置等选项）。
+只有当用户确实要生成图片、且视觉描述不足时，才允许追问风格等维度。
+
+当前为思维模式（渐进式多维采集模式）。核心原则：通过多轮提问逐步收集用户需求，所有维度确认后生成详细提示词。
 
 【流程规则 / Process Rules】
 
@@ -23118,6 +23160,19 @@ if(!Array.isArray(parsed.options)) parsed.options = [];
 if(!Array.isArray(parsed.prompts)) parsed.prompts = [];
 if(!Array.isArray(parsed.generations)) parsed.generations = [];
 if(!Array.isArray(parsed.canvas_ops)) parsed.canvas_ops = [];
+// 画布/节点操作类任务标记：这类任务不参与任何「生图风格追问 / 默认生图」兜底
+const _canvasOpTask = (parsed.canvas_ops.length > 0) || isCanvasOpRequest(text);
+// 画布操作类请求：绝不能给「生图风格」类建议，纠正为与当前任务相关的选项
+if(isCanvasOpRequest(text) && parsed.canvas_ops.length === 0){
+    if(parsed.options.length === 0 || looksLikeStyleSuggestions(parsed.options)){
+        parsed.options = agentCanvasOpSuggestions();
+    }
+    if(!agentState?.devMode){
+        parsed.reply = '看起来你想让我操作画布节点。请先点开输入框下方的「画布控制」开关，开启后我就能直接在当前画布上创建、连接或修改节点。';
+    } else if(!parsed.reply){
+        parsed.reply = '请选择要执行的操作：';
+    }
+}
 // 提前计算思维模式状态，使兜底逻辑能感知
     const bypassThinking = userMsg?.bypassThinking === true;
     const thinkingModeOn = agentState?.thinkingMode && !bypassThinking;
@@ -23178,7 +23233,7 @@ if(!Array.isArray(parsed.canvas_ops)) parsed.canvas_ops = [];
                 // 修改场景（风格修改+主体更换）都使用 use_last_outputs: true 引用原图
                 // 区别在于 prompt 写法：风格修改→描述风格变化；主体更换→明确指示替换主体+保留场景
                 const fallbackUseLastOutputs = isModifyScenario;
-                if(hasAnyIntent){
+                if(hasAnyIntent && !_canvasOpTask){
                         const finalPrompt = genPrompt || userText;
                         parsed.generations = [{
                             prompt: finalPrompt,
@@ -23264,7 +23319,7 @@ if(!Array.isArray(parsed.canvas_ops)) parsed.canvas_ops = [];
         }
         // 1.5 前端兜底：思维模式下，如果输入模糊（缺风格）但 LLM 返回了 prompts（没走阶段一），强制走 options
         // 这样即使 LLM 没按系统提示词执行阶段一，前端也能保证"先选风格再扩写"的流程
-        if(!isModifyRequest && parsed.prompts.length > 0 && parsed.options.length === 0 && isVagueImageRequest(text)){
+        if(!_canvasOpTask && !isModifyRequest && parsed.prompts.length > 0 && parsed.options.length === 0 && isVagueImageRequest(text)){
             parsed.prompts = [];
             parsed.options = [
                 {label:'水墨风', value:'水墨风'},
@@ -23275,7 +23330,7 @@ if(!Array.isArray(parsed.canvas_ops)) parsed.canvas_ops = [];
             parsed.reply = '你的输入比较简略，请先选择一个风格方向，我再为你扩写完整提示词：';
         }
         // 2. 如果 prompts 仍为空，创建默认 prompt
-        if(parsed.prompts.length === 0 && parsed.options.length === 0 && parsed.generations.length === 0){
+        if(!_canvasOpTask && parsed.prompts.length === 0 && parsed.options.length === 0 && parsed.generations.length === 0){
             // 检查 reply 是否包含 JSON 标记（说明解析失败了，但 LLM 确实返回了结构化数据）
             const replyLooksLikeJson = parsed.reply && (parsed.reply.includes('"reply"') || parsed.reply.includes('"options"') || parsed.reply.trim().startsWith('{'));
             if(replyLooksLikeJson){
@@ -23288,15 +23343,20 @@ if(!Array.isArray(parsed.canvas_ops)) parsed.canvas_ops = [];
                     // 提取到了 reply，继续走正常流程创建 prompt
                     parsed.prompts = [{prompt:text, count:1, use_last_outputs:isModifyRequest, use_attachments:false, status:'pending'}];
                 } else {
-                    // 彻底无法提取：给用户友好的提示 + 默认风格选项
-                    parsed.reply = '抱歉，AI 回复格式异常。请重新描述你的需求，或者选择一个风格方向开始：';
-                    parsed.options = [
-                        {label:'水墨风', value:'水墨风'},
-                        {label:'油画风', value:'油画风'},
-                        {label:'赛博朋克', value:'赛博朋克'},
-                        {label:'Q版卡通', value:'Q版卡通'},
-                        {label:'自定义输入', value:'CUSTOM_INPUT'}
-                    ];
+                    // 彻底无法提取：给用户友好的提示 + 与当前任务相关的选项（不要一味的生图风格建议）
+                    if(isCanvasOpRequest(text) || /节点|工作流|流程图|连线/.test(text)){
+                        parsed.reply = '抱歉，AI 回复格式异常。请重新描述你要在画布上做的操作：';
+                        parsed.options = agentCanvasOpSuggestions();
+                    } else {
+                        parsed.reply = '抱歉，AI 回复格式异常。请重新描述你的需求，或者选择一个风格方向开始：';
+                        parsed.options = [
+                            {label:'水墨风', value:'水墨风'},
+                            {label:'油画风', value:'油画风'},
+                            {label:'赛博朋克', value:'赛博朋克'},
+                            {label:'Q版卡通', value:'Q版卡通'},
+                            {label:'自定义输入', value:'CUSTOM_INPUT'}
+                        ];
+                    }
                 }
             } else if(isVagueImageRequest(text) && !isModifyRequest){
                 // 模糊请求：强制走维度选择
@@ -23531,8 +23591,11 @@ async function sendAgentMessage(){
 
         // ===== 快速路径：跳过LLM直接生图 =====
         const _hasGenVerb = /画|生成|设计|创作|做一张|出一张|来一张|帮我画|帮我做|帮我生/.test(text);
+        // 画布/节点操作类请求必须交给 LLM 走画布操作协议，不能当生图直接执行
+        const _isCanvasTask = isCanvasOpRequest(text) || /节点|工作流|流程图|连线/.test(text);
         const isFastPath = text && !attachments.length && !hasLastOutputs
             && _skills.length === 0
+            && !_isCanvasTask
             && !analyzeRe.test(text.trim()) && !refineRe.test(text) && !noGenRe.test(text)
             && !modifyRe.test(text)
             && !/图\d|参考图/.test(text)
@@ -23662,6 +23725,20 @@ async function sendAgentMessage(){
                 routed.text_only = true;
                 routed.intent = 'analyze';
                 if(!routed.analysis && routed.reply) routed.analysis = routed.reply;
+            }
+
+            // 建议归一化：画布/节点操作类请求绝不能给「生图风格」类建议，只给与当前任务相关的选项
+            if(isCanvasOpRequest(text) && !(agentState?.devMode && Array.isArray(routed.canvas_ops) && routed.canvas_ops.length)){
+                if(!Array.isArray(routed.options) || routed.options.length === 0 || looksLikeStyleSuggestions(routed.options)){
+                    routed.options = agentCanvasOpSuggestions();
+                }
+                if(!agentState?.devMode){
+                    routed.reply = '看起来你想让我操作画布节点。请先点开输入框下方的「画布控制」开关，开启后我就能直接在当前画布上创建、连接或修改节点。';
+                } else if(!routed.reply){
+                    routed.reply = '请选择要执行的操作：';
+                }
+                routed.intent = 'clarify';
+                routed.text_only = true;
             }
 
             // 意图分发（信任 LLM 判断，不再用正则覆盖）
@@ -24880,7 +24957,7 @@ agentThinkingBtn?.addEventListener('click', () => {
     agentState.thinkingMode = !agentState.thinkingMode;
     syncAgentThinkingBtn();
     saveAgentState();
-    toast(agentState.thinkingMode ? '思维模式 ON：AI 会多轮追问补充细节，适合灵感探索' : '思维模式 OFF：直接执行，适合明确需求');
+    toast(agentState.thinkingMode ? '思考 ON：AI 会多轮追问补充细节，适合灵感探索' : '思考 OFF：直接执行，适合明确需求');
 });
 
 // 开发模式开关按钮：支持直接在画布中创建、连接或修改节点
@@ -24896,7 +24973,7 @@ agentDevModeBtn?.addEventListener('click', () => {
     agentState.devMode = !agentState.devMode;
     syncAgentDevModeBtn();
     saveAgentState();
-    toast(agentState.devMode ? '开发模式 ON：AI 可直接在画布中创建/连接/修改节点' : '开发模式 OFF：已关闭画布节点操作');
+    toast(agentState.devMode ? '画布控制 ON：AI 可直接在画布中创建/连接/修改节点' : '画布控制 OFF：已关闭画布节点操作');
 });
     agentInput?.addEventListener('input', () => {
         const val = agentInput.value;
