@@ -7618,6 +7618,169 @@ def installed_skills_prompt_block():
         return ""
     return "\n\n以下是用户已安装的 Skill 文档，请严格遵守其中的风格与流程要求：\n\n" + "\n\n".join(parts)
 
+
+# --- 对话上下文压缩 + 主动激活 Skill（聊天 Agent 的 / 命令）---
+
+AUTO_COMPRESS_TOKEN_THRESHOLD = int(os.getenv("AUTO_COMPRESS_TOKEN_THRESHOLD", "192000"))
+COMPRESS_KEEP_RECENT = int(os.getenv("COMPRESS_KEEP_RECENT", "6"))
+
+_CJK_TOKEN_RE = re.compile(r'[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef\u3040-\u30ff\u31f0-\u31ff]')
+
+
+def estimate_tokens(text):
+    """离线 token 估算（不依赖 tiktoken）：CJK/全角字符约 2 token/字，其余约 4 字符/token。
+    偏向高估，避免在 192k 阈值附近漏压导致超出上下文窗口。"""
+    if not text:
+        return 0
+    s = str(text)
+    cjk = len(_CJK_TOKEN_RE.findall(s))
+    others = len(s) - cjk
+    return cjk * 2 + (others + 3) // 4
+
+
+def estimate_messages_tokens(messages):
+    total = 0
+    for m in messages or []:
+        if isinstance(m, dict):
+            total += estimate_tokens(m.get("content") or "")
+            total += 4  # 每条消息的固定开销
+    return total
+
+
+def _fallback_summary(text):
+    lines = []
+    for ln in (text or "").splitlines():
+        ln = ln.strip()
+        if ln:
+            lines.append(ln[:160])
+    return "（以下为早期对话的要点摘录，原始消息已压缩）\n" + "\n".join(lines[:40])
+
+
+async def llm_summarize(text, payload):
+    """用当前对话模型把一段对话压缩成摘要；失败则回退到要点摘录。"""
+    try:
+        chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, getattr(payload, "ms_model", ""))
+        sys_p = ("你是一个对话压缩器。请把下面的多轮对话压缩成一份简洁但信息完整的摘要，"
+                 "必须保留：用户的核心需求与偏好、已做出的决定、关键数值/代码/路径/ID、未完成的任务、"
+                 "以及任何对方要求你记住的事实。不要编造对话中没有的内容，不要使用 Markdown 标题。"
+                 "只输出摘要正文。")
+        messages = [{"role": "system", "content": sys_p}, {"role": "user", "content": text}]
+        async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
+            r = await client.post(f"{chat_base}/chat/completions", headers=chat_hdrs, json={"model": model, "messages": messages})
+            r.raise_for_status()
+            return text_from_chat_response(r.json()).strip() or _fallback_summary(text)
+    except Exception as e:
+        log_net_error("对话压缩摘要失败，回退到要点摘录", e)
+        return _fallback_summary(text)
+
+
+async def compress_conversation_history(messages, payload, keep_recent=COMPRESS_KEEP_RECENT):
+    """把早期消息压缩成一条 system 摘要，保留最近 keep_recent 条。"""
+    msgs = list(messages or [])
+    if len(msgs) <= keep_recent + 1:
+        return msgs
+    recent = msgs[-keep_recent:]
+    old = msgs[:-keep_recent]
+    buf = []
+    for m in old:
+        role = m.get("role") or "user"
+        content = m.get("content") or ""
+        if isinstance(content, list):
+            content = " ".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
+        if content:
+            buf.append(f"[{role}] {content}")
+    summary = await llm_summarize("\n\n".join(buf), payload)
+    summary_msg = {"role": "system", "content": f"[对话历史摘要 · 以下为早期 {len(old)} 条消息的压缩]\n{summary}"}
+    return [summary_msg] + recent
+
+
+def chat_agent_system_prompt(payload, conversation):
+    """聊天 Agent 的 system prompt：默认提示词 + 已安装 Skill（默认启用）+ 本次会话主动激活的 Skill。"""
+    base = chat_system_prompt(payload)
+    parts = [base] if base else []
+    skill_block = installed_skills_prompt_block()
+    if skill_block:
+        parts.append(skill_block)
+    active = (conversation or {}).get("active_skill")
+    if isinstance(active, dict) and active.get("text"):
+        title = active.get("title") or active.get("id") or "Skill"
+        parts.append(f"用户本次会话已主动激活 Skill：{title}。优先依据其指引回应：\n### Skill: {title}\n{active['text']}")
+    return "\n\n".join(parts)
+
+
+async def maybe_auto_compress(conversation, payload, user_id=None):
+    """上下文估算 token 达到阈值时自动压缩并持久化；返回 (window, did_compress)。"""
+    window = conversation["messages"][-MAX_HISTORY_MESSAGES:]
+    sys_msg = {"role": "system", "content": chat_agent_system_prompt(payload, conversation)}
+    if estimate_messages_tokens([sys_msg] + window) < AUTO_COMPRESS_TOKEN_THRESHOLD:
+        return window, False
+    compressed_window = await compress_conversation_history(window, payload, COMPRESS_KEEP_RECENT)
+    conversation["messages"] = conversation["messages"][:-MAX_HISTORY_MESSAGES] + compressed_window
+    conversation["updated_at"] = now_ms()
+    if user_id:
+        try:
+            save_conversation(user_id, conversation)
+        except Exception:
+            pass
+    conversation["_auto_compressed"] = True
+    return compressed_window, True
+
+
+def _assistant_note(content):
+    return {"id": uuid.uuid4().hex, "role": "assistant", "content": content,
+            "created_at": now_ms(), "agent_action": "slash", "mode": "agent"}
+
+
+async def handle_chat_slash_command(raw, payload, conversation, user_id):
+    """处理聊天 Agent 的 / 命令。返回助手消息字典表示已处理；返回 None 表示不是已知命令（走正常流程）。"""
+    body = raw[1:].strip()
+    if not body:
+        return None
+    parts = body.split(None, 1)
+    cmd = (parts[0] or "").lower()
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    if cmd == "skill":
+        if arg in ("off", "clear", "exit", "关闭"):
+            conversation["active_skill"] = None
+            if user_id:
+                save_conversation(user_id, conversation)
+            return _assistant_note("已关闭本次会话主动激活的 Skill（已安装的 Skill 仍作为默认上下文保留）。")
+        installed = load_installed_skills().get("skills", [])
+        target = None
+        for s in installed:
+            sid = str(s.get("id") or "")
+            name = (s.get("name") or "").lower()
+            title = (s.get("title") or "").lower()
+            if sid == arg or name == arg.lower() or title == arg.lower():
+                target = s
+                break
+        if not target:
+            return _assistant_note(f"未找到已安装的 Skill：「{arg}」。请先在 Skill 市场安装，或输入 / 查看可调用列表。")
+        sid = str(target["id"])
+        path = os.path.join(agent_skill_dir(sid), "SKILL.md")
+        text = ""
+        if os.path.isfile(path):
+            try:
+                text = open(path, encoding="utf-8-sig").read().strip()
+            except Exception:
+                text = ""
+        conversation["active_skill"] = {"id": sid, "title": target.get("title") or sid,
+                                         "name": target.get("name") or "", "text": text}
+        if user_id:
+            save_conversation(user_id, conversation)
+        return _assistant_note(f"✅ 已激活 Skill：{target.get('title') or sid}\n后续对话将优先依据该 Skill 的指引。发送 /skill off 可关闭。")
+    if cmd == "compress":
+        before = len(conversation["messages"])
+        compressed = await compress_conversation_history(conversation["messages"], payload, COMPRESS_KEEP_RECENT)
+        conversation["messages"] = compressed
+        conversation["updated_at"] = now_ms()
+        if user_id:
+            save_conversation(user_id, conversation)
+        after = len(conversation["messages"])
+        return _assistant_note(f"✅ 上下文已压缩：{before} 条消息 → {after} 条（保留最近 {COMPRESS_KEEP_RECENT} 条 + 一条历史摘要）。")
+    return None
+
+
 async def run_codex_cli(prompt, model="", image_paths=None, timeout=None, output_last_message=True):
     exe = codex_cli_executable()
     if not exe:
@@ -14641,12 +14804,13 @@ async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, 
         "tool_events": tool_events,
     }
 
-async def build_chat_text_reply(payload, conversation):
+async def build_chat_text_reply(payload, conversation, user_id=None):
     provider_cfg = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
     if is_codex_provider(provider_cfg):
         model = selected_model(payload.model, (provider_cfg.get("chat_models") or CODEX_DEFAULT_CHAT_MODELS)[0])
         payload.model = model
-        text, raw = await codex_chat_text(payload, conversation["messages"][-MAX_HISTORY_MESSAGES:])
+        window, _ = await maybe_auto_compress(conversation, payload, user_id)
+        text, raw = await codex_chat_text(payload, window)
         return {
             "id": uuid.uuid4().hex,
             "role": "assistant",
@@ -14659,7 +14823,8 @@ async def build_chat_text_reply(payload, conversation):
     if is_gemini_cli_provider(provider_cfg):
         model = selected_model(payload.model, (provider_cfg.get("chat_models") or GEMINI_CLI_DEFAULT_CHAT_MODELS)[0])
         payload.model = model
-        text, raw = await gemini_cli_chat_text(payload, conversation["messages"][-MAX_HISTORY_MESSAGES:])
+        window, _ = await maybe_auto_compress(conversation, payload, user_id)
+        text, raw = await gemini_cli_chat_text(payload, window)
         return {
             "id": uuid.uuid4().hex,
             "role": "assistant",
@@ -14676,8 +14841,9 @@ async def build_chat_text_reply(payload, conversation):
         return await build_chat_text_reply_with_tools(
             payload, conversation, provider_cfg, is_apimart, chat_base, chat_hdrs, model, tool_settings
         )
-    upstream_messages = [{"role": "system", "content": chat_system_prompt(payload)}]
-    for item in conversation["messages"][-MAX_HISTORY_MESSAGES:]:
+    window, _ = await maybe_auto_compress(conversation, payload, user_id)
+    upstream_messages = [{"role": "system", "content": chat_agent_system_prompt(payload, conversation)}]
+    for item in window:
         msg = upstream_message_from_record(item)
         if msg:
             upstream_messages.append(msg)
@@ -21057,6 +21223,15 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
     conversation["updated_at"] = now_ms()
     save_conversation(user_id, conversation)
 
+    # / 命令（agent 模式）：/skill <id|name|off> 激活/关闭技能；/compress 立即压缩上下文
+    if payload.message.strip().startswith("/"):
+        slash_msg = await handle_chat_slash_command(payload.message.strip(), payload, conversation, user_id)
+        if slash_msg is not None:
+            conversation["messages"].append(slash_msg)
+            conversation["updated_at"] = now_ms()
+            save_conversation(user_id, conversation)
+            return {"conversation": conversation, "message": slash_msg, "agent": {"action": "slash", "command": payload.message.strip()}}
+
     decision = await decide_chat_agent_action(payload, conversation, image_refs)
     action = decision.get("action") or "chat"
     tool_refs = image_refs[:]
@@ -21119,13 +21294,17 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
             "raw_usage": raw_items[0].get("usage") if raw_items and isinstance(raw_items[0], dict) else None,
         }
     else:
-        assistant_message = await build_chat_text_reply(payload, conversation)
+        assistant_message = await build_chat_text_reply(payload, conversation, user_id)
         assistant_message["agent_action"] = "chat"
 
+    auto_compressed = conversation.pop("_auto_compressed", False)
     conversation["messages"].append(assistant_message)
     conversation["updated_at"] = now_ms()
     save_conversation(user_id, conversation)
-    return {"conversation": conversation, "message": assistant_message, "agent": {"action": action, "decision": decision}}
+    agent_meta = {"action": action, "decision": decision}
+    if auto_compressed:
+        agent_meta["auto_compressed"] = True
+    return {"conversation": conversation, "message": assistant_message, "agent": agent_meta}
 
 @app.post("/api/chat/stream")
 async def chat_stream(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):
