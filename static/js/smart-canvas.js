@@ -23348,6 +23348,48 @@ async function sendAgentMessage(){
     const text = String(agentInput?.value || '').trim();
     const attachments = (Array.isArray(agentState.attachments) ? agentState.attachments : []).slice();
     if(!text && !attachments.length) return;
+
+    // ============ Slash 指令拦截 ============
+    if(text.startsWith('/compress')){
+        if(agentInput) agentInput.value = '';
+        closeAgentSlashPalette();
+        const msgs = agentState.messages || [];
+        if(msgs.length > 6){
+            const keep = msgs.slice(-6);
+            agentState.messages = [
+                {
+                    id: uid('am'),
+                    role: 'assistant',
+                    text: tr('chat.slashAutoCompressed') || '上下文已压缩（保留最近 6 条对话记录）',
+                    ts: Date.now()
+                },
+                ...keep
+            ];
+            renderAgentMessages();
+            saveAgentState();
+            toast((tr('chat.slashCompress') || '压缩上下文') + ' ✓');
+        } else {
+            toast('当前历史消息较少，无需压缩');
+        }
+        return;
+    }
+    if(text.startsWith('/skill')){
+        if(agentInput) agentInput.value = '';
+        closeAgentSlashPalette();
+        const skillArg = text.replace(/^\/skill\s*/, '').trim();
+        if(!skillArg || skillArg === 'off' || skillArg === 'clear' || skillArg === 'exit' || skillArg === '关闭'){
+            agentState.skills = [];
+            renderAgentAttachments();
+            saveAgentState();
+            toast('已清除手动挂载的自定义 Skill');
+            return;
+        }
+        const skills = agentSlashSkillsCache || [];
+        const found = skills.find(s => s.id === skillArg || s.name === skillArg || s.title === skillArg);
+        const name = found ? (found.title || found.name || found.id) : skillArg;
+        toast(`Skill [${name}] 已激活（所有已安装 Skill 均由系统提示词自动注入）`);
+        return;
+    }
     
     // ============ OFF模式：意图路由 + 快速路径 ============
     const thinkingModeOn = agentState?.thinkingMode;
@@ -24256,6 +24298,166 @@ function agentMentionKeydown(e){
     }
     return false;
 }
+let agentSlashSkillsCache = null;
+let agentSlashOpen = false;
+let agentSlashItems = [];
+let agentSlashIndex = 0;
+async function loadAgentSlashSkills(){
+    if(agentSlashSkillsCache) return agentSlashSkillsCache;
+    try{
+        const r = await fetch('/api/skills/installed');
+        const d = await r.json();
+        agentSlashSkillsCache = Array.isArray(d?.skills) ? d.skills : [];
+    }catch(err){
+        console.error('loadAgentSlashSkills failed', err);
+        agentSlashSkillsCache = [];
+    }
+    return agentSlashSkillsCache;
+}
+function agentSlashMatched(s, q){
+    return ((s.title || '') + ' ' + (s.name || '') + ' ' + (s.id || '') + ' ' + (s.category || '') + ' ' + ((s.tags || []).join(' '))).toLowerCase().indexOf(q) >= 0;
+}
+async function renderAgentSlashPalette(queryRaw){
+    const q = String(queryRaw || '').toLowerCase().trim();
+    const skills = await loadAgentSlashSkills();
+    const items = [];
+    const wantCompress = !q || q.indexOf('compress') >= 0 || q.indexOf('压') >= 0;
+    if(wantCompress){
+        items.push({
+            type: 'compress',
+            id: 'compress',
+            title: tr('chat.slashCompress'),
+            desc: tr('chat.slashCompressDesc'),
+            icon: 'minimize-2'
+        });
+    }
+    (skills || []).forEach(s => {
+        if(agentSlashMatched(s, q)){
+            items.push({
+                type: 'skill',
+                id: s.id,
+                title: s.title || s.name || s.id,
+                desc: s.summary || '',
+                chip: s.category || '',
+                icon: 'sparkles'
+            });
+        }
+    });
+    agentSlashItems = items;
+    agentSlashIndex = 0;
+    const pal = document.getElementById('agentSlashPalette');
+    if(!pal) return;
+    if(pal.parentElement !== document.body) document.body.appendChild(pal);
+    if(!items.length){
+        pal.innerHTML = '<div class="agent-slash-empty">' + escapeHtml(tr('chat.slashEmpty')) + '</div>';
+    } else {
+        let html = '<div class="agent-slash-head"><span>' + escapeHtml(tr('chat.slashTitle')) + '</span><span>' + escapeHtml(tr('chat.slashHint')) + '</span></div>';
+        items.forEach((it, i) => {
+            html += '<div class="agent-slash-item' + (i === agentSlashIndex ? ' active' : '') + '" data-slash="' + i + '">'
+                + '<div class="agent-slash-ico"><i data-lucide="' + escapeHtml(it.icon) + '"></i></div>'
+                + '<div class="agent-slash-main">'
+                + '<div class="agent-slash-title">' + escapeHtml(it.title) + '</div>'
+                + (it.desc ? '<div class="agent-slash-desc">' + escapeHtml(it.desc) + '</div>' : '')
+                + '</div>'
+                + (it.chip ? '<span class="agent-slash-chip">' + escapeHtml(it.chip) + '</span>' : '')
+                + '</div>';
+        });
+        pal.innerHTML = html;
+        if(window.lucide && window.lucide.createIcons) window.lucide.createIcons();
+        pal.querySelectorAll('.agent-slash-item').forEach(node => {
+            node.addEventListener('click', () => {
+                agentSlashIndex = parseInt(node.getAttribute('data-slash'), 10) || 0;
+                chooseAgentSlash();
+            });
+            node.addEventListener('mousemove', () => {
+                const idx = parseInt(node.getAttribute('data-slash'), 10);
+                if(idx !== agentSlashIndex){
+                    agentSlashIndex = idx;
+                    highlightAgentSlash();
+                }
+            });
+        });
+    }
+    pal.classList.remove('hidden');
+    agentSlashOpen = true;
+    positionAgentSlashPalette();
+    requestAnimationFrame(positionAgentSlashPalette);
+}
+function positionAgentSlashPalette(){
+    const pal = document.getElementById('agentSlashPalette');
+    const comp = document.querySelector('.agent-input-area') || document.querySelector('.agent-onebox') || document.getElementById('agentPanel');
+    if(!pal || !comp || pal.classList.contains('hidden')) return;
+    const rect = comp.getBoundingClientRect();
+    const viewportW = window.visualViewport?.width || window.innerWidth;
+    const viewportH = window.visualViewport?.height || window.innerHeight;
+    const width = Math.min(360, Math.max(260, rect.width || 320, viewportW - 32));
+    const left = Math.min(Math.max(12, rect.left), Math.max(12, viewportW - width - 12));
+    pal.style.setProperty('--slash-left', `${Math.round(left)}px`);
+    pal.style.setProperty('--slash-width', `${Math.round(width)}px`);
+    const box = pal.getBoundingClientRect();
+    const top = Math.max(12, Math.min(rect.top - box.height - 8, viewportH - box.height - 12));
+    pal.style.setProperty('--slash-top', `${Math.round(top)}px`);
+}
+function highlightAgentSlash(){
+    const pal = document.getElementById('agentSlashPalette');
+    if(!pal) return;
+    pal.querySelectorAll('.agent-slash-item').forEach((node, i) => {
+        const isActive = (i === agentSlashIndex);
+        node.classList.toggle('active', isActive);
+        if(isActive) node.scrollIntoView({ block: 'nearest' });
+    });
+}
+function moveAgentSlash(delta){
+    if(!agentSlashItems.length) return;
+    agentSlashIndex = (agentSlashIndex + delta + agentSlashItems.length) % agentSlashItems.length;
+    highlightAgentSlash();
+}
+function closeAgentSlashPalette(){
+    const pal = document.getElementById('agentSlashPalette');
+    if(!pal) return;
+    pal.classList.add('hidden');
+    agentSlashOpen = false;
+}
+function chooseAgentSlash(){
+    const it = agentSlashItems[agentSlashIndex];
+    closeAgentSlashPalette();
+    const input = document.getElementById('agentInput');
+    if(!input) return;
+    if(!it){
+        sendAgentMessage();
+        return;
+    }
+    if(it.type === 'compress'){
+        input.value = '/compress';
+    } else {
+        input.value = '/skill ' + it.id;
+    }
+    sendAgentMessage();
+}
+function agentSlashKeydown(e){
+    if(!agentSlashOpen) return false;
+    if(e.key === 'ArrowDown'){
+        e.preventDefault();
+        moveAgentSlash(1);
+        return true;
+    }
+    if(e.key === 'ArrowUp'){
+        e.preventDefault();
+        moveAgentSlash(-1);
+        return true;
+    }
+    if(e.key === 'Enter'){
+        e.preventDefault();
+        chooseAgentSlash();
+        return true;
+    }
+    if(e.key === 'Escape'){
+        e.preventDefault();
+        closeAgentSlashPalette();
+        return true;
+    }
+    return false;
+}
 function agentAutoResizeInput(){
     const textarea = document.getElementById('agentInput');
     if(!textarea) return;
@@ -24519,6 +24721,12 @@ agentThinkingBtn?.addEventListener('click', () => {
 });
     agentInput?.addEventListener('input', () => {
         const val = agentInput.value;
+        if(val.startsWith('/')){
+            renderAgentSlashPalette(val.slice(1));
+            hideAgentMention();
+            return;
+        }
+        if(agentSlashOpen) closeAgentSlashPalette();
         const cursorPos = agentInput.selectionStart || 0;
         const beforeCursor = val.slice(0, cursorPos);
         const atIdx = beforeCursor.lastIndexOf('@');
@@ -24530,6 +24738,7 @@ agentThinkingBtn?.addEventListener('click', () => {
     });
     agentInput?.addEventListener('keydown', e => {
         e.stopPropagation();
+        if(agentSlashKeydown(e)) return;
         if(agentMentionKeydown(e)) return;
         if(e.key === 'Enter' && !e.shiftKey && !e.isComposing){
             e.preventDefault();
@@ -24537,7 +24746,17 @@ agentThinkingBtn?.addEventListener('click', () => {
         }
     });
     agentInput?.addEventListener('keyup', e => e.stopPropagation());
-    agentInput?.addEventListener('blur', () => setTimeout(hideAgentMention, 200));
+    agentInput?.addEventListener('blur', () => {
+        setTimeout(() => {
+            hideAgentMention();
+            closeAgentSlashPalette();
+        }, 200);
+    });
+    document.addEventListener('pointerdown', e => {
+        if(agentSlashOpen && !e.target.closest('#agentSlashPalette') && !e.target.closest('#agentInput')){
+            closeAgentSlashPalette();
+        }
+    }, true);
     agentInput?.addEventListener('paste', e => {
         e.stopPropagation();
         const files = [...(e.clipboardData?.files || [])].filter(f => String(f.type || '').startsWith('image/'));

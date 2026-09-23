@@ -1766,15 +1766,16 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-ref-confirm-btn.secondary { background:var(--soft); color:var(--text); }
 .agent-ref-confirm-btn.secondary:hover { opacity:.88; }
 .agent-onebox textarea { display:block; width:100%; min-width:0; resize:none; max-height:200px; border:none; background:transparent; color:var(--text); padding:8px 12px; font-size:11.5px; line-height:1.5; outline:none; font-family:inherit; }
-.agent-toolbar { display:flex; align-items:center; gap:4px; padding:4px 8px 6px; }
-.agent-toolbar-icon { width:28px; height:28px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; border:none; background:none; color:var(--muted); cursor:pointer; transition:color .14s ease, background .14s ease; }
+.agent-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:4px; row-gap:6px; padding:4px 8px 6px; }
+.agent-toolbar-icon { width:28px; height:28px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; border:none; background:none; color:var(--muted); cursor:pointer; transition:color .14s ease, background .14s ease; flex-shrink:0; }
 .agent-toolbar-icon:hover { color:var(--text); background:var(--soft); }
 .agent-toolbar-icon i,.agent-toolbar-icon svg { width:14px; height:14px; }
-.agent-toolbar-dropdown-wrap { position:relative; }
-.agent-toolbar-btn { display:inline-flex; align-items:center; gap:3px; height:28px; padding:0 8px; border-radius:8px; border:none; background:none; color:var(--muted); font-size:10.5px; font-weight:650; cursor:pointer; transition:color .14s ease, background .14s ease; white-space:nowrap; }
+.agent-toolbar-dropdown-wrap { position:relative; min-width:0; }
+.agent-toolbar-btn { display:inline-flex; align-items:center; gap:3px; height:28px; padding:0 8px; border-radius:8px; border:none; background:none; color:var(--muted); font-size:10.5px; font-weight:650; cursor:pointer; transition:color .14s ease, background .14s ease; white-space:nowrap; min-width:0; max-width:100%; }
+.agent-toolbar-btn span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .agent-toolbar-btn:hover { color:var(--text); background:var(--soft); }
-.agent-toolbar-btn i,.agent-toolbar-btn svg { width:11px; height:11px; }
-.agent-toolbar-spacer { flex:1; }
+.agent-toolbar-btn i,.agent-toolbar-btn svg { width:11px; height:11px; flex-shrink:0; }
+.agent-toolbar-spacer { flex:1; min-width:2px; }
 .agent-dropdown-panel { position:fixed; min-width:200px; max-width:calc(100vw - 60px); border-radius:13px; border:1px solid var(--line); background:var(--card); box-shadow:0 -4px 24px rgba(15,23,42,.12); z-index:9999; padding:8px; display:flex; flex-direction:column; gap:6px; }
 .agent-dropdown-panel[hidden] { display:none; }
 .agent-dropdown-row { display:flex; align-items:center; gap:6px; }
@@ -1849,6 +1850,70 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-mention-item-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10.5px; font-weight:700; color:var(--text); }
 .agent-mention-item-time { font-size:9px; font-weight:600; color:var(--faint); }
 .agent-mention-empty { padding:12px; text-align:center; font-size:10.5px; color:var(--faint); }
+
+/* Agent / 指令与 Skill 选择浮窗 */
+.agent-slash-palette {
+    position:fixed;
+    left:var(--slash-left,12px);
+    top:var(--slash-top,120px);
+    bottom:auto;
+    width:var(--slash-width,min(360px,calc(100vw - 32px)));
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:14px;
+    box-shadow:0 18px 50px rgba(15,23,42,.18);
+    padding:6px; max-height:320px; overflow:auto; z-index:9999; text-align:left;
+}
+.agent-slash-palette.hidden { display:none; }
+.agent-slash-head {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:6px 10px 4px; font-size:11px; font-weight:700; color:var(--muted);
+    border-bottom:1px solid var(--line); margin-bottom:4px;
+}
+.agent-slash-head span:last-child { font-size:10px; opacity:.75; }
+.agent-slash-item {
+    width:100%; display:flex; align-items:center; gap:8px;
+    padding:6px 8px; border-radius:10px; border:none; background:transparent;
+    color:var(--text); text-align:left; cursor:pointer; font-size:11.5px;
+    transition:background .12s ease;
+}
+.agent-slash-item:hover, .agent-slash-item.active { background:var(--soft); }
+.agent-slash-ico {
+    width:26px; height:26px; border-radius:8px;
+    background:var(--soft); display:flex; align-items:center; justify-content:center;
+    flex:0 0 auto; color:var(--text);
+}
+.agent-slash-ico i, .agent-slash-ico svg { width:13px; height:13px; }
+.agent-slash-main { min-width:0; flex:1; }
+.agent-slash-title { font-weight:700; font-size:11.5px; line-height:1.3; }
+.agent-slash-desc {
+    font-size:10.5px; color:var(--muted); white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; margin-top:1px;
+}
+.agent-slash-chip {
+    font-size:9.5px; padding:1px 6px; border-radius:6px;
+    background:var(--soft); color:var(--muted); flex:0 0 auto;
+}
+.agent-slash-empty { padding:12px 10px; color:var(--muted); font-size:11px; text-align:center; }
+
+.theme-dark .agent-slash-palette {
+    background:rgba(23,29,41,.96);
+    border-color:var(--line);
+    box-shadow:0 22px 54px rgba(0,0,0,.45);
+    color:var(--text);
+}
+.theme-dark .agent-slash-item:hover,
+.theme-dark .agent-slash-item.active {
+    background:rgba(148,163,184,.14);
+}
+.theme-dark .agent-slash-ico {
+    background:rgba(148,163,184,.14);
+    color:var(--text);
+}
+.theme-dark .agent-slash-chip {
+    background:rgba(148,163,184,.14);
+    color:var(--muted);
+}
 
 /* 输入框拖拽手柄 */
 .agent-input-resize { height:6px; cursor:ns-resize; display:flex; align-items:center; justify-content:center; border-radius:0 0 13px 13px; transition:background .14s ease; }
