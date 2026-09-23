@@ -22967,7 +22967,7 @@ function parseAgentIntentRoute(raw, lastUserText){
     try {
         const data = JSON.parse(jsonStr);
         const intent = String(data.intent || 'generate').toLowerCase();
-        const validIntents = ['generate','edit','analyze','refine','composite','reference_generate','clarify','meta','cancel'];
+        const validIntents = ['generate','edit','analyze','refine','composite','reference_generate','clarify','meta','cancel','canvas_op'];
         return {
             intent: validIntents.includes(intent) ? intent : 'generate',
             reply: String(data.reply || '').slice(0, 500),
@@ -22977,7 +22977,8 @@ function parseAgentIntentRoute(raw, lastUserText){
             use_last_outputs: !!data.use_last_outputs,
             text_only: !!data.text_only || intent === 'analyze' || intent === 'refine' || intent === 'clarify' || intent === 'meta' || intent === 'cancel',
             analysis: String(data.analysis || '').slice(0, 5000),
-            options: Array.isArray(data.options) ? data.options.filter(o => o && o.label).slice(0, 6) : []
+            options: Array.isArray(data.options) ? data.options.filter(o => o && o.label).slice(0, 6) : [],
+            canvas_ops: Array.isArray(data.canvas_ops) ? data.canvas_ops : []
         };
     } catch(e) {
         // JSON 解析失败，尝试正则提取关键字段
@@ -22991,10 +22992,10 @@ function parseAgentIntentRoute(raw, lastUserText){
         if(isTextOnly || intent === 'analyze' || intent === 'refine'){
             let analysis = '';
             if(analysisMatch){ try { analysis = JSON.parse('"' + analysisMatch[1] + '"'); } catch(e2){ analysis = analysisMatch[1]; } }
-            return {...fallback, intent, text_only:true, analysis: analysis || text};
+            return {...fallback, intent, text_only:true, analysis: analysis || text, canvas_ops:[]};
         }
         // 生图类回退：用用户原文
-        return {...fallback, intent:'generate', prompts:[]};
+        return {...fallback, intent:'generate', prompts:[], canvas_ops:[]};
     }
 }
 function parseAgentResponse(raw, lastUserText){
@@ -23600,6 +23601,27 @@ async function sendAgentMessage(){
             messageText += `\n\n【Skill提醒】遵循 Skill 文档（${skillNames}）的所有样式描述。`;
         }
 
+        let offSystemPrompt = AGENT_OFF_MODE_INSTRUCTION;
+        if(agentState?.devMode){
+            offSystemPrompt += `\n\n【开发模式 / Dev Mode 已开启】
+你现在具有直接操作当前项目画布节点的能力！
+当用户要求在画布中创建、修改、连接、删除节点（例如"在左侧建一个快速生图节点"、"建一个提示词节点并连接到快速生图"、"把节点标题改为X"）时：
+1. intent 必须设为 "canvas_op"，且在 JSON 中返回 "canvas_ops" 数组。严禁调用本机文件搜索、命令行工具（run_shell / list_dir / rg）去排查画布文件！
+2. 节点类型 type 支持：
+   - image (快速生图节点)
+   - prompt (提示词节点)
+   - loop (循环节点)
+   - minimax (MiniMax 视频节点)
+   - 3d (3D预览节点)
+   - group (智能分组)
+3. 示例：
+   用户："在画布左侧建一个快速生图节点"
+   返回：{"intent":"canvas_op","reply":"已为您在画布左侧创建快速生图节点。","options":[],"prompts":[],"canvas_ops":[{"op":"create_node","type":"image","position":"left"}]}`;
+        }
+        if(_skills.length > 0){
+            offSystemPrompt += '\n\n' + _skills.map(s => `===== Skill: ${s.name} =====\n${s.content || ''}\n===== End =====`).join('\n');
+        }
+
         const llmPayload = {
             message: messageText,
             messages: agentHistoryMessages().slice(0, -1),
@@ -23608,7 +23630,7 @@ async function sendAgentMessage(){
             model: chatModel,
             provider: chatProvider,
             ms_model: chatProvider === 'modelscope' ? chatModel : '',
-            system_prompt: AGENT_OFF_MODE_INSTRUCTION + (_skills.length > 0 ? '\n\n' + _skills.map(s => `===== Skill: ${s.name} =====\n${s.content || ''}\n===== End =====`).join('\n') : '')
+            system_prompt: offSystemPrompt
         };
 
         agentThinking = true;
@@ -23636,14 +23658,33 @@ async function sendAgentMessage(){
             const _cleanText = text.replace(/@[^\s]+/g, '').trim();
             const _isObviousAnalysis = /^(分析|描述|反推|识别|总结|提取|解读|对比|比较|看看这|这是什么|什么风格|什么特点|什么构图)/.test(_cleanText);
             const _hasExplicitGen = /生成|画一|做一|出一|来一|帮我画|帮我做|帮我生|设计一|创作一/.test(_cleanText);
-            if(_isObviousAnalysis && !_hasExplicitGen && !routed.text_only){
+            if(_isObviousAnalysis && !_hasExplicitGen && !routed.text_only && routed.intent !== 'canvas_op'){
                 routed.text_only = true;
                 routed.intent = 'analyze';
                 if(!routed.analysis && routed.reply) routed.analysis = routed.reply;
             }
 
             // 意图分发（信任 LLM 判断，不再用正则覆盖）
-            if(routed.intent === 'cancel'){
+            const hasCanvasOps = Array.isArray(routed.canvas_ops) && routed.canvas_ops.length > 0;
+            if(routed.intent === 'canvas_op' || (agentState?.devMode && hasCanvasOps)){
+                // 画布节点操作意图
+                const assistantMsg = {
+                    id: uid('am'),
+                    role: 'assistant',
+                    text: routed.reply || (hasCanvasOps ? '已在画布中执行操作。' : '好的。'),
+                    options: routed.options || [],
+                    prompts: [],
+                    generations: [],
+                    ts: Date.now()
+                };
+                agentState.messages.push(assistantMsg);
+                agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
+                saveAgentState();
+                renderAgentMessages();
+                if(hasCanvasOps){
+                    await applyAgentCanvasOps(routed.canvas_ops);
+                }
+            } else if(routed.intent === 'cancel'){
                 // 取消
                 const assistantMsg = {id:uid('am'), role:'assistant', text:routed.reply || '好的，已取消。', options:[], prompts:[], generations:[], ts:Date.now()};
                 agentState.messages.push(assistantMsg);
@@ -23657,6 +23698,9 @@ async function sendAgentMessage(){
                 saveAgentState(); renderAgentMessages();
             } else if(routed.text_only){
                 // 纯文本回复（分析/反推/提示词扩写/meta）
+                if(hasCanvasOps){
+                    await applyAgentCanvasOps(routed.canvas_ops);
+                }
                 const analysisText = routed.analysis || routed.reply || llmResult.text || '';
                 const cardType = routed.intent === 'refine' ? 'prompt_suggestion' : routed.intent === 'meta' ? '' : 'analysis';
                 const assistantMsg = {id:uid('am'), role:'assistant', text:analysisText, options:routed.options || [], prompts:[], generations:[], ts:Date.now(), cardType:cardType || undefined};
@@ -23665,6 +23709,9 @@ async function sendAgentMessage(){
                 saveAgentState(); renderAgentMessages();
             } else {
                 // 生图类意图（generate/edit/composite/reference_generate）
+                if(hasCanvasOps){
+                    await applyAgentCanvasOps(routed.canvas_ops);
+                }
                 const prompts = (Array.isArray(routed.prompts) && routed.prompts.length > 0) ? routed.prompts : [text];
                 const gens = prompts.map(p => ({
                     prompt: p,
