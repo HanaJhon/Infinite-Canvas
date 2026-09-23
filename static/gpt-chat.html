@@ -495,6 +495,39 @@
         body.studio-theme-dark .rail-new,
         html.theme-dark body .rail-new,
         body.theme-dark .rail-new { background:var(--chat-strong) !important; color:var(--chat-strong-text) !important; }
+        html.studio-theme-dark body .slash-palette,
+        body.studio-theme-dark .slash-palette,
+        html.theme-dark body .slash-palette,
+        body.theme-dark .slash-palette {
+            background:rgba(23,29,41,.96) !important;
+            border-color:var(--chat-line) !important;
+            box-shadow:0 22px 54px rgba(0,0,0,.45) !important;
+            color:var(--chat-text) !important;
+        }
+        html.studio-theme-dark body .slash-item:hover,
+        body.studio-theme-dark .slash-item:hover,
+        html.theme-dark body .slash-item:hover,
+        body.theme-dark .slash-item:hover,
+        html.studio-theme-dark body .slash-item.active,
+        body.studio-theme-dark .slash-item.active,
+        html.theme-dark body .slash-item.active,
+        body.theme-dark .slash-item.active {
+            background:var(--chat-soft) !important;
+        }
+        html.studio-theme-dark body .slash-item .slash-ico,
+        body.studio-theme-dark .slash-item .slash-ico,
+        html.theme-dark body .slash-item .slash-ico,
+        body.theme-dark .slash-item .slash-ico {
+            background:var(--chat-soft) !important;
+            color:var(--chat-strong) !important;
+        }
+        html.studio-theme-dark body .slash-item .slash-chip,
+        body.studio-theme-dark .slash-item .slash-chip,
+        html.theme-dark body .slash-item .slash-chip,
+        body.theme-dark .slash-item .slash-chip {
+            border-color:var(--chat-line) !important;
+            color:var(--chat-muted) !important;
+        }
         @media (max-width:900px){
             .chat-shell { display:block; }
             .chat-rail { position:absolute; top:48px; right:0; left:auto; bottom:auto; z-index:70; width:min(330px,calc(100vw - 28px)); max-height:calc(100vh - 86px); transform:none; box-shadow:0 22px 54px rgba(15,23,42,.18); transition:none; }
@@ -550,8 +583,11 @@
 
         /* / 命令面板（agent 模式，输入以 / 开头时弹出） */
         .slash-palette {
-            position:absolute;
-            left:0; right:0; bottom:calc(100% + 10px);
+            position:fixed;
+            left:var(--slash-left,12px);
+            top:var(--slash-top,120px);
+            bottom:auto;
+            width:var(--slash-width,min(520px,calc(100vw - 32px)));
             background:var(--chat-panel,#fff);
             border:1px solid var(--chat-line,#d8e0ea);
             border-radius:14px;
@@ -559,7 +595,7 @@
             padding:6px;
             max-height:320px;
             overflow:auto;
-            z-index:60;
+            z-index:9999;
             text-align:left;
         }
         .slash-palette.hidden { display:none; }
@@ -1514,7 +1550,15 @@
             const tools = document.getElementById('agentTools');
             const popover = document.getElementById('agentToolsPopover');
             if(popover?.classList.contains('open') && tools && !tools.contains(event.target) && !popover.contains(event.target)) toggleAgentTools(false);
+            const pal = document.getElementById('slashPalette');
+            const input = document.getElementById('messageInput');
+            if(slashOpen && pal && !pal.contains(event.target) && event.target !== input) closeSlashPalette();
         });
+        window.addEventListener('resize', () => { if(slashOpen) positionSlashPalette(); });
+        if(window.visualViewport){
+            window.visualViewport.addEventListener('resize', () => { if(slashOpen) positionSlashPalette(); });
+            window.visualViewport.addEventListener('scroll', () => { if(slashOpen) positionSlashPalette(); });
+        }
 
         function setMode(next, persist = true){
             mode = next;
@@ -1948,7 +1992,7 @@
             // 压缩上下文（始终可用，命中 compress/压 时优先）
             const wantCompress = !q || q.indexOf('compress') >= 0 || q.indexOf('压') >= 0;
             if(wantCompress){
-                items.push({ type:'compress', id:'compress', title: tr('chat.slashCompress'), desc: tr('chat.slashCompressDesc'), icon:'compress' });
+                items.push({ type:'compress', id:'compress', title: tr('chat.slashCompress'), desc: tr('chat.slashCompressDesc'), icon:'minimize-2' });
             }
             (skills || []).forEach(s => {
                 if(slashMatched(s, q)){
@@ -1959,6 +2003,9 @@
             slashItems = items;
             slashIndex = 0;
             const pal = document.getElementById('slashPalette');
+            if(!pal) return;
+            // .composer 带 overflow:hidden，浮层移到 body 上用 fixed 定位，避免被裁切
+            if(pal.parentElement !== document.body) document.body.appendChild(pal);
             if(!items.length){
                 pal.innerHTML = '<div class="slash-empty">' + tr('chat.slashEmpty') + '</div>';
             } else {
@@ -1981,6 +2028,24 @@
             }
             pal.classList.remove('hidden');
             slashOpen = true;
+            positionSlashPalette();
+            requestAnimationFrame(positionSlashPalette);
+        }
+
+        function positionSlashPalette(){
+            const pal = document.getElementById('slashPalette');
+            const comp = document.querySelector('.composer') || document.getElementById('composerBody');
+            if(!pal || !comp || pal.classList.contains('hidden')) return;
+            const rect = comp.getBoundingClientRect();
+            const viewportW = window.visualViewport?.width || window.innerWidth;
+            const viewportH = window.visualViewport?.height || window.innerHeight;
+            const width = Math.min(540, Math.max(280, rect.width || 360, viewportW - 32));
+            const left = Math.min(Math.max(12, rect.left), Math.max(12, viewportW - width - 12));
+            pal.style.setProperty('--slash-left', `${Math.round(left)}px`);
+            pal.style.setProperty('--slash-width', `${Math.round(width)}px`);
+            const box = pal.getBoundingClientRect();
+            const top = Math.max(12, Math.min(rect.top - box.height - 8, viewportH - box.height - 12));
+            pal.style.setProperty('--slash-top', `${Math.round(top)}px`);
         }
 
         function highlightSlash(){
@@ -1999,7 +2064,13 @@
 
         function closeSlashPalette(){
             const pal = document.getElementById('slashPalette');
-            pal.classList.add('hidden');
+            if(pal){
+                pal.classList.add('hidden');
+                const composer = document.querySelector('.composer');
+                if(composer && pal.parentElement === document.body){
+                    composer.prepend(pal);
+                }
+            }
             slashOpen = false;
         }
 
