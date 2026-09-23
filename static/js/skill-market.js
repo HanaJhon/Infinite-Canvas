@@ -96,7 +96,12 @@
             +   '<button class="asm-icon-btn" type="button" data-asm="refresh"><i data-lucide="refresh-cw"></i></button>'
             +   '<button class="asm-icon-btn" type="button" data-asm="close"><i data-lucide="x"></i></button>'
             + '</div>'
-            + '<div class="asm-toolbar">'
+            +             '<div class="asm-toolbar">'
+            +   '<div class="asm-views" data-asm="views">'
+            +     '<button class="asm-view active" type="button" data-asm-view="market">' + esc(T('smart.asmMarket')) + '</button>'
+            +     '<button class="asm-view" type="button" data-asm-view="installed">' + esc(T('smart.asmInstalledView'))
+            +       ' <b data-asm="instCount">0</b></button>'
+            +   '</div>'
             +   '<label class="asm-search"><i data-lucide="search"></i><input type="search" data-asm="search" autocomplete="off"></label>'
             +   '<select class="asm-select" data-asm="sort">'
             +     '<option value="hot" data-asm-opt="asmSortHot"></option>'
@@ -110,7 +115,7 @@
             + '<div class="asm-meta" data-asm="meta"></div>'
             + '<div class="asm-list" data-asm="list"></div>';
         document.body.appendChild(overlay);
-        ['title', 'refresh', 'close', 'search', 'sort', 'cats', 'tabs', 'meta', 'list'].forEach(function (key) {
+        ['title', 'refresh', 'close', 'search', 'sort', 'cats', 'tabs', 'meta', 'list', 'views', 'instCount'].forEach(function (key) {
             nodes[key] = overlay.querySelector('[data-asm="' + key + '"]');
         });
         nodes.title.textContent = T('smart.asmTitle');
@@ -126,9 +131,16 @@
         nodes.search.addEventListener('input', function () {
             state.query = nodes.search.value || '';
             state.limit = RENDER_STEP;
-            scheduleRemoteSearch();
+            // ⚠️ 已安装视图里搜索框只做本地过滤，绝不触发全站搜索（否则会抢走列表来源）
+            if (state.view === 'market') scheduleRemoteSearch();
+            else resetRemote();
             render();
         });
+        if (nodes.views) {
+            nodes.views.querySelectorAll('[data-asm-view]').forEach(function (btn) {
+                btn.onclick = function () { switchView(btn.dataset.asmView); };
+            });
+        }
         nodes.sort.addEventListener('change', function () {
             state.sort = nodes.sort.value || 'hot';
             state.limit = RENDER_STEP;
@@ -141,6 +153,8 @@
 
     var state = {
         skills: [], meta: null, query: '', sort: 'hot', tag: '', cat: '',
+        view: 'market',          // 'market' = 浏览 SkillsMP 清单；'installed' = 只看已安装
+        installed: [],           // 已安装记录（来自 /api/skills/installed），不依赖是否在内置清单里
         // taxonomy = 后端给的「大分类 → 子分类」静态结构（前端不硬编码分类表）
         taxonomy: [],
         loading: false, loaded: false, refreshing: false, error: '', limit: 0,
@@ -191,8 +205,12 @@
         return text === 'smart.asmCat.' + key ? key : text;
     }
 
-    // 当前列表来源：全站搜索结果 or 本机清单
-    function currentSource() { return remoteActive() ? state.remote : state.skills; }
+    // 当前列表来源：全站搜索结果 / 已安装清单 / 本机清单（按视图优先级）
+    function currentSource() {
+        if (remoteActive()) return state.remote;
+        if (state.view === 'installed') return state.installed;
+        return state.skills;
+    }
 
     // 某个大分类下允许出现的子分类（'' = 全部大分类 → 所有子分类，按 taxonomy 顺序）
     function subTagsOf(catKey) {
@@ -284,7 +302,7 @@
     function visible() {
         var q = state.query.trim().toLowerCase();
         var remote = remoteActive();
-        var list = (remote ? state.remote : state.skills).slice();
+        var list = currentSource().slice();
         // 大分类 / 子分类筛选对**本地与全站结果都生效**：后端给每条记录都打了
         // category 与 tags，所以全站结果也能筛（早先「全站搜索时隐藏标签行」的做法已废弃）。
         if (state.cat) {
@@ -421,20 +439,28 @@
         var summaryHtml = '<div class="asm-card-summary' + (zh ? ' is-zh' : '') + '"'
             + (zh && en ? ' title="' + esc(en) + '"' : '') + '>' + esc(zh || en) + '</div>';
         var isBusy = busy.has(s.id);
-        var action = s.installed
+        // 已安装视图里每条都是已安装的 → 一律显示卸载；市场视图里按 s.installed 判断
+        var isInstalled = state.view === 'installed' || s.installed;
+        var action = isInstalled
             ? '<button class="asm-btn danger" type="button" data-asm-uninstall="' + esc(s.id) + '"'
               + (isBusy ? ' disabled' : '') + '>' + esc(isBusy ? T('smart.asmUninstalling') : T('smart.asmUninstall')) + '</button>'
             : '<button class="asm-btn primary" type="button" data-asm-install="' + esc(s.id) + '"'
               + (isBusy ? ' disabled' : '') + '>' + esc(isBusy ? T('smart.asmInstalling') : T('smart.asmInstall')) + '</button>';
-        return '<div class="asm-card' + (s.installed ? ' installed' : '') + '">'
+        // 已安装视图里「已安装」徽章是冗余的（整页都是），只在市场视图给已装条目打标
+        var badge = (isInstalled && state.view !== 'installed')
+            ? '<span class="asm-badge">' + esc(T('smart.asmInstalled')) + '</span>' : '';
+        return '<div class="asm-card' + (isInstalled ? ' installed' : '') + '">'
             + '<div class="asm-card-main">'
             +   '<div class="asm-card-head"><span class="asm-card-title">' + esc(s.title) + '</span>'
-            +     (s.installed ? '<span class="asm-badge">' + esc(T('smart.asmInstalled')) + '</span>' : '')
+            +     badge
             +   '</div>'
             +   summaryHtml
             +   '<div class="asm-card-foot">'
-            +     '<span class="asm-stat" title="' + esc(T('smart.asmStarsTip')) + '"><i data-lucide="star"></i>' + count(s.stars) + '</span>'
-            +     '<span class="asm-stat" title="' + esc(T('smart.asmDownloadsTip')) + '"><i data-lucide="git-fork"></i>' + count(s.forks) + '</span>'
+            +     (state.view === 'installed'
+                  ? '<span class="asm-repo" title="' + esc(T('smart.asmInstalledAt')) + '"><i data-lucide="calendar-check"></i>'
+                    + esc(timeText(s.installed_at)) + '</span>'
+                  : '<span class="asm-stat" title="' + esc(T('smart.asmStarsTip')) + '"><i data-lucide="star"></i>' + count(s.stars) + '</span>'
+                    + '<span class="asm-stat" title="' + esc(T('smart.asmDownloadsTip')) + '"><i data-lucide="git-fork"></i>' + count(s.forks) + '</span>')
             +     '<span class="asm-repo" title="' + esc(T('smart.asmRepo')) + '">' + esc(s.repo || '') + '</span>'
             +     tags
             +   '</div>'
@@ -445,6 +471,11 @@
 
     function renderMeta() {
         if (!nodes.meta) return;
+        // 已安装视图：换成「已安装 N 个 + 卸载提示」，不显示市场那套 total/repos
+        if (state.view === 'installed') {
+            nodes.meta.innerHTML = esc(Tf('smart.asmInstalledMeta', { n: state.installed.length }));
+            return;
+        }
         var meta = state.meta || {};
         var installedCount = state.skills.filter(function (s) { return s.installed; }).length;
         var repos = new Set(state.skills.map(function (s) { return s.repo; })).size;
@@ -551,29 +582,33 @@
         renderCats();
         renderTabs();
         if (!nodes.list) return;
-        if (!state.skills.length) {
-            nodes.list.innerHTML = '<div class="asm-empty"><i data-lucide="loader" class="asm-spin"></i><span>'
-                + esc(T('smart.asmLoading')) + '</span></div>';
-        } else {
-            var list = visible();
-            if (!list.length) {
-                if (state.remoteBusy) {
-                    // 本地也没命中、全站结果还没回来 → 明确告诉用户在查全站，别显示「没有匹配」
-                    nodes.list.innerHTML = '<div class="asm-empty"><i data-lucide="loader" class="asm-spin"></i><span>'
-                        + esc(T('smart.asmSearchingShort')) + '</span></div>';
-                } else {
-                    nodes.list.innerHTML = '<div class="asm-empty"><i data-lucide="search-x"></i><span>'
-                        + esc(T(remoteSearched() ? 'smart.asmEmptyOnline' : 'smart.asmEmpty')) + '</span></div>';
-                }
+        var list = visible();
+        if (!list.length) {
+            if (state.view === 'market' && !state.skills.length && !remoteActive()) {
+                // 市场清单还在加载（已安装视图不会走到这里，它用 state.installed）
+                nodes.list.innerHTML = '<div class="asm-empty"><i data-lucide="loader" class="asm-spin"></i><span>'
+                    + esc(T('smart.asmLoading')) + '</span></div>';
+            } else if (state.remoteBusy) {
+                // 本地也没命中、全站结果还没回来 → 明确告诉用户在查全站，别显示「没有匹配」
+                nodes.list.innerHTML = '<div class="asm-empty"><i data-lucide="loader" class="asm-spin"></i><span>'
+                    + esc(T('smart.asmSearchingShort')) + '</span></div>';
+            } else if (state.view === 'installed') {
+                // 已安装视图：没装任何 Skill（或当前筛选下没有）
+                nodes.list.innerHTML = '<div class="asm-empty"><i data-lucide="package-open"></i><span>'
+                    + esc(T('smart.asmInstalledEmpty')) + '</span></div>';
             } else {
-                var shown = list.slice(0, state.limit || RENDER_STEP);
-                var html = shown.map(cardHtml).join('');
-                if (list.length > shown.length) {
-                    html += '<button class="asm-more" type="button" data-asm-more>'
-                        + esc(Tf('smart.asmMore', { n: list.length - shown.length })) + '</button>';
-                }
-                nodes.list.innerHTML = html;
-                var more = nodes.list.querySelector('[data-asm-more]');
+                nodes.list.innerHTML = '<div class="asm-empty"><i data-lucide="search-x"></i><span>'
+                    + esc(T(remoteSearched() ? 'smart.asmEmptyOnline' : 'smart.asmEmpty')) + '</span></div>';
+            }
+        } else {
+            var shown = list.slice(0, state.limit || RENDER_STEP);
+            var html = shown.map(cardHtml).join('');
+            if (list.length > shown.length) {
+                html += '<button class="asm-more" type="button" data-asm-more>'
+                    + esc(Tf('smart.asmMore', { n: list.length - shown.length })) + '</button>';
+            }
+            nodes.list.innerHTML = html;
+            var more = nodes.list.querySelector('[data-asm-more]');
                 if (more) {
                     more.onclick = function () {
                         state.limit = (state.limit || RENDER_STEP) + RENDER_STEP;
@@ -581,7 +616,6 @@
                     };
                 }
             }
-        }
         if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
         nodes.list.querySelectorAll('[data-asm-install]').forEach(function (btn) {
             btn.onclick = function () { install(btn.dataset.asmInstall); };
@@ -602,6 +636,35 @@
         });
     }
 
+    // 已安装清单：来自 /api/skills/installed，**不依赖是否在内置清单里** —— 全站搜索装来的
+    // Skill 在内置清单里没有，市场视图看不到，必须靠这个列表才能管理（卸载）。
+    // ⚠️ 这份列表也是「已安装(N)」角标的数量来源，所以打开浮层就先拉一次（哪怕停在市场视图）。
+    async function loadInstalled() {
+        try {
+            var res = await fetch('/api/skills/installed');
+            if (!res.ok) return;
+            var data = await res.json();
+            state.installed = Array.isArray(data.skills) ? data.skills : [];
+            if (Array.isArray(data.taxonomy) && data.taxonomy.length) state.taxonomy = data.taxonomy;
+            updateInstCount();
+            render();
+        } catch (e) { /* 静默：已安装列表只是辅助视图，拉不到不该阻断市场 */ }
+    }
+    function updateInstCount() {
+        if (nodes.instCount) nodes.instCount.textContent = String(state.installed.length);
+    }
+    function switchView(v) {
+        if (!v || state.view === v) return;
+        state.view = v;
+        state.cat = ''; state.tag = ''; state.limit = RENDER_STEP;
+        if (v === 'installed') resetRemote();   // 离开市场视图就清掉全站搜索结果，别污染列表
+        if (nodes.views) nodes.views.querySelectorAll('[data-asm-view]').forEach(function (b) {
+            b.classList.toggle('active', b.dataset.asmView === v);
+        });
+        render();
+        resetListScroll();
+    }
+
     async function load(refresh) {
         if (state.loading) return;
         state.loading = true;
@@ -616,6 +679,8 @@
             state.meta = data;
             // 大分类 → 子分类 的结构由后端下发（前端不硬编码分类表，改规则只改 main.py）
             if (Array.isArray(data.taxonomy) && data.taxonomy.length) state.taxonomy = data.taxonomy;
+            // 市场响应里也带了已安装清单 → 用它同步角标与已安装视图（避免再发一次请求）
+            if (Array.isArray(data.installed)) { state.installed = data.installed; updateInstCount(); }
             state.loaded = true;
             state.limit = RENDER_STEP;
         } catch (e) {
@@ -652,6 +717,8 @@
             if (!res.ok) throw new Error(await errorMessage(res, T('smart.asmInstallFail')));
             var data = await res.json();
             applyInstalled(data.installed || []);
+            state.installed = data.installed || state.installed;   // 同步已安装角标 / 已安装视图
+            updateInstCount();
             pageToast(T('smart.asmInstallDone') + ((skill && skill.title) || id));
         } catch (e) {
             pageToast(T('smart.asmInstallFail') + '：' + String(e && e.message ? e.message : e).slice(0, 200));
@@ -674,6 +741,8 @@
             if (!res.ok) throw new Error(await errorMessage(res, T('smart.asmUninstallFail')));
             var data = await res.json();
             applyInstalled(data.installed || []);
+            state.installed = data.installed || state.installed;   // 同步已安装角标 / 已安装视图
+            updateInstCount();
             pageToast(T('smart.asmUninstallDone'));
         } catch (e) {
             pageToast(T('smart.asmUninstallFail') + '：' + String(e && e.message ? e.message : e).slice(0, 200));
@@ -723,6 +792,8 @@
         // .asm-search:focus-within 的边框变色承担（见 skill-market.css）。
         if (!state.loaded) load(false);
         else if (state.meta && state.meta.stale) load(true);
+        // 已安装清单是「已安装(N)」角标与已安装视图的来源 → 打开就拉一次（市场响应也会带，双保险）
+        loadInstalled();
     }
 
     function close() {

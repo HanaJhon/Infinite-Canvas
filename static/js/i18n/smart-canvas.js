@@ -328,6 +328,11 @@
         "smart.agentRefLast": { zh: "参考上一批图", en: "Uses last outputs" },
         "smart.agentRefAttach": { zh: "参考附件图", en: "Uses attachments" },
         "smart.asmTitle": { zh: "Skill 市场", en: "Skill Market" },
+        "smart.asmMarket": { zh: "市场", en: "Market" },
+        "smart.asmInstalledView": { zh: "已安装", en: "Installed" },
+        "smart.asmInstalledMeta": { zh: "已安装 {n} 个 Skill · 点卡片上的「卸载」即可随时移除", en: "{n} skills installed · use Uninstall on any card to remove it" },
+        "smart.asmInstalledEmpty": { zh: "尚未安装任何 Skill", en: "No skills installed yet" },
+        "smart.asmInstalledAt": { zh: "安装时间", en: "Installed at" },
         // ⚠️ 数据源自 1.1.4 起换成 SkillsMP（skillsmp.com）——它只提供仓库级 star / fork，
         // 没有下载量。所以「下载量」这一维已整体改为「收藏（fork）数」，键名保留 asmDownloads*
         // 以免动到别处引用（改名会牵动 data-i18n / 校验脚本）。

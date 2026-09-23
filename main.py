@@ -7551,18 +7551,26 @@ async def install_market_skill(skill_id, hint=None):
     os.makedirs(target, exist_ok=True)
     with open(os.path.join(target, "SKILL.md"), "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
+    # 安装时就算好分类（与内置清单共用 skill_tags/skill_category），否则已安装列表无法按
+    # 两级分类筛选。全站搜索装来的 Skill 在内置清单里没有，更得靠这里补。
+    _name = skill.get("name") or skill_id
+    _summary = skill.get("summary") or ""
+    _tags = skill_tags_cached(_name, _summary)
+    _cat = skill_category(_tags)
     index = load_installed_skills()
     index["skills"] = [s for s in index.get("skills", []) if str(s.get("id") or "") != skill_id]
     record = {
         "id": skill_id,
-        "name": skill.get("name") or skill_id,
+        "name": _name,
         "title": skill.get("title") or skill_id,
-        "summary": skill.get("summary") or "",
+        "summary": _summary,
         "repo": skill.get("repo") or "",
         "raw_url": url,
         "bytes": len(raw),
         "installed_at": now_ms(),
         "source": "market",
+        "tags": _tags,
+        "category": _cat,
     }
     index["skills"].append(record)
     save_installed_skills(index)
@@ -16115,9 +16123,20 @@ async def skills_i18n(payload: SkillI18nRequest):
 
 @app.get("/api/skills/installed")
 async def skills_installed():
-    """已安装的 Skill 列表（安装后会被拼进画布 Agent 的系统提示词）。"""
+    """已安装的 Skill 列表（安装后会被拼进画布 Agent 的系统提示词）。
+
+    ⚠️ 给旧安装记录**回填**分类：早期版本装的时候没存 tags/category，前端已安装视图
+    就没法按两级分类筛选。这里按 name+summary 现算（与内置清单同规则），无一致性风险。
+    同时把 taxonomy 一起下发 —— 用户可能先打开「已安装」视图、还没加载过市场，
+    那样前端 taxonomy 是空的，分类行会渲染不出来。
+    """
     skills = load_installed_skills().get("skills", [])
-    return {"skills": skills, "count": len(skills)}
+    for s in skills:
+        if not s.get("tags") or not s.get("category"):
+            _tags = skill_tags_cached(s.get("name") or "", s.get("summary") or "")
+            s["tags"] = _tags
+            s["category"] = skill_category(_tags)
+    return {"skills": skills, "count": len(skills), "taxonomy": skill_taxonomy_meta()}
 
 @app.post("/api/skills/install")
 async def skills_install(payload: AgentSkillRequest):

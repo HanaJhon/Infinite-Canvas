@@ -55,6 +55,13 @@
 .asm-search i, .asm-search svg { width:13px; height:13px; flex:0 0 auto; }
 .asm-search input { flex:1; min-width:0; border:none; outline:none; background:none; color:var(--sm-text); font-size:12px; }
 .asm-select { height:32px; padding:0 8px; border:1px solid var(--sm-line); border-radius:10px; background:var(--sm-card); color:var(--sm-text); font-size:11.5px; }
+/* 顶栏分段控件：市场 / 已安装(N) */
+.asm-views { flex:0 0 auto; display:inline-flex; align-items:stretch; height:32px; padding:3px; border:1px solid var(--sm-line); border-radius:10px; background:var(--sm-soft); }
+.asm-view { display:inline-flex; align-items:center; gap:5px; padding:0 11px; border:none; border-radius:7px; background:none; color:var(--sm-muted); font-size:11.5px; font-weight:800; cursor:pointer; }
+.asm-view:hover { color:var(--sm-text); }
+.asm-view.active { background:var(--sm-card); color:var(--sm-text); box-shadow:0 1px 2px rgba(0,0,0,.10); }
+.asm-view b { font-size:9.5px; font-weight:800; font-variant-numeric:tabular-nums; padding:1px 5px; border-radius:999px; background:var(--sm-line); color:var(--sm-muted); }
+.asm-view.active b { background:var(--sm-strong); color:var(--sm-strong-text); }
 /* 第一行：大分类（全部 / 实用 / 设计 / 视觉 / 其他）—— 分段按钮 + 计数 */
 .asm-cats { display:flex; flex-wrap:wrap; gap:6px; padding:10px 14px 0; }
 .asm-cat { display:inline-flex; align-items:center; gap:5px; padding:4px 11px; border-radius:9px;
