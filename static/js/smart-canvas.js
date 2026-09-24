@@ -14577,12 +14577,31 @@ function validNodeInpaint(node, imageIndex=null){
     if(!current?.url || current.url !== key) return null;
     return {...meta, index};
 }
-function inpaintReferenceImages(meta){
+/* 局部重绘的参考图**顺序**很重要：上游把第一张图当基准图、把 mask 作用在它身上，
+   所以 crop 必须排第一、crop_mask 紧随其后。
+   用户自己选的其它参考图（例如「照参考图里的方向盘款式来改」）必须**追加在后面保留**，
+   否则用户在遮罩重绘里根本没法引用别的图 —— 这是多图场景最常用的用法。
+   被遮罩的那张原图本身要排除：crop 已经是它的局部，再塞整图只会让上游分不清谁是谁。 */
+function inpaintReferenceImages(meta, refs, maxCount){
     if(!meta?.crop_url || !meta?.crop_mask_url) return [];
-    return [
+    const skip = new Set([meta.crop_url, meta.crop_mask_url, meta.mask_url, meta.base_url, meta.base_key, meta.overlay_url].filter(Boolean));
+    const seen = new Set(skip);
+    const extras = [];
+    for(const ref of imageRefsOnly(refs || [])){
+        const url = ref?.url || '';
+        if(!url || seen.has(url)) continue;
+        if(String(ref.role || '').trim().toLowerCase() === 'mask') continue;
+        if(/_mask\.png$/i.test(String(ref.name || ''))) continue;
+        seen.add(url);
+        extras.push(ref);
+    }
+    const list = [
         {url:meta.crop_url, name:'inpaint_crop.png', kind:'image'},
-        {url:meta.crop_mask_url, name:'inpaint_mask.png', kind:'image', role:'mask'}
+        {url:meta.crop_mask_url, name:'inpaint_mask.png', kind:'image', role:'mask'},
+        ...extras
     ];
+    const cap = Math.max(2, Number(maxCount) || list.length);
+    return list.slice(0, cap);
 }
 function maskOverlayHtml(node, index, inThumb=false){
     const meta = validNodeInpaint(node, index);
@@ -18360,8 +18379,11 @@ function comfyFieldKind(field){
 async function runApiGeneration(prompt, refs, runSettings=settings, options={}){
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
     const inpaint = options?.inpaint?.crop_url && options.inpaint.crop_mask_url ? options.inpaint : null;
-    // 局部重绘只出一张（合并图），且必须按裁切比例 / 裁切尺寸提交，
-    // 参考图换成「裁切局部图 + 对齐遮罩」，并显式丢掉其它参考图（含历史遗留的 role:mask）。
+    // 局部重绘只出一张（合并图），且必须按裁切比例 / 裁切尺寸提交。
+    // 参考图 = 「裁切局部图 + 对齐遮罩 + 用户自己选的其它参考图」：
+    // crop 必须在第一位（上游把它当基准图、mask 作用在它身上），
+    // 其它参考图追加在后面（多图生图场景：遮罩只约束改哪儿，风格/款式照旧靠别的参考图）。
+    // 历史遗留的 role:mask 参考图会被 inpaintReferenceImages 过滤掉。
     const count = inpaint ? 1 : Math.max(1, Math.min(8, Number(runSettings.count || 1)));
     const _refMax = providerMaxReferenceImages(runSettings.provider_id);
     const payload = {
@@ -18375,7 +18397,7 @@ async function runApiGeneration(prompt, refs, runSettings=settings, options={}){
         resolution:['1k','2k','4k'].includes(runSettings.resolution) ? runSettings.resolution : '',
         quality:runSettings.quality || 'auto',
         n:1,
-        reference_images:inpaint ? inpaintReferenceImages(inpaint) : imageRefsOnly(refs).slice(0, _refMax)
+        reference_images:inpaint ? inpaintReferenceImages(inpaint, refs, _refMax) : imageRefsOnly(refs).slice(0, _refMax)
     };
     if(inpaint){
         payload.operation = 'inpaint';

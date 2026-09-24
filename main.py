@@ -11525,6 +11525,42 @@ def prepare_reference_for_multipart(ref, max_size=1536):
         print(f"prepare_reference_for_multipart resize failed, fallback to raw: {e}")
         return path, None
 
+def prepare_mask_for_multipart(mask_ref, base_path):
+    """准备遮罩用于 OpenAI /images/edits 的 multipart 上传。
+
+    两个必须处理的坑：
+
+    1. **尺寸必须与基准图完全一致**。基准图会被 `prepare_reference_for_multipart`
+       缩到 1536，而遮罩以前是原样上传 —— 大图裁切时会变成「基准图 1536、遮罩 4096」，
+       上游要么直接报尺寸不匹配，要么把遮罩错位贴上去。这里按基准图**实际落盘尺寸**重建。
+    2. **两种遮罩约定要同时满足**。画布里的遮罩是「白 = 要改」；OpenAI 官方约定是
+       「**透明** = 要改」。所以输出 RGBA：要改的区域 (255,255,255,0)、其余 (0,0,0,255) ——
+       按 alpha 解释的上游看到「透明区可改」，按亮度解释的上游看到「白色区可改」，两边都成立。
+
+    返回 (遮罩文件路径, 需要清理的临时路径或 None)；处理失败时退回原始文件。
+    """
+    raw_url = mask_ref.get("url", "") if isinstance(mask_ref, dict) else str(mask_ref or "")
+    mask_path = output_file_from_url(raw_url)
+    if not mask_path:
+        return None, None
+    if not base_path:
+        return mask_path, None
+    try:
+        with Image.open(base_path) as base:
+            size = base.size
+        with Image.open(mask_path) as mask_img:
+            luma = ImageOps.exif_transpose(mask_img).convert("L")
+            if luma.size != size:
+                luma = luma.resize(size, Image.LANCZOS)
+            rgba = Image.merge("RGBA", (luma, luma, luma, ImageOps.invert(luma)))
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix="inpaint_mask_")
+            os.close(tmp_fd)
+            rgba.save(tmp_path, format="PNG")
+            return tmp_path, tmp_path
+    except Exception as e:
+        print(f"prepare_mask_for_multipart failed, fallback to raw: {e}")
+        return mask_path, None
+
 def is_image_reference(ref):
     if not isinstance(ref, dict):
         return False
@@ -14745,17 +14781,24 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
             edit_failed_status = None
             edit_failed_text = ""
             try:
+                first_ref_path = None
                 for ref in image_refs[:ONLINE_IMAGE_REFERENCE_MAX]:
                     ref_path, tmp_cleanup = prepare_reference_for_multipart(ref, max_size=1536)
                     if not ref_path:
                         continue
+                    if first_ref_path is None:
+                        first_ref_path = ref_path
                     if tmp_cleanup:
                         temp_paths.append(tmp_cleanup)
                     fh = open(ref_path, "rb")
                     opened.append(fh)
                     files.append(("image", (os.path.basename(ref_path), fh, content_type_for_path(ref_path))))
                 if mask_refs:
-                    mask_path = output_file_from_url(mask_refs[0].get("url", ""))
+                    # 遮罩必须与基准图（第一张 image）同尺寸、且同时满足 alpha / 亮度两种约定，
+                    # 否则上游要么报尺寸不匹配，要么当成「全图都可改」。
+                    mask_path, mask_cleanup = prepare_mask_for_multipart(mask_refs[0], first_ref_path)
+                    if mask_cleanup:
+                        temp_paths.append(mask_cleanup)
                     if mask_path:
                         fh = open(mask_path, "rb")
                         opened.append(fh)
