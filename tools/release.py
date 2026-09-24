@@ -369,6 +369,10 @@ _MD_INLINE = [
     (re.compile(r"`([^`]+)`"), r"\1"),                   # `行内代码` -> 纯文字
 ]
 _LIST_MARKER = re.compile(r"^(?:[-*+·]|\d+[.)])\s+")
+# Markdown 水平分隔线（`---` / `***` / `___`）。它们是**排版结构**，不是内容 ——
+# 漏进 body 会在更新面板里变成一个「---」圆点。踩过（2026-09-24，1.1.7）：
+# 说明里加了 3 条 `---`，面板就多了 3 个「---」条目，还把真实条目挤出了 24 条上限。
+_HR_LINE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,})$")
 
 
 def _md_to_plain(s: str) -> str:
@@ -399,6 +403,13 @@ def read_notes_file(path: str) -> list[str]:
     只在「整份文件只有标题」时才退回用标题，避免产出空列表。
 
     ⚠️ 「升级方式」这类收尾章节的正文也**不产出条目**，见 `_SKIP_SECTION_KEYS`。
+
+    ⚠️ 水平分隔线（`---`）同样**不产出条目**，见 `_HR_LINE`。
+
+    🚨 **返回值硬截断到 24 条**（面板显示窗口有限）。所以 `--notes-file` 的
+    **正文行数必须 ≤ 24**，否则排在后面的章节会被**静默丢掉** —— 踩过
+    （2026-09-24，1.1.7）：正文 33 行，新加的两节落在第 25~30 行，全被截掉，
+    面板上完全看不到本次最想说的改动。写完记得数一下正文行数。
     """
     headings, body = [], []
     skipping = False
@@ -414,6 +425,8 @@ def read_notes_file(path: str) -> list[str]:
             skipping = any(k in low for k in _SKIP_SECTION_KEYS)
             continue
         if skipping:
+            continue
+        if _HR_LINE.match(s):
             continue
         s = s.lstrip(">").strip()             # 引用块
         s = _LIST_MARKER.sub("", s)           # - / * / 1. 列表符号
