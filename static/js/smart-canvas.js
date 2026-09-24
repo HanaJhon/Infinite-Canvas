@@ -9908,7 +9908,7 @@ function nodeBodyHtml(node, layout){
     return `<div class="node-drop" data-upload-action="files">
         <span class="upload-node-main"><i data-lucide="upload-cloud"></i></span>
         <span class="upload-node-title">${escapeHtml(tr('smart.createImportNode'))}</span>
-        <span class="upload-node-sub">拖拽 / 粘贴 / 点击上传</span>
+        <span class="upload-node-sub">${escapeHtml(tr('smart.nodeDropHint'))}</span>
     </div>`;
 }
 function jimengPendingBodyHtml(node, layout){
@@ -19649,11 +19649,8 @@ function createNodeFromMenu(type){
     else if(type === 'loop') created = createLoopNode(p.x - 135, p.y - 95);
     else if(type === 'minimax') created = createMinimaxNode(p.x - 520, p.y - 320);
     else if(type === '3d') created = create3DNode(p.x - 280, p.y - 235);
-    else if(type === 'attach'){
-        // 附件节点：建一个空节点并立刻打开文件选择器（不限格式）
-        created = createImageNodeAt(p);
-        if(created) setTimeout(() => pickMediaForSmartNode(created.id), 0);
-    }
+    // 附件不再是独立的创建入口：附件本质上就是快速生图节点里的 file/text 媒体卡片，
+    // 所以「附件」卡片已从创建菜单移除，统一走快速生图（type='image'）。
     else created = createImageNodeAt(p);
     createMenuGroupId = groupId;
     addCreatedNodeToMenuGroup(created);

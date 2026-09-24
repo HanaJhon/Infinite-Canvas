@@ -72,8 +72,10 @@
         "smart.uploadHint": { zh: "点击上传 / 拖入任意文件", en: "Click or drop any file" },
         "smart.createImportNode": { zh: "快速生图", en: "Quick Gen" },
         "smart.createImportNodeSub": { zh: "支持图片/音频/视频/文档/任意附件", en: "Images, audio, video, documents, any file" },
-        "smart.createAttach": { zh: "附件", en: "Attachment" },
-        "smart.createAttachSub": { zh: "上传任意格式文件，可下载或点开浏览", en: "Upload any file; download or preview it" },
+        // 「附件」不再是独立的创建入口 —— 附件本质上就是快速生图节点里的 file/text 卡片，
+        // 所以 smart.createAttach / smart.createAttachSub 已随创建菜单那张卡片一并移除。
+        // 空节点（快速生图新建出来的）上的提示语改用下面这条，明确告诉用户能传任意格式。
+        "smart.nodeDropHint": { zh: "拖拽 / 粘贴 / 点击上传，支持任意格式", en: "Drop, paste or click to upload — any file" },
         "smart.attachNode": { zh: "附件", en: "Attachment" },
         "smart.attachNodeMany": { zh: "附件组", en: "Attachments" },
         "smart.attachOpenHint": { zh: "双击打开", en: "Double-click to open" },
