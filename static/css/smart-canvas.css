@@ -99,7 +99,7 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity:0 !impo
 .theme-dark .image-node.history-group-node { border-color:rgba(148,163,184,.28); background:rgba(30,41,59,.28); }
 .image-node.selected { outline:0; }
 .image-node.selected:not(.empty-node):not(.group-node):not(.prompt-smart-node):not(.loop-smart-node):not(.minimax-smart-node):not(.smart-group-node):not(.smart3d-node) { box-shadow:none; border-radius:12px; }
-.image-node.selected:not(.empty-node):not(.group-node) .image-wrap > img, .image-node.selected:not(.empty-node):not(.group-node) .image-wrap > .node-img { border-color:var(--strong); box-shadow:0 0 0 1px var(--strong); }
+.image-node.selected:not(.empty-node):not(.group-node) .image-wrap > img:not(.node-mask-overlay), .image-node.selected:not(.empty-node):not(.group-node) .image-wrap > .node-img { border-color:var(--strong); box-shadow:0 0 0 1px var(--strong); }
 .image-node.group-node:hover, .image-node.group-node.selected { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
 .image-node.group-node.selected { box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow); }
 .image-node.empty-node:hover { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
@@ -633,6 +633,22 @@ body.smart-node-resize .smart-node-floating-menu,
 .image-node.dragging .image-name-badge { opacity:0 !important; pointer-events:none !important; }
 .node-img { display:block; width:var(--node-img-w, 260px); height:var(--node-img-h, 180px); object-fit:cover; border-radius:12px; background:transparent; }
 video.node-img { object-fit:cover; background:#0f172a; }
+/* 遮罩局部重绘：半透明叠加提示（遮罩区着色）+ 「遮罩」就绪标记（点击清除）。
+   叠加层只做显示，pointer-events:none，不能抢走节点的拖拽/点选事件。 */
+/* ⚠️ 必须用 `.image-wrap >` / `.thumb-item >` 前缀提高特异性：`.thumb-item img`
+   （0,1,1）会把 width/height 压回 auto，导致叠加层尺寸与底图错位。 */
+.image-wrap > .node-mask-overlay,
+.thumb-item > .node-mask-overlay { position:absolute; inset:0; width:100%; height:100%; max-width:none; max-height:none; object-fit:cover; object-position:center; border:0; border-radius:12px; background:transparent; pointer-events:none; z-index:3; }
+.thumb-item > .node-mask-overlay { object-fit:contain; border-radius:11px; }
+.node-mask-badge { position:absolute; left:6px; bottom:6px; z-index:8; display:inline-flex; align-items:center; gap:3px; height:18px; padding:0 6px; border:1px solid rgba(59,130,246,.42); border-radius:9px; background:rgba(239,246,255,.94); color:#1d4ed8; font-size:9.5px; font-weight:600; line-height:1; white-space:nowrap; cursor:pointer; pointer-events:auto; box-shadow:0 2px 8px rgba(15,23,42,.16); transition:background .12s ease, border-color .12s ease; }
+.node-mask-badge:hover { background:#dbeafe; border-color:rgba(37,99,235,.62); }
+.node-mask-badge i, .node-mask-badge svg { width:10px; height:10px; }
+.node-mask-badge .node-mask-badge-x { font-size:11px; font-weight:700; opacity:.55; }
+.node-mask-badge:hover .node-mask-badge-x { opacity:1; }
+.thumb-item .node-mask-badge { left:4px; bottom:4px; height:15px; padding:0 5px; font-size:8.5px; gap:2px; }
+.theme-dark .node-mask-badge { background:rgba(30,58,138,.9); border-color:rgba(96,165,250,.46); color:#bfdbfe; box-shadow:0 4px 12px rgba(0,0,0,.34); }
+.theme-dark .node-mask-badge:hover { background:rgba(37,99,235,.92); border-color:rgba(147,197,253,.7); color:#eff6ff; }
+.image-node.dragging .node-mask-badge { opacity:0 !important; pointer-events:none !important; }
 .media-video-card { position:relative; align-items:stretch; justify-content:stretch; overflow:hidden; border:0; border-radius:12px; background:transparent; box-sizing:border-box; }
 .media-video-card video,.media-video-card img[data-preview-kind="video"] { width:100%; height:100%; object-fit:cover; display:block; border-radius:11px; }
 .media-video-card video { background:#0f172a; }
@@ -691,15 +707,15 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .thumb-item.image-selected { z-index:2; }
 .thumb-item img { width:auto; height:auto; max-width:100%; max-height:100%; object-fit:contain; object-position:center; border-radius:0; background:var(--soft); display:block; }
 .image-wrap { border-radius:13px; transition:box-shadow .14s ease; }
-.image-wrap > img, .image-wrap > .media-video-card { border:1px solid rgba(148,163,184,.38); transition:border-color .12s ease; }
+.image-wrap > img:not(.node-mask-overlay), .image-wrap > .media-video-card { border:1px solid rgba(148,163,184,.38); transition:border-color .12s ease; }
 .theme-dark .thumb-item { border-color:rgba(148,163,184,.3); }
-.theme-dark .image-wrap > img { border-color:rgba(148,163,184,.3); }
+.theme-dark .image-wrap > img:not(.node-mask-overlay) { border-color:rgba(148,163,184,.3); }
 .theme-dark .image-wrap > .media-video-card { border-color:rgba(148,163,184,.3); }
-.thumb-item:hover, .image-wrap:hover > img, .image-wrap:hover > .media-video-card { border-color:var(--strong); }
-.theme-dark .thumb-item:hover, .theme-dark .image-wrap:hover > img, .theme-dark .image-wrap:hover > .media-video-card { border-color:var(--strong); }
+.thumb-item:hover, .image-wrap:hover > img:not(.node-mask-overlay), .image-wrap:hover > .media-video-card { border-color:var(--strong); }
+.theme-dark .thumb-item:hover, .theme-dark .image-wrap:hover > img:not(.node-mask-overlay), .theme-dark .image-wrap:hover > .media-video-card { border-color:var(--strong); }
 .image-node.dragging .thumb-item:hover, .image-node.dragging .image-wrap:hover { box-shadow:none; }
-.image-node.dragging .thumb-item:hover, .image-node.dragging .image-wrap:hover > img, .image-node.dragging .image-wrap:hover > .media-video-card { border-color:var(--line); }
-.thumb-item.image-selected, .image-wrap.image-selected > img, .image-wrap.image-selected > .media-video-card, .thumb-item.image-selected:hover, .image-wrap.image-selected:hover > img, .image-wrap.image-selected:hover > .media-video-card { border-color:var(--strong); }
+.image-node.dragging .thumb-item:hover, .image-node.dragging .image-wrap:hover > img:not(.node-mask-overlay), .image-node.dragging .image-wrap:hover > .media-video-card { border-color:var(--line); }
+.thumb-item.image-selected, .image-wrap.image-selected > img:not(.node-mask-overlay), .image-wrap.image-selected > .media-video-card, .thumb-item.image-selected:hover, .image-wrap.image-selected:hover > img:not(.node-mask-overlay), .image-wrap.image-selected:hover > .media-video-card { border-color:var(--strong); }
 .image-node.dragging .floating-node-actions,
 .image-node.dragging .mini-x,
 .image-node.dragging .node-port,

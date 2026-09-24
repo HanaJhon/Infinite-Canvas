@@ -9902,9 +9902,9 @@ function nodeBodyHtml(node, layout){
     if(imgs.length > 1){
         const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, Number(layout.visibleRows || layout.rows || 1)));
         const maxHeight = visibleRows * Number(layout.thumb || 96) + Math.max(0, visibleRows - 1) * 8;
-        return `<div class="thumb-grid" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${imageNameBadgeHtml(img, {outside:true})}${imageResolutionBadgeHtml(img)}<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`).join('')}</div>`;
+        return `<div class="thumb-grid" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${maskOverlayHtml(node, i, true)}${imageNameBadgeHtml(img, {outside:true})}${imageResolutionBadgeHtml(img)}<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`).join('')}</div>`;
     }
-    if(imgs[0]) return `<div class="image-wrap has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${imageNameBadgeHtml(imgs[0], {outside:true})}${imageResolutionBadgeHtml(imgs[0])}<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`;
+    if(imgs[0]) return `<div class="image-wrap has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${maskOverlayHtml(node, 0)}${imageNameBadgeHtml(imgs[0], {outside:true})}${imageResolutionBadgeHtml(imgs[0])}<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`;
     return `<div class="node-drop" data-upload-action="files">
         <span class="upload-node-main"><i data-lucide="upload-cloud"></i></span>
         <span class="upload-node-title">${escapeHtml(tr('smart.createImportNode'))}</span>
@@ -11541,6 +11541,15 @@ function bindNodeEvents(){
                 querySmartImageTaskNow(btn.dataset.imageTaskQuery, btn.dataset.taskId);
             });
         });
+        el.querySelectorAll('[data-mask-clear]').forEach(btn => {
+            btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                clearNodeInpaint(btn.dataset.maskClear, Number(btn.dataset.maskIndex || 0));
+            }, true);
+        });
         el.querySelectorAll('[data-thumb-scroll]').forEach(scroller => {
             scroller.addEventListener('wheel', e => {
                 e.stopPropagation();
@@ -11609,7 +11618,7 @@ function bindNodeEvents(){
             });
             item.addEventListener('mousedown', e => {
                 if(e.target.closest('video,audio')) return;
-                if(e.button !== 0 || e.target.closest('.image-delete,.image-name-badge')) return;
+                if(e.button !== 0 || e.target.closest('.image-delete,.image-name-badge,.node-mask-badge')) return;
                 if(e.detail < 2) return;
                 e.preventDefault();
                 e.stopPropagation();
@@ -11628,7 +11637,7 @@ function bindNodeEvents(){
             }, true);
             item.addEventListener('click', e => {
                 if(e.target.closest('video,audio')) return;
-                if(e.target.closest('.image-delete,.image-name-badge')) return;
+                if(e.target.closest('.image-delete,.image-name-badge,.node-mask-badge')) return;
                 e.preventDefault();
                 e.stopPropagation();
                 e.stopImmediatePropagation();
@@ -11666,7 +11675,7 @@ function bindNodeEvents(){
             });
         item.addEventListener('dblclick', e => {
             if(e.target.closest('video,audio')) return;
-            if(e.target.closest('.image-delete,.image-name-badge')) return;
+            if(e.target.closest('.image-delete,.image-name-badge,.node-mask-badge')) return;
             e.preventDefault();
             e.stopPropagation();
             e.stopImmediatePropagation();
@@ -12071,6 +12080,12 @@ function deleteImage(id, imageIndex){
     if(!node || imageIndex < 0) return;
     pushUndo();
     node.images = (node.images || []).filter((_, index) => index !== imageIndex);
+    // 删图会让后续下标整体前移：遮罩记的是 index，必须跟着改，否则会错位到别的图上。
+    const _maskIndex = Number.isFinite(Number(node.inpaint?.index)) ? Math.round(Number(node.inpaint.index)) : null;
+    if(_maskIndex !== null){
+        if(_maskIndex === imageIndex) delete node.inpaint;
+        else if(_maskIndex > imageIndex) node.inpaint = {...node.inpaint, index:_maskIndex - 1};
+    }
     // 附件节点删掉一个文件后不应被改写成 "Image"（标题会出现在 @ 引用面板与 Agent 节点引用里）
     const _rest = node.images || [];
     if(_rest.length > 1) node.title = 'Group';
@@ -14478,6 +14493,10 @@ function replaceEditedImage(file, extra={}){
     const {node, index} = currentEditImage();
     if(!node || !file) return false;
     node.images[index] = {...(node.images[index] || {}), url:file.url, name:file.name, kind:file.kind || mediaKindForItem(file), natural_w:0, natural_h:0, ...extra};
+    // 裁剪/扩图/画笔都会把原图像素换掉，之前涂抹的遮罩坐标随之失效，必须一起清掉。
+    // ⚠️ 这里不能用 validNodeInpaint 判定：它比对的是 base_key，而上一行 url 已经换成新的了。
+    const _maskMeta = node.inpaint;
+    if(_maskMeta && Math.round(Number(_maskMeta.index || 0)) === Number(index)) delete node.inpaint;
     if((node.images || []).length === 1){ delete node.w; delete node.h; }
     selectedId = node.id; selectedImage = {nodeId:node.id, index};
     return true;
@@ -14540,19 +14559,112 @@ async function applyImageOutpaint(){
         scheduleSave();
     }
 }
+/* ── 遮罩局部重绘（裁切 → 生成 → 回贴）前端侧 ─────────────────────────────
+   用户涂抹遮罩确认后，不再把遮罩当参考图塞进 node.images（那会让遮罩混进参考图里），
+   而是交给后端算出包围盒、扩到标准比例、裁出局部图与对齐遮罩，结果存到 node.inpaint。
+   节点始终显示原图，遮罩用半透明叠加层提示「这块会被改」；点运行时把 crop + crop_mask
+   送上游按裁切比例生成，生成完由后端把结果按遮罩羽化回贴到原图，最终落一张整图。 */
+function validNodeInpaint(node, imageIndex=null){
+    const meta = node?.inpaint;
+    if(!meta || typeof meta !== 'object') return null;
+    if(!meta.crop_url || !meta.crop_mask_url || !meta.base_url) return null;
+    if(!Array.isArray(meta.bbox) || meta.bbox.length !== 4) return null;
+    const index = Number.isFinite(Number(meta.index)) ? Math.max(0, Math.round(Number(meta.index))) : 0;
+    if(imageIndex !== null && index !== Number(imageIndex)) return null;
+    const current = (node.images || [])[index];
+    const key = meta.base_key || meta.base_url;
+    // 原图被替换 / 删除 / 换序 → 遮罩已经对不上位置，直接视为失效
+    if(!current?.url || current.url !== key) return null;
+    return {...meta, index};
+}
+function inpaintReferenceImages(meta){
+    if(!meta?.crop_url || !meta?.crop_mask_url) return [];
+    return [
+        {url:meta.crop_url, name:'inpaint_crop.png', kind:'image'},
+        {url:meta.crop_mask_url, name:'inpaint_mask.png', kind:'image', role:'mask'}
+    ];
+}
+function maskOverlayHtml(node, index, inThumb=false){
+    const meta = validNodeInpaint(node, index);
+    if(!meta?.overlay_url) return '';
+    const hint = tr('smart.maskBadgeHint');
+    return `<img class="node-mask-overlay" src="${escapeAttr(meta.overlay_url)}" alt="" draggable="false">`
+        + `<button class="node-mask-badge" type="button" data-mask-clear="${escapeAttr(node.id)}" data-mask-index="${index}" title="${escapeAttr(hint)}">`
+        + `<i data-lucide="brush"></i><span>${escapeHtml(tr('smart.maskBadge'))}</span><span class="node-mask-badge-x">×</span></button>`;
+}
+function clearNodeInpaint(nodeId, imageIndex){
+    const node = nodes.find(n => n.id === nodeId);
+    const meta = validNodeInpaint(node, imageIndex);
+    if(!node || !meta) return;
+    pushUndo();
+    delete node.inpaint;
+    render(); scheduleSave();
+    toast(tr('smart.maskCleared'));
+}
+// prepare 需要服务端能读到本地文件；远程图先经同源代理取回、落成本地 asset 再送。
+async function ensureLocalAssetUrl(item){
+    const local = localDisplayUrlForMediaItem(item);
+    if(local && !/^https?:\/\//i.test(String(local))) return local;
+    if(!smartOriginalMediaUrl(item)) return '';
+    try {
+        const blob = await fetch(proxiedMediaUrl(item)).then(res => res.ok ? res.blob() : null);
+        if(!blob) return '';
+        const file = await uploadCroppedBlob(blob, item?.name || 'image.png');
+        return file?.url || '';
+    } catch(e) {
+        return '';
+    }
+}
+async function prepareInpaintMeta(imageItem, maskUrl){
+    const baseUrl = await ensureLocalAssetUrl(imageItem);
+    if(!baseUrl) return {error:tr('smart.maskSourceMissing')};
+    const res = await fetch('/api/image-mask-prepare', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({image_url:baseUrl, mask_url:maskUrl})
+    });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok) return {error:apiErrorMessage(data, tr('smart.maskPrepareFailed'))};
+    if(!data?.crop_url || !data?.crop_mask_url) return {error:tr('smart.maskPrepareFailed')};
+    return {data};
+}
 async function applyImageMask(){
-    if(!cropState || !editCanvasHasPixels()) return;
-    const {node, image} = currentEditImage();
+    if(!cropState || !editCanvasHasPixels()){ toast(tr('smart.maskEmpty')); return; }
+    const {node, image, index} = currentEditImage();
     if(!node || !image) return;
     const mask = maskCanvasFromDrawCanvas(editDrawCanvas());
     const blob = await new Promise(resolve => mask.toBlob(resolve, 'image/png'));
     const base = (image.name || 'image').replace(/\.[^.]+$/, '');
     const file = blob ? await uploadCroppedBlob(blob, `${base}_mask.png`) : null;
-    if(file){
-        node.images.push({url:file.url, name:file.name, role:'mask'});
-        selectedId = node.id; selectedImage = {nodeId:node.id, index:node.images.length - 1};
-        closeImageEditor(); render(); scheduleSave();
-    }
+    if(!file?.url) return;
+    const prepared = await prepareInpaintMeta(image, file.url);
+    if(prepared.error){ toast(prepared.error); return; }
+    const data = prepared.data;
+    const imageIndex = Number.isFinite(index) ? Math.max(0, index) : 0;
+    pushUndo();
+    node.inpaint = {
+        index:imageIndex,
+        base_url:data.base_url || '',
+        // base_key 用「节点里存的原图 URL」做身份标识：base_url 可能是本地缓存副本，
+        // 直接拿它比对会在远程图上永远不相等，遮罩会被误判失效。
+        base_key:(node.images || [])[imageIndex]?.url || data.base_url || '',
+        base_name:data.base_name || '',
+        mask_url:data.mask_url || file.url,
+        crop_url:data.crop_url,
+        crop_mask_url:data.crop_mask_url,
+        overlay_url:data.overlay_url || '',
+        bbox:Array.isArray(data.bbox) ? data.bbox : [],
+        base_w:Number(data.base_w || 0),
+        base_h:Number(data.base_h || 0),
+        aspect_ratio:data.aspect_ratio || '',
+        size:data.size || '',
+        feather:Number(data.feather || 0),
+        created_at:Date.now()
+    };
+    selectedId = node.id;
+    selectedImage = {nodeId:node.id, index:imageIndex};
+    closeImageEditor(); render(); scheduleSave();
+    toast(tr('smart.maskReady'));
 }
 function maskCanvasFromDrawCanvas(src){
     const mask = document.createElement('canvas');
@@ -17995,9 +18107,13 @@ async function runGeneration(){
     if(!node) return;
     if(smartNodeInFlight(node)) return;
     const refs = request.refs;
+    // 遮罩局部重绘：refs 保持原样（用于待生成占位框 / 运行日志缩略图，
+    // 输出是整图，占位框应当跟原图同比例），真正送上游的参考图在 runApiGeneration 里换掉。
+    const inpaintMeta = validNodeInpaint(node);
     const previousSettings = cloneSmartSettings(settings);
     const runSettings = smartSettingsForNode(node);
     settings = {...settings, ...cloneSmartSettings(runSettings || {})};
+    if(inpaintMeta) settings = {...settings, count:1};
     if(settings.llmEnabled){
         try {
             prompt = await resolvePromptWithLlmIfNeeded(prompt, refs, node, settings);
@@ -18097,12 +18213,12 @@ async function runGeneration(){
         }
         const rhModelMode = settings.engine === 'runninghub' && Boolean(runningHubSelectedModel(settings));
         const outImages = rhModelMode
-            ? await runApiGeneration(prompt, refs, runningHubModelApiSettings(settings))
+            ? await runApiGeneration(prompt, refs, runningHubModelApiSettings(settings), {inpaint:inpaintMeta})
             : settings.engine === 'runninghub'
                 ? await runRunningHubGeneration(prompt, refs)
                 : settings.engine === 'modelscope'
                 ? await runModelscopeGeneration(prompt, refs)
-                : await runApiGeneration(prompt, refs);
+                : await runApiGeneration(prompt, refs, settings, {inpaint:inpaintMeta});
         if(isApiLikeEngine(settings.engine) || rhModelMode){
             const taskIds = Array.isArray(outImages?.taskIds) ? outImages.taskIds : [];
             if(!taskIds.length) throw new Error(tr('smart.errRunFailed'));
@@ -18124,6 +18240,7 @@ async function runGeneration(){
             }
             if(!(pendingNode.images || []).length) throw new Error(tr('smart.errNoOutImages'));
             if(outpaintSize) delete node.outpaintSize;
+        if(inpaintMeta) delete node.inpaint;
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             addSmartGenerationLog({run:runLog, outputs:pendingNode.images || [], runMs:nowMs() - runLogStart});
             clearPromptInput({preserveDraft:true});
@@ -18133,6 +18250,7 @@ async function runGeneration(){
         }
         if(!outImages.length) throw new Error(tr('smart.errNoOutImages'));
         if(outpaintSize) delete node.outpaintSize;
+        if(inpaintMeta) delete node.inpaint;
         finalizePendingNode(pendingNode, outImages, pendingMeta);
         if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
         addSmartGenerationLog({run:runLog, outputs:outImages, runMs:nowMs() - runLogStart});
@@ -18239,23 +18357,42 @@ function comfyFieldKind(field){
     if(field?.type === 'textarea' || /prompt|text|提示词|正向|负向/.test(key)) return 'prompt';
     return 'setting';
 }
-async function runApiGeneration(prompt, refs, runSettings=settings){
+async function runApiGeneration(prompt, refs, runSettings=settings, options={}){
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
-    const count = Math.max(1, Math.min(8, Number(runSettings.count || 1)));
+    const inpaint = options?.inpaint?.crop_url && options.inpaint.crop_mask_url ? options.inpaint : null;
+    // 局部重绘只出一张（合并图），且必须按裁切比例 / 裁切尺寸提交，
+    // 参考图换成「裁切局部图 + 对齐遮罩」，并显式丢掉其它参考图（含历史遗留的 role:mask）。
+    const count = inpaint ? 1 : Math.max(1, Math.min(8, Number(runSettings.count || 1)));
     const _refMax = providerMaxReferenceImages(runSettings.provider_id);
     const payload = {
         prompt,
         provider_id:runSettings.provider_id,
         model:runSettings.model,
-        size:sizeForRun(runSettings),
-        aspect_ratio:isNanoBananaProAutoRatioModel(runSettings.model) && runSettings.ratio === 'auto'
+        size:inpaint?.size || sizeForRun(runSettings),
+        aspect_ratio:inpaint?.aspect_ratio || (isNanoBananaProAutoRatioModel(runSettings.model) && runSettings.ratio === 'auto'
             ? 'auto'
-            : API_RATIO_VALUES[runSettings.ratio] || (runSettings.ratio === 'custom' ? String(runSettings.customRatio || '').trim() : ''),
+            : API_RATIO_VALUES[runSettings.ratio] || (runSettings.ratio === 'custom' ? String(runSettings.customRatio || '').trim() : '')),
         resolution:['1k','2k','4k'].includes(runSettings.resolution) ? runSettings.resolution : '',
         quality:runSettings.quality || 'auto',
         n:1,
-        reference_images:imageRefsOnly(refs).slice(0, _refMax)
+        reference_images:inpaint ? inpaintReferenceImages(inpaint) : imageRefsOnly(refs).slice(0, _refMax)
     };
+    if(inpaint){
+        payload.operation = 'inpaint';
+        payload.inpaint = {
+            base_url:inpaint.base_url,
+            base_name:inpaint.base_name || '',
+            mask_url:inpaint.mask_url || '',
+            crop_url:inpaint.crop_url,
+            crop_mask_url:inpaint.crop_mask_url,
+            bbox:(inpaint.bbox || []).slice(0, 4).map(v => Math.round(Number(v) || 0)),
+            base_w:Math.round(Number(inpaint.base_w) || 0),
+            base_h:Math.round(Number(inpaint.base_h) || 0),
+            aspect_ratio:inpaint.aspect_ratio || '',
+            size:inpaint.size || '',
+            feather:Math.round(Number(inpaint.feather) || 0)
+        };
+    }
     const tasks = await Promise.all(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}).then(async r => {
         if(!r.ok) throw new Error(await r.text());
         return r.json();

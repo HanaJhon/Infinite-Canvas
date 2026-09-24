@@ -31,7 +31,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from threading import Lock, Thread
 from concurrent.futures import ThreadPoolExecutor
 import httpx
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageFilter
 from io import BytesIO
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Header, Request
 from fastapi.exceptions import RequestValidationError
@@ -3424,6 +3424,25 @@ class AIReference(BaseModel):
     source_url: str = ""
     originalLocalUrl: str = ""
 
+class InpaintMeta(BaseModel):
+    """局部重绘（裁切-生成-回贴）的元数据，由 /api/image-mask-prepare 产出。
+
+    bbox 是**扩到标准比例后**的裁切框，坐标相对原图；crop_url / crop_mask_url
+    都是这个 bbox 内的图，两者同尺寸，一起送去生图；生成结果按 crop_mask_url
+    抠出遮罩内像素，羽化后贴回 base_url 的 bbox 位置。
+    """
+    base_url: str = ""
+    base_name: str = ""
+    mask_url: str = ""
+    crop_url: str = ""
+    crop_mask_url: str = ""
+    bbox: List[int] = []
+    base_w: int = 0
+    base_h: int = 0
+    aspect_ratio: str = ""
+    size: str = ""
+    feather: int = 0
+
 class OnlineImageRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=ONLINE_IMAGE_PROMPT_MAX_LENGTH)
     provider_id: str = "comfly"
@@ -3436,6 +3455,7 @@ class OnlineImageRequest(BaseModel):
     reference_images: List[AIReference] = []
     operation: str = ""
     resolution_type: str = ""
+    inpaint: Optional[InpaintMeta] = None
 
 class MidjourneySubmitRequest(BaseModel):
     provider_id: str = ""
@@ -17710,6 +17730,277 @@ async def fetch_upstream_models(provider_id: str):
         raise HTTPException(status_code=400, detail=f"{provider.get('name') or provider_id} 未配置 API Key")
     return await fetch_models_from_upstream(provider.get("base_url") or "", api_key, provider_protocol(provider), provider.get("image_request_mode") or "openai")
 
+# ============================================================================
+# 遮罩局部重绘（裁切 → 生成 → 回贴）
+#
+# 为什么要裁切：直接把整图 + 遮罩丢给上游，模型经常顺手把遮罩外的部分也重画一遍，
+# 于是「只改这一小块」的需求做不到。裁到遮罩的包围盒再生成，模型只需要专注这一块，
+# 结果质量更稳、更贴提示词；回贴时再用遮罩抠一遍，遮罩外一个像素都不动。
+#
+# 比例为什么要扩：bbox 的长宽比几乎不可能是标准比（1:1 / 4:3 / 16:9…），
+# 而生图接口只认标准比。硬传原比例要么被忽略、要么被拉伸。所以把 bbox 向外扩到
+# 最接近的标准比（保持中心、尽量不出画），扩进来的周边画面还能给模型当上下文。
+# ============================================================================
+
+INPAINT_ASPECT_CHOICES = [
+    ("1:1", 1, 1), ("4:3", 4, 3), ("3:4", 3, 4), ("3:2", 3, 2), ("2:3", 2, 3),
+    ("16:9", 16, 9), ("9:16", 9, 16), ("5:4", 5, 4), ("4:5", 4, 5),
+    ("21:9", 21, 9), ("9:21", 9, 21),
+]
+# 羽化半径 = 包围盒短边 × 该系数（再夹到 [2, 48]），避免硬接缝
+INPAINT_FEATHER_RATIO = 0.015
+INPAINT_OVERLAY_MAX_SIDE = 1600          # 叠加提示图只是显示用，不必原分辨率
+INPAINT_OVERLAY_TINT = (59, 130, 246)    # #3B82F6
+INPAINT_OVERLAY_ALPHA = 0.45
+
+
+def inpaint_parse_ratio(text):
+    match = re.match(r"^\s*(\d+)\s*[:x/]\s*(\d+)\s*$", str(text or ""))
+    if not match:
+        return None
+    rw, rh = int(match.group(1)), int(match.group(2))
+    return (rw, rh) if rw > 0 and rh > 0 else None
+
+
+def inpaint_nearest_ratio(width, height):
+    """挑最接近 width:height 的标准比例。用对数距离，宽比高和反过来的偏差对称。"""
+    if width <= 0 or height <= 0:
+        return INPAINT_ASPECT_CHOICES[0]
+    target = math.log(width / height)
+    best = None
+    for label, rw, rh in INPAINT_ASPECT_CHOICES:
+        score = abs(math.log(rw / rh) - target)
+        if best is None or score < best[0]:
+            best = (score, label, rw, rh)
+    return (best[1], best[2], best[3])
+
+
+def inpaint_expand_bbox(x, y, w, h, img_w, img_h, rw, rh):
+    """把 bbox 向外扩成 rw:rh（保持中心），返回 (x, y, w, h)。
+
+    放不下时先等比缩小，再夹进原图；只有当原图本身都装不下该比例时，
+    才会退回「优先覆盖 bbox」并把比例夹到原图尺寸。
+    """
+    target = rw / rh
+    if w / h < target:
+        new_w, new_h = int(math.ceil(h * target)), h
+    else:
+        new_w, new_h = w, int(math.ceil(w / target))
+    scale = min(1.0, img_w / max(1, new_w), img_h / max(1, new_h))
+    if scale < 1.0:
+        new_w = max(1, int(new_w * scale))
+        new_h = max(1, int(new_h * scale))
+    # 取整后比例会有微差，按实际尺寸把另一边补齐
+    if new_w / max(1, new_h) < target:
+        new_h = max(1, int(math.floor(new_w / target)))
+    else:
+        new_w = max(1, int(math.floor(new_h * target)))
+    new_w = min(new_w, img_w)
+    new_h = min(new_h, img_h)
+    cx, cy = x + w / 2.0, y + h / 2.0
+    nx = int(round(cx - new_w / 2.0))
+    ny = int(round(cy - new_h / 2.0))
+    nx = max(0, min(img_w - new_w, nx))
+    ny = max(0, min(img_h - new_h, ny))
+    return nx, ny, new_w, new_h
+
+
+def inpaint_size_for_ratio(label, rw, rh, long_side=1536):
+    """按比例给出一个送上游的 size；优先用项目已有的比例尺寸表。
+
+    兜底路径要在 16 的倍数里搜一遍：直接取整再对齐到 16 会把极端比例拉偏
+    （21:9 会被算成 2.29，误差 5%），搜一遍就能找到 1344x576 这种精确解。
+    """
+    preset = CHAT_RATIO_SIZE_OPTIONS.get(label)
+    if preset:
+        return snap_size_to_multiple(preset[1], 16)
+    target = rw / rh
+    best = None
+    # 从大到小搜、只认严格更优：误差打平时保留更大的尺寸（分辨率越高回贴越清晰）
+    for long in range(max(1024, int(long_side)), 511, -16):
+        if target >= 1:
+            width, height = long, max(16, int(round(long / target / 16)) * 16)
+        else:
+            height, width = long, max(16, int(round(long * target / 16)) * 16)
+        error = abs(width / height - target)
+        if best is None or error < best[0]:
+            best = (error, width, height)
+    return f"{best[1]}x{best[2]}"
+
+
+def inpaint_feather_for_bbox(w, h):
+    return max(2, min(48, int(round(min(max(1, w), max(1, h)) * INPAINT_FEATHER_RATIO))))
+
+
+def inpaint_mask_bbox(mask: Image.Image):
+    """返回遮罩白像素的包围盒 (x, y, w, h)；遮罩为空返回 None。"""
+    try:
+        binary = mask.convert("L").point(lambda value: 255 if value >= 128 else 0)
+    except Exception:
+        return None
+    box = binary.getbbox()
+    if not box:
+        return None
+    x0, y0, x1, y1 = box
+    return x0, y0, max(1, x1 - x0), max(1, y1 - y0)
+
+
+def inpaint_open_image(path):
+    try:
+        with Image.open(path) as img:
+            img.load()
+            return img.copy()
+    except Exception as exc:
+        print(f"[inpaint] 读取图片失败 {path}: {exc}")
+        return None
+
+
+def inpaint_composite(base: Image.Image, patch: Image.Image, mask: Image.Image, bbox):
+    """把 patch 按 mask 抠出遮罩内像素、羽化后贴回 base 的 bbox 位置。
+
+    ⚠️ mask 必须是**已经按 bbox 裁好**的那张（尺寸 = bbox 的 w×h）。
+    传整张原图尺寸的遮罩会被硬缩到 bbox 尺寸，结果基本全黑 —— 静默错。
+    `compose_inpaint_result` 里有兜底：发现拿到的是整图遮罩会先裁一次。
+
+    `Image.paste(im, box, mask)` 做的就是 canvas*(1-m) + patch*m，
+    正好等于「只保留遮罩内、边缘羽化过渡」。
+    """
+    x, y, w, h = [int(v) for v in bbox]
+    canvas = base.convert("RGBA").copy()
+    patch_rgba = patch.convert("RGBA").resize((w, h), Image.LANCZOS)
+    alpha = mask.convert("L").resize((w, h), Image.LANCZOS)
+    radius = inpaint_feather_for_bbox(w, h)
+    if radius > 0:
+        alpha = alpha.filter(ImageFilter.GaussianBlur(radius=radius / 2.0))
+    canvas.paste(patch_rgba, (x, y), alpha)
+    return canvas
+
+
+def inpaint_overlay_image(mask: Image.Image, size, tint=INPAINT_OVERLAY_TINT, alpha=INPAINT_OVERLAY_ALPHA):
+    """把遮罩渲染成一张半透明提示图（透明底 + 彩色遮罩区），给画布节点叠在图上显示。"""
+    width, height = size
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    layer = Image.new("RGBA", (width, height), (tint[0], tint[1], tint[2], 255))
+    layer.putalpha(mask.convert("L").point(lambda value: int(value * alpha)))
+    overlay.alpha_composite(layer)
+    return overlay
+
+
+def inpaint_save_asset(image: Image.Image, prefix: str, category: str = "input"):
+    """把 PIL 图落到 assets 下并返回可访问 URL；失败返回空串。"""
+    name = f"{prefix}{uuid.uuid4().hex[:10]}.png"
+    path = output_path_for(name, category)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        image.save(path, format="PNG")
+    except Exception as exc:
+        print(f"[inpaint] 落盘失败 {path}: {exc}")
+        return ""
+    return output_url_for(name, category)
+
+
+async def compose_inpaint_result(meta: InpaintMeta, generated_url: str) -> str:
+    """把生成结果按遮罩回贴到原图，返回合并图 URL；失败返回空串（调用方回退成未合并结果）。"""
+    def _compose():
+        base_path = output_file_from_url(meta.base_url)
+        mask_path = output_file_from_url(meta.crop_mask_url)
+        gen_path = output_file_from_url(generated_url)
+        if not (base_path and mask_path and gen_path):
+            print(f"[inpaint] 回贴素材缺失 base={bool(base_path)} mask={bool(mask_path)} gen={bool(gen_path)}")
+            return ""
+        base = inpaint_open_image(base_path)
+        mask = inpaint_open_image(mask_path)
+        patch = inpaint_open_image(gen_path)
+        if base is None or mask is None or patch is None:
+            return ""
+        x, y, w, h = [int(v) for v in meta.bbox]
+        x = max(0, min(max(0, base.width - 1), x))
+        y = max(0, min(max(0, base.height - 1), y))
+        w = max(1, min(w, base.width - x))
+        h = max(1, min(h, base.height - y))
+        if mask.size != (w, h) and mask.size == base.size:
+            # 兜底：拿到的是整张遮罩（crop_mask_url 缺失/被替换）→ 按 bbox 现裁，
+            # 否则会被硬缩成 w×h，遮罩内容全丢，贴上去等于没改。
+            mask = mask.crop((x, y, x + w, y + h))
+        merged = inpaint_composite(base, patch, mask, (x, y, w, h))
+        return inpaint_save_asset(merged, "inpaint_merged_", "output")
+
+    try:
+        return await asyncio.to_thread(_compose)
+    except Exception as exc:
+        print(f"[inpaint] 回贴失败: {exc}")
+        return ""
+
+
+class ImageMaskPrepareRequest(BaseModel):
+    image_url: str = ""
+    mask_url: str = ""
+    feather: int = 0
+
+
+@app.post("/api/image-mask-prepare")
+async def image_mask_prepare(payload: ImageMaskPrepareRequest):
+    """遮罩确认：求包围盒 → 扩到标准比例 → 裁出局部图与对齐遮罩 → 产出显示用叠加图。
+
+    前端拿到 crop_url / crop_mask_url / bbox 后存进节点，用户点「运行」时
+    连同 operation='inpaint' 一起提交，由 build_online_image_result 完成回贴。
+    """
+    def _prepare():
+        base_path = output_file_from_url(payload.image_url)
+        mask_path = output_file_from_url(payload.mask_url)
+        if not base_path or not mask_path:
+            raise HTTPException(status_code=400, detail="找不到原图或遮罩文件，请重新涂抹遮罩")
+        base = inpaint_open_image(base_path)
+        mask = inpaint_open_image(mask_path)
+        if base is None or mask is None:
+            raise HTTPException(status_code=400, detail="原图或遮罩无法解析")
+        if mask.size != base.size:
+            mask = mask.resize(base.size, Image.NEAREST)
+        raw_bbox = inpaint_mask_bbox(mask)
+        if not raw_bbox:
+            raise HTTPException(status_code=400, detail="遮罩是空的，请先涂抹要修改的区域")
+        label, rw, rh = inpaint_nearest_ratio(raw_bbox[2], raw_bbox[3])
+        bbox = inpaint_expand_bbox(raw_bbox[0], raw_bbox[1], raw_bbox[2], raw_bbox[3], base.width, base.height, rw, rh)
+        # 扩完之后实际比例可能被原图边界带偏，重新取一次最接近的标准比
+        label, rw, rh = inpaint_nearest_ratio(bbox[2], bbox[3])
+        box = (bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3])
+        crop = base.crop(box)
+        crop_mask = mask.crop(box)
+        overlay_source = mask
+        if max(base.size) > INPAINT_OVERLAY_MAX_SIDE:
+            ratio = INPAINT_OVERLAY_MAX_SIDE / max(base.size)
+            small = (max(1, int(base.width * ratio)), max(1, int(base.height * ratio)))
+            overlay_source = mask.resize(small, Image.LANCZOS)
+        return {
+            "base_url": payload.image_url,
+            "base_name": os.path.basename(base_path),
+            "mask_url": payload.mask_url,
+            "crop_url": inpaint_save_asset(crop, "inpaint_crop_"),
+            "crop_mask_url": inpaint_save_asset(crop_mask, "inpaint_mask_"),
+            "overlay_url": inpaint_save_asset(inpaint_overlay_image(overlay_source, overlay_source.size), "inpaint_overlay_"),
+            "bbox": [int(v) for v in bbox],
+            "raw_bbox": [int(v) for v in raw_bbox],
+            "base_w": int(base.width),
+            "base_h": int(base.height),
+            "crop_w": int(bbox[2]),
+            "crop_h": int(bbox[3]),
+            "aspect_ratio": label,
+            "size": inpaint_size_for_ratio(label, rw, rh),
+            "feather": int(payload.feather or inpaint_feather_for_bbox(bbox[2], bbox[3])),
+        }
+
+    try:
+        data = await asyncio.to_thread(_prepare)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"[inpaint] 准备遮罩失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"处理遮罩失败：{exc}") from exc
+    if not data.get("crop_url") or not data.get("crop_mask_url"):
+        raise HTTPException(status_code=500, detail="遮罩裁切结果落盘失败")
+    return {"ok": True, **data}
+
+
 async def build_online_image_result(payload: OnlineImageRequest):
     provider = get_api_provider(payload.provider_id)
     default_model = (provider.get("image_models") or [IMAGE_MODEL])[0]
@@ -17729,6 +18020,18 @@ async def build_online_image_result(payload: OnlineImageRequest):
         if not image_refs:
             raise HTTPException(status_code=400, detail="请先选择要放大的图片")
         count = 1
+    # 局部重绘：前端送来的就是「遮罩 bbox 内的局部图 + 对齐遮罩」，
+    # 生成完再把结果按遮罩回贴到原图，最终只落一张合并图。
+    inpaint = payload.inpaint if isinstance(payload.inpaint, InpaintMeta) else None
+    if inpaint and len(inpaint.bbox or []) != 4:
+        raise HTTPException(status_code=400, detail="局部重绘缺少遮罩裁切信息，请重新涂抹遮罩")
+    if inpaint:
+        if not inpaint.base_url or not inpaint.crop_mask_url:
+            raise HTTPException(status_code=400, detail="局部重绘缺少原图或遮罩，请重新涂抹遮罩")
+        operation = "inpaint"
+        count = 1
+        request_size = snap_size_to_multiple(inpaint.size or payload.size, 16)
+    request_aspect = (inpaint.aspect_ratio if inpaint else "") or payload.aspect_ratio
     async def generate_one():
         if operation == "upscale":
             image_data, raw_item = await generate_jimeng_upscale_image(image_refs, payload.resolution_type)
@@ -17740,7 +18043,7 @@ async def build_online_image_result(payload: OnlineImageRequest):
                 try:
                     image_data, raw_item = await generate_ai_image(
                         payload.prompt, request_size, payload.quality, model, image_refs, provider["id"],
-                        payload.aspect_ratio, payload.resolution,
+                        request_aspect, payload.resolution,
                     )
                     break
                 except httpx.HTTPStatusError:
@@ -17758,9 +18061,15 @@ async def build_online_image_result(payload: OnlineImageRequest):
         local_items = []
         for item in image_items:
             local_url = await save_ai_image_to_output(item, prefix="online_")
-            if local_url:
-                local_urls.append(local_url)
-                local_items.append(image_output_meta(local_url, item))
+            if not local_url:
+                continue
+            if inpaint:
+                # 回贴失败不致命：退化成「只给出局部重绘结果」，总比整个任务失败好
+                merged_url = await compose_inpaint_result(inpaint, local_url)
+                if merged_url:
+                    local_url = merged_url
+            local_urls.append(local_url)
+            local_items.append(image_output_meta(local_url, item))
         return local_urls, local_items, raw_item
     try:
         generated = await asyncio.gather(*(generate_one() for _ in range(count)))
