@@ -70,11 +70,14 @@
         "smart.compareUseTip": { zh: "点击与该图对比", en: "Click to compare with this image" },
         "smart.compareDrag": { zh: "拖动对比", en: "Drag to compare" },
         "smart.uploadHint": { zh: "点击上传 / 拖入任意文件", en: "Click or drop any file" },
-        "smart.createImportNode": { zh: "快速生图", en: "Quick Gen" },
+        // ⚠️ key 名里的 "ImportNode" 是历史包袱（早先叫「导入节点」）—— 节点已更名为
+        //    「快速执行 / Quick Run」，但 key 名保持不动，避免牵连所有 tr() 调用点。
+        //    这个 key 同时是「创建菜单卡片标题」和「空节点标题」的唯一真相来源。
+        "smart.createImportNode": { zh: "快速执行", en: "Quick Run" },
         "smart.createImportNodeSub": { zh: "支持图片/音频/视频/文档/任意附件", en: "Images, audio, video, documents, any file" },
-        // 「附件」不再是独立的创建入口 —— 附件本质上就是快速生图节点里的 file/text 卡片，
+        // 「附件」不再是独立的创建入口 —— 附件本质上就是快速执行节点里的 file/text 卡片，
         // 所以 smart.createAttach / smart.createAttachSub 已随创建菜单那张卡片一并移除。
-        // 空节点（快速生图新建出来的）上的提示语改用下面这条，明确告诉用户能传任意格式。
+        // 空节点（快速执行新建出来的）上的提示语改用下面这条，明确告诉用户能传任意格式。
         "smart.nodeDropHint": { zh: "拖拽 / 粘贴 / 点击上传，支持任意格式", en: "Drop, paste or click to upload — any file" },
         "smart.attachNode": { zh: "附件", en: "Attachment" },
         "smart.attachNodeMany": { zh: "附件组", en: "Attachments" },
@@ -436,12 +439,12 @@
         "smart.3dRun": { zh: "生成 3D", en: "Generate 3D" },
         "smart.3dRerun": { zh: "重新生成", en: "Regenerate" },
         "smart.3dGenerating": { zh: "识别中…", en: "Recognizing…" },
-        "smart.3dNeedUpstream": { zh: "需连接快速生图", en: "Connect a Quick Image node" },
+        "smart.3dNeedUpstream": { zh: "需连接快速执行", en: "Connect a Quick Run node" },
         "smart.3dNoImage": { zh: "上游图片为空", en: "Upstream has no image" },
         "smart.3dFailed": { zh: "生成失败", en: "Generation failed" },
         "smart.3dInvalid": { zh: "模型未返回有效 3D 数据", en: "Model returned no valid 3D data" },
         "smart.3dDragHint": { zh: "拖拽旋转 · 滚轮缩放", en: "Drag to rotate · scroll to zoom" },
-        "smart.3dEmptyHint": { zh: "连接快速生图后点生成", en: "Connect a Quick Image node, then generate" },
+        "smart.3dEmptyHint": { zh: "连接快速执行后点生成", en: "Connect a Quick Run node, then generate" },
         "smart.3dObjects": { zh: "已识别 {n} 个对象", en: "{n} objects recognized" },
         "smart.3dSnapshotName": { zh: "3D预览截图", en: "3D preview snapshot" },
         "smart.3dShowRaw": { zh: "查看模型输出", en: "View model output" },
