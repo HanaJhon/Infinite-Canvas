@@ -274,6 +274,9 @@ STATIC_RUNNINGHUB_THUMBNAIL_DIR = os.path.join(STATIC_RUNNINGHUB_DIR, "thumbnail
 STATIC_RUNNINGHUB_API_PROVIDERS_FILE = os.path.join(STATIC_RUNNINGHUB_DIR, "api_providers.json")
 STATIC_RUNNINGHUB_MODEL_REGISTRY_FILE = os.path.join(STATIC_RUNNINGHUB_DIR, "models_registry.json")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
+# 附件节点：Agent 生成的文件目录（对外的 url 前缀是 /output/agent/，走 /output 静态挂载）
+AGENT_FILES_DIR = os.path.join(OUTPUT_DIR, "agent")
+AGENT_FILES_URL_PREFIX = "/output/agent/"
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 OUTPUT_INPUT_DIR = os.path.join(ASSETS_DIR, "input")
 OUTPUT_OUTPUT_DIR = os.path.join(ASSETS_DIR, "output")
@@ -1579,6 +1582,8 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(ASSETS_DIR, exist_ok=True)
 os.makedirs(OUTPUT_INPUT_DIR, exist_ok=True)
 os.makedirs(OUTPUT_OUTPUT_DIR, exist_ok=True)
+# 附件节点：Agent 生成的文件（xlsx/docx/pptx/pdf/…）统一落这里，经 /output/agent/ 对外访问
+os.makedirs(AGENT_FILES_DIR, exist_ok=True)
 os.makedirs(ASSET_LIBRARY_DIR, exist_ok=True)
 os.makedirs(LOCAL_UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
@@ -3650,6 +3655,8 @@ class CanvasLLMRequest(BaseModel):
     ms_model: str = ""
     images: List[str] = []   # 可以是 /output/*.png、/assets/*.png 本地路径 或 http(s) URL 或 data URL
     videos: List[str] = []   # 可以是 /output/*.mp4、/assets/*.mp4 本地路径 或 http(s) URL 或 data URL
+    # 附件节点：非图片附件（docx/xlsx/pptx/pdf/txt/md/csv/zip…），每项 {url,name,kind}
+    files: List[Dict[str, Any]] = []
 
 class ConversationCreateRequest(BaseModel):
     title: str = "新对话"
@@ -5806,6 +5813,11 @@ AGENT_TOOLS_SYSTEM_HINT = (
     "\n\n你可以调用本机工具来完成任务：run_shell（执行 Windows 命令）、read_file、write_file、list_dir。"
     "需要了解文件内容或执行命令时直接调用工具，不要凭空猜测；工具返回失败时说明原因并给出替代方案。"
     "不要调用与用户请求无关的工具，也不要在回复里伪造工具输出。"
+    "\n生成文件类产物（xlsx/docx/pptx/pdf/csv/md/txt/zip…）时："
+    f"必须把文件写到项目根目录下的 output/agent/ 子目录（绝对路径 {AGENT_FILES_DIR}）；"
+    "纯文本用 write_file 直接写，xlsx / docx / pptx / pdf 用 run_shell 调 python（openpyxl / python-docx / python-pptx / fpdf2）生成，不要手写二进制。"
+    "文件写好后，在返回 JSON 的 canvas_ops 里为每个文件加一条 create_file_node"
+    "（url = /output/agent/<文件名>，name 带正确扩展名），产物就会直接显示为画布上的附件节点。"
 )
 
 def agent_decode_bytes(data):
@@ -5825,6 +5837,195 @@ def agent_truncate(text, limit=AGENT_TOOL_OUTPUT_LIMIT):
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n…（已截断，原文共 {len(text)} 字符）"
+
+# ---------------------------------------------------------------------------
+# 附件节点：把 Agent 收到的「非图片附件」转成模型可读的上下文
+#   · 文本类（txt/md/csv/json/代码…）→ 直接内联正文
+#   · Office / PDF（docx/xlsx/pptx/pdf）→ 用可选依赖抽取文本（缺失则降级）
+#   · 抽不出来 → 给出本机绝对路径，让 Agent 用 read_file / run_shell 自己看
+# ---------------------------------------------------------------------------
+AGENT_FILE_TEXT_EXTS = {
+    ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".xml", ".yaml", ".yml",
+    ".ini", ".toml", ".log", ".srt", ".vtt", ".sql", ".py", ".pyw", ".js", ".mjs", ".cjs",
+    ".ts", ".tsx", ".jsx", ".css", ".scss", ".less", ".html", ".htm", ".vue", ".svelte",
+    ".java", ".kt", ".c", ".h", ".cpp", ".hpp", ".cs", ".go", ".rs", ".rb", ".php", ".sh",
+    ".env", ".properties", ".conf", ".cfg",
+}
+AGENT_FILE_INLINE_CHARS = 20_000     # 单个附件内联正文上限
+AGENT_FILES_TOTAL_CHARS = 60_000     # 全部附件合计上限
+
+
+def agent_file_display_name(item, path=""):
+    name = str((item or {}).get("name") or "").strip()
+    if name:
+        return os.path.basename(name)
+    if path:
+        return os.path.basename(path)
+    return "attachment"
+
+
+def read_text_attachment(path, limit=AGENT_FILE_INLINE_CHARS):
+    """按 UTF-8 → GBK 顺序读文本；二进制（含 NUL）视为失败返回 None。"""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(max(4096, limit * 4))
+    except OSError:
+        return None
+    if not raw:
+        return ""
+    if b"\x00" in raw[:4096]:
+        return None
+    text = None
+    for encoding in ("utf-8-sig", "utf-8", "gbk"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        text = raw.decode("utf-8", errors="replace")
+    return text[:limit]
+
+
+def extract_docx_text(path, limit):
+    try:
+        import docx  # python-docx
+    except Exception:
+        return None
+    try:
+        document = docx.Document(path)
+        lines = [str(p.text).strip() for p in document.paragraphs if str(p.text).strip()]
+        for table in document.tables:
+            for row in table.rows:
+                cells = [str(c.text).strip() for c in row.cells]
+                if any(cells):
+                    lines.append(" | ".join(cells))
+        return "\n".join(lines)[:limit]
+    except Exception:
+        return None
+
+
+def extract_xlsx_text(path, limit):
+    try:
+        import openpyxl
+    except Exception:
+        return None
+    try:
+        workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        lines = []
+        for sheet in workbook.worksheets:
+            lines.append(f"[工作表] {sheet.title}")
+            for index, row in enumerate(sheet.iter_rows(values_only=True)):
+                if index >= 80:
+                    lines.append("…（仅显示前 80 行）")
+                    break
+                cells = ["" if c is None else str(c) for c in row]
+                if any(c.strip() for c in cells):
+                    lines.append(" | ".join(cells))
+        try:
+            workbook.close()
+        except Exception:
+            pass
+        return "\n".join(lines)[:limit]
+    except Exception:
+        return None
+
+
+def extract_pptx_text(path, limit):
+    try:
+        from pptx import Presentation
+    except Exception:
+        return None
+    try:
+        prs = Presentation(path)
+        lines = []
+        for index, slide in enumerate(prs.slides, 1):
+            lines.append(f"[第{index}页]")
+            for shape in slide.shapes:
+                if not getattr(shape, "has_text_frame", False):
+                    continue
+                for para in shape.text_frame.paragraphs:
+                    text = "".join(run.text for run in para.runs).strip()
+                    if text:
+                        lines.append(text)
+        return "\n".join(lines)[:limit]
+    except Exception:
+        return None
+
+
+def extract_pdf_text(path, limit):
+    reader_cls = None
+    for module_name, attr in (("pypdf", "PdfReader"), ("PyPDF2", "PdfReader")):
+        try:
+            reader_cls = getattr(__import__(module_name, fromlist=[attr]), attr)
+            break
+        except Exception:
+            continue
+    if reader_cls is None:
+        return None
+    try:
+        reader = reader_cls(path)
+        parts = []
+        for page in reader.pages[:30]:
+            parts.append(page.extract_text() or "")
+        return "\n".join(parts)[:limit]
+    except Exception:
+        return None
+
+
+def extract_attachment_text(path, limit=AGENT_FILE_INLINE_CHARS):
+    """返回正文；返回 None 表示「抽不出来」（调用方降级为给出路径）。"""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in AGENT_FILE_TEXT_EXTS:
+        return read_text_attachment(path, limit)
+    if ext == ".docx":
+        return extract_docx_text(path, limit)
+    if ext in (".xlsx", ".xlsm", ".xltx"):
+        return extract_xlsx_text(path, limit)
+    if ext == ".pptx":
+        return extract_pptx_text(path, limit)
+    if ext == ".pdf":
+        return extract_pdf_text(path, limit)
+    return None
+
+
+def agent_files_context_block(files):
+    """把 payload.files 转成一段注入用户消息的附件上下文；无有效附件返回 ""。"""
+    items = [f for f in (files or []) if isinstance(f, dict) and f.get("url")]
+    if not items:
+        return ""
+    budget = AGENT_FILES_TOTAL_CHARS
+    blocks = []
+    for item in items[:16]:
+        url = str(item.get("url") or "")
+        path = output_file_from_url(url) or local_media_file_by_basename(filename_from_media_url(url, ""))
+        name = agent_file_display_name(item, path or "")
+        if not path or not os.path.isfile(path):
+            blocks.append(f"【附件：{name}】\n（文件不在本机可访问路径上，url={url}）")
+            continue
+        size = os.path.getsize(path)
+        ext = os.path.splitext(path)[1].lower().lstrip(".") or "?"
+        abs_path = os.path.abspath(path)
+        if budget <= 0:
+            blocks.append(f"【附件：{name}】格式 .{ext}（{size} 字节）\n本机绝对路径：{abs_path}\n（附件总长度已达上限，请用 read_file 自行读取）")
+            continue
+        text = extract_attachment_text(path, min(AGENT_FILE_INLINE_CHARS, budget))
+        if text is None:
+            blocks.append(
+                f"【附件：{name}】格式 .{ext}（{size} 字节），未能直接解析为文本。"
+                f"\n本机绝对路径：{abs_path}"
+                f"\n如需内容，请用 read_file / run_shell（例如用 python 读取该文件）自行查看。"
+            )
+        else:
+            budget -= len(text)
+            tail = "" if budget > 0 else "\n（附件总长度已达上限，后续附件只给路径）"
+            blocks.append(
+                f"【附件：{name}】格式 .{ext}（{size} 字节）\n```\n{text}\n```"
+                f"\n本机绝对路径：{abs_path}{tail}"
+            )
+    if not blocks:
+        return ""
+    return "\n\n以下是用户随消息一起发来的附件，请结合它们理解需求并产出结果：\n\n" + "\n\n".join(blocks)
 
 def load_agent_tools_settings():
     settings = {
@@ -6146,6 +6347,10 @@ SKILL_SNAPSHOT_LIMIT = 1200              # 清单总条数上限
 SKILLS_CATALOG_FILE = os.path.join(STATIC_DIR, "skills-catalog.json")
 AGENT_SKILLS_DIR = os.path.join(DATA_DIR, "agent_skills")
 AGENT_SKILLS_INDEX = os.path.join(AGENT_SKILLS_DIR, "index.json")
+# 内置 Skill（随程序分发、只读）：放在项目根的 skills/ 下而不是 data/agent_skills/，
+# 因为 data/ 是用户数据目录、打包时被黑名单整目录排除 —— 内置 Skill 必须随包走，
+# 且用户覆盖安装后仍是最新版。见 tools/release.py 的 PROGRAM_DIRS。
+BUILTIN_SKILLS_DIR = os.path.join(BASE_DIR, "skills")
 SKILLS_MARKET_CACHE = os.path.join(DATA_DIR, "skills_market_cache.json")
 SKILLS_MARKET_STATE = os.path.join(DATA_DIR, "skills_market_state.json")
 SKILLS_MARKET_TTL = 6 * 3600             # 联网刷新缓存有效期（秒）
@@ -7589,10 +7794,104 @@ def uninstall_market_skill(skill_id):
         shutil.rmtree(target, ignore_errors=True)
     return {"ok": True, "id": skill_id}
 
-def installed_skills_prompt_block():
-    """把已安装 Skill 的正文拼成一段系统提示词（有总长上限，超了截断）。"""
-    parts = []
-    used = 0
+def load_builtin_skills():
+    """读取随程序分发的内置 Skill（项目根 skills/<id>/SKILL.md），按目录名排序。
+
+    返回 [{id, name, title, content, builtin}]；读不到就返回空列表，不影响启动。
+    """
+    records = []
+    try:
+        if not os.path.isdir(BUILTIN_SKILLS_DIR):
+            return records
+        for name in sorted(os.listdir(BUILTIN_SKILLS_DIR)):
+            path = os.path.join(BUILTIN_SKILLS_DIR, name, "SKILL.md")
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8-sig") as f:
+                    text = (f.read() or "").strip()
+            except Exception:
+                continue
+            if not text:
+                continue
+            title = name
+            first_line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+            if first_line.startswith("# "):
+                title = first_line[2:].strip() or name
+            # SKILL.md 首行常写成「# Skill: xxx」，去掉前缀避免拼出「### Skill: Skill: xxx」
+            title = re.sub(r"^Skill\s*[:：]\s*", "", title).strip() or name
+            records.append({
+                "id": f"builtin:{name}",
+                "name": name,
+                "title": title,
+                "content": text,
+                "builtin": True,
+            })
+    except Exception as exc:
+        print(f"加载内置 Skill 失败: {exc}")
+    return records
+
+
+# 本机工具关闭时，内置办公 Skill 依赖的 run_shell / write_file 都不可用 —— 与其注入
+# 无法执行的流程，不如直接告诉模型「没有这个能力，先让用户开工具」。
+AGENT_FILES_DISABLED_HINT = (
+    "\n\n【文件产物能力】当前「Agent 本机工具」未开启，你无法生成 docx / xlsx / pptx / pdf / csv 等文件产物。"
+    "如果用户要求生成这类文件，请明确说明：需要先在 Agent 工具设置里开启本机工具"
+    "（run_shell / write_file / read_file / list_dir），开启后我才能生成文件。"
+    "绝对不要假装已经生成了文件，也不要返回指向不存在文件的 create_file_node。"
+)
+
+
+def agent_file_capability_block():
+    """工具关闭时返回一段「无文件能力」说明；工具开启时返回空串（此时会注入办公 Skill）。"""
+    if load_agent_tools_settings().get("enabled"):
+        return ""
+    return AGENT_FILES_DISABLED_HINT
+
+
+# 内置办公 Skill 命中词：只有请求可能涉及「文件产物」时才注入，避免每次生图请求
+# 都背上 ~9KB 的办公流程说明（纯生图场景完全用不上）。
+_OFFICE_SKILL_TRIGGER_RE = re.compile(
+    r"(xlsx|xlsm|\bxls\b|excel|表格|报表|台账|清单|统计表|数据表|"
+    r"docx|\bword\b|文档|报告|合同|简历|说明书|方案书|"
+    r"pptx|\bppt\b|幻灯片|演示文稿|汇报|"
+    r"\bpdf\b|csv|tsv|\btxt\b|markdown|\bmd\b|"
+    r"附件|文件产物|导出文件|生成文件|保存成|保存为|"
+    r"办公)",
+    re.I,
+)
+
+
+def builtin_skills_relevant(text):
+    return bool(_OFFICE_SKILL_TRIGGER_RE.search(str(text or "")))
+
+
+def canvas_llm_skill_query(payload):
+    """拼出「本次请求 + 最近几条用户消息」用于判断是否注入内置办公 Skill。
+
+    带上历史是有意的：用户先说「做个销售报表」、下一轮只说「标题改一下」时，
+    单看当前消息会漏判，连带历史就能保持注入（多轮任务不断链）。
+    """
+    parts = [str(getattr(payload, "message", "") or "")]
+    for item in (getattr(payload, "messages", None) or [])[-6:]:
+        if isinstance(item, dict) and item.get("role") == "user":
+            parts.append(str(item.get("content") or ""))
+    return "\n".join(p for p in parts if p)
+
+
+def installed_skills_prompt_block(query=None):
+    """把「内置 Skill + 用户已安装 Skill」的正文拼成一段系统提示词（有总长上限，超了截断）。
+
+    ⚠️ 内置办公 Skill 只在**本机工具开启**时注入：它们全部依赖 run_shell / write_file，
+    工具关着的时候注入只会让模型给出无法执行的方案（由 agent_file_capability_block 兜底）。
+    query 传 None 表示「不按相关性过滤」（聊天 Agent 这类通用场景）；
+    传具体文本时按 _OFFICE_SKILL_TRIGGER_RE 判断是否与文件产物相关。
+    """
+    entries = []
+    if load_agent_tools_settings().get("enabled"):
+        if query is None or builtin_skills_relevant(query):
+            for item in load_builtin_skills():
+                entries.append((item.get("title") or item.get("id") or "Skill", item.get("content") or ""))
     for item in load_installed_skills().get("skills", []):
         skill_id = str(item.get("id") or "")
         if not skill_id:
@@ -7605,6 +7904,10 @@ def installed_skills_prompt_block():
                 text = (f.read() or "").strip()
         except Exception:
             continue
+        entries.append((item.get("title") or skill_id, text))
+    parts = []
+    used = 0
+    for title, text in entries:
         if not text:
             continue
         remain = SKILL_INJECT_CHARS - used
@@ -7613,10 +7916,13 @@ def installed_skills_prompt_block():
         if len(text) > remain:
             text = text[:remain] + "\n…（该 Skill 内容过长，已截断）"
         used += len(text)
-        parts.append(f"### Skill: {item.get('title') or skill_id}\n{text}")
+        parts.append(f"### Skill: {title}\n{text}")
     if not parts:
         return ""
-    return "\n\n以下是用户已安装的 Skill 文档，请严格遵守其中的风格与流程要求：\n\n" + "\n\n".join(parts)
+    return (
+        "\n\n以下是可用的 Skill 文档（含随程序内置的办公 Skill），请严格遵守其中的风格与流程要求：\n\n"
+        + "\n\n".join(parts)
+    )
 
 
 # --- 对话上下文压缩 + 主动激活 Skill（聊天 Agent 的 / 命令）---
@@ -7695,10 +8001,10 @@ async def compress_conversation_history(messages, payload, keep_recent=COMPRESS_
 
 
 def chat_agent_system_prompt(payload, conversation):
-    """聊天 Agent 的 system prompt：默认提示词 + 已安装 Skill（默认启用）+ 本次会话主动激活的 Skill。"""
+    """聊天 Agent 的 system prompt：默认提示词 + 已安装/内置 Skill（默认启用）+ 本次会话主动激活的 Skill。"""
     base = chat_system_prompt(payload)
     parts = [base] if base else []
-    skill_block = installed_skills_prompt_block()
+    skill_block = installed_skills_prompt_block() + agent_file_capability_block()
     if skill_block:
         parts.append(skill_block)
     active = (conversation or {}).get("active_skill")
@@ -11040,6 +11346,33 @@ def content_type_for_path(path):
         return "text/vtt; charset=utf-8"
     if ext == ".png":
         return "image/png"
+    # ---- 附件节点：文档 / 压缩包 / 代码类 ----
+    # 用途：浏览器按正确 MIME 内联预览（PDF 可直接看）或正确命名下载。
+    # 注意：.html/.htm 一律按 text/plain 返回，避免上传的网页在应用同源下被执行。
+    if ext == ".pdf":
+        return "application/pdf"
+    if ext == ".docx":
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if ext == ".doc":
+        return "application/msword"
+    if ext == ".xlsx":
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if ext == ".xls":
+        return "application/vnd.ms-excel"
+    if ext == ".pptx":
+        return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    if ext == ".ppt":
+        return "application/vnd.ms-powerpoint"
+    if ext == ".zip":
+        return "application/zip"
+    if ext in [".yaml", ".yml"]:
+        return "text/yaml; charset=utf-8"
+    if ext in [".markdown", ".log", ".ini", ".toml", ".conf", ".cfg", ".env",
+               ".py", ".pyw", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+               ".css", ".scss", ".less", ".java", ".kt", ".c", ".h", ".cpp",
+               ".hpp", ".cs", ".go", ".rs", ".rb", ".php", ".sh", ".sql",
+               ".xml", ".html", ".htm", ".vue", ".svelte", ".tsv", ".srt"]:
+        return "text/plain; charset=utf-8"
     return "application/octet-stream"
 
 def is_image_reference_value(value):
@@ -14722,7 +15055,14 @@ async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, 
     """带本机工具（终端 / 文件）的聊天：跑一个 tool-calling 循环，直到模型给出最终文字回复。"""
     level = load_codex_permission()
     tools = agent_tool_schemas(level)
-    upstream_messages = [{"role": "system", "content": chat_system_prompt(payload) + AGENT_TOOLS_SYSTEM_HINT}]
+    # 与画布 Agent 一致：按最近几条用户消息判断是否注入内置办公 Skill（文件产物任务才需要）
+    _recent_user = "\n".join(
+        str(item.get("content") or "")
+        for item in conversation["messages"][-6:]
+        if isinstance(item, dict) and item.get("role") == "user"
+    )
+    _system = chat_system_prompt(payload) + installed_skills_prompt_block(_recent_user) + agent_file_capability_block()
+    upstream_messages = [{"role": "system", "content": _system + AGENT_TOOLS_SYSTEM_HINT}]
     for item in conversation["messages"][-MAX_HISTORY_MESSAGES:]:
         msg = upstream_message_from_record(item)
         if msg:
@@ -19491,9 +19831,13 @@ async def canvas_llm_stream(task_id: str, payload: CanvasLLMRequest):
     # APIMart 不支持流式，回退
     if _is_apimart:
         return await canvas_llm(payload)
+    # 附件节点：非图片附件正文/路径拼进用户消息（上面的早退分支已由 canvas_llm 处理，不会重复拼接）
+    file_block = agent_files_context_block(payload.files)
+    if file_block:
+        payload.message = f"{payload.message}\n\n{file_block}"
     system_prompt = (payload.system_prompt or "").strip()
     # Skill 市场里已安装的 Skill 统一在这里注入（流式路径与非流式保持一致）
-    skill_block = installed_skills_prompt_block()
+    skill_block = installed_skills_prompt_block(canvas_llm_skill_query(payload)) + agent_file_capability_block()
     if skill_block:
         system_prompt = (system_prompt + skill_block).strip()
     upstream_messages = [{"role": "system", "content": system_prompt}] if system_prompt else []
@@ -19550,6 +19894,10 @@ async def canvas_llm_stream(task_id: str, payload: CanvasLLMRequest):
 
 @app.post("/api/canvas-llm")
 async def canvas_llm(payload: CanvasLLMRequest):
+    # 附件节点：把随消息发来的非图片附件（正文 / 本机路径）拼进用户消息，所有协议分支共用
+    file_block = agent_files_context_block(payload.files)
+    if file_block:
+        payload.message = f"{payload.message}\n\n{file_block}"
     _provider = get_api_provider(payload.provider)
     if is_codex_provider(_provider):
         model = selected_model(payload.model, (_provider.get("chat_models") or CODEX_DEFAULT_CHAT_MODELS)[0])
@@ -19567,7 +19915,7 @@ async def canvas_llm(payload: CanvasLLMRequest):
     _is_apimart = is_apimart_provider(_llm_provider)
     system_prompt = (payload.system_prompt or "").strip()
     # Skill 市场里已安装的 Skill 统一在这里注入，保证「安装即生效」，并与客户端挂载的 skill 文件叠加
-    skill_block = installed_skills_prompt_block()
+    skill_block = installed_skills_prompt_block(canvas_llm_skill_query(payload)) + agent_file_capability_block()
     if skill_block:
         system_prompt = (system_prompt + skill_block).strip()
     tool_settings = load_agent_tools_settings()

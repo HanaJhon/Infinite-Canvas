@@ -7360,19 +7360,106 @@ function isTextMediaItem(img){
     if(!img) return false;
     if(img.kind === 'text') return true;
     const url = smartOriginalMediaUrl(img).toLowerCase();
-    return /\.(txt|json|csv|srt|vtt|md)(\?|$)/.test(url);
+    return /\.(txt|json|csv|tsv|srt|vtt|md|markdown|log|yaml|yml|ini|toml)(\?|$)/.test(url);
 }
 function isFileMediaItem(img){
     if(!img) return false;
     return img.kind === 'file';
 }
+// 供「附件节点」判断：任何「非图片 / 非视频 / 非音频」的媒体都算附件
+// （pdf / docx / xlsx / pptx / zip / txt / md / csv … 以及未识别格式）
+function isAttachmentMediaItem(img){
+    if(!img) return false;
+    const kind = mediaKindForItem(img);
+    return kind === 'file' || kind === 'text';
+}
 function mediaKindForFile(file){
     const type = String(file?.type || '').toLowerCase();
     const name = String(file?.name || '').toLowerCase();
-    if(type.startsWith('video/') || /\.(mp4|webm|mov|m4v|avi|mkv)(\?|$)/.test(name)) return 'video';
+    if(type.startsWith('video/') || /\.(mp4|webm|mov|m4v|avi|mkv|flv)(\?|$)/.test(name)) return 'video';
     if(type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac)(\?|$)/.test(name)) return 'audio';
-    if(type.startsWith('text/') || /\.(txt|json|csv|srt|vtt|md)(\?|$)/.test(name)) return 'text';
-    return 'image';
+    if(type.startsWith('text/') || /\.(txt|json|csv|tsv|srt|vtt|md|markdown|log|yaml|yml|ini|toml)(\?|$)/.test(name)) return 'text';
+    if(type.startsWith('image/') || /\.(png|jpe?g|jfif|webp|gif|bmp|svg|avif|heic|heif|ico|tiff?)(\?|$)/.test(name)) return 'image';
+    // 附件节点：pdf / docx / xlsx / pptx / zip / 以及任意未知格式，一律按「文件」处理
+    return 'file';
+}
+// ---------------------------------------------------------------------------
+// 附件节点：预览方式判定
+//   pdf   → 新标签页内联预览（浏览器原生 PDF viewer）
+//   text  → 画布内弹窗读取正文
+//   其它  → 直接下载（Office / 压缩包 / 未知格式）
+// ---------------------------------------------------------------------------
+const ATTACH_PDF_EXT_RE = /\.pdf(\?|$)/i;
+const ATTACH_TEXT_EXT_RE = /\.(txt|json|csv|tsv|srt|vtt|md|markdown|log|yaml|yml|ini|toml|xml|sql|py|pyw|js|mjs|cjs|ts|tsx|jsx|html|htm|css|scss|less|java|kt|c|h|cpp|hpp|cs|go|rs|rb|php|vue|svelte|sh|env|properties|conf|cfg)(\?|$)/i;
+function attachmentProbeText(img){
+    const name = String(img?.name || '').trim().toLowerCase();
+    const url = String(img?.url || img?.originalLocalUrl || img?.localUrl || '').trim().toLowerCase();
+    return {name, url};
+}
+function attachmentExtLabel(img){
+    const {name, url} = attachmentProbeText(img);
+    const m = name.match(/\.([a-z0-9]{1,8})$/) || url.split('?')[0].match(/\.([a-z0-9]{1,8})$/);
+    if(m) return m[1].toUpperCase();
+    return isTextMediaItem(img) ? 'TEXT' : 'FILE';
+}
+function attachmentPreviewKind(img){
+    const {name, url} = attachmentProbeText(img);
+    if(ATTACH_PDF_EXT_RE.test(name) || ATTACH_PDF_EXT_RE.test(url)) return 'pdf';
+    if(ATTACH_TEXT_EXT_RE.test(name) || ATTACH_TEXT_EXT_RE.test(url)) return 'text';
+    return 'download';
+}
+function attachmentInlineUrl(url){
+    return `/api/download-output?url=${encodeURIComponent(url || '')}&inline=1`;
+}
+function openAttachmentItem(img){
+    if(!img?.url) return;
+    const mode = attachmentPreviewKind(img);
+    if(mode === 'pdf'){
+        window.open(attachmentInlineUrl(img.url), '_blank', 'noopener');
+        return;
+    }
+    if(mode === 'text'){
+        openAttachmentTextPreview(img);
+        return;
+    }
+    downloadPreviewFile(img);
+}
+let attachmentPreviewEl = null;
+function closeAttachmentPreview(){
+    try { attachmentPreviewEl?.remove(); } catch(e) {}
+    attachmentPreviewEl = null;
+}
+// 文本类附件：弹窗读取正文（浮层挂在 body 上，避免 transform 祖先破坏 position:fixed）
+async function openAttachmentTextPreview(img){
+    if(!img?.url) return;
+    closeAttachmentPreview();
+    const btnStyle = 'flex:0 0 auto;padding:5px 12px;border-radius:8px;border:1px solid var(--border,rgba(127,127,127,.35));background:transparent;color:inherit;font-size:12px;cursor:pointer';
+    const wrap = document.createElement('div');
+    wrap.className = 'attachment-preview-mask';
+    wrap.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:28px';
+    wrap.innerHTML = `<div style="width:min(920px,92vw);max-height:86vh;display:flex;flex-direction:column;background:var(--panel,#fff);color:var(--text,#111);border-radius:14px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.35)">
+        <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border,rgba(127,127,127,.25))">
+            <strong style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px">${escapeHtml(img.name || 'Attachment')}</strong>
+            <button type="button" data-attach-download style="${btnStyle}">${escapeHtml(tr('smart.attachDownload') || '下载')}</button>
+            <button type="button" data-attach-close style="${btnStyle}">${escapeHtml(tr('smart.attachClose') || '关闭')}</button>
+        </div>
+        <pre style="flex:1;margin:0;padding:16px;overflow:auto;font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word">…</pre>
+    </div>`;
+    document.body.appendChild(wrap);
+    attachmentPreviewEl = wrap;
+    wrap.addEventListener('click', e => {
+        if(e.target === wrap || e.target.closest('[data-attach-close]')){ closeAttachmentPreview(); return; }
+        if(e.target.closest('[data-attach-download]')) downloadPreviewFile(img);
+    });
+    const pre = wrap.querySelector('pre');
+    try {
+        const res = await fetch(attachmentInlineUrl(img.url));
+        if(!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await res.text();
+        pre.textContent = text.length > 400000 ? `${text.slice(0, 400000)}\n\n…（内容过长已截断，请下载查看完整文件）` : text;
+    } catch(err) {
+        pre.textContent = `${tr('smart.attachReadFail') || '无法读取内容'}：${err?.message || err}`;
+    }
 }
 function mediaKindForItem(img){
     if(isFileMediaItem(img)) return 'file';
@@ -7380,6 +7467,26 @@ function mediaKindForItem(img){
     if(isAudioMediaItem(img)) return 'audio';
     if(isVideoMediaItem(img)) return 'video';
     return 'image';
+}
+// 图片节点（smart-image）的头部标签：按实际承载的媒体类型显示。
+// 附件节点显示真实扩展名（XLSX / PPTX / PDF…），多个附件显示「附件组」，
+// 否则附件节点会被笼统标成 "Image"，用户根本看不出这是 Agent 产出的文件。
+function smartImageNodeTitle(node, imgs){
+    const list = Array.isArray(imgs) ? imgs : [];
+    if(!list.length) return escapeHtml(tr('smart.createImportNode'));
+    if(list.length > 1){
+        if(list.every(isAttachmentMediaItem)) return escapeHtml(tr('smart.attachNodeMany'));
+        if(list.every(isVideoMediaItem)) return escapeHtml(tr('smart.kindVideo'));
+        return 'Group';
+    }
+    const one = list[0];
+    if(isAttachmentMediaItem(one)){
+        const ext = attachmentExtLabel(one);
+        return escapeHtml(ext || tr('smart.attachNode'));
+    }
+    if(isVideoMediaItem(one)) return escapeHtml(tr('smart.kindVideo'));
+    if(isAudioMediaItem(one)) return escapeHtml(tr('smart.kindAudio'));
+    return 'Image';
 }
 function localDisplayUrlForMediaItem(img){
     if(!img) return '';
@@ -7473,7 +7580,10 @@ function audioRefsOnly(refs){
     return (refs || []).filter(ref => ref?.url && mediaKindForItem(ref) === 'audio');
 }
 function thumbMediaHtml(img){
-    if(isFileMediaItem(img) || isTextMediaItem(img)) return `<div class="media-thumb file-thumb" data-media-url="${escapeAttr(img.url || '')}" data-media-kind="${escapeAttr(mediaKindForItem(img))}"><i data-lucide="${isTextMediaItem(img) ? 'file-text' : 'file'}"></i><span>${escapeHtml(img.name || (isTextMediaItem(img) ? 'Text' : 'File'))}</span></div>`;
+    if(isFileMediaItem(img) || isTextMediaItem(img)){
+        const isText = isTextMediaItem(img);
+        return `<div class="media-thumb file-thumb" data-attach-open="1" data-media-url="${escapeAttr(img.url || '')}" data-media-kind="${escapeAttr(mediaKindForItem(img))}" title="${escapeAttr(tr('smart.attachOpenHint') || '双击打开')}"><i data-lucide="${isText ? 'file-text' : 'file'}"></i><span>${escapeHtml(img.name || (isText ? 'Text' : 'File'))}</span></div>`;
+    }
     if(isAudioMediaItem(img)) return `<div class="media-thumb audio-thumb" data-media-url="${escapeAttr(img.url || '')}" data-media-kind="audio"><i data-lucide="file-audio"></i><span>${escapeHtml(img.name || 'Audio')}</span></div>`;
     if(isVideoMediaItem(img)) return `<div class="media-thumb video-thumb">${isInlineVideoActive(img) ? smartVideoPlayerHtml(img.url || '') : `${smartVideoPreviewHtml(img, 512, 'alt=""')}<button class="smart-video-play thumb-video-play" type="button" title="播放"><i data-lucide="play"></i></button>`}</div>`;
     return smartPreviewImgHtml(img, 512, 'draggable="false"');
@@ -7544,7 +7654,11 @@ function updateImageResolutionBadgeElement(itemEl, img){
     badge.textContent = label;
 }
 function singleMediaHtml(img, w, h){
-    if(isFileMediaItem(img) || isTextMediaItem(img)) return `<div class="node-img media-card media-file-card" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="${isTextMediaItem(img) ? 'file-text' : 'file'}"></i></div><div class="media-card-title">${escapeHtml(img.name || (isTextMediaItem(img) ? 'Text' : 'File'))}</div><div class="media-card-sub">${isTextMediaItem(img) ? 'TEXT' : 'FILE'}</div></div>`;
+    if(isFileMediaItem(img) || isTextMediaItem(img)){
+        const isText = isTextMediaItem(img);
+        const hint = tr('smart.attachOpenHint') || '双击打开';
+        return `<div class="node-img media-card media-file-card" data-attach-open="1" data-media-url="${escapeAttr(img.url || '')}" data-media-kind="${escapeAttr(mediaKindForItem(img))}" title="${escapeAttr(hint)}" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="${isText ? 'file-text' : 'file'}"></i></div><div class="media-card-title" title="${escapeAttr(img.name || '')}">${escapeHtml(img.name || (isText ? 'Text' : 'File'))}</div><div class="media-card-sub">${escapeHtml(attachmentExtLabel(img))}</div></div>`;
+    }
     if(isAudioMediaItem(img)) return `<div class="node-img media-card media-audio-card" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="file-audio"></i></div><div class="media-card-title">${escapeHtml(img.name || 'Audio')}</div><div class="media-card-sub">AUDIO</div><audio src="${escapeAttr(img.url || '')}" data-url="${escapeAttr(img.url || '')}" controls preload="metadata"></audio></div>`;
     if(isVideoMediaItem(img)) return `<div class="node-img media-card media-video-card" style="width:${w}px;height:${h}px">${isInlineVideoActive(img) ? smartVideoPlayerHtml(img.url || '') : `${smartVideoPreviewHtml(img, 768, 'alt=""')}<button class="smart-video-play" type="button" title="播放"><i data-lucide="play"></i></button>`}</div>`;
     return smartPreviewImgHtml(img, 768, `class="node-img" draggable="false" style="width:${w}px;height:${h}px"`);
@@ -9818,6 +9932,20 @@ function runSmartNodeToolbarAction(nodeId, action){
         // 发送图片到 Agent 面板作为附件
         if(!agentOpen) toggleAgentPanel(true);
         if(agentState){
+            // 附件节点：非图片（文档 / 表格 / 压缩包 / 文本…）走「文档附件」，图片 / 视频仍走参考图附件
+            if(kind !== 'image' && kind !== 'video'){
+                const docItem = node.images?.[index] || item;
+                const added = agentAddDocumentRefs([{
+                    url:docItem.url,
+                    name:docItem.name || node.title || 'file',
+                    kind:mediaKindForItem(docItem) === 'text' ? 'text' : 'file',
+                    nodeId:node.id,
+                    x:Number(node.x) || 0,
+                    y:Number(node.y) || 0
+                }]);
+                toast(added ? '已发送至 Agent' : (agentState.documents.some(d => d.url === docItem.url) ? '附件已存在' : `最多携带 ${AGENT_DOC_MAX} 个附件`));
+                return;
+            }
             if(!Array.isArray(agentState.attachments)) agentState.attachments = [];
             const _genProv = agentGenProviders().some(p => p.id === agentState.genProvider) ? agentState.genProvider : (agentGenProviders()[0]?.id || '');
             const _refMax = _genProv ? providerMaxReferenceImages(_genProv) : AGENT_LLM_IMAGE_MAX;
@@ -10027,7 +10155,7 @@ function render(){
         .sort((a, b) => (isSmartGroupNode(a) ? 0 : 1) - (isSmartGroupNode(b) ? 0 : 1))
         .map(node => {
         const imgs = node.images || [];
-        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : node.type === 'smart-minimax' ? 'MiniMax H3' : isSmart3DNode(node) ? escapeHtml(tr('smart.3dTitle')) : (imgs.length > 1 ? 'Group' : imgs.length ? 'Image' : escapeHtml(tr('smart.createImportNode')));
+        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : node.type === 'smart-minimax' ? 'MiniMax H3' : isSmart3DNode(node) ? escapeHtml(tr('smart.3dTitle')) : smartImageNodeTitle(node, imgs);
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
@@ -11235,7 +11363,7 @@ function handlePortDrop(drag, e){
 function pickMediaForSmartNode(nodeId){
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'image/*,video/*,audio/*';
+    // 附件节点：不限格式，用户可挑选任意文件
     input.multiple = true;
     input.onchange = () => {
         if(input.files?.length) handleFiles(input.files, nodeId);
@@ -11871,7 +11999,10 @@ function deleteImage(id, imageIndex){
     if(!node || imageIndex < 0) return;
     pushUndo();
     node.images = (node.images || []).filter((_, index) => index !== imageIndex);
-    if(node.images.length <= 1) node.title = 'Image';
+    // 附件节点删掉一个文件后不应被改写成 "Image"（标题会出现在 @ 引用面板与 Agent 节点引用里）
+    const _rest = node.images || [];
+    if(_rest.length > 1) node.title = 'Group';
+    else if(_rest.length === 1) node.title = isAttachmentMediaItem(_rest[0]) ? attachmentExtLabel(_rest[0]) : 'Image';
     if(selectedImage.nodeId === id) selectedImage = {nodeId:id, index:Math.min(selectedImage.index, node.images.length - 1)};
     if(selectedImage.index < 0) selectedImage = {nodeId:'', index:-1};
     render();
@@ -14023,7 +14154,8 @@ function openImageEditor(nodeId, imageIndex=0){
     if(!image?.url) return;
     const kind = mediaKindForItem(image);
     if(kind !== 'image' && kind !== 'video'){
-        downloadPreviewFile(image);
+        // 附件节点：PDF 内联预览 / 文本弹窗预览 / 其余格式直接下载
+        openAttachmentItem(image);
         return;
     }
     selectedId = nodeId;
@@ -15004,11 +15136,14 @@ function reorderInputThumb(currentNode, items, from, to, placement='before'){
     render();
     scheduleSave();
 }
+// 附件节点：除「本机可执行 / 脚本」外放行任意格式。
+// 说明：这不是安全边界（文件存在本机、用户自己上传），只是为了不让 .exe/.bat 之类
+// 混进素材区被误双击运行。若确实需要上传这些格式，把扩展名从这里删掉即可。
+const UNSAFE_UPLOAD_EXT_RE = /\.(exe|msi|msp|bat|cmd|com|scr|pif|vbs|vbe|wsf|wsh|ps1|psd1|psm1|dll|sys|drv|reg|lnk|hta|jar|apk|app|dmg|deb|rpm|sh|bash|zsh|command)(\?|$)/i;
 function isSupportedUploadFile(file){
-    const type = String(file?.type || '').toLowerCase();
     const name = String(file?.name || '').toLowerCase();
-    return type.startsWith('image/') || type.startsWith('video/') || type.startsWith('audio/')
-        || /\.(png|jpe?g|webp|gif|bmp|svg|avif|heic|ico|tiff|mp4|webm|mov|m4v|mkv|mp3|wav|m4a|aac|ogg|flac)(\?|$)/i.test(name);
+    if (UNSAFE_UPLOAD_EXT_RE.test(name)) return false;
+    return true;
 }
 function dataTransferItemEntry(item){
     try { return item?.webkitGetAsEntry?.() || null; } catch { return null; }
@@ -15044,7 +15179,16 @@ function uploadTitleForItems(items, fallback=''){
     if(kinds.size > 1) return list.length > 1 ? 'Media' : (fallback || tr('smart.createImportNode'));
     if(kinds.has('video')) return list.length > 1 ? 'Videos' : 'Video';
     if(kinds.has('audio')) return 'Audio';
+    if(kinds.has('file') || kinds.has('text')) return list.length > 1 ? tr('smart.attachNodeMany') : tr('smart.attachNode');
     return list.length > 1 ? 'Group' : (fallback || tr('smart.createImportNode'));
+}
+// 服务端对未识别格式会统一兜底成 kind='file'，但前端能识别出更具体的类型（如 .md → text）。
+// 取「更具体」的那个，避免 .md 被当普通附件、也避免未知格式被误当图片。
+function resolveUploadedKind(serverKind, file){
+    const local = file instanceof File ? mediaKindForFile(file) : mediaKindForItem(file);
+    if(!serverKind) return local;
+    if(serverKind === 'file' && local !== 'file') return local;
+    return serverKind;
 }
 const SMART_IMAGE_DROP_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif|heic|ico|tiff)$/i;
 const SMART_IMAGE_DROP_TEXT_TYPES = [
@@ -15203,7 +15347,7 @@ async function uploadFiles(files){
     });
     return (data.files || []).map((file, index) => ({
         ...file,
-        kind:file.kind || mediaKindForFile(supported[index])
+        kind:resolveUploadedKind(file.kind, supported[index])
     }));
 }
 function appendImagesToSmartNode(uploaded, targetId='', opts={}){
@@ -15262,7 +15406,7 @@ async function handleFiles(files, targetId='', opts={}){
         const uploaded = await uploadFiles(fileList);
         if(!uploaded.length) return;
         if(!opts.skipUndo) pushUndo();
-        appendImagesToSmartNode(uploaded.map((file, index) => ({...file, kind:file.kind || mediaKindForFile(fileList[index])})), targetId, opts);
+        appendImagesToSmartNode(uploaded.map((file, index) => ({...file, kind:resolveUploadedKind(file.kind, fileList[index])})), targetId, opts);
     } catch(e) { toast(e.message || tr('smart.toastUploadFail')); }
 }
 async function importSmartLocalImages(paths){
@@ -19414,6 +19558,11 @@ function createNodeFromMenu(type){
     else if(type === 'loop') created = createLoopNode(p.x - 135, p.y - 95);
     else if(type === 'minimax') created = createMinimaxNode(p.x - 520, p.y - 320);
     else if(type === '3d') created = create3DNode(p.x - 280, p.y - 235);
+    else if(type === 'attach'){
+        // 附件节点：建一个空节点并立刻打开文件选择器（不限格式）
+        created = createImageNodeAt(p);
+        if(created) setTimeout(() => pickMediaForSmartNode(created.id), 0);
+    }
     else created = createImageNodeAt(p);
     createMenuGroupId = groupId;
     addCreatedNodeToMenuGroup(created);
@@ -19421,6 +19570,16 @@ function createNodeFromMenu(type){
     return created;
 }
 // AI Agent 画布操作执行器（开发模式 / canvas_ops 协议）
+// 附件节点：判断一组 ops 里是否包含「Agent 产物落成附件节点」的操作。
+// 这类操作是 Agent 的产出通道，不受「画布控制」开关限制（否则用户不开发模式就永远收不到文件）。
+const AGENT_FILE_OPS = ['create_file_node', 'attach_file', 'create_attachment_node', 'create_document_node'];
+function isAgentFileOp(op){
+    if(!op || typeof op !== 'object') return false;
+    return AGENT_FILE_OPS.includes(String(op.op || op.action || '').trim().toLowerCase());
+}
+function agentOpsHaveFileOps(ops){
+    return Array.isArray(ops) && ops.some(isAgentFileOp);
+}
 function applyAgentCanvasOps(ops){
     if(!Array.isArray(ops) || !ops.length) return 0;
     pushUndo();
@@ -19435,22 +19594,26 @@ function applyAgentCanvasOps(ops){
         target = nodes.find(n => n.title && n.title.toLowerCase().includes(str));
         return target || null;
     };
+    const resolveOpPosition = op => {
+        let p = viewportCenter();
+        if(Array.isArray(op.position) && op.position.length >= 2){
+            p = { x: Number(op.position[0]) || p.x, y: Number(op.position[1]) || p.y };
+        } else if(typeof op.position === 'string'){
+            const pos = op.position.toLowerCase();
+            if(pos === 'left') p.x -= 420;
+            else if(pos === 'right') p.x += 420;
+            else if(pos === 'top') p.y -= 320;
+            else if(pos === 'bottom') p.y += 320;
+        }
+        return p;
+    };
 
     ops.forEach(op => {
         if(!op || typeof op !== 'object') return;
         const action = String(op.op || op.action || '').trim().toLowerCase();
         if(action === 'create_node'){
             const type = String(op.type || 'image').trim().toLowerCase();
-            let p = viewportCenter();
-            if(Array.isArray(op.position) && op.position.length >= 2){
-                p = { x: Number(op.position[0]) || p.x, y: Number(op.position[1]) || p.y };
-            } else if(typeof op.position === 'string'){
-                const pos = op.position.toLowerCase();
-                if(pos === 'left') p.x -= 420;
-                else if(pos === 'right') p.x += 420;
-                else if(pos === 'top') p.y -= 320;
-                else if(pos === 'bottom') p.y += 320;
-            }
+            const p = resolveOpPosition(op);
             let created = null;
             if(type.includes('prompt')) created = createPromptNode(p.x - 158, p.y - 97, {skipUndo:true});
             else if(type.includes('loop')) created = createLoopNode(p.x - 135, p.y - 95, {skipUndo:true});
@@ -19462,6 +19625,19 @@ function applyAgentCanvasOps(ops){
             if(created){
                 if(op.title && typeof op.title === 'string') created.title = op.title;
                 if(op.text && typeof op.text === 'string' && created.type === 'smart-prompt') created.text = op.text;
+                appliedCount++;
+            }
+        } else if(action === 'create_file_node' || action === 'attach_file' || action === 'create_attachment_node' || action === 'create_document_node'){
+            // 附件节点：把 Agent 产出的文件（已落在 /output/agent/ 等可访问路径）落成画布节点
+            const url = String(op.url || op.src || op.path || '').trim();
+            if(!url) return;
+            const name = String(op.name || op.filename || fileNameFromUrl(url) || 'file').trim() || 'file';
+            const p = resolveOpPosition(op);
+            const kind = mediaKindForFile({name, type:''});
+            const item = {url, name, kind};
+            const created = createImageNodeAt(p, [item], {skipUndo:true});
+            if(created){
+                created.title = (op.title && typeof op.title === 'string') ? op.title : name;
                 appliedCount++;
             }
         } else if(action === 'connect'){
@@ -20872,9 +21048,26 @@ const AGENT_STORAGE_PREFIX = 'smart_agent_v1:';
 const AGENT_SKILL_MAX_BYTES = 512 * 1024;
 const AGENT_HISTORY_MAX = 20;
 const AGENT_LLM_IMAGE_MAX = 8;
+// 附件节点：Agent 侧可携带的「非图片附件」上限（文档 / 表格 / 压缩包 / 任意格式）
+const AGENT_DOC_MAX = 8;
+// 作为 Skill 载入的判定：文件名命中这几个模式（其余 .md/.txt 一律当普通附件）
+const AGENT_SKILL_FILE_RE = /^(skill|skills|skills?\.md|.*\.skill\.md)$/i;
 const AGENT_GEN_MAX_PER_MSG = 8;
 const AGENT_MSG_MAX = 60;
 const AGENT_NL = String.fromCharCode(10);
+// 附件产物协议：Agent 生成的文档 / 表格 / PPT / PDF 等如何落成画布附件节点。
+// 单独抽出来是为了同时注入「OFF 模式」与「思考模式」两套系统提示词，避免两处写法漂移。
+const AGENT_FILES_INSTRUCTION = `
+【附件产物协议 / Agent Files】
+当用户要求生成文档 / 表格 / PPT / PDF / 压缩包 / 代码文件等「非图片产物」时：
+1. 先用本机工具把文件写到项目根目录下的 output/agent/ 子目录（write_file 写文本类；xlsx / docx / pptx / pdf 用 run_shell 调 python 生成，不要手写二进制）；
+2. 再在返回 JSON 的 canvas_ops 里为**每一个**文件追加一条 create_file_node，url 用 /output/agent/<文件名>，name 必须带正确扩展名；
+3. 需要多个产物就写多条（可与 create_node 混用）——不要只做一个，也不要把多个文件塞进一条。
+示例：
+"canvas_ops": [
+  {"op":"create_file_node", "url":"/output/agent/销售报表.xlsx", "name":"销售报表.xlsx", "title":"销售报表"},
+  {"op":"create_file_node", "url":"/output/agent/说明.md", "name":"说明.md"}
+]`;
 const AGENT_FORMAT_INSTRUCTION = `You are an AI image-generation agent. Reply with raw JSON only (no markdown, no extra text):
 {"reply":"回复用户的话","options":[],"prompts":[],"generations":[{"prompt":"详细中文提示词","count":1,"use_last_outputs":false,"use_attachments":false}]}
 
@@ -20922,7 +21115,8 @@ B. 主体更换（use_last_outputs必须为true）：
   {"op":"connect", "from":"from_node_id_or_title", "to":"to_node_id_or_title", "kind":"input"},
   {"op":"update_node", "id":"node_id_or_title", "title":"新标题", "text":"新文本"},
   {"op":"remove_node", "id":"node_id_or_title"}
-]`;
+]
+${AGENT_FILES_INSTRUCTION}`;
 // OFF模式系统提示词：快速执行器（理解意图但不改写prompt）
 const AGENT_OFF_MODE_INSTRUCTION = `你是一个图像生成 Agent 的意图决策器。分析用户输入+上下文，决定下一步行动。仅返回原始 JSON，不要 markdown。
 
@@ -21001,7 +21195,7 @@ let agentSaveTimer = null;
 let agentState = null;
 let agentMentionIdx = -1;
 function agentDefaultState(){
-    return {skills:[], attachments:[], messages:[], conversations:[], activeConversationId:'', chatProvider:'', chatModel:'', genProvider:'', genModel:'', genRatio:'square', genResolution:'1k', genCount:1, genQuality:'', autoContext:true, inputHeight:0, devMode:false};
+    return {skills:[], attachments:[], documents:[], messages:[], conversations:[], activeConversationId:'', chatProvider:'', chatModel:'', genProvider:'', genModel:'', genRatio:'square', genResolution:'1k', genCount:1, genQuality:'', autoContext:true, inputHeight:0, devMode:false};
 }
 // 将 prompts 规范化为对象数组（兼容旧格式 string[]）
 // 每个 prompt 对象：{prompt, count, use_last_outputs, use_attachments, status}
@@ -21068,6 +21262,8 @@ function loadAgentState(){
     delete agentState.skill;
     if(!Array.isArray(agentState.skills)) agentState.skills = [];
     if(!Array.isArray(agentState.attachments)) agentState.attachments = [];
+    // 附件节点：Agent 侧的非图片附件（文档/表格/压缩包…）
+    if(!Array.isArray(agentState.documents)) agentState.documents = [];
     // 旧数据迁移：messages → conversations
     if(!Array.isArray(agentState.conversations)) agentState.conversations = [];
     if(agentState.messages && agentState.messages.length && !agentState.conversations.length){
@@ -21998,6 +22194,7 @@ function renderAgentAttachments(){
     if(!agentAttachRow || !agentState) return;
     const skills = Array.isArray(agentState.skills) ? agentState.skills : [];
     const attachments = Array.isArray(agentState.attachments) ? agentState.attachments : [];
+    const documents = Array.isArray(agentState.documents) ? agentState.documents : [];
     let html = '';
     skills.forEach((skill, i) => {
         html += `<div class="agent-attach-skill"><i data-lucide="file-text"></i><span class="agent-attach-skill-name">${escapeHtml(skill.name || 'skill.md')}</span><button type="button" data-agent-skill-remove="${i}"><i data-lucide="x"></i></button></div>`;
@@ -22005,6 +22202,7 @@ function renderAgentAttachments(){
     attachments.forEach((att, i) => {
         html += `<div class="agent-attach-chip" draggable="${attachments.length > 1 ? 'true' : 'false'}" data-agent-att-index="${i}" title="${escapeHtml(att.name || 'image')}"><span class="agent-att-num">${agentLastResults().length + i + 1}</span><img src="${escapeHtml(att.url)}" alt=""><button type="button" data-agent-att-remove="${i}"><i data-lucide="x"></i></button></div>`;
     });
+    documents.forEach((doc, i) => { html += agentDocChipHtml(doc, i); });
     agentAttachRow.innerHTML = html;
     if(window.lucide) lucide.createIcons();
     agentAttachRow.querySelectorAll('[data-agent-skill-remove]').forEach(btn => {
@@ -22021,6 +22219,26 @@ function renderAgentAttachments(){
             agentState.attachments.splice(Number(btn.dataset.agentAttRemove) || 0, 1);
             renderAgentAttachments();
             saveAgentState();
+        };
+    });
+    // 文档附件：点卡片打开预览（PDF 内联 / 文本弹窗 / 其余下载），× 移除，✦ 载入为 Skill
+    agentAttachRow.querySelectorAll('[data-agent-doc-index]').forEach(el => {
+        el.onclick = e => {
+            const idx = Number(el.dataset.agentDocIndex);
+            if(e.target.closest('[data-agent-doc-remove]')){
+                e.stopPropagation();
+                agentState.documents.splice(idx, 1);
+                renderAgentAttachments();
+                saveAgentState();
+                return;
+            }
+            if(e.target.closest('[data-agent-doc-skill]')){
+                e.stopPropagation();
+                promoteAgentDocToSkill(idx);
+                return;
+            }
+            const doc = (agentState.documents || [])[idx];
+            if(doc?.url) openAttachmentItem(doc);
         };
     });
     agentAttachRow.querySelectorAll('[data-agent-att-index]').forEach(el => {
@@ -22094,15 +22312,103 @@ function renderAgentAttachments(){
         });
     });
 }
+// ---------------------------------------------------------------------------
+// 附件节点 → Agent：任意格式文件作为「文档附件」加入 Agent 输入区
+//   · 与图片附件（生图参考图）分开存：documents[] vs attachments[]
+//   · 发送时随 llmPayload.files 一起给后端，由后端抽取正文/路径注入提示词
+// ---------------------------------------------------------------------------
+// 送给后端的附件引用（后端按 url 解析成本机路径，抽取正文或给出可读路径）
+function agentFileRefsForLlm(docs){
+    return (docs || []).filter(d => d?.url).slice(0, AGENT_DOC_MAX).map(d => ({
+        url:d.url,
+        name:d.name || '',
+        kind:(String(d.kind || 'file') === 'text') ? 'text' : 'file'
+    }));
+}
+// 按引用把已有文件（画布节点里的 url）加入 Agent 文档附件；返回新增数量
+function agentAddDocumentRefs(items){
+    if(!agentState) return 0;
+    if(!Array.isArray(agentState.documents)) agentState.documents = [];
+    let added = 0;
+    (items || []).forEach(item => {
+        if(!item?.url) return;
+        if(agentState.documents.length >= AGENT_DOC_MAX) return;
+        if(agentState.documents.some(d => d.url === item.url)) return;
+        const kind = String(item.kind || 'file');
+        agentState.documents.push({
+            url:item.url,
+            name:item.name || fileNameFromUrl(item.url) || 'file',
+            kind:(kind === 'text') ? 'text' : 'file',
+            nodeId:item.nodeId || '',
+            x:Number(item.x) || 0,
+            y:Number(item.y) || 0
+        });
+        added++;
+    });
+    if(added){ renderAgentAttachments(); saveAgentState(); }
+    return added;
+}
+async function agentAttachDocuments(files){
+    if(!agentState) return;
+    const list = [...(files || [])].filter(isSupportedUploadFile);
+    if(!list.length) return;
+    if(!Array.isArray(agentState.documents)) agentState.documents = [];
+    const room = AGENT_DOC_MAX - agentState.documents.length;
+    if(room <= 0){ toast(`最多携带 ${AGENT_DOC_MAX} 个附件，请先移除部分文件`); return; }
+    const use = list.slice(0, room);
+    if(list.length > room) toast(`最多携带 ${AGENT_DOC_MAX} 个附件，仅添加前 ${room} 个`);
+    try {
+        const uploaded = await uploadFiles(use);
+        agentAddDocumentRefs((uploaded || []).filter(f => f?.url));
+    } catch(e) {
+        toast(String(e.message || e).slice(0, 120));
+    }
+}
+// 文档附件小卡片（非图片 → 图标 + 文件名 + 扩展名 + 移除）
+function agentDocChipHtml(doc, i){
+    const label = attachmentExtLabel(doc);
+    const icon = isTextMediaItem(doc) ? 'file-text' : 'file';
+    return `<div class="agent-attach-doc" data-agent-doc-index="${i}" title="${escapeAttr(doc.name || 'file')}">`
+        + `<i data-lucide="${icon}"></i>`
+        + `<span class="agent-attach-doc-name">${escapeHtml(doc.name || 'file')}</span>`
+        + `<span class="agent-attach-doc-ext">${escapeHtml(label)}</span>`
+        + `<button type="button" class="agent-attach-doc-skill" data-agent-doc-skill="${i}" title="${escapeAttr(tr('smart.agentDocAsSkill') || '作为 Skill 载入')}"><i data-lucide="sparkles"></i></button>`
+        + `<button type="button" data-agent-doc-remove="${i}" title="${escapeAttr(tr('smart.agentDocRemove') || '移除')}"><i data-lucide="x"></i></button>`
+        + `</div>`;
+}
+// 把已上传的文档附件提升为 Skill（等价于载入 skill.md）
+async function promoteAgentDocToSkill(i){
+    if(!agentState) return;
+    const doc = (agentState.documents || [])[i];
+    if(!doc?.url) return;
+    try {
+        const res = await fetch(attachmentInlineUrl(doc.url));
+        if(!res.ok) throw new Error(String(res.status));
+        const text = await res.text();
+        if(!Array.isArray(agentState.skills)) agentState.skills = [];
+        agentState.skills.push({name:doc.name || 'skill.md', content:text});
+        agentState.documents.splice(i, 1);
+        renderAgentAttachments();
+        saveAgentState();
+        toast(`${tr('smart.agentSkillLoaded') || 'Skill 已载入'}: ${doc.name || ''}`);
+    } catch(e) {
+        toast(tr('smart.attachReadFail') || '读取失败');
+    }
+}
 async function agentAttachFiles(files){
     if(!agentState) return;
     const allFiles = [...(files || [])];
-    const skillFiles = allFiles.filter(f => {
-        const name = String(f.name || '').toLowerCase();
-        return name.endsWith('.md') || name.endsWith('.markdown') || name.endsWith('.txt');
-    });
-    const imageFiles = allFiles.filter(f => String(f.type || '').startsWith('image/')).slice(0, AGENT_LLM_IMAGE_MAX);
+    if(!allFiles.length) return;
+    if(!Array.isArray(agentState.documents)) agentState.documents = [];
+    // ① 只有明确写成 skill.md / *.skill.md 的文件才载入为 Skill；
+    //    其余 .md/.txt 一律当普通附件（旧行为会把所有 .md/.txt 静默变成 Skill，容易误伤）
+    const skillFiles = allFiles.filter(f => AGENT_SKILL_FILE_RE.test(String(f.name || '').trim()));
     skillFiles.forEach(f => setAgentSkillFile(f));
+    // ② 图片 → 参考图附件（继续走生图参考图链路）
+    const imageFiles = allFiles.filter(f => String(f.type || '').startsWith('image/')).slice(0, AGENT_LLM_IMAGE_MAX);
+    // ③ 其余任意格式（docx / xlsx / pptx / pdf / zip / md / txt / csv…）→ 文档附件
+    const docFiles = allFiles.filter(f => !skillFiles.includes(f) && !String(f.type || '').startsWith('image/'));
+    if(docFiles.length) await agentAttachDocuments(docFiles);
     if(!imageFiles.length) return;
     if(!Array.isArray(agentState.attachments)) agentState.attachments = [];
     // 检查生图 provider 的参考图上限
@@ -22147,6 +22453,16 @@ function agentGenCardHtml(gen, numOffset){
 }
 function agentMessageHtml(msg){
     const imgs = (msg.images || []).filter(i => i?.url).map(i => `<img src="${escapeHtml(i.url)}" alt="" loading="lazy">`).join('');
+    // 附件节点：消息里的非图片附件（点击可预览 / 下载）
+    const docs = (Array.isArray(msg.documents) ? msg.documents : []).filter(d => d?.url).map((doc, i) => {
+        const icon = isTextMediaItem(doc) ? 'file-text' : 'file';
+        return `<div class="agent-msg-doc" data-agent-msg-doc="${escapeHtml(msg.id)}:${i}" title="${escapeAttr(doc.name || 'file')}">`
+            + `<i data-lucide="${icon}"></i>`
+            + `<span class="agent-msg-doc-name">${escapeHtml(doc.name || 'file')}</span>`
+            + `<span class="agent-msg-doc-ext">${escapeHtml(attachmentExtLabel(doc))}</span>`
+            + `</div>`;
+    }).join('');
+    const docsWrap = docs ? `<div class="agent-msg-docs">${docs}</div>` : '';
     let _genNumOffset = 0;
     const gens = (msg.generations || []).map(g => { const html = agentGenCardHtml(g, _genNumOffset); _genNumOffset += (g.results || []).filter(r => r?.url).length; return html; }).join('');
     // 本机工具调用记录：可折叠卡片（默认收起，点开看参数与输出）
@@ -22223,7 +22539,7 @@ function agentMessageHtml(msg){
         cardHtml = `<div class="agent-prompt-suggest-card"><div class="agent-prompt-suggest-body">${escapeHtml(msg.text)}</div><div class="agent-analysis-actions"><button class="agent-quick-btn primary" type="button" data-agent-card-gen="1"><i data-lucide="palette"></i><span>直接生图</span></button><button class="agent-quick-btn" type="button" data-agent-copy="${escapeHtml(msg.id)}"><i data-lucide="copy"></i><span>复制</span></button></div></div>`;
     }
     const bubbleHtml = (msg.text && !cardHtml) ? `<div class="agent-msg-bubble">${escapeHtml(msg.text)}</div>` : '';
-    return `<div class="agent-msg ${msg.role === 'user' ? 'user' : 'assistant'}${toolWrap ? ' has-tools' : ''}">${bubbleHtml}${cardHtml}${imgs ? `<div class="agent-msg-thumbs">${imgs}</div>` : ''}${toolWrap}${gens}${promptCardHtml}${optionsHtml}${actions}</div>`;
+    return `<div class="agent-msg ${msg.role === 'user' ? 'user' : 'assistant'}${toolWrap ? ' has-tools' : ''}">${bubbleHtml}${cardHtml}${imgs ? `<div class="agent-msg-thumbs">${imgs}</div>` : ''}${docsWrap}${toolWrap}${gens}${promptCardHtml}${optionsHtml}${actions}</div>`;
 }
 function renderAgentMessages(){
     if(!agentMessages || !agentState) return;
@@ -22483,6 +22799,19 @@ function renderAgentMessages(){
             if(btn) btn.click();
         };
     });
+    // 附件节点：消息里的非图片附件 → 点击预览/下载
+    agentMessages.querySelectorAll('[data-agent-msg-doc]').forEach(el => {
+        el.onclick = e => {
+            e.stopPropagation();
+            const raw = String(el.dataset.agentMsgDoc || '');
+            const sep = raw.lastIndexOf(':');
+            const msgId = raw.slice(0, sep);
+            const idx = Number(raw.slice(sep + 1)) || 0;
+            const msg = (agentState?.messages || []).find(m => m.id === msgId);
+            const doc = (msg?.documents || [])[idx];
+            if(doc?.url) openAttachmentItem(doc);
+        };
+    });
 }
 function agentLastResults(){
     const msgs = agentState?.messages || [];
@@ -22658,6 +22987,8 @@ Fields: "reply"=对话回复; "options"=[{label,value}]按钮选项; "collected"
     } else {
         parts.push(AGENT_FORMAT_INSTRUCTION);
     }
+    // 附件产物协议：两套模式都要注入（生成文档/表格/PPT 不受「画布控制」开关限制）
+    parts.push(AGENT_FILES_INSTRUCTION);
     // 注入开发模式指令：当开启开发模式时，强化画布节点操作规则
     if(agentState?.devMode){
         parts.push(`【开发模式 / Dev Mode 已开启】
@@ -22671,6 +23002,7 @@ Fields: "reply"=对话回复; "options"=[{label,value}]按钮选项; "collected"
    - minimax (MiniMax 视频节点)
    - 3d (3D预览节点)
    - group (智能分组)
+   - attach (附件节点，空节点，用户随后自行上传文件)
 3. 示例：
    用户："在画布左侧建一个快速生图节点"
    返回：{"reply":"已为您在画布左侧创建快速生图节点。","options":[],"prompts":[],"generations":[],"canvas_ops":[{"op":"create_node","type":"image","position":"left"}]}`);
@@ -23524,7 +23856,9 @@ async function sendAgentMessage(){
     }
     const text = String(agentInput?.value || '').trim();
     const attachments = (Array.isArray(agentState.attachments) ? agentState.attachments : []).slice();
-    if(!text && !attachments.length) return;
+    // 附件节点：非图片附件（文档/表格/压缩包…）
+    const documents = (Array.isArray(agentState.documents) ? agentState.documents : []).slice();
+    if(!text && !attachments.length && !documents.length) return;
 
     // ============ Slash 指令拦截 ============
     if(text.startsWith('/compress')){
@@ -23580,10 +23914,11 @@ async function sendAgentMessage(){
         const genIntentRe = /生成|画一|做一|出一|来一|帮我画|帮我做|帮我生|设计|创作/i;
 
         // 创建user消息（所有路径共用）
-        const userMsg = {id:uid('am'), role:'user', text, images:attachments, ts:Date.now()};
+        const userMsg = {id:uid('am'), role:'user', text, images:attachments, documents:documents.slice(), ts:Date.now()};
         agentState.messages.push(userMsg);
         agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
         agentState.attachments = [];
+        agentState.documents = [];
         if(agentInput) agentInput.value = '';
         renderAgentAttachments();
         agentSending = true;
@@ -23593,7 +23928,7 @@ async function sendAgentMessage(){
         const _hasGenVerb = /画|生成|设计|创作|做一张|出一张|来一张|帮我画|帮我做|帮我生/.test(text);
         // 画布/节点操作类请求必须交给 LLM 走画布操作协议，不能当生图直接执行
         const _isCanvasTask = isCanvasOpRequest(text) || /节点|工作流|流程图|连线/.test(text);
-        const isFastPath = text && !attachments.length && !hasLastOutputs
+        const isFastPath = text && !attachments.length && !documents.length && !hasLastOutputs
             && _skills.length === 0
             && !_isCanvasTask
             && !analyzeRe.test(text.trim()) && !refineRe.test(text) && !noGenRe.test(text)
@@ -23617,7 +23952,7 @@ async function sendAgentMessage(){
         }
 
         // ===== 修改快速路径：有last_outputs + 修改意图，跳过LLM =====
-        const isEditFastPath = text && hasLastOutputs && modifyRe.test(text) && !attachments.length
+        const isEditFastPath = text && hasLastOutputs && modifyRe.test(text) && !attachments.length && !documents.length
             && !analyzeRe.test(text.trim()) && !refineRe.test(text);
         if(isEditFastPath){
             const gens = [{prompt:text, count:1, use_last_outputs:true, use_attachments:false, results:[], status:'running'}];
@@ -23664,7 +23999,7 @@ async function sendAgentMessage(){
             messageText += `\n\n【Skill提醒】遵循 Skill 文档（${skillNames}）的所有样式描述。`;
         }
 
-        let offSystemPrompt = AGENT_OFF_MODE_INSTRUCTION;
+        let offSystemPrompt = AGENT_OFF_MODE_INSTRUCTION + AGENT_FILES_INSTRUCTION;
         if(agentState?.devMode){
             offSystemPrompt += `\n\n【开发模式 / Dev Mode 已开启】
 你现在具有直接操作当前项目画布节点的能力！
@@ -23677,6 +24012,7 @@ async function sendAgentMessage(){
    - minimax (MiniMax 视频节点)
    - 3d (3D预览节点)
    - group (智能分组)
+   - attach (附件节点，空节点，用户随后自行上传文件)
 3. 示例：
    用户："在画布左侧建一个快速生图节点"
    返回：{"intent":"canvas_op","reply":"已为您在画布左侧创建快速生图节点。","options":[],"prompts":[],"canvas_ops":[{"op":"create_node","type":"image","position":"left"}]}`;
@@ -23690,6 +24026,7 @@ async function sendAgentMessage(){
             messages: agentHistoryMessages().slice(0, -1),
             images: contextImages.slice(0, AGENT_LLM_IMAGE_MAX).map(i => i.url),
             videos: [],
+            files: agentFileRefsForLlm(documents),
             model: chatModel,
             provider: chatProvider,
             ms_model: chatProvider === 'modelscope' ? chatModel : '',
@@ -23728,7 +24065,8 @@ async function sendAgentMessage(){
             }
 
             // 建议归一化：画布/节点操作类请求绝不能给「生图风格」类建议，只给与当前任务相关的选项
-            if(isCanvasOpRequest(text) && !(agentState?.devMode && Array.isArray(routed.canvas_ops) && routed.canvas_ops.length)){
+            // 例外：Agent 产物类操作（create_file_node）是产出通道，不受「画布控制」开关限制
+            if(isCanvasOpRequest(text) && !agentOpsHaveFileOps(routed.canvas_ops) && !(agentState?.devMode && Array.isArray(routed.canvas_ops) && routed.canvas_ops.length)){
                 if(!Array.isArray(routed.options) || routed.options.length === 0 || looksLikeStyleSuggestions(routed.options)){
                     routed.options = agentCanvasOpSuggestions();
                 }
@@ -23835,13 +24173,14 @@ async function sendAgentMessage(){
     const model = resolveChatModel(agentState.chatModel, provider);
     agentState.chatProvider = provider;
     agentState.chatModel = model;
-    const userMsg = {id:uid('am'), role:'user', text, images:attachments, ts:Date.now()};
+    const userMsg = {id:uid('am'), role:'user', text, images:attachments, documents:documents.slice(), ts:Date.now()};
     const bypassThinking = agentBypassThinkingNext;
     agentBypassThinkingNext = false;
     userMsg.bypassThinking = bypassThinking;
     agentState.messages.push(userMsg);
     agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
     agentState.attachments = [];
+    agentState.documents = [];
     if(agentInput) agentInput.value = '';
     renderAgentAttachments();
     agentSending = true;
@@ -23895,6 +24234,7 @@ async function sendAgentMessage(){
         messages:agentHistoryMessages().slice(0, -1),
         images:contextImages.slice(0, AGENT_LLM_IMAGE_MAX).map(i => i.url),
         videos:[],
+        files:agentFileRefsForLlm(documents),
         model,
         provider,
         ms_model:provider === 'modelscope' ? model : '',
@@ -24181,6 +24521,7 @@ async function regenerateAgentPrompts(assistantMsg){
         messages: agentHistoryMessages().slice(0, -1),
         images: userMsg?.images ? userMsg.images.map(i => i.url) : [],
         videos: [],
+        files: agentFileRefsForLlm(userMsg?.documents),
         model,
         provider,
         ms_model: provider === 'modelscope' ? model : '',
@@ -24463,7 +24804,10 @@ function agentCanvasImages(){
     (nodes || []).forEach(node => {
         if(!isSmartImageNode(node)) return;
         (node.images || []).forEach(img => {
-            if(img?.url) items.push({url:img.url, name:img.name || node.title || 'image', nodeId:node.id, nodeTitle:node.title || '', x:Number(node.x) || 0, y:Number(node.y) || 0, ts:Number(node.created_at) || 0});
+            if(!img?.url) return;
+            // 附件节点：文件/文本类素材也允许 @ 引用，kind 决定面板里画缩略图还是文件卡片
+            const kind = mediaKindForItem(img);
+            items.push({url:img.url, name:img.name || node.title || 'image', kind, nodeId:node.id, nodeTitle:node.title || '', x:Number(node.x) || 0, y:Number(node.y) || 0, ts:Number(node.created_at) || 0});
         });
     });
     return items.sort((a, b) => b.ts - a.ts);
@@ -24475,20 +24819,25 @@ function showAgentMention(filter){
     const q = String(filter || '').toLowerCase();
     const filtered = q ? images.filter(img => (img.name + ' ' + img.nodeTitle).toLowerCase().includes(q)) : images;
     if(!filtered.length){
-        panel.innerHTML = '<div class="agent-mention-empty">画布中暂无图片</div>';
+        panel.innerHTML = '<div class="agent-mention-empty">画布中暂无图片或附件</div>';
         panel.hidden = false;
         return;
     }
     agentMentionIdx = 0;
     panel.innerHTML = filtered.slice(0, 20).map((img, i) => {
         const time = img.ts ? new Date(img.ts).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'}) : '';
-        return `<button class="agent-mention-item${i === 0 ? ' active' : ''}" type="button" data-mention-url="${escapeHtml(img.url)}" data-mention-name="${escapeHtml(img.name)}" data-mention-node-id="${escapeHtml(img.nodeId || '')}" data-mention-x="${img.x || 0}" data-mention-y="${img.y || 0}"><img src="${escapeHtml(img.url)}" alt="" loading="lazy"><div class="agent-mention-item-info"><div class="agent-mention-item-name">${escapeHtml(img.name)}</div><div class="agent-mention-item-time">${escapeHtml(time)}</div></div></button>`;
+        const isPic = img.kind === 'image' || img.kind === 'video';
+        const thumb = isPic
+            ? `<img src="${escapeHtml(img.url)}" alt="" loading="lazy">`
+            : `<div class="agent-mention-file"><i data-lucide="${img.kind === 'text' ? 'file-text' : 'file'}"></i><span>${escapeHtml(attachmentExtLabel(img))}</span></div>`;
+        return `<button class="agent-mention-item${i === 0 ? ' active' : ''}" type="button" data-mention-url="${escapeHtml(img.url)}" data-mention-name="${escapeHtml(img.name)}" data-mention-kind="${escapeHtml(img.kind || 'image')}" data-mention-node-id="${escapeHtml(img.nodeId || '')}" data-mention-x="${img.x || 0}" data-mention-y="${img.y || 0}">${thumb}<div class="agent-mention-item-info"><div class="agent-mention-item-name">${escapeHtml(img.name)}</div><div class="agent-mention-item-time">${escapeHtml(time)}</div></div></button>`;
     }).join('');
     panel.hidden = false;
+    if(window.lucide) lucide.createIcons();
     panel.querySelectorAll('.agent-mention-item').forEach(btn => {
         btn.onclick = e => {
             e.preventDefault();
-            insertAgentMention(btn.dataset.mentionUrl, btn.dataset.mentionName, btn.dataset.mentionNodeId, btn.dataset.mentionX, btn.dataset.mentionY);
+            insertAgentMention(btn.dataset.mentionUrl, btn.dataset.mentionName, btn.dataset.mentionNodeId, btn.dataset.mentionX, btn.dataset.mentionY, btn.dataset.mentionKind);
         };
     });
 }
@@ -24497,11 +24846,18 @@ function hideAgentMention(){
     if(panel) panel.hidden = true;
     agentMentionIdx = -1;
 }
-function insertAgentMention(url, name, nodeId, x, y){
+function insertAgentMention(url, name, nodeId, x, y, kind){
     if(!agentState || !url) return;
-    if(!Array.isArray(agentState.attachments)) agentState.attachments = [];
-    if(agentState.attachments.length < AGENT_LLM_IMAGE_MAX && !agentState.attachments.some(a => a.url === url)){
-        agentState.attachments.push({url, name: name || 'canvas-image', nodeId: nodeId || '', x: Number(x) || 0, y: Number(y) || 0});
+    // 附件节点：非图片/视频素材进「文档附件」，图片/视频仍进参考图附件
+    const k = String(kind || 'image');
+    if(k !== 'image' && k !== 'video'){
+        const added = agentAddDocumentRefs([{url, name: name || 'canvas-file', kind:(k === 'text' ? 'text' : 'file'), nodeId:nodeId || '', x:Number(x) || 0, y:Number(y) || 0}]);
+        if(!added) toast(agentState.documents.some(d => d.url === url) ? '附件已存在' : `最多携带 ${AGENT_DOC_MAX} 个附件`);
+    } else {
+        if(!Array.isArray(agentState.attachments)) agentState.attachments = [];
+        if(agentState.attachments.length < AGENT_LLM_IMAGE_MAX && !agentState.attachments.some(a => a.url === url)){
+            agentState.attachments.push({url, name: name || 'canvas-image', nodeId: nodeId || '', x: Number(x) || 0, y: Number(y) || 0});
+        }
     }
     if(agentInput){
         const val = agentInput.value;
@@ -24528,7 +24884,7 @@ function agentMentionKeydown(e){
     if(e.key === 'Enter' && agentMentionIdx >= 0 && items[agentMentionIdx]){
         e.preventDefault();
         const btn = items[agentMentionIdx];
-        insertAgentMention(btn.dataset.mentionUrl, btn.dataset.mentionName, btn.dataset.mentionNodeId, btn.dataset.mentionX, btn.dataset.mentionY);
+        insertAgentMention(btn.dataset.mentionUrl, btn.dataset.mentionName, btn.dataset.mentionNodeId, btn.dataset.mentionX, btn.dataset.mentionY, btn.dataset.mentionKind);
         return true;
     }
     if(e.key === 'Escape'){

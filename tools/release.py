@@ -114,6 +114,9 @@ PROGRAM_DIRS = [
     "CLI",
     "packages",
     "python",
+    # 内置 Skill（只读，随包分发）：main.py 的 BUILTIN_SKILLS_DIR 指这里。
+    # 不能放 data/agent_skills/ —— data/ 是用户数据目录，被 DENY_PREFIXES 整目录排除。
+    "skills",
 ]
 
 # data/ 是「混装目录」：里面既有用户数据（api_providers.json 含 API 密钥、

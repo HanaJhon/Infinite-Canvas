@@ -1878,6 +1878,25 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-attach-skill button { position:absolute; top:2px; right:2px; width:15px; height:15px; border-radius:50%; background:rgba(15,23,42,.78); color:#fff; display:flex; align-items:center; justify-content:center; border:none; cursor:pointer; padding:0; }
 .agent-attach-skill button i,.agent-attach-skill button svg { width:9px; height:9px; }
 
+/* 附件节点：Agent 输入区的「文档附件」卡片（非图片 → 图标 + 文件名 + 扩展名） */
+.agent-attach-doc { position:relative; display:flex; align-items:center; gap:6px; height:44px; padding:0 44px 0 8px; border-radius:10px; border:1px solid var(--line); background:var(--card); max-width:190px; cursor:pointer; transition:border-color .14s ease; }
+.agent-attach-doc:hover { border-color:var(--strong); }
+.agent-attach-doc > i,.agent-attach-doc > svg { width:14px; height:14px; color:var(--strong); flex:0 0 auto; }
+.agent-attach-doc-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; font-weight:700; color:var(--text); }
+.agent-attach-doc-ext { flex:0 0 auto; font-size:8.5px; font-weight:800; letter-spacing:.4px; color:var(--muted); border:1px solid var(--line); border-radius:5px; padding:0 4px; }
+.agent-attach-doc button { position:absolute; top:2px; width:15px; height:15px; border-radius:50%; background:rgba(15,23,42,.78); color:#fff; display:flex; align-items:center; justify-content:center; border:none; cursor:pointer; padding:0; }
+.agent-attach-doc button[data-agent-doc-skill] { right:19px; }
+.agent-attach-doc button[data-agent-doc-remove] { right:2px; }
+.agent-attach-doc button i,.agent-attach-doc button svg { width:9px; height:9px; }
+
+/* 附件节点：Agent 消息里的文档附件 */
+.agent-msg-docs { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+.agent-msg-doc { display:flex; align-items:center; gap:6px; max-width:220px; padding:5px 8px; border-radius:9px; border:1px solid var(--line); background:var(--card); cursor:pointer; transition:border-color .14s ease; }
+.agent-msg-doc:hover { border-color:var(--strong); }
+.agent-msg-doc > i,.agent-msg-doc > svg { width:13px; height:13px; color:var(--strong); flex:0 0 auto; }
+.agent-msg-doc-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; font-weight:700; color:var(--text); }
+.agent-msg-doc-ext { flex:0 0 auto; font-size:8.5px; font-weight:800; letter-spacing:.4px; color:var(--muted); border:1px solid var(--line); border-radius:5px; padding:0 4px; }
+
 /* @ 引用面板 */
 .agent-mention-panel { position:absolute; bottom:100%; left:0; right:0; max-height:240px; overflow-y:auto; border-radius:13px; border:1px solid var(--line); background:var(--card); box-shadow:0 -4px 24px rgba(15,23,42,.12); z-index:50; margin-bottom:4px; }
 .agent-mention-panel[hidden] { display:none; }
@@ -1885,6 +1904,10 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-mention-item { display:flex; align-items:center; gap:8px; padding:7px 10px; cursor:pointer; border:none; background:none; width:100%; text-align:left; }
 .agent-mention-item:hover,.agent-mention-item.active { background:var(--soft); }
 .agent-mention-item img { width:32px; height:32px; border-radius:7px; object-fit:cover; flex:0 0 auto; border:1px solid var(--line); }
+/* 附件节点：@ 面板里的文件素材缩略块（替代 img，避免裂图） */
+.agent-mention-file { width:32px; height:32px; border-radius:7px; flex:0 0 auto; border:1px solid var(--line); background:var(--soft); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; }
+.agent-mention-file > i,.agent-mention-file > svg { width:13px; height:13px; color:var(--strong); }
+.agent-mention-file > span { font-size:7.5px; font-weight:800; letter-spacing:.3px; color:var(--muted); }
 .agent-mention-item-info { flex:1; min-width:0; }
 .agent-mention-item-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10.5px; font-weight:700; color:var(--text); }
 .agent-mention-item-time { font-size:9px; font-weight:600; color:var(--faint); }
