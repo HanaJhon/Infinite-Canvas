@@ -666,6 +666,18 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .media-thumb.file-thumb { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; background:var(--soft); color:var(--muted); text-align:center; padding:5px; }
 .media-thumb.file-thumb span { max-width:86%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:9px; font-weight:800; }
 .media-thumb.file-thumb i,.media-thumb.file-thumb svg { width:18px; height:18px; }
+/* 非图片附件在缩略图位置：只显示文件名，绝不用 <img>（指向 .xlsx 只会得到浏览器默认裂图标）。
+   `.media-file-chip` 只负责内部排版，宽度/边框交给宿主容器 —— 卡片里是 44×44 的小格子，
+   放不下文件名，所以 `.is-fileish` / `.input-thumb-fileish` 会把宿主放开。 */
+.media-file-chip { display:flex; align-items:center; gap:6px; min-width:0; max-width:100%; height:100%; padding:0 9px; box-sizing:border-box; color:var(--text); }
+.media-file-chip-ext { flex:0 0 auto; padding:1px 5px; border-radius:5px; background:var(--line); color:var(--muted); font-size:8.5px; font-weight:900; letter-spacing:.02em; line-height:1.5; }
+.media-file-chip-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10.5px; font-weight:750; }
+.input-thumb.input-thumb-fileish { width:auto; max-width:220px; min-width:96px; cursor:default; }
+.input-thumb.input-thumb-fileish:hover { transform:none; box-shadow:none; border-color:var(--line); }
+.input-thumb.input-thumb-fileish[draggable="true"] { cursor:grab; }
+.smart-node-input-thumb.is-fileish { grid-column:span 3; width:auto; min-width:0; overflow:visible; border:0; background:transparent; box-shadow:none; }
+.smart-node-input-thumb.is-fileish .media-file-chip { border:1px solid rgba(148,163,184,.34); border-radius:10px; background:rgba(255,255,255,.58); }
+.theme-dark .smart-node-input-thumb.is-fileish .media-file-chip { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.24); }
 .thumb-grid { display:grid; grid-template-columns:repeat(var(--thumb-cols, 2), var(--thumb-size, 96px)); gap:8px; justify-content:center; align-content:start; max-width:100%; max-height:var(--thumb-max-height, 304px); overflow-y:auto; overflow-x:hidden; padding-right:2px; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent; }
 .thumb-grid::-webkit-scrollbar { width:4px; }
 .thumb-grid::-webkit-scrollbar-track { background:transparent; }
@@ -930,8 +942,8 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .composer-llm-section { grid-area:llm; display:grid; grid-template-columns:1fr 1fr; gap:6px; align-items:start; }
 .mention-image-token { height:24px; max-width:132px; margin:0 3px 2px; padding:2px 7px 2px 3px; border-radius:999px; display:inline-flex; align-items:center; gap:5px; vertical-align:middle; background:var(--soft); border:1px solid var(--line); color:var(--text); font-size:10.5px; font-weight:600; white-space:nowrap; cursor:default; }
 .mention-image-token img,.mention-image-token video { width:18px; height:18px; border-radius:999px; object-fit:cover; border:1px solid var(--line); flex:0 0 auto; background:#0f172a; }
-.mention-audio-thumb { width:18px; height:18px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; background:var(--card); border:1px solid var(--line); color:var(--muted); }
-.mention-audio-thumb i,.mention-audio-thumb svg { width:12px !important; height:12px !important; }
+.mention-audio-thumb,.mention-file-thumb { width:18px; height:18px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; background:var(--card); border:1px solid var(--line); color:var(--muted); }
+.mention-audio-thumb i,.mention-audio-thumb svg,.mention-file-thumb i,.mention-file-thumb svg { width:12px !important; height:12px !important; }
 .mention-image-token span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 .mention-image-token:hover { border-color:var(--strong); }
 .mention-preview { position:fixed; z-index:120; width:220px; max-height:220px; border-radius:14px; overflow:hidden; border:1px solid var(--line); background:var(--card); box-shadow:0 18px 46px var(--shadow); display:none; pointer-events:none; }
@@ -969,8 +981,10 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .mention-option { min-width:0; padding:4px 3px 5px; border-radius:8px; border:1px solid transparent; background:transparent; color:var(--muted); display:flex; flex-direction:column; align-items:center; gap:4px; overflow:hidden; cursor:pointer; transition:background .14s ease, border-color .14s ease, color .14s ease, transform .14s ease; }
 .mention-option:hover { background:var(--card); border-color:var(--line); color:var(--text); transform:translateY(-1px); }
 .mention-option img,.mention-option video { width:100%; aspect-ratio:1; max-width:54px; max-height:54px; border-radius:7px; object-fit:cover; border:1px solid var(--line); background:var(--soft); }
-.mention-option .mention-option-audio { width:54px; height:54px; border-radius:7px; border:1px solid var(--line); }
-.mention-option .mention-option-audio span { display:none; }
+.mention-option .mention-option-audio,.mention-option .mention-option-file { width:54px; height:54px; border-radius:7px; border:1px solid var(--line); }
+.mention-option .mention-option-audio span,.mention-option .mention-option-file span { display:none; }
+.mention-option .mention-option-file { display:flex; align-items:center; justify-content:center; background:var(--soft); color:var(--muted); }
+.mention-option .mention-option-file i,.mention-option .mention-option-file svg { width:20px; height:20px; }
 .mention-option span { width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:9.5px; line-height:1.1; text-align:center; font-weight:500; }
 .prompt-preset-panel { position:absolute; z-index:85; width:392px; max-width:calc(100vw - 36px); display:none; flex-direction:column; gap:8px; padding:10px; border-radius:16px; background:var(--panel); border:1px solid var(--line); box-shadow:0 22px 58px var(--shadow); backdrop-filter:blur(18px); }
 .prompt-preset-panel.open { display:flex; }

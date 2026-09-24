@@ -2307,12 +2307,19 @@ function smartNodeInputThumbsHtml(images, opts={}){
     const limit = Math.min(10, refs.length);
     const items = refs.slice(0, limit).map((img, index) => {
         const label = opts.labelPrefix ? `${opts.labelPrefix}${index + 1}` : (window.StudioI18n?.lang?.() === 'en' ? `Image ${index + 1}` : `图${index + 1}`);
+        // 非图片附件（xlsx / pptx / pdf / zip / txt …）不能当图片渲染 —— 44×44 的格子放不下
+        // 文件名，所以这类改成「跨 3 列的文件名芯片」，并且不挂「图N」角标（语义不对）。
+        const mediaKind = mediaKindForItem(img);
+        const isFileish = mediaKind === 'file' || mediaKind === 'text';
         const media = isAudioMediaItem(img)
             ? `<div class="media-thumb audio-thumb"><i data-lucide="file-audio"></i><span>${escapeHtml(img.name || 'Audio')}</span></div>`
+            : isFileish
+            ? mediaFileChipHtml(img)
             : isVideoMediaItem(img)
             ? smartVideoPreviewHtml(img, 256, 'alt=""')
             : smartPreviewImgHtml(img, 256, 'alt=""');
-        return `<div class="smart-node-input-thumb" title="${escapeHtml(label)}">${media}<span class="smart-node-input-badge">${escapeHtml(label)}</span></div>`;
+        const badge = isFileish ? '' : `<span class="smart-node-input-badge">${escapeHtml(label)}</span>`;
+        return `<div class="smart-node-input-thumb ${isFileish ? 'is-fileish' : ''}" title="${escapeHtml(isFileish ? (img.name || label) : label)}">${media}${badge}</div>`;
     }).join('');
     const more = refs.length > limit ? `<div class="smart-node-input-thumb smart-node-input-more">+${refs.length - limit}</div>` : '';
     return `<div class="smart-node-input-thumbs">${items}${more}</div>`;
@@ -7460,6 +7467,63 @@ async function openAttachmentTextPreview(img){
     } catch(err) {
         pre.textContent = `${tr('smart.attachReadFail') || '无法读取内容'}：${err?.message || err}`;
     }
+}
+// ---------------------------------------------------------------------------
+// 非图片附件在「缩略图」位置绝不能当图片渲染
+//   `<img src="....xlsx">` 只会得到浏览器默认的裂图标。xlsx / pptx / pdf / zip 这类
+//   无法直接预览的文件，统一改成一个「只显示文件名」的文字芯片。
+// ---------------------------------------------------------------------------
+function mediaFileChipHtml(img, extraClass=''){
+    const ext = attachmentExtLabel(img);
+    const name = String(img?.name || fileNameFromUrl(img?.url) || '').trim() || tr('smart.attachNode');
+    return `<span class="media-file-chip ${extraClass}"><span class="media-file-chip-ext">${escapeHtml(ext)}</span><span class="media-file-chip-name">${escapeHtml(name)}</span></span>`;
+}
+// 文本类附件（txt / md / csv / json …）：正文会被读出来，以「上游输入」的形式呈现，
+// 读不到内容时退回文件名芯片 —— 两条路都不渲染裂图标。
+const MEDIA_TEXT_CONTENT_MAX = 20000;
+const mediaTextFetching = new Set();
+function isTextContentMediaItem(img){
+    return Boolean(img?.url) && isTextMediaItem(img);
+}
+function mediaItemTextContent(img){
+    return typeof img?.textContent === 'string' ? img.textContent : '';
+}
+// ⚠️ 必须取**节点里的真实 item 引用**（`imagesForNode()` 返回的是带 nodeId 的副本，
+//    往副本上写 textContent 不会落盘，刷新后又要重新抓一次）。
+function upstreamTextFileItems(node){
+    if(!node) return [];
+    const out = [];
+    inputNodesFor(node).forEach(input => {
+        (input?.images || []).forEach(img => { if(isTextContentMediaItem(img)) out.push(img); });
+    });
+    return out;
+}
+// 懒加载文本附件正文并缓存到 item 上（含落盘），返回「本次是否有新内容」。
+async function ensureUpstreamTextContents(node){
+    const targets = upstreamTextFileItems(node)
+        .filter(img => typeof img.textContent !== 'string' && !mediaTextFetching.has(img.url));
+    if(!targets.length) return false;
+    await Promise.all(targets.map(async img => {
+        mediaTextFetching.add(img.url);
+        try{
+            const res = await fetch(attachmentInlineUrl(img.url));
+            if(!res.ok) throw new Error(`HTTP ${res.status}`);
+            const text = await res.text();
+            img.textContent = text.length > MEDIA_TEXT_CONTENT_MAX ? text.slice(0, MEDIA_TEXT_CONTENT_MAX) : text;
+        }catch(err){
+            // 失败也落一个空串：否则每次渲染都会重试同一个坏文件
+            img.textContent = '';
+        }finally{
+            mediaTextFetching.delete(img.url);
+        }
+    }));
+    if(canvas) scheduleSave();
+    return true;
+}
+function inputAttachmentTextFor(node){
+    return upstreamTextFileItems(node)
+        .map(img => mediaItemTextContent(img).trim())
+        .filter(Boolean);
 }
 function mediaKindForItem(img){
     if(isFileMediaItem(img)) return 'file';
@@ -14826,6 +14890,9 @@ function renderComposerLlmSection(node){
 }
 function renderInputPromptPreview(node){
     if(!inputPromptPreview) return;
+    // 上游文本类附件的正文是懒加载的：先用已有缓存渲染，抓回来后再刷一次。
+    // 循环会自然终止 —— 抓取结束后 item.textContent 变成字符串，下次就没有 target 了。
+    if(node) ensureUpstreamTextContents(node).then(changed => { if(changed) renderInputPromptPreview(node); });
     const groupText = isSmartGroupNode(node) ? textForNode(node).trim() : '';
     const text = node ? [groupText, inputPromptTextFor(node).trim()].filter(Boolean).join('\n\n') : '';
     inputPromptPreview.classList.toggle('has-text', Boolean(text));
@@ -14868,18 +14935,24 @@ function renderInputThumbsRow(node){
         const title = isSelf
             ? tr('smart.inputSelf')
             : (smartImageMode(node) === 'workflow' ? tr('smart.inputUpstreamWorkflow') : tr('smart.inputUpstream'));
+        // 非图片附件（xlsx / pptx / pdf / zip / txt …）不能当图片渲染 —— 用文件名芯片。
+        // 文本类的**正文**另外会以「上游输入」的形式出现在输入框上方（见 renderInputPromptPreview），
+        // 这里保留芯片是为了让用户还能看出「挂了这个文件」，两处信息互补、不重复。
+        const isFileish = kind === 'file' || kind === 'text';
         const inner = kind === 'audio'
             ? `<div class="input-thumb-audio"><i data-lucide="file-audio"></i></div>`
+            : isFileish
+            ? mediaFileChipHtml(img)
             : isVid
             ? smartVideoPreviewHtml(img, 256, 'draggable="false" alt=""')
             : smartPreviewImgHtml(img, 256, 'draggable="false"');
         const count = (mediaCounters[kind] = (mediaCounters[kind] || 0) + 1);
-        const label = kind === 'audio' ? `音频${count}` : kind === 'video' ? `视频${count}` : `图${count}`;
+        const label = isFileish ? '' : kind === 'audio' ? `音频${count}` : kind === 'video' ? `视频${count}` : `图${count}`;
         const sourceUrl = img.originalLocalUrl || img.url || '';
         const key = inputRefKey(img);
         const removable = manualRefKeys.has(key);
         const removeBtn = removable ? `<button class="input-thumb-remove" type="button" data-input-remove-reference="${escapeHtml(inputRefKey(img))}" title="删除参考图" aria-label="删除参考图">×</button>` : '';
-        return `<div class="input-thumb ${isSelf ? 'input-self' : ''} ${removable ? 'input-manual-ref' : ''}" draggable="false" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" data-source-url="${escapeHtml(sourceUrl)}" title="${escapeHtml(`${img.name || tr('smart.inputNum').replace('{n}', String(i + 1))} · ${title}`)}">${inner}<span class="input-thumb-label">${escapeHtml(label)}</span>${removeBtn}</div>`;
+        return `<div class="input-thumb ${isFileish ? 'input-thumb-fileish' : ''} ${isSelf ? 'input-self' : ''} ${removable ? 'input-manual-ref' : ''}" draggable="false" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" data-source-url="${escapeHtml(sourceUrl)}" title="${escapeHtml(`${img.name || tr('smart.inputNum').replace('{n}', String(i + 1))} · ${title}`)}">${inner}${label ? `<span class="input-thumb-label">${escapeHtml(label)}</span>` : ''}${removeBtn}</div>`;
     }).join('');
     inputThumbsRow.innerHTML = `<div class="input-thumb-list">${thumbsHtml}${dedup.length > 1 ? `<span class="input-thumb-count">${escapeHtml(tr('smart.inputCount').replace('{n}', String(dedup.length)))}</span>` : ''}</div><div class="input-thumb-actions">${addButton}</div>`;
     bindSmartPreviewImageFallbacks(inputThumbsRow);
@@ -15554,6 +15627,10 @@ function mentionTokenMediaHtml(img, kind=mediaKindForItem(img)){
     if(kind === 'audio'){
         return `<div class="mention-audio-thumb"><i data-lucide="file-audio"></i></div>`;
     }
+    // 附件（xlsx / pptx / pdf / zip / txt …）不能当图片渲染，否则是裂图标
+    if(kind === 'file' || kind === 'text'){
+        return `<div class="mention-file-thumb"><i data-lucide="${kind === 'text' ? 'file-text' : 'file'}"></i></div>`;
+    }
     if(kind === 'video'){
         return smartVideoPreviewHtml(img, 256, 'alt=""');
     }
@@ -15563,6 +15640,9 @@ function mentionOptionMediaHtml(img){
     const kind = mediaKindForItem(img);
     if(kind === 'audio'){
         return `<div class="media-thumb audio-thumb mention-option-audio"><i data-lucide="file-audio"></i><span>${escapeHtml(img.alias || img.name || 'Audio')}</span></div>`;
+    }
+    if(kind === 'file' || kind === 'text'){
+        return `<div class="media-thumb mention-option-file"><i data-lucide="${kind === 'text' ? 'file-text' : 'file'}"></i></div>`;
     }
     return kind === 'video' ? smartVideoPreviewHtml(img, 256, 'alt=""') : smartPreviewImgHtml(img, 256, 'alt=""');
 }
@@ -15891,8 +15971,11 @@ function inputPromptTextFor(node, ctx=smartLoopContext){
     const relayText = Array.isArray(ctx?.relayPromptNodeIds)
         ? ctx.relayPromptNodeIds.map(id => nodes.find(n => n.id === id)).map(input => textForNode(input, ctx)).filter(Boolean)
         : [];
+    // 上游「文本类附件节点」（txt / md / csv / json …）的正文也算上游输入：
+    // 拖一个 .txt 到画布、连到快速生图，正文就会出现在「上游输入」里并被当作提示词。
+    const attachmentText = inputAttachmentTextFor(node);
     const seen = new Set();
-    return [...directText, ...relayText].filter(text => {
+    return [...directText, ...relayText, ...attachmentText].filter(text => {
         const key = String(text || '').trim();
         if(!key || seen.has(key)) return false;
         seen.add(key);
