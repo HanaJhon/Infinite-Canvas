@@ -9081,9 +9081,9 @@ function smartMinimaxBodyHtml(node){
 }
 
 // ===================== 3D 预览节点（three.js） =====================
-// 数据流：上游「快速执行」的图片 → /api/canvas-llm 视觉识别 → 场景 JSON → three.js 实时渲染。
+// 数据流：上游「上传」的图片 → /api/canvas-llm 视觉识别 → 场景 JSON → three.js 实时渲染。
 // 场景 JSON 存在节点数据里（scene3d），刷新页面无需重跑模型即可复原；相机姿态存 node.camera。
-// 下游「快速执行」取的是查看器实时截图（node.scene3dSnapshotUrl）。
+// 下游「上传」取的是查看器实时截图（node.scene3dSnapshotUrl）。
 const SMART_3D_MAX_VIEWERS = 6;
 const SMART_3D_SNAPSHOT_DEBOUNCE = 520;
 const smart3DViewers = new Map();          // nodeId -> viewer
@@ -10247,7 +10247,7 @@ function render(){
         const deleteBtn = (isGroup || isMinimax) ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         // 3D 节点的交互说明（拖拽旋转 · 滚轮缩放）移到标题栏内、跟在节点名后面的灰色小字，底部不再有说明行。
         // 仅在「已有场景」时显示：空场景/生成失败的提示由舞台中央的占位层负责，避免同一句话重复出现，
-        // 也避免生成失败时标题栏错误地显示「连接快速执行后点生成」。
+        // 也避免生成失败时标题栏错误地显示「连接上传后点生成」。
         const headSub = (is3D && smart3DHasScene(node)) ? `<span class="node-head-sub">${escapeHtml(tr('smart.3dDragHint'))}</span>` : '';
         const hint = is3D ? '' : isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
         const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${is3D ? 'smart3d-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
@@ -15737,7 +15737,7 @@ function connectInputNode(fromId, toId){
     const from = nodes.find(n => n.id === fromId);
     const to = nodes.find(n => n.id === toId);
     if(!from || !to || from.id === to.id) return false;
-    // 3D预览 只与「快速执行」双向相连：上游只能是快速执行，下游也只能是快速执行。
+    // 3D预览 只与「上传」双向相连：上游只能是上传，下游也只能是上传。
     if(isSmart3DNode(to) && !isSmartImageNode(from)) return false;
     if(isSmart3DNode(from) && !isSmartImageNode(to)) return false;
     if(to.type === 'smart-loop'){
@@ -15936,7 +15936,7 @@ function smartLoopPreviewImages(node){
     }).filter(img => img?.url);
 }
 function outputImagesForNode(node, consume=false, ctx=smartLoopContext){
-    // 3D 预览节点对外输出的是查看器实时截图：下游快速执行连上后即取到当前画面。
+    // 3D 预览节点对外输出的是查看器实时截图：下游上传连上后即取到当前画面。
     if(node?.type === 'smart-3d'){
         const url = String(node.scene3dSnapshotUrl || '');
         if(!url){
@@ -15972,7 +15972,7 @@ function inputPromptTextFor(node, ctx=smartLoopContext){
         ? ctx.relayPromptNodeIds.map(id => nodes.find(n => n.id === id)).map(input => textForNode(input, ctx)).filter(Boolean)
         : [];
     // 上游「文本类附件节点」（txt / md / csv / json …）的正文也算上游输入：
-    // 拖一个 .txt 到画布、连到快速执行，正文就会出现在「上游输入」里并被当作提示词。
+    // 拖一个 .txt 到画布、连到上传，正文就会出现在「上游输入」里并被当作提示词。
     const attachmentText = inputAttachmentTextFor(node);
     const seen = new Set();
     return [...directText, ...relayText, ...attachmentText].filter(text => {
@@ -19649,8 +19649,8 @@ function createNodeFromMenu(type){
     else if(type === 'loop') created = createLoopNode(p.x - 135, p.y - 95);
     else if(type === 'minimax') created = createMinimaxNode(p.x - 520, p.y - 320);
     else if(type === '3d') created = create3DNode(p.x - 280, p.y - 235);
-    // 附件不再是独立的创建入口：附件本质上就是快速执行节点里的 file/text 媒体卡片，
-    // 所以「附件」卡片已从创建菜单移除，统一走快速执行（type='image'）。
+    // 附件不再是独立的创建入口：附件本质上就是上传节点里的 file/text 媒体卡片，
+    // 所以「附件」卡片已从创建菜单移除，统一走上传（type='image'）。
     else created = createImageNodeAt(p);
     createMenuGroupId = groupId;
     addCreatedNodeToMenuGroup(created);
@@ -20517,7 +20517,7 @@ window.addEventListener('paste', async e => {
         pasteNodes();
         return;
     }
-    // 非编辑输入区且剪贴板文本为本地图片路径或远程图片URL时，自动创建快速执行节点导入
+    // 非编辑输入区且剪贴板文本为本地图片路径或远程图片URL时，自动创建上传节点导入
     if(!isEditableTarget(e.target) && e.clipboardData){
         const text = String(e.clipboardData.getData('text/plain') || '').trim();
         if(text){
@@ -22003,8 +22003,10 @@ function isCanvasOpRequest(text){
     // 结构性操作动词（刻意不含「改成/改为」——那通常是在改图，不是在改节点）
     const structuralVerb = /创建|新建|建立|建一|搭建|添加|增加|加一|删掉|删除|移除|连接|连到|接到|连上|清空|排列|对齐|分组|排布|布局|改名|重命名|改标题|改名字|标题|名称|名字/i;
     // 节点类型词本身就是「建节点」的强信号
-    // ⚠️ 「快速生图」是更名前的旧叫法，保留匹配以兼容用户沿用旧说法
-    const nodeTypeWord = /快速执行|快速生图|提示词节点|循环节点|视频节点|3d|3D|智能分组/i;
+    // ⚠️ 「快速生图」「快速执行」都是更名前的旧叫法（快速生图 → 快速执行 → 上传），
+    //    保留匹配以兼容用户沿用旧说法。
+    //    裸「上传」刻意不收：它太常用了（"上传一张图"），会误判成画布操作；只认「上传节点」。
+    const nodeTypeWord = /上传节点|快速执行|快速生图|提示词节点|循环节点|视频节点|3d|3D|智能分组/i;
     if(hasNodeNoun) return structuralVerb.test(t) || nodeTypeWord.test(t);
     // 只提到「画布」时，必须有结构性操作动词，避免把「在画布上画一张图」误判为节点操作
     return structuralVerb.test(t);
@@ -22012,9 +22014,9 @@ function isCanvasOpRequest(text){
 // 与当前任务相关的建议选项（画布操作类请求用，替代一味的「生图风格」选项）
 function agentCanvasOpSuggestions(){
     return [
-        {label:'建一个快速执行节点', value:'在画布中创建一个快速执行节点'},
+        {label:'建一个上传节点', value:'在画布中创建一个上传节点'},
         {label:'建一个提示词节点', value:'在画布中创建一个提示词节点'},
-        {label:'提示词节点 → 快速执行（连线）', value:'在画布中创建一个提示词节点，并连接到快速执行节点'},
+        {label:'提示词节点 → 上传（连线）', value:'在画布中创建一个提示词节点，并连接到上传节点'},
         {label:'把节点标题改成新名称', value:'把画布中第一个节点的标题改成新名称'}
     ];
 }
@@ -23082,19 +23084,19 @@ Fields: "reply"=对话回复; "options"=[{label,value}]按钮选项; "collected"
     if(agentState?.devMode){
         parts.push(`【开发模式 / Dev Mode 已开启】
 你现在具有直接操作当前项目画布节点的能力！
-当用户要求在画布中创建、修改、连接、删除节点（例如"在左侧建一个快速执行节点"、"建一个提示词节点并连接到快速执行"、"把节点标题改为X"）时：
+当用户要求在画布中创建、修改、连接、删除节点（例如"在左侧建一个上传节点"、"建一个提示词节点并连接到上传"、"把节点标题改为X"）时：
 1. 必须在 JSON 中返回 "canvas_ops" 数组，严禁调用本机文件搜索、命令行工具（run_shell / list_dir / rg）去排查画布文件！
 2. 节点类型 type 支持：
-   - image (快速执行节点)
+   - image (上传节点)
    - prompt (提示词节点)
    - loop (循环节点)
    - minimax (MiniMax 视频节点)
    - 3d (3D预览节点)
    - group (智能分组)
-   - attach (附件节点，空节点，用户随后自行上传文件)
+   - 附件没有独立的 type：Agent 产物落文件用 create_file_node 动作，用户自己传文件就建 image 节点
 3. 示例：
-   用户："在画布左侧建一个快速执行节点"
-   返回：{"reply":"已为您在画布左侧创建快速执行节点。","options":[],"prompts":[],"generations":[],"canvas_ops":[{"op":"create_node","type":"image","position":"left"}]}`);
+   用户："在画布左侧建一个上传节点"
+   返回：{"reply":"已为您在画布左侧创建上传节点。","options":[],"prompts":[],"generations":[],"canvas_ops":[{"op":"create_node","type":"image","position":"left"}]}`);
     }
     // 注入最终出图数量（前端已决策：输入框显式要求 > 工具栏设置）
     // LLM 无需自行判断数量，只需按此数量返回对应条数
@@ -24092,19 +24094,19 @@ async function sendAgentMessage(){
         if(agentState?.devMode){
             offSystemPrompt += `\n\n【开发模式 / Dev Mode 已开启】
 你现在具有直接操作当前项目画布节点的能力！
-当用户要求在画布中创建、修改、连接、删除节点（例如"在左侧建一个快速执行节点"、"建一个提示词节点并连接到快速执行"、"把节点标题改为X"）时：
+当用户要求在画布中创建、修改、连接、删除节点（例如"在左侧建一个上传节点"、"建一个提示词节点并连接到上传"、"把节点标题改为X"）时：
 1. intent 必须设为 "canvas_op"，且在 JSON 中返回 "canvas_ops" 数组。严禁调用本机文件搜索、命令行工具（run_shell / list_dir / rg）去排查画布文件！
 2. 节点类型 type 支持：
-   - image (快速执行节点)
+   - image (上传节点)
    - prompt (提示词节点)
    - loop (循环节点)
    - minimax (MiniMax 视频节点)
    - 3d (3D预览节点)
    - group (智能分组)
-   - attach (附件节点，空节点，用户随后自行上传文件)
+   - 附件没有独立的 type：Agent 产物落文件用 create_file_node 动作，用户自己传文件就建 image 节点
 3. 示例：
-   用户："在画布左侧建一个快速执行节点"
-   返回：{"intent":"canvas_op","reply":"已为您在画布左侧创建快速执行节点。","options":[],"prompts":[],"canvas_ops":[{"op":"create_node","type":"image","position":"left"}]}`;
+   用户："在画布左侧建一个上传节点"
+   返回：{"intent":"canvas_op","reply":"已为您在画布左侧创建上传节点。","options":[],"prompts":[],"canvas_ops":[{"op":"create_node","type":"image","position":"left"}]}`;
         }
         if(_skills.length > 0){
             offSystemPrompt += '\n\n' + _skills.map(s => `===== Skill: ${s.name} =====\n${s.content || ''}\n===== End =====`).join('\n');

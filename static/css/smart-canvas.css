@@ -560,7 +560,7 @@ body.smart-prompt-split-resize .prompt-node-llm select { pointer-events:none !im
 
 .create-menu { position:fixed; z-index:75; display:none; width:400px; max-width:calc(100vw - 28px); padding:9px; border-radius:16px; background:var(--panel); border:1px solid var(--line); box-shadow:0 22px 58px var(--shadow); backdrop-filter:blur(20px); }
 .create-menu.open { display:block; }
-/* 创建菜单现有 6 张卡片（快速执行 / 分组 / 提示词节点 / 循环 / MiniMax / 3D预览）。
+/* 创建菜单现有 6 张卡片（上传 / 分组 / 提示词节点 / 循环 / MiniMax / 3D预览）。
    原来按 7 张排 5 列 → 删掉「附件」卡片后会变成 5+1 的「孤行」，所以改成 3 列 2 行。
    ⚠️ 卡片数量再变时记得同步这里的列数，别留下孤行。 */
 .create-menu-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; }
