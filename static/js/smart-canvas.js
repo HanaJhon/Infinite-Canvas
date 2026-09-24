@@ -7470,7 +7470,15 @@ function mediaKindForItem(img){
 }
 // 图片节点（smart-image）的头部标签：按实际承载的媒体类型显示。
 // 附件节点显示真实扩展名（XLSX / PPTX / PDF…），多个附件显示「附件组」，
-// 否则附件节点会被笼统标成 "Image"，用户根本看不出这是 Agent 产出的文件。
+// 否则附件节点会被笼统标成 "Image"，看不出这是 Agent 产出的文件。
+//
+// ⚠️ 注意可见性：全局规则 `.image-node:not(.empty-node) .node-head/.node-title
+//    { display:none }`（smart-canvas.css:574-575）会隐藏**所有非空**图片节点的标题栏，
+//    只有空节点与显式覆盖该规则的类型（如 smart3d-node）才看得到。
+//    所以附件节点的「格式识别」在界面上**主要靠卡片自己的文件名 + 格式标签**
+//    （`media-card-sub` 走 attachmentExtLabel，如 XLSX / MD / PPTX）；
+//    这里返回的标题仍然要算对 —— 它会出现在 @ 引用面板与 Agent 的按标题引用节点里，
+//    将来若有节点类型选择显示标题栏，也应当是正确值。
 function smartImageNodeTitle(node, imgs){
     const list = Array.isArray(imgs) ? imgs : [];
     if(!list.length) return escapeHtml(tr('smart.createImportNode'));
