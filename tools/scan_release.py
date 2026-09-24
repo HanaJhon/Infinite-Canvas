@@ -142,7 +142,8 @@ def positive_control() -> int:
 
 def scan(target: str) -> int:
     ss = load_scan_secrets()
-    struct, secrets, stats = [], [], {"txt": 0, "bin": 0, "total": 0}
+    ignore = ss.load_ignore()
+    struct, secrets, stats = [], [], {"txt": 0, "bin": 0, "total": 0, "ignored": 0}
 
     for name, raw in iter_entries(target):
         stats["total"] += 1
@@ -161,6 +162,14 @@ def scan(target: str) -> int:
 
         if PRIVATE_KEY.search(txt):
             struct.append((name, "私钥内容（BEGIN PRIVATE KEY）"))
+        # 🚨 必须尊重 .secretsignore —— 否则「把误报写进 .secretsignore」这条官方指引
+        #    在发布包审计里根本不生效（踩过：fontTools 的 CURVE_TYPE_LIB_KEY 被尺子①
+        #    误判，写进豁免清单后 build 仍然中止，因为 scan_release 直接调 scan_text、
+        #    绕过了 scan_secrets.skip()）。这里只取豁免清单那一部分，不套用 skip() 的
+        #    路径/后缀跳过，避免顺手把本该扫的文件也放过。
+        if any(pat in norm for pat in ignore):
+            stats["ignored"] += 1
+            continue
         for kind, masked in ss.scan_text(name, txt):
             secrets.append((name, f"[尺子①] {kind}: {masked}"))
         vendored = any(v in norm for v in VENDORED)
@@ -178,7 +187,7 @@ def scan(target: str) -> int:
 
     print("=" * 66)
     print(f"审计对象：{target}")
-    print(f"条目 {stats['total']} 个（文本 {stats['txt']}，二进制 {stats['bin']}）")
+    print(f"条目 {stats['total']} 个（文本 {stats['txt']}，二进制 {stats['bin']}，豁免 {stats['ignored']}）")
     print("-" * 66)
     print(f"【结构断言】命中 {len(struct)} 项")
     for n, label in struct[:40]:
