@@ -2091,8 +2091,67 @@ sealed class LauncherHost : IDisposable
         {
             SendLog($"停止服务进程时出错：{ex.Message}");
         }
+
+        // 只杀「自己拉起的」服务是不够的：服务可能是上一次启动器遗留的孤儿进程
+        // （启动器崩溃 / 被强杀 / 更新中途退出后，python.exe 会活下来）。
+        // 它一直占着 python\Lib\site-packages 下的 .pyd（PIL 等），更新器覆盖这些文件时
+        // 就 IOException 崩在半途，留下「后端新、前端旧」的半成品安装 —— 2026-09-24 踩过两次。
+        // 所以这里按「可执行文件位于安装目录内」兜底清理。
+        foreach (var pid in KillProcessesUnderRoot(root))
+        {
+            if (!pids.Contains(pid)) pids.Add(pid);
+        }
+
         ownsServer = false;
         return pids;
+    }
+
+    /// <summary>
+    /// 结束所有「可执行文件位于安装目录内」的进程（python 服务、残留启动器、旧更新器副本），
+    /// 返回被结束的 PID。孤儿服务不会被 <see cref="server"/> 追踪，必须按路径兜底。
+    /// </summary>
+    private List<int> KillProcessesUnderRoot(string installRoot)
+    {
+        var killed = new List<int>();
+        if (string.IsNullOrWhiteSpace(installRoot)) return killed;
+        var rootPrefix = installRoot.TrimEnd('\\', '/') + "\\";
+        var self = Environment.ProcessId;
+
+        foreach (var p in Process.GetProcesses())
+        {
+            try
+            {
+                if (p.Id == self) continue;
+
+                string exePath;
+                try { exePath = p.MainModule?.FileName ?? ""; }
+                catch { continue; }   // 权限不足 / 已退出 / 32-64 位不匹配：跳过
+                if (string.IsNullOrEmpty(exePath)) continue;
+                if (!exePath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)) continue;
+
+                string name;
+                try { name = p.ProcessName; } catch { continue; }
+                var isService = name.StartsWith("python", StringComparison.OrdinalIgnoreCase);
+                var isLauncher = name.IndexOf("Lochou", StringComparison.OrdinalIgnoreCase) >= 0;
+                var isApplier = name.IndexOf("_apply_update", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (!isService && !isLauncher && !isApplier) continue;
+
+                var pid = p.Id;
+                p.Kill(true);
+                try { p.WaitForExit(8000); } catch { }
+                killed.Add(pid);
+                SendLog($"已结束安装目录内的遗留进程 {name}（PID {pid}）。");
+            }
+            catch (Exception ex)
+            {
+                SendLog($"结束遗留进程时出错：{ex.Message}");
+            }
+            finally
+            {
+                p.Dispose();
+            }
+        }
+        return killed;
     }
 
     private void ScheduleExit(int delayMs)

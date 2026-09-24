@@ -146,6 +146,19 @@ internal static class UpdateApplier
                 ? $"本次将删除 {deleteList.Count} 个文件（已纳入恢复点）"
                 : "本次没有要删除的文件");
 
+            // ③.5 预检：确认要覆盖的文件现在都写得进去。
+            //      被占用就【一个字节都别写】直接中止 —— 写到一半崩掉留下的
+            //      「后端新、前端旧」半成品，比干脆不更新更难排查（2026-09-24 踩过两次）。
+            var locked = FindLockedTargets(zipPath, destDir);
+            if (locked.Count > 0)
+            {
+                Log($"[中止] 有 {locked.Count} 个文件被占用，无法覆盖。未做任何改动。");
+                foreach (var rel in locked.Take(20)) Log($"    {rel}");
+                if (locked.Count > 20) Log($"    ...（还有 {locked.Count - 20} 个）");
+                Log("       请先退出启动器，并在任务管理器里结束安装目录下的 python.exe（遗留的服务进程），然后重试。");
+                return 6;
+            }
+
             // ④ 建恢复点（format 2，与网页端 main.py 完全一致）
             var restorePoint = CreateUpdateRestorePoint(destDir, manifest, isDelta ? zipRels : null, deleteList);
             Log(restorePoint is null
@@ -153,8 +166,29 @@ internal static class UpdateApplier
                 : $"已创建恢复点 {Path.GetFileName(restorePoint)}");
 
             // ⑤ 解压覆盖（只写包内条目；增量包因此天然只更新变更文件）
-            var written = ExtractOverwrite(zipPath, destDir);
+            var written = ExtractOverwrite(zipPath, destDir, out var failed);
             Log($"已写入 {written} 个文件");
+
+            if (failed.Count > 0)
+            {
+                // 预检过了却仍写失败：占用是中途才出现的。此时目录已经是半新半旧，
+                // 必须从刚建的恢复点整体还原，绝不把半成品安装留给用户。
+                Log($"[失败] 有 {failed.Count} 个文件中途被占用，写入失败：");
+                foreach (var rel in failed.Take(20)) Log($"    {rel}");
+                if (failed.Count > 20) Log($"    ...（还有 {failed.Count - 20} 个）");
+                if (restorePoint is not null)
+                {
+                    Log("正在从恢复点整体还原，避免留下半成品安装 ...");
+                    var back = RestoreFromRestorePoint(destDir, restorePoint);
+                    Log($"已还原 {back} 个文件（安装目录回到更新前状态）。");
+                }
+                else
+                {
+                    Log("[警告] 本次没有可用恢复点，安装目录可能不完整 —— 请用完整包重新安装。");
+                }
+                Log("[中止] 更新未完成。请关掉启动器与所有服务进程后重试。");
+                return 7;
+            }
 
             // ⑥ 删除：增量包按 manifest.deleted；完整包删 prune_roots 内的旧残留
             var deleted = DeleteFiles(destDir, deleteList);
@@ -306,6 +340,59 @@ internal static class UpdateApplier
             Log($"[异常] {ex}");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// 从恢复点还原安装目录（不建「回退前安全快照」、不重启启动器）。
+    /// 专用于更新中途失败时把目录还原回去，避免留下半新半旧的半成品安装。
+    /// 还原逻辑与 <see cref="RunRollback"/> 保持一致，返回还原的文件数。
+    /// </summary>
+    private static int RestoreFromRestorePoint(string destDir, string backupDir)
+    {
+        var manifest = ReadBackupManifest(backupDir);
+        var restored = new List<string>();
+        var skipped = new List<string>();
+
+        RestoreStatic(destDir, backupDir, manifest, restored, skipped);
+
+        foreach (var file in Directory.EnumerateFiles(backupDir, "*", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(backupDir, file).Replace('\\', '/');
+            if (rel.StartsWith("static/", StringComparison.OrdinalIgnoreCase)) continue;   // 上面已处理
+            if (IsBackupMetadata(rel)) continue;                                          // 清单本身不还原
+            if (IsForbiddenPath(rel)) { skipped.Add(rel); continue; }
+
+            var target = SafeCombine(destDir, rel);
+            if (target is null) { skipped.Add(rel); continue; }
+
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                CopyFileAtomic(file, target);
+                restored.Add(rel);
+            }
+            catch (Exception ex)
+            {
+                skipped.Add(rel);
+                Log($"  [跳过] 还原失败 {rel}：{ex.Message}");
+            }
+        }
+
+        // 删掉「本次更新新增的」文件（恢复点里标成 existed=false 的那些）
+        if (manifest?.root_files is not null)
+        {
+            foreach (var (rel, state) in manifest.root_files)
+            {
+                if (state?.existed != false) continue;
+                if (rel.StartsWith("static/", StringComparison.OrdinalIgnoreCase)) continue;
+                if (IsBackupMetadata(rel) || IsForbiddenPath(rel)) continue;
+                var target = SafeCombine(destDir, rel);
+                if (target is null || !File.Exists(target)) continue;
+                TryDelete(target);
+            }
+        }
+
+        return restored.Count;
     }
 
     /// <summary>列出可用于回退的恢复点（供启动器 UI）。按时间倒序。</summary>
@@ -673,9 +760,71 @@ internal static class UpdateApplier
         }
     }
 
-    /// <summary>把 zip 内容覆盖到 destDir，剥掉包内顶层目录。返回写入文件数。</summary>
-    private static int ExtractOverwrite(string zipPath, string destDir)
+    /// <summary>解压前预检「文件是否可写」的轮数 / 间隔。</summary>
+    private const int LockCheckAttempts = 6;
+    private const int LockCheckDelayMs = 800;
+
+    /// <summary>单个文件解压失败后的退避重试次数 / 间隔。</summary>
+    private const int ExtractAttempts = 5;
+    private const int ExtractRetryDelayMs = 500;
+
+    /// <summary>包内所有目标文件的相对路径（剥掉顶层目录、跳过目录项与越界项）。</summary>
+    private static List<string> EnumerateTargetRels(string zipPath, string destDir)
     {
+        var rels = new List<string>();
+        using var zip = ZipFile.OpenRead(zipPath);
+        foreach (var entry in zip.Entries)
+        {
+            if (entry.FullName.EndsWith("/", StringComparison.Ordinal)) continue;
+            var rel = StripTopSegment(entry.FullName);
+            if (string.IsNullOrEmpty(rel)) continue;
+            if (SafeCombine(destDir, rel) is null) continue;   // 路径越界
+            rels.Add(rel);
+        }
+        return rels;
+    }
+
+    /// <summary>
+    /// 预检：解压前确认包内要覆盖的文件现在都写得进去（没被别的进程占用）。
+    /// 被占用就【一个字节都别写】直接中止 —— 否则写到一半崩掉会留下
+    /// 「后端新、前端旧」的半成品安装，比干脆不更新更难排查（2026-09-24 踩过两次）。
+    /// 占用常常是瞬时的（进程正在退出、杀软正在扫描），所以先退避重试几轮。
+    /// </summary>
+    private static List<string> FindLockedTargets(string zipPath, string destDir)
+    {
+        var rels = EnumerateTargetRels(zipPath, destDir);
+        var locked = new List<string>();
+        for (var attempt = 1; attempt <= LockCheckAttempts; attempt++)
+        {
+            locked = new List<string>();
+            foreach (var rel in rels)
+            {
+                var target = SafeCombine(destDir, rel);
+                if (target is null || !File.Exists(target)) continue;   // 新文件不会被占用
+                try
+                {
+                    using var fs = new FileStream(target, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                }
+                catch (IOException) { locked.Add(rel); }
+                catch (UnauthorizedAccessException) { locked.Add(rel); }
+            }
+            if (locked.Count == 0) return locked;
+            if (attempt < LockCheckAttempts)
+            {
+                Log($"  有 {locked.Count} 个文件暂时被占用，{LockCheckDelayMs}ms 后重试（第 {attempt}/{LockCheckAttempts} 轮）...");
+                Thread.Sleep(LockCheckDelayMs);
+            }
+        }
+        return locked;
+    }
+
+    /// <summary>
+    /// 把 zip 内容覆盖到 destDir，剥掉包内顶层目录。返回写入文件数；
+    /// 被占用而写不进去的记进 <paramref name="failed"/>。
+    /// </summary>
+    private static int ExtractOverwrite(string zipPath, string destDir, out List<string> failed)
+    {
+        failed = new List<string>();
         var written = 0;
         using var zip = ZipFile.OpenRead(zipPath);
         foreach (var entry in zip.Entries)
@@ -693,9 +842,33 @@ internal static class UpdateApplier
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            // 直接覆盖：更新包内只有程序文件，用户数据不在其中
-            entry.ExtractToFile(target, overwrite: true);
-            written++;
+
+            // 直接覆盖：更新包内只有程序文件，用户数据不在其中。
+            // 逐个文件退避重试 —— 一次失败就整体中止，会把安装目录留在半新半旧的状态。
+            var ok = false;
+            for (var attempt = 1; attempt <= ExtractAttempts; attempt++)
+            {
+                try
+                {
+                    entry.ExtractToFile(target, overwrite: true);
+                    ok = true;
+                    break;
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                {
+                    if (attempt >= ExtractAttempts) break;
+                    Thread.Sleep(ExtractRetryDelayMs);
+                }
+            }
+            if (ok)
+            {
+                written++;
+            }
+            else
+            {
+                failed.Add(rel);
+                Log($"  [失败] 无法写入（文件被占用）：{rel}");
+            }
         }
         return written;
     }
