@@ -81,8 +81,8 @@ PACKAGE_TOP = "Infinite-Canvas"
 ROOT_FILES = [
     "Lochou启动器.exe",
     "main.py",
-    # 3D 预览节点的 HuggingFace Space 客户端（main.py 直接 import，缺了服务起不来）
-    "hf_3dai_client.py",
+    # 混元3D 节点的浏览器通道客户端（main.py 启动时直接 import，缺了服务起不来）
+    "hunyuan3d_client.py",
     "VERSION",
     "requirements.txt",
     "README.md",
