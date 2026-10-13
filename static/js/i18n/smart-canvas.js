@@ -572,6 +572,7 @@
         "smart.hy3dViewsNone": { zh: "未连接图片", en: "No image connected" },
         "smart.hy3dNeedLogin": { zh: "混元3D 未登录：点「去登录」，在自动打开的浏览器窗口里完成登录（若提示绑定手机号，请一并完成）后重新生成", en: "Not signed in to Hunyuan 3D. Click \"Sign in\", finish login in the browser window that opens (complete phone binding if prompted), then generate again." },
         "smart.hy3dLoginWaiting": { zh: "请在弹出的浏览器窗口完成登录（若提示绑定手机号，请一并完成）", en: "Finish signing in in the browser window (complete phone binding if prompted)" },
+        "smart.hy3dLoggingIn": { zh: "登录中", en: "Signing in" },
         "smart.hy3dLoginBtn": { zh: "去登录", en: "Sign in" },
         "smart.hy3dLoginOk": { zh: "登录成功，请重新点「生成」", en: "Signed in. Click \"Generate\" again." },
         "smart.hy3dLoginFail": { zh: "登录失败或超时", en: "Sign-in failed or timed out" },

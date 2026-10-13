@@ -10515,11 +10515,14 @@ function hy3dBodyHtml(node){
     const views = hy3dConnectedViews(node);
     const hasModel = hy3dHasContent(node);
     const phaseLabel = node.hy3dPhase ? (HY3D_PHASE_LABELS[node.hy3dPhase] || node.hy3dPhase) : '';
-    const statusLine = node.running ? (node.hy3dHint || phaseLabel || '生成中…') : '';
+    const statusLine = node.running ? (node.hy3dHint || phaseLabel || tr('smart.hy3dRunning')) : '';
+    // 🚨 占位文案就是「当前状态说明」的唯一出处（下方不再另起一行重复）。
+    //    登录中优先显示「去浏览器完成登录」，而不是上一次失败留下的旧原因。
     let placeholderText = '';
-    if(node.hy3dNeedLogin) placeholderText = node.hy3dLoginReason || tr('smart.hy3dNeedLogin');
+    if(node.running && node.hy3dNeedLogin) placeholderText = node.hy3dHint || tr('smart.hy3dLoginWaiting');
+    else if(node.hy3dNeedLogin) placeholderText = node.hy3dLoginReason || tr('smart.hy3dNeedLogin');
     else if(node.hy3dError) placeholderText = node.hy3dError;
-    else if(node.running) placeholderText = statusLine || '生成中…';
+    else if(node.running) placeholderText = statusLine;
     else if(hasModel) placeholderText = '';
     else if(views.length === 1) placeholderText = tr('smart.hy3dViewsSingle');
     else if(views.length >= 2) placeholderText = trf('smart.hy3dViewsMulti', {n:String(views.length)});
@@ -10528,7 +10531,10 @@ function hy3dBodyHtml(node){
         <i data-lucide="${node.hy3dError ? 'triangle-alert' : 'boxes'}"></i>
         <span>${escapeHtml(placeholderText)}</span>
     </div>`;
-    const runLabel = node.running ? tr('smart.hy3dRunning') : tr('smart.hy3dRun');
+    // 登录中 ≠ 生成中，按钮文案要分开（两个状态共用 running 标志）
+    const runLabel = node.running
+        ? (node.hy3dNeedLogin ? tr('smart.hy3dLoggingIn') : tr('smart.hy3dRunning'))
+        : tr('smart.hy3dRun');
     const narrow = (Number(node.w) || 0) < 430;
     const display = hy3dDisplayOf(node);
     const tools = hasModel ? `<div class="hy3d-tools">
@@ -10573,7 +10579,7 @@ function hy3dBodyHtml(node){
         </div>
         ${tools}
         ${fovRow}
-        ${statusLine && !hasModel ? `<div class="hy3d-phase">${escapeHtml(statusLine)}</div>` : ''}
+        ${statusLine && hasModel ? `<div class="hy3d-phase">${escapeHtml(statusLine)}</div>` : ''}
         ${node.hy3dError && hasModel ? `<div class="hy3d-phase is-error">${escapeHtml(node.hy3dError)}</div>` : ''}
     </div>`;
 }
