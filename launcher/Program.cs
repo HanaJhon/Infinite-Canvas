@@ -59,6 +59,26 @@ internal static class Program
             return;
         }
 
+        // 诊断模式：联网抓一次 Grsai 官方模型清单并打印后直接退出（不建窗口、不抢单实例互斥量）。
+        //   Lochou启动器.exe --probe-grsai-models
+        //   Lochou启动器.exe --probe-grsai-models "<api_providers.json 副本路径>"
+        //       ↑ 顺带在**副本**上试算「合并进 Grsai 通道」（只读不写），用于验证合并逻辑。
+        // 用途：不开界面就能验证「联网识别最新模型清单」这一环是否还通。
+        if (args.Length > 0 && (args[0].Equals("--probe-grsai-models", StringComparison.OrdinalIgnoreCase)
+                                || args[0].Equals("--fetch-grsai-models", StringComparison.OrdinalIgnoreCase)))
+        {
+            var providersArg = args.Length > 1 && !string.IsNullOrWhiteSpace(args[1]) ? args[1] : null;
+            var probeJson = LauncherHost.ProbeGrsaiModelsJsonAsync(providersArg).GetAwaiter().GetResult();
+            var probeBytes = System.Text.Encoding.UTF8.GetBytes(probeJson + Environment.NewLine);
+            using (var stdout = Console.OpenStandardOutput())
+            {
+                stdout.Write(probeBytes, 0, probeBytes.Length);
+                stdout.Flush();
+            }
+            Environment.Exit(0);
+            return;
+        }
+
         ApplicationConfiguration.Initialize();
         using var mutex = new Mutex(true, "InfiniteCanvasLauncher.SingleInstance", out var isOwner);
         if (!isOwner)
@@ -841,6 +861,9 @@ sealed class LauncherHost : IDisposable
 
                 // 当页面 HTML/CSS 加载完毕，触发启动器窗口平滑渐显动画
                 FadeInWindow();
+
+                // 每次运行：后台联网更新 Grsai 官方模型清单（不阻塞界面，失败只记日志）
+                _ = Task.Run(RefreshGrsaiModelsAsync);
             };
 
             // Resolve dist directory across various single-file extract and project directory structures
@@ -1361,6 +1384,424 @@ sealed class LauncherHost : IDisposable
         "gpt-5.5",
     };
 
+    // ==================================================================
+    // Grsai 模型清单「每次运行联网自动更新」（2026-10-09）
+    //
+    // 🚨 为什么不能直接打接口：Grsai **没有**任何模型列表接口。实测穷举
+    //    GET/POST /v1/models、/v1/api/models、/v1/api/model/list、/api/models、
+    //    /v1/model/list、/pricing、/v1/pricing、/openapi.json、/swagger.json、
+    //    /docs … **全部 404**；该域名下真实存在的只有 POST /v1/api/generate
+    //    与 GET /v1/api/result。官网 grsai.ai 是纯营销站（sitemap 仅 4 条 URL），
+    //    首页只内嵌 8 个模型名，**比内置清单还少** → 抓首页会「越抓越少」。
+    //
+    // ✅ 唯一可联网获取的权威来源：Grsai 自己的控制台文档页
+    //      https://grsai.ai/zh/dashboard/documents/chat
+    //    该页把 Chat API 的「支持模型」以**纯文本**内嵌在 _next/static/chunks/*.js
+    //    里（形如 {title:"支持模型",content:"gpt-image-2.5\ngpt-6-astra\n..."}）。
+    //    2026-10-09 实测拿到 32 个，比内置清单多出 gpt-5.4 / nano-banana-2.1。
+    //
+    // 策略：远端 ∪ 内置（远端在前）→ 写本地缓存 → **只增不减**地并进已保存的
+    //      Grsai 通道（画布侧读同一份 data/api_providers.json，两边一起更新）。
+    //      抓不到就用缓存；再无就用内置清单。任何失败只记日志，绝不影响启动。
+    //      chunk 名是内容哈希的 → 缓存里记一份，命中时只发 1 个请求；
+    //      对方重新部署导致哈希变化时自动回落到「取页面 → 并行找 chunk」。
+    // ==================================================================
+
+    internal const string GrsaiDocsPageUrl = "https://grsai.ai/zh/dashboard/documents/chat";
+
+    private static readonly string[] GrsaiModelAnchors = { "支持模型", "Supported models" };
+
+    private static readonly HashSet<string> GrsaiModelStopWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "apikey", "model", "prompt", "images", "url", "json", "true", "false",
+        "null", "content", "title", "data", "response", "headers", "type",
+    };
+
+    /// <summary>把抓到的原始文本行清洗成模型 id（去空、去重、挡掉文档里的字段名）。</summary>
+    internal static List<string> GrsaiNormalizeModelIds(IEnumerable<string> rawLines)
+    {
+        var outList = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in rawLines)
+        {
+            var t = (raw ?? "").Trim().Trim('"', '\'', ' ', ',', '\\');
+            if (t.Length < 2 || t.Length > 64) continue;
+            if (!Regex.IsMatch(t, @"^[A-Za-z0-9][A-Za-z0-9._\-]*$")) continue;
+            if (GrsaiModelStopWords.Contains(t)) continue;
+            if (seen.Add(t)) outList.Add(t);
+        }
+        return outList;
+    }
+
+    /// <summary>从一个 JS chunk 文本里抽出「支持模型」清单；抽不到返回 null。</summary>
+    internal static List<string>? GrsaiExtractModelsFromChunk(string js)
+    {
+        if (string.IsNullOrEmpty(js)) return null;
+        foreach (var anchor in GrsaiModelAnchors)
+        {
+            var idx = js.IndexOf(anchor, StringComparison.Ordinal);
+            while (idx >= 0)
+            {
+                var len = Math.Min(4000, js.Length - idx);
+                var m = Regex.Match(js.Substring(idx, len),
+                                    "content\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+                if (m.Success)
+                {
+                    // JS 字符串里的换行是**字面量** \n（反斜杠 + n，两个字符）
+                    var ids = GrsaiNormalizeModelIds(Regex.Split(m.Groups[1].Value, @"\\n|\r|\n"));
+                    if (ids.Count >= 5) return ids;
+                }
+                idx = js.IndexOf(anchor, idx + anchor.Length, StringComparison.Ordinal);
+            }
+        }
+        return null;
+    }
+
+    internal sealed class GrsaiRemoteModels
+    {
+        public List<string> Models = new();
+        public string ChunkUrl = "";
+    }
+
+    /// <summary>联网抓 Grsai 官方模型清单；抓不到返回 null（调用方回落缓存 / 内置）。</summary>
+    internal static async Task<GrsaiRemoteModels?> FetchRemoteGrsaiModelsAsync(string? cachedChunkUrl, CancellationToken ct)
+    {
+        // ① 先用缓存里记下的 chunk 地址（命中只需 1 个请求）
+        if (!string.IsNullOrEmpty(cachedChunkUrl))
+        {
+            try
+            {
+                var js = await HttpGetStringAsync("https://grsai.ai" + cachedChunkUrl, ct);
+                var hit = GrsaiExtractModelsFromChunk(js);
+                if (hit is { Count: >= 5 })
+                    return new GrsaiRemoteModels { Models = hit, ChunkUrl = cachedChunkUrl! };
+            }
+            catch { /* 对方重新部署过 → 落到发现流程 */ }
+        }
+
+        // ② 发现流程：取文档页 → 列出全部 chunk → 分批并行找含「支持模型」的那个。
+        //    ⚠️ 必须并行：实测 grsai.ai 单请求 TTFB 就有 5~16s，串行扫 16 个 chunk 要 3 分钟。
+        var page = await HttpGetStringAsync(GrsaiDocsPageUrl, ct);
+        var chunkUrls = Regex.Matches(page, "/_next/static/chunks/[A-Za-z0-9._\\-]+\\.js")
+                             .Select(m => m.Value).Distinct().Take(32).ToList();
+        foreach (var batch in chunkUrls.Chunk(4))
+        {
+            ct.ThrowIfCancellationRequested();
+            var results = await Task.WhenAll(batch.Select(async cu =>
+            {
+                try
+                {
+                    var js = await HttpGetStringAsync("https://grsai.ai" + cu, ct);
+                    var hit = GrsaiExtractModelsFromChunk(js);
+                    return hit is { Count: >= 5 } ? new GrsaiRemoteModels { Models = hit, ChunkUrl = cu } : null;
+                }
+                catch { return null; }
+            }));
+            var win = results.FirstOrDefault(r => r is not null);
+            if (win is not null) return win;
+        }
+        return null;
+    }
+
+    internal static async Task<string> HttpGetStringAsync(string url, CancellationToken ct)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        // 显式 UA：无 UA / 类库默认 UA 会被 Cloudflare 前置拦（1010）
+        req.Headers.TryAddWithoutValidation("User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) InfiniteCanvasLauncher/1.0");
+        req.Headers.TryAddWithoutValidation("Accept", "text/html,application/javascript,*/*");
+        using var resp = await _pingHttpClient.SendAsync(req, ct);
+        resp.EnsureSuccessStatusCode();
+        return await resp.Content.ReadAsStringAsync();
+    }
+
+    // ⚠️ 下面两个关键词表必须与启动器前端 Qe() **逐字一致**，否则 C# 写进
+    //    api_providers.json 的分类会和界面重新归类的结果对不上（同一个模型
+    //    出现在不同分类里）。前端源码：dist/launcher/assets/index-*.js 的 Qe()。
+    private static readonly string[] GrsaiVideoKeywords =
+    {
+        "video", "runway", "gen-3", "gen3", "gen-2", "luma", "kling", "sora",
+        "cogvideo", "hailuo", "minimax-h3", "pika", "vidu", "animate", "svd",
+        "ltx", "hunyuanvideo",
+    };
+
+    private static readonly string[] GrsaiImageKeywords =
+    {
+        "image", "flux", "dall-e", "dalle", "sdxl", "stable-diffusion", "midjourney",
+        "kolors", "paint", "draw", "diffusion", "banana", "art",
+    };
+
+    /// <summary>按名字归类（与启动器前端 Qe() 的规则逐字一致）。</summary>
+    internal static string GrsaiClassifyModel(string id)
+    {
+        var n = (id ?? "").ToLowerInvariant();
+        if (GrsaiVideoKeywords.Any(n.Contains)) return "video";
+        if (GrsaiImageKeywords.Any(n.Contains)) return "image";
+        return "chat";
+    }
+
+    /// <summary>远端 ∪ 内置（远端顺序在前）。remote 为空时就是内置清单。</summary>
+    internal static List<string> MergeGrsaiModelList(IEnumerable<string>? remote)
+    {
+        var merged = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var m in remote ?? Enumerable.Empty<string>()) if (seen.Add(m)) merged.Add(m);
+        foreach (var m in GrsaiCuratedModels()) if (seen.Add(m)) merged.Add(m);
+        return merged;
+    }
+
+    internal sealed class GrsaiModelsCacheFile
+    {
+        public string updated_at { get; set; } = "";
+        public string source { get; set; } = "";
+        public string chunk_url { get; set; } = "";
+        public List<string> models { get; set; } = new();
+    }
+
+    // 缓存放启动器自己的目录（与 preferences.json 同级），**不往项目 data/ 里塞东西**
+    // —— data/ 是随发布包走的目录，release 扫描只允许留 inspire_prompt_zh.json。
+    private static string GrsaiModelsCachePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "InfiniteCanvasLauncher", "grsai-models.json");
+
+    internal static GrsaiModelsCacheFile? LoadGrsaiModelsCache()
+    {
+        try
+        {
+            if (!File.Exists(GrsaiModelsCachePath)) return null;
+            if (JsonNode.Parse(File.ReadAllText(GrsaiModelsCachePath, Encoding.UTF8)) is not JsonObject obj)
+                return null;
+            var res = new GrsaiModelsCacheFile
+            {
+                updated_at = obj["updated_at"]?.GetValue<string>() ?? "",
+                source = obj["source"]?.GetValue<string>() ?? "",
+                chunk_url = obj["chunk_url"]?.GetValue<string>() ?? "",
+            };
+            if (obj["models"] is JsonArray arr)
+                foreach (var m in arr)
+                {
+                    var s = m?.GetValue<string>();
+                    if (!string.IsNullOrWhiteSpace(s)) res.models.Add(s!);
+                }
+            return res;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>写缓存；返回错误信息（空串 = 成功）。</summary>
+    internal static string SaveGrsaiModelsCache(List<string> models, string chunkUrl)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(GrsaiModelsCachePath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            var obj = new JsonObject
+            {
+                ["updated_at"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                ["source"] = GrsaiDocsPageUrl,
+                ["chunk_url"] = chunkUrl ?? "",
+                ["models"] = new JsonArray(models.Select(m => (JsonNode)JsonValue.Create(m)!).ToArray()),
+            };
+            File.WriteAllText(GrsaiModelsCachePath,
+                obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+                new UTF8Encoding(false));
+            return "";
+        }
+        catch (Exception ex) { return ex.Message; }
+    }
+
+    /// <summary>
+    /// 纯函数：把清单**只增不减**地并进 api_providers.json 数组里的 Grsai 通道
+    /// （就地修改 arr）。返回新增个数；没找到 Grsai 通道返回 null。
+    /// 单独抽出来是为了能用 --probe-grsai-models 在副本上先验证一遍。
+    /// </summary>
+    internal static int? MergeGrsaiModelsIntoArray(JsonArray arr, List<string> models)
+    {
+        JsonObject? grsai = null;
+        foreach (var item in arr)
+        {
+            if (item is not JsonObject p) continue;
+            var pId = p["id"]?.GetValue<string>() ?? "";
+            var pName = p["name"]?.GetValue<string>() ?? "";
+            var pBase = p["base_url"]?.GetValue<string>() ?? "";
+            if (IsGrsaiProvider(pId + " " + pName, pBase)) { grsai = p; break; }
+        }
+        if (grsai is null) return null;
+
+        var buckets = new Dictionary<string, JsonArray>
+        {
+            ["chat"] = grsai["chat_models"] as JsonArray ?? new JsonArray(),
+            ["image"] = grsai["image_models"] as JsonArray ?? new JsonArray(),
+            ["video"] = grsai["video_models"] as JsonArray ?? new JsonArray(),
+        };
+        var existing = new HashSet<string>(
+            buckets.Values.SelectMany(a => a.Select(n => n?.GetValue<string>() ?? ""))
+                          .Where(s => s.Length > 0),
+            StringComparer.OrdinalIgnoreCase);
+
+        var added = 0;
+        foreach (var m in models)
+        {
+            if (string.IsNullOrWhiteSpace(m) || !existing.Add(m)) continue;
+            buckets[GrsaiClassifyModel(m)].Add(m);
+            added++;
+        }
+        if (added == 0) return 0;
+
+        grsai["chat_models"] = buckets["chat"];
+        grsai["image_models"] = buckets["image"];
+        grsai["video_models"] = buckets["video"];
+        return added;
+    }
+
+    /// <summary>
+    /// 把清单并进 data/api_providers.json 里的 Grsai 通道（画布侧读同一份文件，两边一起更新）。
+    /// 返回本次新增个数；没找到 Grsai 通道（或文件不存在）返回 null。
+    /// 🚨 写前先备份到 %LOCALAPPDATA%\InfiniteCanvasLauncher\api_providers.bak-*.json。
+    /// </summary>
+    private int? MergeGrsaiModelsIntoProviderConfig(List<string> models)
+    {
+        try
+        {
+            if (!File.Exists(apiProvidersPath)) return null;
+            if (JsonNode.Parse(File.ReadAllText(apiProvidersPath, Encoding.UTF8)) is not JsonArray arr)
+                return null;
+
+            var added = MergeGrsaiModelsIntoArray(arr, models);
+            if (added is null or 0) return added; // 没 Grsai 通道 / 无新增 → 一个字节都不写
+
+            try
+            {
+                var dir = Path.GetDirectoryName(preferencePath);
+                if (!string.IsNullOrEmpty(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                    File.Copy(apiProvidersPath,
+                              Path.Combine(dir, "api_providers.bak-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".json"),
+                              true);
+                }
+            }
+            catch { /* 备份失败不阻断写入 */ }
+
+            var parent = Path.GetDirectoryName(apiProvidersPath);
+            if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
+            File.WriteAllText(apiProvidersPath,
+                arr.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+                new UTF8Encoding(false));
+            return added;
+        }
+        catch (Exception ex)
+        {
+            SendLog($"[Grsai 模型] 写入通道配置失败：{ex.Message}");
+            return null;
+        }
+    }
+
+    private int _grsaiRefreshStarted; // 0/1：一次运行只联网刷一次
+
+    /// <summary>
+    /// 启动时后台调用：联网拉 Grsai 官方清单 → 写缓存 → 并进 Grsai 通道配置。
+    /// 全程不阻塞界面；任何失败只记日志。NavigationCompleted 可能多次触发，故加一次性守卫。
+    /// </summary>
+    private async Task RefreshGrsaiModelsAsync()
+    {
+        if (Interlocked.Exchange(ref _grsaiRefreshStarted, 1) == 1) return;
+        try
+        {
+            var cache = LoadGrsaiModelsCache();
+            GrsaiRemoteModels? remote = null;
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+                remote = await FetchRemoteGrsaiModelsAsync(cache?.chunk_url, cts.Token);
+            }
+            catch (Exception ex)
+            {
+                SendLog($"[Grsai 模型] 联网获取失败：{ex.Message}（继续用本地缓存 / 内置清单）");
+            }
+            if (remote is null || remote.Models.Count == 0) return;
+
+            var merged = MergeGrsaiModelList(remote.Models);
+            var cacheErr = SaveGrsaiModelsCache(merged, remote.ChunkUrl);
+            if (cacheErr.Length > 0) SendLog($"[Grsai 模型] 写缓存失败：{cacheErr}");
+
+            var added = MergeGrsaiModelsIntoProviderConfig(merged);
+            SendLog(added is null
+                ? $"[Grsai 模型] 已联网更新清单：{merged.Count} 个模型（未找到已保存的 Grsai 通道，跳过写配置）"
+                : $"[Grsai 模型] 已联网更新清单：{merged.Count} 个模型，本次新增 {added.Value} 个");
+        }
+        catch (Exception ex)
+        {
+            SendLog($"[Grsai 模型] 自动更新异常：{ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 诊断入口：联网抓一次 Grsai 模型清单并返回 JSON（供 --probe-grsai-models 用）。
+    /// providersJsonPath 非空时，额外在**该文件上试算**合并（只读不写盘）—— 传副本，别传真配置。
+    /// </summary>
+    internal static async Task<string> ProbeGrsaiModelsJsonAsync(string? providersJsonPath = null)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        GrsaiRemoteModels? remote = null;
+        var error = "";
+        var sw = Stopwatch.StartNew();
+        try { remote = await FetchRemoteGrsaiModelsAsync(null, cts.Token); }
+        catch (Exception ex) { error = ex.Message; }
+        sw.Stop();
+
+        var merged = MergeGrsaiModelList(remote?.Models);
+        var obj = new JsonObject
+        {
+            ["ok"] = remote is not null,
+            ["elapsed_ms"] = (long)sw.Elapsed.TotalMilliseconds,
+            ["error"] = error,
+            ["chunk_url"] = remote?.ChunkUrl ?? "",
+            ["remote_count"] = remote?.Models.Count ?? 0,
+            ["merged_count"] = merged.Count,
+            ["remote_models"] = new JsonArray((remote?.Models ?? new List<string>())
+                .Select(m => (JsonNode)JsonValue.Create(m)!).ToArray()),
+            ["merged_models"] = new JsonArray(merged.Select(m => (JsonNode)JsonValue.Create(m)!).ToArray()),
+        };
+
+        // 顺带把缓存写一遍再读回来，验证「写缓存 → FETCH_MODELS 读缓存」这条环路的落盘格式。
+        // （缓存在启动器自己的 %LOCALAPPDATA% 目录，不碰项目文件。）
+        if (remote is not null)
+        {
+            obj["cache_path"] = GrsaiModelsCachePath;
+            obj["cache_write_error"] = SaveGrsaiModelsCache(merged, remote.ChunkUrl);
+            var back = LoadGrsaiModelsCache();
+            obj["cache_read_count"] = back?.models.Count ?? 0;
+            obj["cache_updated_at"] = back?.updated_at ?? "";
+            obj["cache_chunk_url"] = back?.chunk_url ?? "";
+        }
+
+        if (!string.IsNullOrWhiteSpace(providersJsonPath) && File.Exists(providersJsonPath))
+        {
+            try
+            {
+                var arr = JsonNode.Parse(File.ReadAllText(providersJsonPath!, Encoding.UTF8)) as JsonArray;
+                var added = arr is null ? null : MergeGrsaiModelsIntoArray(arr, merged);
+                obj["merge_source"] = providersJsonPath;
+                obj["merge_added"] = added is null ? "无 Grsai 通道 / 解析失败" : added.Value.ToString();
+                obj["merge_result"] = arr is null
+                    ? (JsonNode)JsonValue.Create("不是 JSON 数组")!
+                    : JsonNode.Parse(arr.ToJsonString())!;
+            }
+            catch (Exception ex)
+            {
+                obj["merge_source"] = providersJsonPath;
+                obj["merge_error"] = ex.Message;
+            }
+        }
+
+        return obj.ToJsonString(new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        });
+    }
+
     private ModelsEndpoint? ResolveModelsEndpoint(string baseUrl, string protocol, string? apiKey, string? providerId, string? providerName)
     {
         string? resolvedKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
@@ -1416,9 +1857,25 @@ sealed class LauncherHost : IDisposable
 
         var endpoint = ResolveModelsEndpoint(baseUrl, protocol, apiKey, providerId, providerName);
 
-        // Grsai 专有服务没有 /models 接口，直接返回内置官方清单（用解析后的 URL 一并判断，兼容 baseUrl 从配置回填的情况）
+        // Grsai 专有服务没有 /models 接口 → 用「联网更新的官方清单 ∪ 内置清单」
+        // （用解析后的 URL 一并判断，兼容 baseUrl 从配置回填的情况）
         if (IsGrsaiProvider(protocol, baseUrl) || (endpoint is not null && IsGrsaiProvider("", endpoint.Url)))
-            return new { ok = true, models = GrsaiCuratedModels(), source = "curated", note = "Grsai 未提供 /models 接口，返回内置官方模型清单" };
+        {
+            var cache = LoadGrsaiModelsCache();
+            var hasRemote = cache is { models.Count: > 0 };
+            IEnumerable<string>? remote = hasRemote ? cache!.models : null;
+            var models = MergeGrsaiModelList(remote);
+            return new
+            {
+                ok = true,
+                models = models.ToArray(),
+                // source != "curated" 时前端提示「成功拉取并自动归类 N 个可用模型！」
+                source = hasRemote ? "remote" : "curated",
+                note = hasRemote
+                    ? $"已联网同步 Grsai 官方清单（{cache!.updated_at}）"
+                    : "Grsai 未提供 /models 接口，返回内置官方模型清单",
+            };
+        }
 
         if (endpoint is null)
             return new { ok = false, error = "缺少接口地址（baseUrl）" };

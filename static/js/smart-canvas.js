@@ -1567,7 +1567,7 @@ function isSmart3DNode(node){
     return Boolean(node && node.type === 'smart-3d');
 }
 function isSmartRunnableNode(node){
-    return Boolean(isSmartImageNode(node) || isSmartGroupNode(node) || node?.type === 'smart-minimax' || isSmart3DNode(node));
+    return Boolean(isSmartImageNode(node) || isSmartGroupNode(node) || node?.type === 'smart-minimax' || isSmart3DNode(node) || isHy3dNode(node));
 }
 function isHistoryGroupNode(node){
     return Boolean(isSmartImageNode(node) && (node.isHistoryGroup || node.historyFor));
@@ -2458,6 +2458,7 @@ function imageLayout(images, scale=1, node=null){
     if(node?.type === 'smart-prompt') return {cols:1, rows:1, ...promptNodeLayoutSize(node), thumb:96, single:true};
     if(node?.type === 'smart-minimax') return {cols:1, rows:1, ...smartMinimaxLayoutSize(node), thumb:96, single:true};
     if(node?.type === 'smart-3d') return {cols:1, rows:1, ...smart3DLayoutSize(node), thumb:96, single:true};
+    if(node?.type === 'smart-hy3d') return {cols:1, rows:1, ...smart3DLayoutSize(node), thumb:96, single:true};
     if(node?.type === 'smart-loop'){
         const explicitW = Number(node.w);
         const explicitH = Number(node.h);
@@ -6917,6 +6918,16 @@ const SMART_3D_MIN_W = 320;
 const SMART_3D_MIN_H = 280;
 const SMART_3D_STAGE_RATIO = 0.62;
 
+// ---------------------------------------------------------------------------
+// 3D 预览节点：对话模型视觉识别图片 → 输出 JSON 图元 → 本地 three.js 拼白模。
+// （HuggingFace 真模型通道已按需求移除，只保留本地白模方案。）
+// ---------------------------------------------------------------------------
+
+// 渲染的是哪一份内容：白模看 scene3d。
+function smart3DHasContent(node){
+    return smart3DHasScene(node);
+}
+
 function smart3DSceneObjects(node){
     return Array.isArray(node?.scene3d?.objects) ? node.scene3d.objects : [];
 }
@@ -6940,6 +6951,8 @@ function create3DNode(x, y, options={}){
         title:'3D预览',
         model:'',
         provider:'',
+        imageProvider:'',
+        imageModel:'',
         scene3d:null,
         scene3dRaw:'',
         scene3dError:'',
@@ -7012,6 +7025,8 @@ function cloneSmartNode(node, dx=0, dy=0){
             ? 'group'
             : node.type === 'smart-minimax'
             ? 'minimax'
+            : node.type === 'smart-hy3d'
+            ? 'hy3d'
             : 'smart'
     );
     copy.x = (Number(node.x) || 0) + dx;
@@ -9370,6 +9385,11 @@ function start3DRenderLoop(viewer){
     const step = () => {
         if(viewer.disposed) return;
         viewer.frame = requestAnimationFrame(step);
+        // 自动旋转（混元3D 工具栏开关）：每帧转一点并置脏，让下面的渲染分支跑起来
+        if(viewer.autoRotate && viewer.orbit){
+            viewer.orbit.theta += 0.01;
+            viewer.dirty = true;
+        }
         if(!viewer.dirty) return;
         viewer.dirty = false;
         try{
@@ -9404,34 +9424,7 @@ function apply3DSceneToViewer(viewer, node){
     viewer.scene.background = new THREE.Color(SMART_3D_STUDIO.background);
     if(!scene){ viewer.dirty = true; return; }
     const group = new THREE.Group();
-    // ---- 光照：固定工作室布光（半球环境光 + 主/辅/轮廓三点柔光）----
-    const hemisphere = new THREE.HemisphereLight(
-        new THREE.Color(SMART_3D_STUDIO.hemisphere.sky),
-        new THREE.Color(SMART_3D_STUDIO.hemisphere.ground),
-        SMART_3D_STUDIO.hemisphere.intensity
-    );
-    hemisphere.position.set(0, 8, 0);
-    group.add(hemisphere);
-    const addStudioLight = (spec, castShadow) => {
-        const light = new THREE.DirectionalLight(new THREE.Color(spec.color), spec.intensity);
-        light.position.set(spec.position[0], spec.position[1], spec.position[2]);
-        if(castShadow){
-            light.castShadow = true;
-            light.shadow.mapSize.set(1024, 1024);
-            light.shadow.bias = -0.0006;
-            light.shadow.normalBias = 0.022;
-            light.shadow.radius = 3;
-            const frustum = light.shadow.camera;
-            frustum.left = -6; frustum.right = 6; frustum.top = 6; frustum.bottom = -6;
-            frustum.near = 0.5; frustum.far = 44;
-            frustum.updateProjectionMatrix();
-        }
-        group.add(light);
-        return light;
-    };
-    addStudioLight(SMART_3D_STUDIO.key, true);
-    addStudioLight(SMART_3D_STUDIO.fill, false);
-    addStudioLight(SMART_3D_STUDIO.rim, false);
+    build3DStudioLights(viewer, group);
     // ---- 地面：纯白背景下的接触阴影接收面 ----
     const groundMesh = new THREE.Mesh(
         new THREE.PlaneGeometry(80, 80),
@@ -9470,14 +9463,68 @@ function apply3DSceneToViewer(viewer, node){
     viewer.content = group;
     viewer.hasScene = true;
     viewer.sceneRef = scene;
-    // 焦距优先用用户拖滑块存下的 node.camera.fov（覆盖模型场景默认值），否则回退场景 fov。
-    const nodeFov = Number(node?.camera?.fov);
-    viewer.camera.fov = (Number.isFinite(nodeFov) && nodeFov >= 20 && nodeFov <= 90) ? nodeFov : scene.camera.fov;
-    viewer.camera.updateProjectionMatrix();
-    const saved = (node.camera && Array.isArray(node.camera.position) && Array.isArray(node.camera.target)) ? node.camera : null;
-    viewer.orbit = smart3DOrbitFromCamera(THREE, saved || scene.camera);
+    apply3DCameraToViewer(viewer, node, scene.camera);
     viewer.dirty = true;
 }
+
+// 固定工作室布光（半球环境光 + 主/辅/轮廓三点柔光）。白模与 GLB 共用同一套。
+// `group` 传 null 时直接挂在 viewer.scene 上（GLB 路径用这个，因为 GLB 每次重建）。
+function build3DStudioLights(viewer, group){
+    const THREE = viewer.THREE;
+    const host = group || viewer.scene;
+    const previous = host === viewer.scene ? viewer.lights || [] : [];
+    // 清掉上一轮的光（GLB 重新加载会反复调用），避免光照越叠越亮
+    previous.forEach(light => { try{ host.remove(light); }catch(e){} });
+    const lights = [];
+    const hemisphere = new THREE.HemisphereLight(
+        new THREE.Color(SMART_3D_STUDIO.hemisphere.sky),
+        new THREE.Color(SMART_3D_STUDIO.hemisphere.ground),
+        SMART_3D_STUDIO.hemisphere.intensity
+    );
+    hemisphere.position.set(0, 8, 0);
+    host.add(hemisphere);
+    lights.push(hemisphere);
+    const addStudioLight = (spec, castShadow) => {
+        const light = new THREE.DirectionalLight(new THREE.Color(spec.color), spec.intensity);
+        light.position.set(spec.position[0], spec.position[1], spec.position[2]);
+        if(castShadow){
+            light.castShadow = true;
+            light.shadow.mapSize.set(1024, 1024);
+            light.shadow.bias = -0.0006;
+            light.shadow.normalBias = 0.022;
+            light.shadow.radius = 3;
+            const frustum = light.shadow.camera;
+            frustum.left = -6; frustum.right = 6; frustum.top = 6; frustum.bottom = -6;
+            frustum.near = 0.5; frustum.far = 44;
+            frustum.updateProjectionMatrix();
+        }
+        host.add(light);
+        lights.push(light);
+        return light;
+    };
+    addStudioLight(SMART_3D_STUDIO.key, true);
+    addStudioLight(SMART_3D_STUDIO.fill, false);
+    addStudioLight(SMART_3D_STUDIO.rim, false);
+    if(host === viewer.scene) viewer.lights = lights;
+    return lights;
+}
+
+// 相机/环绕：优先用户拖滑块存下的 node.camera.fov，否则用传入的默认相机参数。
+function apply3DCameraToViewer(viewer, node, fallbackCamera){
+    const THREE = viewer.THREE;
+    const nodeFov = Number(node?.camera?.fov);
+    const fallbackFov = Number(fallbackCamera?.fov);
+    const fov = (Number.isFinite(nodeFov) && nodeFov >= 20 && nodeFov <= 90)
+        ? nodeFov
+        : (Number.isFinite(fallbackFov) && fallbackFov > 0 ? fallbackFov : 45);
+    viewer.camera.fov = fov;
+    viewer.camera.updateProjectionMatrix();
+    const saved = (node.camera && Array.isArray(node.camera.position) && Array.isArray(node.camera.target))
+        ? node.camera : null;
+    viewer.orbit = smart3DOrbitFromCamera(THREE, saved || fallbackCamera);
+}
+
+// ---- GLB 加载：下载 → 解析 → 自动居中/缩放到工作室尺寸 → 挂上场景 ----
 function attach3DOrbit(viewer){
     const canvas = viewer.canvas;
     let dragging = false, pointerId = null, lastX = 0, lastY = 0, travelled = 0;
@@ -9567,7 +9614,7 @@ async function create3DViewer(nodeId){
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 400);
-        const viewer = {nodeId, THREE, renderer, scene, camera, canvas, content:null, sceneRef:null, orbit:null, hasScene:false, dirty:true, frame:0, disposed:false, bufferW:0, bufferH:0, envTarget:null};
+        const viewer = {nodeId, THREE, renderer, scene, camera, canvas, content:null, sceneRef:null, orbit:null, hasScene:false, dirty:true, frame:0, disposed:false, bufferW:0, bufferH:0, envTarget:null, lights:[]};
         const envTarget = build3DStudioEnvironment(THREE, renderer);
         if(envTarget){
             viewer.envTarget = envTarget;
@@ -9583,7 +9630,10 @@ async function create3DViewer(nodeId){
     }catch(error){
         const node = nodes.find(n => n.id === nodeId);
         if(node && isSmart3DNode(node) && !node.scene3dError){
-            node.scene3dError = tr('smart.3dFailed');
+            // 🚨 别只写「生成失败」：这里也可能是 three.js 模块没加载成功 / WebGL 建不出来。
+            //    把真实原因带出来，用户才有办法自查（否则只能靠猜）。
+            const reason = String(error?.message || error || '').trim().slice(0, 140);
+            node.scene3dError = reason ? `${tr('smart.3dFailed')}：${reason}` : tr('smart.3dFailed');
             render();
         }
         return null;
@@ -9596,6 +9646,8 @@ function dispose3DViewer(nodeId){
     const timer = smart3DSnapshotTimers.get(nodeId);
     if(timer){ clearTimeout(timer); smart3DSnapshotTimers.delete(nodeId); }
     smart3DSnapshotData.delete(nodeId);
+    // hf 引擎的 GLB 是异步加载的、且 group 会在 viewer 之间搬运，所以状态单独存 ——
+    // 节点还在（只是 viewer 被回收）时**不要**丢，下次建 viewer 还能复用已解析的模型。
     if(!viewer) return;
     smart3DViewers.delete(nodeId);
     viewer.disposed = true;
@@ -9623,14 +9675,16 @@ function sync3DViewers(){
         const viewer = smart3DViewers.get(nodeId);
         if(viewer){
             if(viewer.canvas.parentElement !== stage) stage.appendChild(viewer.canvas);
-            if(viewer.sceneRef !== node.scene3d) apply3DSceneToViewer(viewer, node);
+            // 内容源变了才重建：白模比 scene3d。
+            const wantRef = node.scene3d;
+            if(viewer.sceneRef !== wantRef) apply3DSceneToViewer(viewer, node);
             const placeholder = stage.querySelector('[data-3d-placeholder]');
             if(placeholder && viewer.hasScene) placeholder.remove();
             resize3DViewer(viewer);
             viewer.dirty = true;
             return;
         }
-        if(smart3DHasScene(node)) create3DViewer(nodeId);
+        if(smart3DHasContent(node)) create3DViewer(nodeId);
     });
     [...smart3DViewers.keys()].forEach(nodeId => {
         if(!alive.has(nodeId)) dispose3DViewer(nodeId);
@@ -9662,6 +9716,9 @@ function persist3DCamera(nodeId){
     scheduleSave();
 }
 function queue3DSnapshot(nodeId, delay=SMART_3D_SNAPSHOT_DEBOUNCE){
+    // 混元3D 查看器复用同一套 orbit/滚轮/双击触发器 ⇒ 在这里按节点类型分派
+    const target = nodes.find(n => n.id === nodeId);
+    if(target && isHy3dNode(target)) return queueHy3dSnapshot(nodeId, delay);
     const timer = smart3DSnapshotTimers.get(nodeId);
     if(timer) clearTimeout(timer);
     smart3DSnapshotTimers.set(nodeId, setTimeout(() => {
@@ -9697,6 +9754,7 @@ async function upload3DSnapshot(nodeId, force=false){
         return node.scene3dSnapshotUrl || '';
     }
 }
+// 白模引擎的控件：对话通道 + 对话模型（用视觉识别把图片拆成图元）。
 function smart3DModelControlsHtml(node){
     if(!chatApiProviders().length){
         return `<span class="smart3d-nomodel" title="${escapeAttr(tr('smart.3dNoVisionModel'))}"><i data-lucide="triangle-alert"></i>${escapeHtml(tr('smart.3dNoVisionModel'))}</span>`;
@@ -9707,31 +9765,33 @@ function smart3DModelControlsHtml(node){
 }
 function smart3DBodyHtml(node){
     const objects = smart3DSceneObjects(node);
+    const hasContent = objects.length > 0;
     const errorText = String(node.scene3dError || '');
+    const loading = Boolean(node.running);
     const emptyText = errorText || tr('smart.3dEmptyHint');
     // 生成失败时不能和中性空态提示一个长相：实测两者文案颜色完全相同（都是 #8b95a8），
     // 上游报错几乎看不出来。加 is-error 走红色文案 + 放开 pointer-events 让长报错可被选中复制
     //（空态仍是 pointer-events:none，不抢舞台拖拽）。
-    const placeholder = objects.length ? '' : `<div class="smart3d-placeholder${errorText ? ' is-error' : ''}" data-3d-placeholder="1">
-            <i data-lucide="${errorText ? 'triangle-alert' : 'rotate-3d'}"></i>
+    const placeholder = hasContent ? '' : `<div class="smart3d-placeholder${errorText ? ' is-error' : ''}${loading ? ' is-loading' : ''}" data-3d-placeholder="1">
+            <i data-lucide="${errorText ? 'triangle-alert' : (loading ? 'loader-2' : 'rotate-3d')}"></i>
             <span>${escapeHtml(emptyText)}</span>
         </div>`;
     const raw = String(node.scene3dRaw || '').trim();
-    const runLabel = node.running ? tr('smart.3dGenerating') : (objects.length ? tr('smart.3dRerun') : tr('smart.3dRun'));
+    const runLabel = node.running ? tr('smart.3dGenerating') : (hasContent ? tr('smart.3dRerun') : tr('smart.3dRun'));
     const fovVal = smart3DCurrentFov(node);
     const focalMm = smart3DFocalMm(fovVal);
-    const objectsText = trf('smart.3dObjects', {n:objects.length});
-    // 节点窄时把「已识别 N 个对象」和「生成 3D」压成纯图标（文案保留在 title 里），把宽度让给两个模型下拉。
+    const metaText = trf('smart.3dObjects', {n:objects.length});
+    // 节点窄时把徽标和「生成 3D」压成纯图标（文案保留在 title 里），把宽度让给模型下拉。
     // 阈值按真实文案宽度实测，不写死像素 —— 理由见 smart3DBarNeedWidth 的注释。
     // run 的三种文案宽度不同（生成 3D / 重新生成 / 识别中…），取最宽的那个算阈值，
     // 否则节点在「开始生成」的一瞬间会因阈值变化而闪一下布局。
     const runWidest = [tr('smart.3dRun'), tr('smart.3dRerun'), tr('smart.3dGenerating')]
         .reduce((a, b) => (smart3DTextWidth(b, '850') > smart3DTextWidth(a, '850') ? b : a), runLabel);
-    const narrow = smart3DLayoutSize(node).width - 24 < smart3DBarNeedWidth(objectsText, runWidest);
+    const narrow = smart3DLayoutSize(node).width - 24 < smart3DBarNeedWidth(metaText, runWidest);
     return `<div class="smart3d-body${narrow ? ' is-narrow' : ''}" data-3d-root="1">
         <div class="smart3d-stage" data-3d-stage="1" data-3d-node="${escapeAttr(node.id)}">${placeholder}</div>
         <div class="smart3d-bar">
-            <span class="smart3d-meta" title="${escapeAttr(objectsText)}"><i data-lucide="boxes"></i><span>${escapeHtml(objectsText)}</span></span>
+            <span class="smart3d-meta" title="${escapeAttr(metaText)}"><i data-lucide="boxes"></i><span>${escapeHtml(metaText)}</span></span>
             ${smart3DModelControlsHtml(node)}
             <button class="smart3d-run${node.running ? ' is-running' : ''}" type="button" data-3d-run="1" ${node.running ? 'disabled' : ''} title="${escapeAttr(runLabel)}">
                 <i data-lucide="${node.running ? 'loader-2' : 'play'}"></i><span>${escapeHtml(runLabel)}</span>
@@ -9782,6 +9842,35 @@ function bind3DNodeControls(el, node){
             scheduleSave();
         });
     }
+    // hf 引擎：图像通道 → 联动重渲染模型下拉；纹理档位单独存，全局记忆
+    const imgProviderSelect = el.querySelector('[data-3d-imgprovider]');
+    if(imgProviderSelect){
+        imgProviderSelect.addEventListener('change', () => {
+            pushUndo();
+            node.imageProvider = imgProviderSelect.value;
+            node.imageModel = '';
+            render();
+            scheduleSave();
+        });
+    }
+    const imgModelSelect = el.querySelector('[data-3d-imgmodel]');
+    if(imgModelSelect){
+        imgModelSelect.addEventListener('change', () => {
+            pushUndo();
+            node.imageModel = imgModelSelect.value;
+            scheduleSave();
+        });
+    }
+    const textureSelect = el.querySelector('[data-3d-texture]');
+    if(textureSelect){
+        textureSelect.addEventListener('change', () => {
+            pushUndo();
+            node.textureSize = textureSelect.value;
+            smart3DWriteTextureSize(textureSelect.value);
+            render();
+            scheduleSave();
+        });
+    }
     const fovInput = el.querySelector('[data-3d-fov]');
     if(fovInput){
         // 只阻止冒泡（防 beginNodeDrag 抢节点拖拽），不能 preventDefault——
@@ -9816,7 +9905,30 @@ async function run3DNode(nodeId){
     if(!inputNodesFor(node).length){ toast(tr('smart.3dNeedUpstream')); return; }
     const refs = imageRefsOnly(inputImagesFor(node));
     if(!refs.length){ toast(tr('smart.3dNoImage')); return; }
-    if(!chatApiProviders().length){ toast(tr('smart.3dNoVisionModel')); return; }
+    return run3DNodeLlm(node, refs);
+}
+
+function sleepMs(ms){
+    return new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
+}
+
+// 从非 2xx 响应里抠出后端的中文 detail（FastAPI 的 {"detail": "..."}）
+async function readErrorDetail(response){
+    try{
+        const text = await response.text();
+        try{
+            const data = JSON.parse(text);
+            if(typeof data?.detail === 'string') return data.detail;
+            if(Array.isArray(data?.detail)) return data.detail.map(d => d?.msg || '').join('; ') || text;
+        }catch(e){ /* 不是 JSON → 原样返回 */ }
+        return text || `HTTP ${response.status}`;
+    }catch(e){
+        return `HTTP ${response.status}`;
+    }
+}
+
+/* ---------- llm 引擎：视觉识别 → JSON 图元 → three.js 白模 ---------- */
+async function run3DNodeLlm(node, refs){
     const provider = resolveChatProviderId(node.provider || '');
     const model = resolveChatModel(node.model || '', provider);
     pushUndo();
@@ -9842,31 +9954,31 @@ async function run3DNode(nodeId){
                 system_prompt:SMART_3D_SYSTEM_PROMPT
             })
         }).then(async response => {
-            if(!response.ok) throw new Error(await response.text());
+            if(!response.ok) throw new Error(await readErrorDetail(response));
             return response.json();
         });
         const raw = String(result?.text || '').trim();
         const scene = normalize3DScene(smart3DParseSceneJson(raw));
         if(!scene) throw new Error(tr('smart.3dInvalid'));
-        const live = nodes.find(n => n.id === nodeId) || node;
+        const live = nodes.find(n => n.id === node.id) || node;
         live.scene3d = scene;
         live.scene3dRaw = raw.slice(0, 20000);
         live.scene3dError = '';
         delete live.camera;
         delete live.scene3dSnapshotUrl;
-        smart3DSnapshotData.delete(nodeId);
+        smart3DSnapshotData.delete(node.id);
         render();
         await nextAnimationFrame();
-        await upload3DSnapshot(nodeId, true);
+        await upload3DSnapshot(node.id, true);
         addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStart});
     }catch(error){
-        const live = nodes.find(n => n.id === nodeId) || node;
-        const detail = (error?.message || tr('smart.3dFailed')).slice(0, 200);
+        const live = nodes.find(n => n.id === node.id) || node;
+        const detail = String(error?.message || tr('smart.3dFailed')).slice(0, 200);
         live.scene3dError = detail;
         toast(detail);
         if(!live?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStart, error:detail});
     } finally {
-        const live = nodes.find(n => n.id === nodeId) || node;
+        const live = nodes.find(n => n.id === node.id) || node;
         live.running = false;
         render();
         scheduleSave();
@@ -9875,8 +9987,888 @@ async function run3DNode(nodeId){
 function nextAnimationFrame(){
     return new Promise(resolve => requestAnimationFrame(() => resolve()));
 }
+
+/* ---------- 混元3D 节点：多视图上传 → 混元生成 → GLB（后端 hunyuan3d_client.py） ----------
+ * 选择器/API/判据 = REFERENCE AV（2026-10-12 实测）。上传+生成走后端浏览器通道，
+ * 前端只负责：收集上游视图 → 建任务 → 轮询状态 → GLB 渲染 → 分享链接。
+ */
+const SMART_HY3D_DEFAULT_W = 520;
+const SMART_HY3D_DEFAULT_H = 460;
+const HY3D_MAX_VIEWS = 8;   // 站点多视图上限；front 必填，第 1 张落 front
+const HY3D_PHASE_LABELS = {
+    queued:'排队中', login:'等待登录', upload:'上传视图', generate:'提交生成',
+    process:'混元3D 生成中', download:'下载模型', done:'完成'
+};
+
+function isHy3dNode(node){
+    return Boolean(node && node.type === 'smart-hy3d');
+}
+function hy3dNodeElement(nodeId){
+    return world.querySelector(`.smart-hy3d-node[data-id="${CSS.escape(String(nodeId || ''))}"]`);
+}
+function hy3dHasContent(node){
+    return Boolean(String(node?.model3dUrl || '').trim());
+}
+// GLTFLoader 走同一套本地 vendor 模块（three 0.160.0 + 唯一依赖 BufferGeometryUtils）。
+// 两个文件的 import 路径都已改成相对路径，必须从同一 base 解析 ⇒ 用绝对路径 import。
+let hy3dGLTFLoaderPromise = null;
+function loadHy3dGLTFLoader(){
+    if(!hy3dGLTFLoaderPromise){
+        hy3dGLTFLoaderPromise = import('/static/vendor/js/three-gltf-loader.module.js').catch(error => {
+            hy3dGLTFLoaderPromise = null;
+            throw error;
+        });
+    }
+    return hy3dGLTFLoaderPromise;
+}
+// 收集上游视图：与 3D 节点同口径（inputNodesFor 展平 + imageRefsOnly 去重），
+// 覆盖 ① N 个上传节点各 1 张 ② 1 个 group 含 N 张（多图并组）两种连法。
+function hy3dConnectedViews(node){
+    if(!node) return [];
+    const urls = [];
+    const seen = new Set();
+    imageRefsOnly(inputImagesFor(node)).forEach(ref => {
+        const url = String(ref?.url || '').trim();
+        if(!url || seen.has(url)) return;
+        seen.add(url);
+        urls.push(url);
+    });
+    return urls.slice(0, HY3D_MAX_VIEWS);
+}
+function createHy3dNode(x, y, options={}){
+    if(!options.skipUndo) pushUndo();
+    const node = {
+        id:uid('hy3d'),
+        type:'smart-hy3d',
+        x,
+        y,
+        w:SMART_HY3D_DEFAULT_W,
+        h:SMART_HY3D_DEFAULT_H,
+        title:'混元3D',
+        model3dUrl:'',
+        hy3dTaskId:'',
+        hy3dPhase:'',
+        hy3dHint:'',
+        hy3dAsset:null,
+        hy3dShareUrl:'',
+        hy3dError:'',
+        hy3dNeedLogin:false,
+        camera:null,
+        running:false,
+        created_at:Date.now()
+    };
+    nodes.push(node);
+    if(options.select !== false) selectedId = node.id;
+    render();
+    scheduleSave();
+    return node;
+}
+
+// ---- GLB 查看器：复用 3D 节点的 three.js 基建（环境光/orbit/渲染循环），内容源换成 GLB ----
+const hy3dViewers = new Map();
+const hy3dViewerPending = new Set();
+const hy3dModelState = new Map();   // nodeId -> {status,url,error,group,frame}；viewer 被回收也不丢
+const hy3dSnapshotData = new Map(); // nodeId -> 最近一次截图的 dataURL（仅内存，不进画布 JSON）
+const hy3dSnapshotTimers = new Map();
+
+function disposeHy3dViewer(nodeId, dropModel=false){
+    const timer = hy3dSnapshotTimers.get(nodeId);
+    if(timer){ clearTimeout(timer); hy3dSnapshotTimers.delete(nodeId); }
+    hy3dSnapshotData.delete(nodeId);
+    const viewer = hy3dViewers.get(nodeId);
+    if(!viewer) return;
+    hy3dViewers.delete(nodeId);
+    viewer.disposed = true;
+    if(viewer.frame) cancelAnimationFrame(viewer.frame);
+    if(viewer.content){
+        try{ viewer.scene.remove(viewer.content); }catch(e){}
+        // 反照率材质挂在 mesh.userData 上，dispose3DObject 覆盖不到，先单独清
+        try{
+            viewer.content.traverse?.(child => {
+                try{ child.userData?.hy3dAlbedo?.dispose?.(); }catch(e) {}
+            });
+        }catch(e){}
+        dispose3DObject(viewer.content);
+    }
+    viewer.content = null;
+    try{ viewer.scene.remove(viewer.hy3dBbox); }catch(e){}
+    try{ viewer.hy3dBbox?.geometry?.dispose?.(); }catch(e){}
+    viewer.hy3dBbox = null;
+    Object.values(viewer.hy3dMats || {}).forEach(material => {
+        try{ material.dispose?.(); }catch(e){}
+    });
+    viewer.hy3dMats = null;
+    try{ viewer.scene.environment = null; }catch(e){}
+    try{ viewer.envTarget?.dispose?.(); }catch(e){}
+    viewer.envTarget = null;
+    try{
+        viewer.renderer.dispose?.();
+        viewer.renderer.forceContextLoss?.();
+    }catch(e){}
+    viewer.canvas.remove();
+    if(dropModel) hy3dModelState.delete(nodeId);
+}
+
+async function createHy3dViewer(nodeId){
+    if(hy3dViewers.has(nodeId) || hy3dViewerPending.has(nodeId)) return hy3dViewers.get(nodeId) || null;
+    hy3dViewerPending.add(nodeId);
+    try{
+        const THREE = await load3DThree();
+        const node = nodes.find(n => n.id === nodeId);
+        if(!node || !isHy3dNode(node) || hy3dViewers.has(nodeId)) return null;
+        while(hy3dViewers.size >= SMART_3D_MAX_VIEWERS){
+            const oldest = hy3dViewers.keys().next().value;
+            if(oldest === undefined) break;
+            disposeHy3dViewer(oldest);   // 只回收 viewer，模型状态留着复用
+        }
+        const canvas = document.createElement('canvas');
+        canvas.className = 'smart3d-canvas';
+        const renderer = new THREE.WebGLRenderer({canvas, antialias:true, preserveDrawingBuffer:true});
+        renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.toneMapping = THREE.NoToneMapping;
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 400);
+        const viewer = {nodeId, THREE, renderer, scene, camera, canvas, content:null, appliedUrl:null, orbit:null, hasScene:false, dirty:true, frame:0, disposed:false, bufferW:0, bufferH:0, envTarget:null, lights:[]};
+        const envTarget = build3DStudioEnvironment(THREE, renderer);
+        if(envTarget){
+            viewer.envTarget = envTarget;
+            scene.environment = envTarget.texture;
+        }
+        // 与 3D 预览同一套「纯白摄影棚」：白底 + 三点柔光（GLB 每次重建 ⇒ 光挂 scene 上）
+        scene.background = new THREE.Color(SMART_3D_STUDIO.background);
+        build3DStudioLights(viewer, null);
+        hy3dViewers.set(nodeId, viewer);
+        const stage = hy3dNodeElement(nodeId)?.querySelector('[data-hy3d-stage]');
+        if(stage) stage.appendChild(canvas);
+        // 与 3D 节点一致：画布自己吃掉鼠标事件，别让画布跟着节点拖走
+        canvas.addEventListener('mousedown', e => e.stopPropagation(), true);
+        canvas.addEventListener('click', e => e.stopPropagation(), true);
+        canvas.addEventListener('contextmenu', e => e.stopPropagation());
+        attach3DOrbit(viewer);
+        applyHy3dModelToViewer(viewer, node);
+        // viewer 是异步建的：建完立刻自己触发一次模型加载，别等下一次 render（否则要两次 render 才出模型）
+        const wantUrl = String(node.model3dUrl || '').trim();
+        if(wantUrl) loadHy3dModelIntoViewer(viewer, node, wantUrl);
+        start3DRenderLoop(viewer);
+        return viewer;
+    }catch(error){
+        const node = nodes.find(n => n.id === nodeId);
+        if(node && isHy3dNode(node) && !node.hy3dError){
+            const reason = String(error?.message || error || '').trim().slice(0, 140);
+            node.hy3dError = reason ? trf('smart.hy3dModelLoadFailed', {msg:reason}) : tr('smart.hy3dFailed');
+            render();
+        }
+        return null;
+    }finally{
+        hy3dViewerPending.delete(nodeId);
+    }
+}
+
+function applyHy3dModelToViewer(viewer, node){
+    const state = hy3dModelState.get(node.id);
+    const wantUrl = String(node?.model3dUrl || '').trim();
+    if(viewer.content){
+        try{ viewer.scene.remove(viewer.content); }catch(e){}
+        dispose3DObject(viewer.content);
+        viewer.content = null;
+    }
+    viewer.hasScene = false;
+    viewer.appliedUrl = (state && state.url === wantUrl) ? wantUrl : null;
+    if(state && state.status === 'ready' && state.group && state.url === wantUrl){
+        viewer.scene.add(state.group);
+        viewer.content = state.group;
+        viewer.appliedUrl = wantUrl;
+        viewer.hasScene = true;
+        const THREE = viewer.THREE;
+        const saved = (node.camera && Array.isArray(node.camera.position) && Array.isArray(node.camera.target))
+            ? node.camera : null;
+        viewer.orbit = smart3DOrbitFromCamera(THREE, saved || state.frame);
+        const fov = Number((saved || state.frame)?.fov) || 45;
+        viewer.camera.fov = fov;
+        viewer.camera.updateProjectionMatrix();
+        apply3DCamera(viewer);
+    }
+    const stage = viewer.canvas.parentElement;
+    const placeholder = stage?.querySelector('[data-hy3d-placeholder]');
+    if(placeholder && viewer.hasScene) placeholder.remove();
+    if(viewer.hasScene) hy3dApplyDisplayMode(viewer, node);
+}
+
+function loadHy3dModelIntoViewer(viewer, node, url){
+    const nodeId = node.id;
+    const existing = hy3dModelState.get(nodeId);
+    if(existing && existing.status === 'loading' && existing.url === url) return;
+    const state = {status:'loading', url, error:'', group:null, frame:null};
+    hy3dModelState.set(nodeId, state);
+    Promise.all([load3DThree(), loadHy3dGLTFLoader()]).then(([THREE, module]) => {
+        // 加载期间节点可能已被删掉/换模型，放弃过期结果
+        const live = nodes.find(n => n.id === nodeId);
+        if(!live || String(live.model3dUrl || '').trim() !== url) return;
+        const loader = new module.GLTFLoader();
+        return new Promise((resolve, reject) => {
+            loader.load(url, gltf => resolve({THREE, gltf}), undefined, error => reject(error));
+        });
+    }).then(loaded => {
+        if(!loaded) return;
+        const {THREE, gltf} = loaded;
+        const root = gltf?.scene;
+        if(!root) throw new Error('GLB 里没有可渲染的场景');
+        const group = new THREE.Group();
+        group.add(root);
+        // 自动取景：上游模型尺寸/原点完全不定，不归一化要么看不见要么糊满屏。
+        // 居中 → 最大边缩到 2.4（与白模量级一致）→ 底面对齐 y=0（接触阴影落在脚下）。
+        const box = new THREE.Box3().setFromObject(root);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        const maxSide = Math.max(size.x, size.y, size.z) || 1;
+        const scale = 2.4 / maxSide;
+        root.position.sub(center);
+        root.scale.setScalar(scale);
+        const scaled = new THREE.Box3().setFromObject(root);
+        root.position.y += -scaled.min.y;
+        root.traverse(child => {
+            if(child.isMesh){
+                child.castShadow = true;
+                child.receiveShadow = false;
+                child.frustumCulled = false;
+                child.userData.hy3dOriginal = child.material;   // 显示样式切换要能还原
+            }
+        });
+        let vertexCount = 0;
+        root.traverse(child => {
+            if(child.isMesh && child.geometry?.attributes?.position){
+                vertexCount += child.geometry.attributes.position.count;
+            }
+        });
+        const finalBox = new THREE.Box3().setFromObject(group);
+        const frame = {
+            // 默认取景收紧到 ~4.9 单位距离（模型最大边 2.4 ⇒ 约占视高 6 成），太大显得空
+            position: [2.5, 1.87, 3.59],
+            target: [0, Math.max(0.4, finalBox.getSize(new THREE.Vector3()).y * 0.42), 0],
+            fov: 45
+        };
+        // 接触阴影接收面：必须在取景之后加，否则 80×80 平面会把包围盒撑爆、相机跑到天上
+        const ground = new THREE.Mesh(
+            new THREE.PlaneGeometry(80, 80),
+            new THREE.ShadowMaterial({opacity:SMART_3D_STUDIO.groundShadow})
+        );
+        ground.rotation.x = -Math.PI / 2;
+        ground.receiveShadow = true;
+        ground.name = 'hy3d-ground';
+        group.add(ground);
+        const live = nodes.find(n => n.id === nodeId);
+        if(!live || String(live.model3dUrl || '').trim() !== url) return;
+        group.name = 'hy3d-model';
+        state.status = 'ready';
+        state.group = group;
+        state.root = root;
+        state.frame = frame;
+        state.error = '';
+        live.hy3dVertexCount = vertexCount;
+        const viewer2 = hy3dViewers.get(nodeId);
+        if(viewer2){
+            applyHy3dModelToViewer(viewer2, live);
+            viewer2.dirty = true;
+        }
+        render();
+        queueHy3dSnapshot(nodeId, 300);   // 模型就绪后出一张参考图
+    }).catch(error => {
+        state.status = 'failed';
+        state.error = String(error?.message || error || 'GLB 加载失败');
+        const live = nodes.find(n => n.id === nodeId);
+        if(live && !live.hy3dError){
+            live.hy3dError = trf('smart.hy3dModelLoadFailed', {msg:state.error.slice(0, 120)});
+            render();
+        }
+    });
+}
+
+function syncHy3dViewers(){
+    const alive = new Set();
+    world.querySelectorAll('.smart-hy3d-node').forEach(el => {
+        const nodeId = el.dataset.id;
+        const node = nodes.find(n => n.id === nodeId);
+        if(!node) return;
+        alive.add(nodeId);
+        const stage = el.querySelector('[data-hy3d-stage]');
+        if(!stage) return;
+        const viewer = hy3dViewers.get(nodeId);
+        if(viewer){
+            if(viewer.canvas.parentElement !== stage) stage.appendChild(viewer.canvas);
+            const wantUrl = String(node.model3dUrl || '').trim();
+            const state = hy3dModelState.get(nodeId);
+            if(wantUrl && (!state || state.url !== wantUrl)) loadHy3dModelIntoViewer(viewer, node, wantUrl);
+            const latest = hy3dModelState.get(nodeId);
+            if((latest?.url || '') !== viewer.appliedUrl) applyHy3dModelToViewer(viewer, node);
+            const placeholder = stage.querySelector('[data-hy3d-placeholder]');
+            if(placeholder && viewer.hasScene) placeholder.remove();
+            resize3DViewer(viewer);
+            viewer.dirty = true;
+            return;
+        }
+        if(hy3dHasContent(node)) createHy3dViewer(nodeId);
+    });
+    [...hy3dViewers.keys()].forEach(nodeId => {
+        if(!alive.has(nodeId)) disposeHy3dViewer(nodeId, true);  // 节点没了 ⇒ 模型状态一起清
+    });
+}
+
+// ---- 混元3D 节点 UI / 运行 / 登录 / 分享 ----
+// ---- 实时画面截图（给下游当参考图，口径与 3D 预览完全一致）----
+function snapshotHy3dNode(nodeId){
+    const viewer = hy3dViewers.get(nodeId);
+    if(!viewer || !viewer.hasScene) return '';
+    try{
+        resize3DViewer(viewer);
+        apply3DCamera(viewer);
+        viewer.renderer.render(viewer.scene, viewer.camera);
+        return viewer.canvas.toDataURL('image/png');
+    }catch(e) { return ''; }
+}
+function queueHy3dSnapshot(nodeId, delay=SMART_3D_SNAPSHOT_DEBOUNCE){
+    const timer = hy3dSnapshotTimers.get(nodeId);
+    if(timer) clearTimeout(timer);
+    hy3dSnapshotTimers.set(nodeId, setTimeout(() => {
+        hy3dSnapshotTimers.delete(nodeId);
+        uploadHy3dSnapshot(nodeId);
+    }, Math.max(0, delay)));
+}
+async function uploadHy3dSnapshot(nodeId, force=false){
+    const node = nodes.find(n => n.id === nodeId);
+    if(!node || !isHy3dNode(node)) return '';
+    const dataUrl = snapshotHy3dNode(nodeId);
+    if(!dataUrl) return node.hy3dSnapshotUrl || '';
+    if(!force && hy3dSnapshotData.get(nodeId) === dataUrl && node.hy3dSnapshotUrl) return node.hy3dSnapshotUrl;
+    hy3dSnapshotData.set(nodeId, dataUrl);
+    try{
+        const result = await fetch('/api/ai/upload-base64', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({data:dataUrl, name:`hy3d-${String(nodeId).slice(-6)}.png`, content_type:'image/png'})
+        }).then(async response => {
+            if(!response.ok) throw new Error(await response.text());
+            return response.json();
+        });
+        const url = result?.files?.[0]?.url || '';
+        if(!url) throw new Error('empty url');
+        const live = nodes.find(n => n.id === nodeId) || node;
+        if(live.hy3dSnapshotUrl !== url){
+            live.hy3dSnapshotUrl = url;
+            scheduleSave();
+        }
+        return url;
+    }catch(error){
+        return node.hy3dSnapshotUrl || '';
+    }
+}
+
+// ---- 显示样式（对齐站点底部工具栏）：纹理/白模/线框+白模/反照率/法线 + 包围盒/光照/适配/自动旋转 ----
+const HY3D_DISPLAY_MODES = ['texture', 'clay', 'wireframe', 'albedo', 'normal'];
+function hy3dDisplayOf(node){
+    return HY3D_DISPLAY_MODES.includes(node?.hy3dDisplay) ? node.hy3dDisplay : 'texture';
+}
+// 共用材质（每个 viewer 一份，随 viewer 一起 dispose；原始材质存在 mesh.userData.hy3dOriginal）
+function hy3dSharedMaterial(viewer, kind){
+    if(!viewer.hy3dMats) viewer.hy3dMats = {};
+    if(viewer.hy3dMats[kind]) return viewer.hy3dMats[kind];
+    const THREE = viewer.THREE;
+    let material = null;
+    if(kind === 'clay'){
+        material = new THREE.MeshStandardMaterial({
+            color: new THREE.Color(SMART_3D_STUDIO.clay),
+            roughness: SMART_3D_STUDIO.clayRoughness,
+            metalness: SMART_3D_STUDIO.clayMetalness,
+            envMapIntensity: SMART_3D_STUDIO.envIntensity
+        });
+    }else if(kind === 'wireframe'){
+        material = hy3dSharedMaterial(viewer, 'clay').clone();
+        material.wireframe = true;
+    }else if(kind === 'normal'){
+        material = new THREE.MeshNormalMaterial();
+    }
+    if(material) viewer.hy3dMats[kind] = material;
+    return material;
+}
+function hy3dApplyDisplayMode(viewer, node){
+    if(!viewer?.content) return;
+    const THREE = viewer.THREE;
+    const mode = hy3dDisplayOf(node);
+    viewer.content.traverse(child => {
+        if(!child.isMesh || child.name === 'hy3d-ground') return;
+        if(!child.userData.hy3dOriginal) child.userData.hy3dOriginal = child.material;
+        const original = child.userData.hy3dOriginal;
+        if(mode === 'texture'){ child.material = original; return; }
+        if(mode === 'clay' || mode === 'wireframe'){ child.material = hy3dSharedMaterial(viewer, mode); return; }
+        if(mode === 'normal'){ child.material = hy3dSharedMaterial(viewer, 'normal'); return; }
+        if(mode === 'albedo'){
+            if(!child.userData.hy3dAlbedo){
+                const first = Array.isArray(original) ? original[0] : original;
+                child.userData.hy3dAlbedo = new THREE.MeshBasicMaterial({
+                    map: first?.map || null,
+                    color: first?.map ? 0xffffff : 0xcfd6e0
+                });
+            }
+            child.material = child.userData.hy3dAlbedo;
+        }
+    });
+    // 包围盒（只框模型本体，不框地面）
+    if(!viewer.hy3dBbox){
+        const helper = new THREE.Box3Helper(new THREE.Box3(new THREE.Vector3(), new THREE.Vector3()),
+                                            new THREE.Color('#7c8db5'));
+        helper.visible = false;
+        viewer.scene.add(helper);
+        viewer.hy3dBbox = helper;
+    }
+    const root = hy3dModelState.get(node?.id)?.root;
+    if(node?.hy3dShowBox && root){
+        viewer.hy3dBbox.box.setFromObject(root);
+        viewer.hy3dBbox.visible = true;
+    }else{
+        viewer.hy3dBbox.visible = false;
+    }
+    // 光照开关：三点光 + 环境贴图一起关，才真的变「无光」
+    const lightsOn = node?.hy3dLights !== false;
+    (viewer.lights || []).forEach(light => { light.visible = lightsOn; });
+    if(viewer.envTarget?.texture) viewer.scene.environment = lightsOn ? viewer.envTarget.texture : null;
+    viewer.autoRotate = Boolean(node?.hy3dAutoRotate);
+    viewer.dirty = true;
+}
+function hy3dFitView(viewer, node){
+    const state = hy3dModelState.get(node?.id);
+    if(!viewer || !state?.frame) return;
+    delete node.camera;
+    viewer.orbit = smart3DOrbitFromCamera(viewer.THREE, state.frame);
+    viewer.camera.fov = Number(state.frame.fov) || 45;
+    viewer.camera.updateProjectionMatrix();
+    apply3DCamera(viewer);
+    viewer.dirty = true;
+    queueHy3dSnapshot(node.id, 250);
+}
+function hy3dSetDisplay(nodeId, mode){
+    const node = nodes.find(n => n.id === nodeId);
+    if(!node || !isHy3dNode(node)) return;
+    node.hy3dDisplay = HY3D_DISPLAY_MODES.includes(mode) ? mode : 'texture';
+    const viewer = hy3dViewers.get(nodeId);
+    if(viewer) hy3dApplyDisplayMode(viewer, node);
+    queueHy3dSnapshot(nodeId, 250);   // 参考图跟着当前显示样式走
+    render();
+    scheduleSave();
+}
+function hy3dToggleOption(nodeId, key){
+    const node = nodes.find(n => n.id === nodeId);
+    if(!node || !isHy3dNode(node)) return;
+    // hy3dLights 默认「开」（undefined 视作 true）⇒ 首次点击要关掉，不能用 !undefined
+    node[key] = (key === 'hy3dLights') ? (node[key] === false) : !node[key];
+    const viewer = hy3dViewers.get(nodeId);
+    if(viewer) hy3dApplyDisplayMode(viewer, node);
+    render();
+    scheduleSave();
+}
+function hy3dToolBtn(icon, active, title, attr, value='1'){
+    return `<button class="hy3d-tool${active ? ' is-active' : ''}" type="button" data-${attr}="${escapeAttr(value)}" title="${escapeAttr(title)}"><i data-lucide="${icon}"></i></button>`;
+}
+
+function hy3dQuotaTitle(quota){
+    const remain = Number(quota?.remain);
+    const total = Number(quota?.total);
+    const used = Number(quota?.consume);
+    const parts = [];
+    if(Number.isFinite(remain) && Number.isFinite(total)) parts.push(`${remain} / ${total}`);
+    else if(Number.isFinite(remain)) parts.push(String(remain));
+    if(Number.isFinite(used)) parts.push(trf('smart.hy3dQuotaUsed', {n:String(used)}));
+    return trf('smart.hy3dQuotaTitle', {detail:parts.join(' · ') || '—'});
+}
+
+function hy3dMetaText(node){
+    const parts = [];
+    if(hy3dHasContent(node)){
+        const face = Number(node.hy3dAsset?.faceCount || 0);
+        if(face > 0) parts.push(`${face.toLocaleString()} 面`);
+        const vertex = Number(node.hy3dVertexCount || 0);
+        if(vertex > 0) parts.push(`${vertex.toLocaleString()} 顶点`);
+        if(!parts.length) parts.push('GLB 模型');
+    }else{
+        const views = hy3dConnectedViews(node).length;
+        parts.push(views ? `已连接 ${views} 张视图` : '未连接视图');
+    }
+    return parts.join(' · ');
+}
+
+function hy3dBodyHtml(node){
+    const views = hy3dConnectedViews(node);
+    const hasModel = hy3dHasContent(node);
+    const phaseLabel = node.hy3dPhase ? (HY3D_PHASE_LABELS[node.hy3dPhase] || node.hy3dPhase) : '';
+    const statusLine = node.running ? (node.hy3dHint || phaseLabel || '生成中…') : '';
+    let placeholderText = '';
+    if(node.hy3dNeedLogin) placeholderText = tr('smart.hy3dNeedLogin');
+    else if(node.hy3dError) placeholderText = node.hy3dError;
+    else if(node.running) placeholderText = statusLine || '生成中…';
+    else if(hasModel) placeholderText = '';
+    else if(views.length >= 2) placeholderText = `已连接 ${views.length} 张视图，点「${tr('smart.hy3dRun')}」上传到混元3D`;
+    else placeholderText = '连接至少 2 张图片（正/侧/背…）后生成';
+    const placeholder = hasModel ? '' : `<div class="smart3d-placeholder${node.hy3dError ? ' is-error' : ''}${node.running ? ' is-loading' : ''}" data-hy3d-placeholder="1">
+        <i data-lucide="${node.hy3dError ? 'triangle-alert' : 'boxes'}"></i>
+        <span>${escapeHtml(placeholderText)}</span>
+    </div>`;
+    const runLabel = node.running ? tr('smart.hy3dRunning') : tr('smart.hy3dRun');
+    const narrow = (Number(node.w) || 0) < 430;
+    const display = hy3dDisplayOf(node);
+    const tools = hasModel ? `<div class="hy3d-tools">
+            ${hy3dToolBtn('orbit', Boolean(node.hy3dAutoRotate), tr('smart.hy3dAutoRotate'), 'hy3d-autorotate')}
+            <span class="hy3d-tools-sep"></span>
+            ${hy3dToolBtn('palette', display === 'texture', tr('smart.hy3dTex'), 'hy3d-display', 'texture')}
+            ${hy3dToolBtn('circle', display === 'clay', tr('smart.hy3dClay'), 'hy3d-display', 'clay')}
+            ${hy3dToolBtn('frame', display === 'wireframe', tr('smart.hy3dWire'), 'hy3d-display', 'wireframe')}
+            ${hy3dToolBtn('sun', display === 'albedo', tr('smart.hy3dAlbedo'), 'hy3d-display', 'albedo')}
+            ${hy3dToolBtn('mountain', display === 'normal', tr('smart.hy3dNormal'), 'hy3d-display', 'normal')}
+            <span class="hy3d-tools-sep"></span>
+            ${hy3dToolBtn('box', Boolean(node.hy3dShowBox), tr('smart.hy3dBox'), 'hy3d-bbox')}
+            ${hy3dToolBtn('lightbulb', node.hy3dLights !== false, tr('smart.hy3dLight'), 'hy3d-lights')}
+            ${hy3dToolBtn('maximize', false, tr('smart.hy3dFit'), 'hy3d-fit')}
+        </div>` : '';
+    const fovVal = Math.round(Number(node.camera?.fov) || 45);
+    const fovRow = hasModel ? `<div class="smart3d-fovrow">
+            <i data-lucide="focus" class="smart3d-fovicon"></i>
+            <input type="range" class="smart3d-fov" data-hy3d-fov="1" min="20" max="90" step="1" value="${fovVal}" title="${escapeAttr(tr('smart.hy3dFov'))}">
+            <span class="smart3d-fovval" data-hy3d-fovval="1">${fovVal}° · ${smart3DFocalMm(fovVal)}mm</span>
+        </div>` : '';
+    // 分享 = 打开混元3D 资产页（新标签）。生成时后端已把 share_url 拿好 ⇒ 直接是 <a>，点了就跳。
+    // 兜底：没有 share_url 时退回按钮（点按再取链接，见 hy3dShareNode）。
+    const shareBtn = !hasModel ? '' : (node.hy3dShareUrl
+        ? `<a class="smart3d-run" href="${escapeAttr(String(node.hy3dShareUrl))}" target="_blank" rel="noreferrer" data-hy3d-open-share="1" title="${escapeAttr(tr('smart.hy3dShareOpen'))}"><i data-lucide="external-link"></i><span>${escapeHtml(tr('smart.hy3dShare'))}</span></a>`
+        : `<button class="smart3d-run" type="button" data-hy3d-share="1" title="${escapeAttr(tr('smart.hy3dShareOpen'))}"><i data-lucide="share-2"></i><span>${escapeHtml(tr('smart.hy3dShare'))}</span></button>`);
+    const downloadName = `hunyuan3d-${String(node.hy3dAsset?.id || node.id || 'model').replace(/[^\w-]/g, '').slice(0, 12)}.glb`;
+    const downloadBtn = hasModel ? `<a class="smart3d-run hy3d-download" href="${escapeAttr(String(node.model3dUrl || ''))}" download="${escapeAttr(downloadName)}" data-hy3d-download="1" title="${escapeAttr(tr('smart.hy3dDownload'))}"><i data-lucide="download"></i><span>${escapeHtml(tr('smart.hy3dDownload'))}</span></a>` : '';
+    // 混元3D 剩余次数：数值来自后端实时读的 quotainfo（各账号不同，不写死），点一下刷新
+    const quota = node.hy3dQuota || null;
+    const quotaChip = (quota && Number.isFinite(Number(quota.remain)))
+        ? `<button class="hy3d-quota" type="button" data-hy3d-quota="1" title="${escapeAttr(hy3dQuotaTitle(quota))}"><i data-lucide="sparkles"></i><span>${escapeHtml(trf('smart.hy3dQuota', {n:String(quota.remain)}))}</span></button>`
+        : '';
+    return `<div class="smart3d-body${narrow ? ' is-narrow' : ''} smart-hy3d-body" data-hy3d-root="1">
+        <div class="smart3d-stage" data-hy3d-stage="1" data-hy3d-node="${escapeAttr(node.id)}">${placeholder}</div>
+        <div class="smart3d-bar">
+            <span class="smart3d-meta" title="${escapeAttr(hy3dMetaText(node))}"><i data-lucide="boxes"></i><span>${escapeHtml(hy3dMetaText(node))}</span></span>
+            ${node.hy3dNeedLogin ? `<button class="smart3d-run" type="button" data-hy3d-login="1" title="${escapeAttr(tr('smart.hy3dLoginBtn'))}"><i data-lucide="log-in"></i><span>${escapeHtml(tr('smart.hy3dLoginBtn'))}</span></button>` : ''}
+            ${shareBtn}
+            ${downloadBtn}
+            ${quotaChip}
+            <button class="smart3d-run${node.running ? ' is-running' : ''}" type="button" data-hy3d-run="1" ${node.running ? 'disabled' : ''} title="${escapeAttr(runLabel)}"><i data-lucide="${node.running ? 'loader-2' : 'play'}"></i><span>${escapeHtml(runLabel)}</span></button>
+        </div>
+        ${tools}
+        ${fovRow}
+        ${statusLine && !hasModel ? `<div class="hy3d-phase">${escapeHtml(statusLine)}</div>` : ''}
+        ${node.hy3dError && hasModel ? `<div class="hy3d-phase is-error">${escapeHtml(node.hy3dError)}</div>` : ''}
+    </div>`;
+}
+
+function bindHy3dNodeControls(el, node){
+    const stage = el.querySelector('[data-hy3d-stage]');
+    if(stage){
+        stage.addEventListener('wheel', e => e.stopPropagation(), {passive:false});
+        stage.addEventListener('mousedown', e => e.stopPropagation(), true);
+    }
+    el.querySelectorAll('[data-hy3d-run]').forEach(btn => {
+        btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+        btn.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            runHy3dNode(node.id);
+        });
+    });
+    el.querySelectorAll('[data-hy3d-share]').forEach(btn => {
+        btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+        btn.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            hy3dShareNode(node.id);
+        });
+    });
+    el.querySelectorAll('[data-hy3d-login]').forEach(btn => {
+        btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+        btn.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            hy3dLoginNode(node.id);
+        });
+    });
+    el.querySelectorAll('[data-hy3d-display]').forEach(btn => {
+        btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+        btn.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            hy3dSetDisplay(node.id, btn.dataset.hy3dDisplay || 'texture');
+        });
+    });
+    [['hy3d-autorotate', 'hy3dAutoRotate'], ['hy3d-bbox', 'hy3dShowBox'], ['hy3d-lights', 'hy3dLights']].forEach(([attr, key]) => {
+        el.querySelectorAll(`[data-${attr}]`).forEach(btn => {
+            btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                hy3dToggleOption(node.id, key);
+            });
+        });
+    });
+    el.querySelectorAll('[data-hy3d-fit]').forEach(btn => {
+        btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+        btn.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            const viewer = hy3dViewers.get(node.id);
+            if(viewer) hy3dFitView(viewer, node);
+        });
+    });
+    el.querySelectorAll('[data-hy3d-quota]').forEach(btn => {
+        btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+        btn.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            hy3dRefreshQuota(node.id);
+        });
+    });
+    // 下载/分享都是 <a target=_blank>：只拦拖拽传播，**不要** preventDefault（否则跳转/下载被吞）
+    el.querySelectorAll('[data-hy3d-download], [data-hy3d-open-share]').forEach(link => {
+        link.addEventListener('mousedown', e => e.stopPropagation(), true);
+        link.addEventListener('click', e => e.stopPropagation());
+    });
+    const fov = el.querySelector('[data-hy3d-fov]');
+    if(fov){
+        const label = el.querySelector('[data-hy3d-fovval]');
+        const applyFov = () => {
+            const value = Math.min(90, Math.max(20, Number(fov.value) || 45));
+            node.camera = Object.assign({}, node.camera || {}, {fov:value});
+            if(label) label.textContent = `${value}° · ${smart3DFocalMm(value)}mm`;
+            const viewer = hy3dViewers.get(node.id);
+            if(viewer){
+                viewer.camera.fov = value;
+                viewer.camera.updateProjectionMatrix();
+                viewer.dirty = true;
+            }
+        };
+        fov.addEventListener('mousedown', e => e.stopPropagation(), true);
+        fov.addEventListener('click', e => e.stopPropagation(), true);
+        fov.addEventListener('input', applyFov);
+        fov.addEventListener('change', () => { applyFov(); scheduleSave(); });
+    }
+}
+
+async function runHy3dNode(nodeId){
+    const node = nodes.find(n => n.id === nodeId);
+    if(!node || !isHy3dNode(node) || node.running) return;
+    if(!inputNodesFor(node).length){ toast(tr('smart.3dNeedUpstream')); return; }
+    const views = hy3dConnectedViews(node);
+    if(views.length < 2){ toast(tr('smart.hy3dNeedTwo')); return; }
+    pushUndo();
+    node.running = true;
+    node.hy3dError = '';
+    node.hy3dNeedLogin = false;
+    node.hy3dPhase = 'queued';
+    node.hy3dHint = '';
+    node.hy3dTaskId = '';
+    render();
+    const runLogStart = nowMs();
+    const runLog = {nodeId:node.id, kind:'hy3d', prompt:tr('smart.hy3dTitle'), startedAt:Date.now()};
+    let taskId = '';
+    try{
+        const created = await fetch('/api/hy3d-tasks', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({view_urls:views})
+        }).then(async response => {
+            if(!response.ok) throw new Error(await readErrorDetail(response));
+            return response.json();
+        });
+        taskId = String(created?.task_id || '');
+        if(!taskId) throw new Error('后端没有返回任务 ID');
+        const live0 = nodes.find(n => n.id === node.id) || node;
+        live0.hy3dTaskId = taskId;
+        render();
+        // 轮询任务状态
+        let task = null;
+        for(;;){
+            await sleepMs(2500);
+            task = await fetch(`/api/hy3d-tasks/${encodeURIComponent(taskId)}`).then(async response => {
+                if(!response.ok) throw new Error(await readErrorDetail(response));
+                return response.json();
+            });
+            const live = nodes.find(n => n.id === node.id) || node;
+            live.hy3dPhase = String(task.progress?.phase || task.status || '');
+            live.hy3dHint = String(task.progress?.message || '');
+            // 后端在任务里顺手读了额度（各账号不同，实时值）
+            if(task.quota) live.hy3dQuota = task.quota;
+            if(task.status === 'need_login'){
+                live.hy3dNeedLogin = true;
+                live.hy3dError = '';
+                render();
+                return;
+            }
+            if(task.status === 'succeeded' || task.status === 'failed') break;
+            render();
+        }
+        const live = nodes.find(n => n.id === node.id) || node;
+        if(task.status === 'succeeded'){
+            live.model3dUrl = String(task.result?.model_url || '');
+            live.hy3dAsset = {
+                id: String(task.result?.asset_id || ''),
+                faceCount: Number(task.result?.face_count || 0) || null
+            };
+            live.hy3dShareUrl = String(task.result?.share_url || '');   // 后端在生成时已拿好
+            if(task.result?.quota) live.hy3dQuota = task.result.quota;
+            live.hy3dError = '';
+            live.hy3dPhase = 'done';
+            delete live.camera;
+            delete live.hy3dVertexCount;
+            render();
+            addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStart});
+        }else{
+            const detail = String(task.error_detail?.message || task.error || tr('smart.hy3dFailed')).slice(0, 200);
+            throw new Error(detail);
+        }
+    }catch(error){
+        const live = nodes.find(n => n.id === node.id) || node;
+        const detail = String(error?.message || tr('smart.hy3dFailed')).slice(0, 200);
+        live.hy3dError = detail;
+        toast(detail);
+        if(!live?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStart, error:detail});
+    }finally{
+        const live = nodes.find(n => n.id === node.id) || node;
+        live.running = false;
+        render();
+        scheduleSave();
+    }
+}
+
+async function hy3dLoginNode(nodeId){
+    const node = nodes.find(n => n.id === nodeId);
+    if(!node || !isHy3dNode(node) || node.running) return;
+    const taskId = node.hy3dTaskId;
+    if(!taskId){ toast(tr('smart.hy3dLoginNoTask')); return; }
+    node.running = true;
+    node.hy3dHint = '等待登录…';
+    render();
+    try{
+        const data = await fetch(`/api/hy3d-tasks/${encodeURIComponent(taskId)}/login`, {method:'POST'})
+            .then(async response => {
+                if(!response.ok) throw new Error(await readErrorDetail(response));
+                return response.json();
+            });
+        if(!data?.ok) throw new Error('登录接口没有返回 ok');
+        const live = nodes.find(n => n.id === node.id) || node;
+        live.hy3dNeedLogin = false;
+        live.hy3dError = '';
+        live.hy3dHint = '';
+        toast(tr('smart.hy3dLoginOk'));
+    }catch(error){
+        const live = nodes.find(n => n.id === node.id) || node;
+        live.hy3dHint = '';
+        toast(String(error?.message || tr('smart.hy3dLoginFail')).slice(0, 160));
+    }finally{
+        const live = nodes.find(n => n.id === node.id) || node;
+        live.running = false;
+        render();
+    }
+}
+
+async function hy3dShareNode(nodeId){
+    const node = nodes.find(n => n.id === nodeId);
+    if(!node || !isHy3dNode(node) || node.running) return;
+    // 已经拿到分享链接 ⇒ 直接开（按钮在 HTML 里本就是 <a>，这里只兜住程序化调用）
+    if(node.hy3dShareUrl){
+        window.open(node.hy3dShareUrl, '_blank', 'noopener');
+        return;
+    }
+    // 🚨 分享按「资产 ID」走：任务记录只在内存里，服务一重启就没了，
+    //    而 assetId 持久化在节点上 ⇒ 老节点照样能分享。
+    const assetId = String(node.hy3dAsset?.id || '');
+    const taskId = String(node.hy3dTaskId || '');
+    if(!assetId && !taskId){ toast(tr('smart.hy3dShareNoTask')); return; }
+    let win = null;
+    try{
+        // 🚨 必须先同步开窗再去取链接：取链接要开一次浏览器（好几秒），
+        //    等 await 回来再 window.open 就出了用户手势窗口，会被当弹窗拦掉。
+        win = window.open('', '_blank');
+        if(!win) throw new Error(tr('smart.hy3dShareBlocked'));
+        try{
+            win.document.write('<!doctype html><meta charset="utf-8">'
+                + '<body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;'
+                + 'background:#1f2227;color:#cbd5e1;font:13px/1.6 system-ui,-apple-system,\'Segoe UI\',sans-serif">'
+                + escapeHtml(tr('smart.hy3dSharePreparing')) + '</body>');
+            win.document.close();
+        }catch(e){ /* 占位页写不进去不影响后面的跳转 */ }
+        node.running = true;
+        node.hy3dHint = tr('smart.hy3dSharePreparing');
+        render();
+        let url = '';
+        if(assetId){
+            const data = await fetch('/api/hy3d-share', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({asset_id: assetId})
+            }).then(async response => {
+                if(!response.ok) throw new Error(await readErrorDetail(response));
+                return response.json();
+            });
+            url = String(data?.share_url || '');
+        }
+        if(!url && taskId){
+            const data = await fetch(`/api/hy3d-tasks/${encodeURIComponent(taskId)}/share`, {method:'POST'})
+                .then(async response => {
+                    if(!response.ok) throw new Error(await readErrorDetail(response));
+                    return response.json();
+                });
+            url = String(data?.share_url || '');
+        }
+        if(!url) throw new Error(tr('smart.hy3dShareFail'));
+        const live = nodes.find(n => n.id === node.id) || node;
+        live.hy3dShareUrl = url;
+        scheduleSave();
+        win.location.href = url;   // 跳到混元3D 资产页
+    }catch(error){
+        try{ win?.close(); }catch(e) {}
+        toast(String(error?.message || tr('smart.hy3dShareFail')).slice(0, 160));
+    }finally{
+        const live = nodes.find(n => n.id === node.id) || node;
+        live.running = false;
+        live.hy3dHint = '';
+        render();
+    }
+}
+
+async function hy3dRefreshQuota(nodeId){
+    const node = nodes.find(n => n.id === nodeId);
+    if(!node || !isHy3dNode(node) || node.running) return;
+    node.running = true;
+    node.hy3dHint = tr('smart.hy3dQuotaLoading');
+    render();
+    try{
+        const data = await fetch('/api/hy3d-quota?refresh=1').then(async response => {
+            if(!response.ok) throw new Error(await readErrorDetail(response));
+            return response.json();
+        });
+        const pick = value => (value === null || value === undefined || value === '' ? null : Number(value));
+        const live = nodes.find(n => n.id === node.id) || node;
+        live.hy3dQuota = {
+            remain: pick(data?.remain),
+            total: pick(data?.total),
+            consume: pick(data?.consume),
+            date: String(data?.date || '')
+        };
+        scheduleSave();
+    }catch(error){
+        toast(String(error?.message || tr('smart.hy3dQuotaFail')).slice(0, 160));
+    }finally{
+        const live = nodes.find(n => n.id === node.id) || node;
+        live.running = false;
+        live.hy3dHint = '';
+        render();
+    }
+}
 function nodeBodyHtml(node, layout){
     if(node.type === 'smart-3d') return smart3DBodyHtml(node);
+    if(node.type === 'smart-hy3d') return hy3dBodyHtml(node);
     if(node.type === 'smart-minimax') return smartMinimaxBodyHtml(node);
     if(node.type === 'smart-group') return smartGroupBodyHtml(node);
     if(node.type === 'smart-prompt') return promptNodeBodyHtml(node);
@@ -9967,6 +10959,9 @@ function smartNodeToolbarHtml(node){
         {key:'mask', icon:'brush', label:'遮罩', enabled:canEditImage},
         {key:'brush', icon:'paintbrush', label:'画笔', enabled:canEditImage},
         {key:'grid', icon:'grid-3x3', label:gridLabel, enabled:canEditImage},
+        // 🚨 「拆分图层」只对 GPT 相关 LLM 开放（老板 2026-10-09）：不是 GPT 就**整条不显示**，
+        //    而不是灰掉 —— 灰按钮点不动又不知道为啥，比没有更烦人。
+        ...(splitLayersGptGateOpen() ? [{key:'splitLayers', icon:'layers', label:tr('smart.splitLayersAction'), enabled:canEditImage}] : []),
         ...(jimengImageProviderId() ? [{key:'upscale', icon:'maximize-2', label:tr('smart.jimengUpscaleAction'), enabled:canEditImage}] : []),
         {key:'download', icon:'download', label:'下载', enabled:true}
     ];
@@ -10055,6 +11050,10 @@ function runSmartNodeToolbarAction(nodeId, action){
         runJimengUpscale(node, index);
         return;
     }
+    if(action === 'splitLayers'){
+        openSplitLayersEditor(nodeId, index);
+        return;
+    }
     const modeMap = {crop:'crop', outpaint:'outpaint', mask:'mask', brush:'brush', grid:'grid'};
     openImageEditor(nodeId, index);
     setImageEditMode(modeMap[action] || 'preview', true);
@@ -10062,6 +11061,2170 @@ function runSmartNodeToolbarAction(nodeId, action){
         setGridOperationMode('join');
     }
 }
+
+/* ==========================================================================
+   拆分图层：LLM 主导的拆图 + 合成（自研画板为主，Photopea 按需精细编辑）
+   - 只对 **GPT 相关 LLM** 开放：入口由 splitLayersGptGateOpen() 决定显不显示，
+     弹层里的「分析通道 / 分析模型」也只列 GPT 家族（见 splitLayersGptProviders）。
+   - 关键提示词**内置在后端**（拆图规则 / 抠图品质规则 / PS 合成规则），
+     用户唯一能调的是「拆分层数」，层数一变后端就重新优化提示词。
+   - 元素图层 PNG 是「全画布尺寸」，位置天然与原图一致，注入时不需要再定位；
+     默认走「原图像素裁切」，只有 LLM 判定或本地去背失败时才自动调图像模型。
+   - 文字层默认是「像素态」（原图裁出来的 PNG），切「编辑态」才用 TEXT 图层重建。
+   - 合成 / 导出分层 PSD 走 Photopea（内置 photopea.min.js，地址为 `#<config>` 形式）。
+   ========================================================================== */
+
+const SPLIT_LAYERS_POLL_MS = 1500;
+const SPLIT_LAYERS_TIMEOUT_MS = 20 * 60 * 1000;
+// 「拆分层数」：最低 2 层 = 背景 + 前景。
+// 🚨 **文字层不占层数**：画面里有几块文字就额外多几条文字层，N 只约束 背景 1 + 前景 (N-1)。
+const SPLIT_LAYERS_MIN_LAYERS = 2;
+const SPLIT_LAYERS_MAX_LAYERS = 12;
+const SPLIT_LAYERS_COUNT_KEY = 'slTargetLayers';
+// 模型选择（照 AI Agent 面板的「通道 + 模型」两级联动）：分析（对话/视觉）与生图是两个不同的
+// 角色，各自记住上次选的通道与模型，存成 JSON。
+const SPLIT_LAYERS_CHAT_KEY = 'slChatSel';
+const SPLIT_LAYERS_IMAGE_KEY = 'slImageSel';
+// 「拆分记录留存」：误关弹窗后重新打开要能直接回到上次结果，不能逼用户重拆一次
+// （auto 模式一次要打几十次上游模型，是实打实的钱）。
+// 🚨 存 localStorage 而不是节点字段：画布 JSON 是**全量替换 + 无历史版本**的高危数据，
+//    一个纯前端的「上次结果缓存」没有理由长在它上面。
+//    代价是换浏览器 / 清缓存就没了 —— 但本功能要解决的场景（手误关窗后重开）本来就在本机。
+const SPLIT_LAYERS_RECORD_KEY = 'slRecords';
+const SPLIT_LAYERS_RECORD_VERSION = 1;
+const SPLIT_LAYERS_RECORD_MAX = 12;
+
+const splitLayersState = {
+    open:false, nodeId:null, imageIndex:0, source:'',
+    taskId:'', pollTimer:null, startedAt:0,
+    pea:null, ready:false,
+    canvas:{width:0, height:0},
+    layers:[], selectedId:'', selectedCanvasIds:[],
+    busy:false,
+    // 结果摘要（stats / reconstruction / bg_pure）：留存与恢复时要用它把状态栏文案还原成原样
+    recordMeta:null,
+    targetLayers:SPLIT_LAYERS_MIN_LAYERS,
+    chatProvider:'', chatModel:'', imageProvider:'', imageModel:'',
+    // 画板（自研轻量图层面板）：fit = 把画布缩到容器里的显示比例；peaMode = 是否切到 Photopea
+    view:{fit:1}, peaMode:false, imageCache:{}
+};
+
+function splitLayersEl(id){ return document.getElementById(id); }
+
+function splitLayersReadTarget(){
+    try{
+        const v = Math.round(Number(localStorage.getItem(SPLIT_LAYERS_COUNT_KEY)));
+        if(Number.isFinite(v) && v >= SPLIT_LAYERS_MIN_LAYERS){
+            return Math.min(SPLIT_LAYERS_MAX_LAYERS, v);
+        }
+    }catch(e){ /* 隐私模式读不了 localStorage，用默认值 */ }
+    return SPLIT_LAYERS_MIN_LAYERS;
+}
+
+function splitLayersWriteTarget(v){
+    try{ localStorage.setItem(SPLIT_LAYERS_COUNT_KEY, String(v)); }catch(e){ /* 忽略 */ }
+}
+
+function splitLayersFillCountSelect(){
+    const sel = splitLayersEl('splitLayersLayerSelect');
+    if(!sel) return;
+    if(sel.dataset.filled !== '1'){
+        sel.dataset.filled = '1';
+        const tpl = tr('smart.splitLayersCountOption') || '{n}';
+        let html = '';
+        for(let n = SPLIT_LAYERS_MIN_LAYERS; n <= SPLIT_LAYERS_MAX_LAYERS; n++){
+            html += `<option value="${n}">${escapeHtml(tpl.replace('{n}', String(n)))}</option>`;
+        }
+        sel.innerHTML = html;
+        sel.addEventListener('change', () => {
+            const v = Math.round(Number(sel.value)) || SPLIT_LAYERS_MIN_LAYERS;
+            splitLayersState.targetLayers = v;
+            splitLayersWriteTarget(v);
+        });
+    }
+    sel.value = String(splitLayersState.targetLayers || SPLIT_LAYERS_MIN_LAYERS);
+}
+
+// 「拆分图层」的模型选择：**照 AI Agent 面板那套两级联动** —— 通道下拉 + 该通道的模型下拉，
+// 分析（对话/视觉）与生图各一组，共 4 个下拉。
+// 🚨 通道与模型**直接复用 Agent 面板同一批 helper**（chatApiProviders / chatProviderOptions /
+// chatModelOptions / agentGenProviders / providerImageModels），别再自己扫 apiProviders ——
+// 否则「拆分图层」的通道清单会和 Agent 面板走偏（本项目已经踩过「两套清单不一致」的坑）。
+// 存储：两个 JSON 键，各自记 {provider, model}。
+function splitLayersReadSel(kind){
+    const key = kind === 'image' ? SPLIT_LAYERS_IMAGE_KEY : SPLIT_LAYERS_CHAT_KEY;
+    try{
+        const data = JSON.parse(localStorage.getItem(key) || 'null');
+        if(data && typeof data === 'object'){
+            return { provider: String(data.provider || ''), model: String(data.model || '') };
+        }
+    }catch(e){ /* 隐私模式读不了 / 脏数据 → 用默认 */ }
+    return { provider: '', model: '' };
+}
+
+function splitLayersWriteSel(kind){
+    const key = kind === 'image' ? SPLIT_LAYERS_IMAGE_KEY : SPLIT_LAYERS_CHAT_KEY;
+    const st = splitLayersState;
+    const payload = kind === 'image'
+        ? { provider: st.imageProvider, model: st.imageModel }
+        : { provider: st.chatProvider, model: st.chatModel };
+    try{ localStorage.setItem(key, JSON.stringify(payload)); }catch(e){ /* 忽略 */ }
+}
+
+/* ---------- GPT 门禁：拆分图层只对 GPT 相关 LLM 开放 ----------
+   🚨 老板 2026-10-09 要求：「用户仅选择 gpt 相关 LLM 模型时显示拆分图层功能，
+      限制仅 GPT 相关模型可以使用该功能」。
+   判定链（已与老板确认）：拆分弹层记忆的分析模型 → AI Agent 面板当前 LLM → 配置里第一个 GPT 模型。
+   最后那一步是**防死锁**用的：从没进过弹层、也没开过 Agent 面板时前两步都取不到值，
+   若直接判 false，入口就永远不出现、用户也就永远没机会去选 GPT。
+   ⚠️ 只认模型名里带 `gpt` 的（含 `chatgpt-*`）。OpenAI 的 o1/o3/o4 不算 —— 它们不是 GPT 品牌线，
+      放进来等于把「限制仅 GPT」这条要求做废。要放宽只改这一个函数。 */
+function splitLayersIsGptModel(model){
+    return /gpt/i.test(String(model || '').trim());
+}
+
+// 某通道里可用的 GPT 家族对话模型
+function splitLayersGptModels(providerId){
+    return providerChatModels(providerId).filter(splitLayersIsGptModel);
+}
+
+// 有 GPT 对话模型的通道（弹层里的「分析通道」下拉只列这些）
+function splitLayersGptProviders(){
+    return chatApiProviders().filter(p => splitLayersGptModels(p.id).length);
+}
+
+// 当前「分析模型」：记忆 → Agent 面板 → 配置里第一个 GPT 模型
+function splitLayersCurrentChatModel(){
+    const saved = splitLayersReadSel('chat');
+    if(saved.provider && saved.model) return saved.model;
+    const agentModel = String(agentState?.chatModel || '');
+    if(agentModel) return agentModel;
+    for(const provider of splitLayersGptProviders()){
+        const gpt = splitLayersGptModels(provider.id);
+        if(gpt.length) return gpt[0];
+    }
+    return '';
+}
+
+// 入口是否显示。配置里压根没有 GPT 对话模型 → 直接不显示（这功能确实用不了）。
+function splitLayersGptGateOpen(){
+    if(!splitLayersGptProviders().length) return false;
+    return splitLayersIsGptModel(splitLayersCurrentChatModel());
+}
+
+// 与 renderAgentModelSelectors() 同构：先修正通道 → 渲染通道 → 再按通道修正并渲染模型。
+// 修正步骤是必须的：存下来的通道/模型可能已被上游下架或禁用，留着空值会让后端自己去猜通道。
+function splitLayersRenderModelSelects(){
+    const st = splitLayersState;
+    // 🚨 分析通道 / 分析模型**只列 GPT 家族**（老板要求「限制仅 GPT 相关模型可以使用该功能」）。
+    //    入口那边还有一道 splitLayersGptGateOpen() 门禁，这里是第二道 —— 进来之后也换不成别的模型。
+    const chatProviders = splitLayersGptProviders();
+    const chatProvSel = splitLayersEl('splitLayersChatProvider');
+    const chatModelSel = splitLayersEl('splitLayersChatModel');
+    if(chatProvSel){
+        if(!chatProviders.some(p => p.id === st.chatProvider)) st.chatProvider = chatProviders[0]?.id || '';
+        chatProvSel.innerHTML = chatProviders.length
+            ? chatProviders.map(p => `<option value="${escapeAttr(p.id)}"${p.id === st.chatProvider ? ' selected' : ''}>${escapeHtml(p.name || p.id)}</option>`).join('')
+            : `<option value="">${escapeHtml(tr('smart.splitLayersNoGptProvider'))}</option>`;
+    }
+    if(chatModelSel){
+        const models = st.chatProvider ? splitLayersGptModels(st.chatProvider) : [];
+        if(!models.includes(st.chatModel)) st.chatModel = models[0] || '';
+        chatModelSel.innerHTML = models.length
+            ? models.map(m => `<option value="${escapeAttr(m)}"${m === st.chatModel ? ' selected' : ''}>${escapeHtml(m)}</option>`).join('')
+            : '<option value="">-</option>';
+    }
+
+    const genProviders = agentGenProviders();
+    const genProvSel = splitLayersEl('splitLayersImageProvider');
+    const genModelSel = splitLayersEl('splitLayersImageModel');
+    if(genProvSel){
+        if(genProviders.length){
+            if(!genProviders.some(p => p.id === st.imageProvider)) st.imageProvider = genProviders[0].id;
+            genProvSel.innerHTML = genProviders.map(p =>
+                `<option value="${escapeAttr(p.id)}"${p.id === st.imageProvider ? ' selected' : ''}>${escapeHtml(p.name || p.id)}</option>`).join('');
+        } else {
+            st.imageProvider = '';
+            genProvSel.innerHTML = `<option value="">${escapeHtml(tr('smart.splitLayersNoProvider'))}</option>`;
+        }
+    }
+    if(genModelSel){
+        const models = st.imageProvider ? [...new Set(providerImageModels(st.imageProvider))] : [];
+        if(models.length){
+            if(!models.includes(st.imageModel)) st.imageModel = models[0];
+            genModelSel.innerHTML = models.map(m =>
+                `<option value="${escapeAttr(m)}"${m === st.imageModel ? ' selected' : ''}>${escapeHtml(m)}</option>`).join('');
+        } else {
+            st.imageModel = '';
+            genModelSel.innerHTML = '<option value="">-</option>';
+        }
+    }
+}
+
+function splitLayersBindModelSelects(){
+    const bind = (id, handler) => {
+        const el = splitLayersEl(id);
+        if(!el || el.dataset.splitBound === '1') return;
+        el.dataset.splitBound = '1';
+        el.addEventListener('change', handler);
+    };
+    // 换通道就清空模型并重渲 —— 与 Agent 面板的行为一致（模型清单属于通道）
+    bind('splitLayersChatProvider', () => {
+        splitLayersState.chatProvider = splitLayersEl('splitLayersChatProvider')?.value || '';
+        splitLayersState.chatModel = '';
+        splitLayersRenderModelSelects();
+        splitLayersWriteSel('chat');
+    });
+    bind('splitLayersChatModel', () => {
+        splitLayersState.chatModel = splitLayersEl('splitLayersChatModel')?.value || '';
+        splitLayersWriteSel('chat');
+    });
+    bind('splitLayersImageProvider', () => {
+        splitLayersState.imageProvider = splitLayersEl('splitLayersImageProvider')?.value || '';
+        splitLayersState.imageModel = '';
+        splitLayersRenderModelSelects();
+        splitLayersWriteSel('image');
+    });
+    bind('splitLayersImageModel', () => {
+        splitLayersState.imageModel = splitLayersEl('splitLayersImageModel')?.value || '';
+        splitLayersWriteSel('image');
+    });
+}
+
+// 只把预检面板摆出来（不动状态栏文字）—— 失败后重试也用它
+function splitLayersShowPrepOverlay(){
+    splitLayersFillCountSelect();
+    splitLayersBindModelSelects();
+    splitLayersRenderModelSelects();
+    const overlay = splitLayersEl('splitLayersOverlay');
+    if(overlay){
+        overlay.classList.add('show');
+        overlay.classList.add('prep');
+        overlay.classList.remove('fail');
+    }
+    refreshIcons();
+}
+
+// 进弹层 / 点「重新拆分」都走这里：先选层数与模型再开跑，避免用错配置白跑一次模型
+function splitLayersOpenPrep(){
+    if(!splitLayersState.open) return;
+    if(splitLayersState.pollTimer){ clearTimeout(splitLayersState.pollTimer); splitLayersState.pollTimer = null; }
+    splitLayersState.taskId = '';
+    splitLayersState.targetLayers = splitLayersReadTarget();
+    const chatSel = splitLayersReadSel('chat');
+    splitLayersState.chatProvider = chatSel.provider;
+    splitLayersState.chatModel = chatSel.model;
+    const imageSel = splitLayersReadSel('image');
+    splitLayersState.imageProvider = imageSel.provider;
+    splitLayersState.imageModel = imageSel.model;
+    splitLayersSetProgress(false);
+    splitLayersSetBusy(false);
+    splitLayersSetStatus(tr('smart.splitLayersReady'), '');
+    splitLayersShowPrepOverlay();
+}
+
+function splitLayersStartSplit(){
+    if(!splitLayersState.open) return;
+    const sel = splitLayersEl('splitLayersLayerSelect');
+    const raw = Math.round(Number(sel?.value));
+    const v = Number.isFinite(raw)
+        ? Math.max(SPLIT_LAYERS_MIN_LAYERS, Math.min(SPLIT_LAYERS_MAX_LAYERS, raw))
+        : SPLIT_LAYERS_MIN_LAYERS;
+    splitLayersState.targetLayers = v;
+    splitLayersWriteTarget(v);
+    // 模型下拉的值同步进 state（用户可能刚改完就直接点开始，change 事件不保证先到）
+    for(const [id, field] of [['splitLayersChatProvider','chatProvider'], ['splitLayersChatModel','chatModel'],
+                              ['splitLayersImageProvider','imageProvider'], ['splitLayersImageModel','imageModel']]){
+        const el = splitLayersEl(id);
+        if(el?.value) splitLayersState[field] = el.value;
+    }
+    // 重拆：清掉上一轮的结果与 Photopea 文档
+    splitLayersState.layers = [];
+    splitLayersState.selectedId = '';
+    splitLayersState.selectedCanvasIds = [];
+    splitLayersState.ready = false;
+    const host = splitLayersEl('splitLayersPea');
+    if(host) host.innerHTML = '';
+    splitLayersState.pea = null;
+    splitLayersRenderList();
+    splitLayersSetBusy(true);
+    splitLayersSetProgress(true, tr('smart.splitLayersAnalyzing'), 0.05);
+    splitLayersSetStatus(tr('smart.splitLayersAnalyzing'), '');
+    splitLayersCreateTask();
+}
+
+function splitLayersLayerName(layer){
+    return (`SL_${layer?.id || ''}_${layer?.name || ''}`).slice(0, 60);
+}
+
+function splitLayersHexToRgb(hex){
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+    if(!m) return {r:17, g:24, b:39};
+    const v = parseInt(m[1], 16);
+    return {r:(v >> 16) & 255, g:(v >> 8) & 255, b:v & 255};
+}
+
+/* ---------- 自研画板：按 z 叠加 + 选中定位 + 位移/缩放/旋转/不透明度 ----------
+   Photopea 那套（iframe 嵌 photopea.com）自带菜单栏、工具栏和右侧广告，界面上
+   永远有我们控制不了的杂物；文字层在它里面只是一条图层名，选中也看不出在画面哪。
+   所以默认视图换成这个自己画的画板：干净、可控、选中即高亮定位、能直接拖拽缩放。
+   Photopea 降级成「精细编辑」按需打开（见 splitLayersTogglePea）。 */
+
+const SPLIT_LAYERS_FONT = 'system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+// 角控制点 = 等比缩放；四边中点 = **单轴拉伸（变形）**。
+// 🚨 四边控制点是老板 2026-10-10 要的「变形工具」：模型产出的元素与源图的长宽比
+//    总有一点差（实测卡片窄 3.6%），只靠等比缩放永远对齐不了原图边缘 —— 角点缩完
+//    一边对上了另一边又错开。单轴拉伸才能把元素拉到与原图逐边重合。
+const SPLIT_LAYERS_HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+
+// 一层的「盒子」= 画板上它占的那块矩形，同时决定**旋转/缩放的支点**与**控制点的位置**。
+//   · 像素态文字层：整幅画布 —— 像素层本身就是一张全画布 PNG，盒子等于整幅才贴合，
+//     而且旋转/缩放的支点才落在画布中心（拿 bbox 当盒子会把整幅图绕着文字转）。
+//   · 其余（编辑态文字 / 元素 / 背景）：它自己的 bbox。
+// 🚨 元素层以前也是**整幅画布**，于是控制点落在画布四角、离元素十万八千里 ——
+//    「拖一下把元素拉到与原图边缘重合」根本够不着，选中高亮也等于没高亮
+//    （老板 2026-10-10：「元素层也没有完整对齐原图边缘（可以借助photopea的变形工具实现）」）。
+//    改成 bbox 之后控制点就贴在元素上，配合四边控制点的单轴拉伸即可逐边对齐。
+//    代价是 <img> 必须按「全画布尺寸 + 负偏移」摆进这个小盒子里（见 splitLayersImageHtml）。
+function splitLayersBoxFor(layer){
+    const cw = Math.max(1, Number(splitLayersState.canvas.width) || 1);
+    const ch = Math.max(1, Number(splitLayersState.canvas.height) || 1);
+    if(layer.kind === 'text' && splitLayersIsPixelText(layer)){
+        return {x:0, y:0, w:cw, h:ch};
+    }
+    const bb = Array.isArray(layer.bbox) && layer.bbox.length >= 4 ? layer.bbox : null;
+    if(bb){
+        const x = Number(bb[0]) || 0;
+        const y = Number(bb[1]) || 0;
+        const w = Math.max(1, Number(bb[2]) || 1);
+        const h = Math.max(1, Number(bb[3]) || 1);
+        return {x, y, w, h};
+    }
+    return {x:0, y:0, w:cw, h:ch};
+}
+
+function splitLayersEnsureEditable(layer){
+    if(!layer) return layer;
+    if(!layer.edit){
+        layer.box = splitLayersBoxFor(layer);
+        // sx/sy = 单轴拉伸倍率（默认 1，四边控制点改的就是它们），scale = 等比倍率（角控制点）。
+        // 拆成两个是为了让「等比缩放」和「单轴变形」互不干扰：改一个不动另一个。
+        layer.edit = {tx:0, ty:0, scale:1, sx:1, sy:1,
+                      rotate:Number(layer.rotation) || 0, opacity:1};
+        // 「复位」要回到刚拆出来时的样子，所以把初始值留一份
+        layer.editInit = {...layer.edit};
+    }
+    return layer;
+}
+
+function splitLayersSelected(){
+    const layer = splitLayersState.layers.find(l => l.id === splitLayersState.selectedId);
+    return layer ? splitLayersEnsureEditable(layer) : null;
+}
+
+function splitLayersTransformCss(edit){
+    const sx = Number(edit.sx ?? 1) || 1;
+    const sy = Number(edit.sy ?? 1) || 1;
+    const s = Number(edit.scale ?? 1) || 1;
+    return `translate(${edit.tx}px, ${edit.ty}px) rotate(${edit.rotate}deg) `
+        + `scale(${s * sx}, ${s * sy})`;
+}
+
+function splitLayersLayerNode(id){
+    const board = splitLayersEl('splitLayersBoard');
+    return board ? board.querySelector(`.sl-layer[data-split-node="${id}"]`) : null;
+}
+
+// 图层图只加载一次：拖拽 / 缩放 / 旋转都会重排画板，重复 new Image 会闪
+function splitLayersLoadImage(url){
+    if(!url) return Promise.reject(new Error('empty url'));
+    const cache = splitLayersState.imageCache;
+    if(!cache[url]){
+        cache[url] = new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = () => reject(new Error(`图片加载失败：${url}`));
+            img.src = url;
+        });
+    }
+    return cache[url];
+}
+
+/* ---------- 文字层：编辑态（默认）/ 像素态 ----------
+   🚨 2026-10-09 老板口径变更：**文字层默认就是可编辑的**。
+      在此之前默认是「像素态」—— 那是为了「叠加恒等于原图」（背景层与元素层本来就取自
+      原图像素，只有文字层是前端 fillText 重画的，字体/字距/描边永远对不上）。
+      代价是文字层默认不可改字，老板要的是「选中就能直接改」。
+   现在翻过来：默认编辑态，像素态降级成「还原像素」按钮 ——
+   编辑态的字体/斜体/字距/旋转由后端从原图估出来（font_family / italic / letter_spacing /
+   实测 rotation），所以画出来与原图的差距已经小得多；要逐像素一致就点一下「还原像素」。 */
+function splitLayersIsPixelText(layer){
+    return !!layer && layer.kind === 'text' && layer.textMode === 'pixel' && !!layer.url;
+}
+
+// 字体栈：后端已白名单归一（拿不到回落 Arial）。这里只兜「老数据没有这个字段」。
+function splitLayersFontStack(layer){
+    const raw = String(layer?.font_family || '').trim();
+    return raw || SPLIT_LAYERS_FONT;
+}
+
+// 字距夹在与后端同一口径的范围里，避免老数据/手改数据把排版撑爆
+function splitLayersLetterSpacing(layer, size){
+    const raw = Number(layer?.letter_spacing);
+    if(!Number.isFinite(raw) || !raw) return 0;
+    return Math.round(Math.max(-size * 0.3, Math.min(size * 2, raw)) * 100) / 100;
+}
+
+function splitLayersTextNodeHtml(layer){
+    if(splitLayersIsPixelText(layer)){
+        // 像素态：盒子 = 整幅画布（见 splitLayersBoxFor），`width:100%;height:100%` 正好贴合，
+        // 不再需要负的 left/top 把全画布图挪回原点 —— 那样一旋转就把整幅画布转起来了。
+        return splitLayersImageHtml(layer);
+    }
+    const size = Math.max(6, Number(layer.font_size) || 24);
+    const align = splitLayersTextAlignOf(layer);
+    const justify = align === 'center' ? 'center' : (align === 'right' ? 'flex-end' : 'flex-start');
+    const weight = layer.font_weight === 'bold' ? '700' : '400';
+    // 🚨 2026-10-10：画板（DOM）这条路径也要做「墨迹盒拟合」，否则画板上还是双影
+    //    （老板截图看到的就是画板）。用共享离屏 ctx 量 —— DOM 与 canvas 是同一排版引擎，
+    //    度量一致；再把倍率写成 transform。
+    //    ⚠️ CSS `transform: A B` 是矩阵左乘 = **先 B 后 A**，所以 `translate(...) scale(...)`
+    //       的实际效果是「先按墨迹原点缩放，再平移」—— 平移量必须乘上倍率才搬得准。
+    let fitStyle = '';
+    const ctx = splitLayersInkCtx();
+    if(ctx){
+        const lines = String(layer.text || '').split('\n');
+        const s = splitLayersApplyTextFont(ctx, layer);
+        const lh = s * 1.15;
+        const ink = splitLayersMeasureInk(ctx, layer, lines, lh);
+        if(ink){
+            const k = splitLayersTextFit(layer, ink);
+            // DOM 里第 0 行基线在「内容盒顶 + 半行距 + 字体上伸」处，而 canvas 量出来的 t
+            // 是相对基线的，所以这里要补上这一段才能把两条路径对齐。
+            const half = (lh - (ink.fontAscent + ink.fontDescent)) / 2;
+            const inkTop = half + ink.fontAscent + ink.t;
+            fitStyle = `transform:translate(${(-ink.l * k.x).toFixed(2)}px,${(-inkTop * k.y).toFixed(2)}px)`
+                + ` scale(${k.x.toFixed(4)},${k.y.toFixed(4)});transform-origin:0 0;`;
+        }
+    }
+    // 🚨 这三样是老板「编辑态字体样式/斜体对不上」的修复：全部来自后端的原图估计值。
+    //    旋转不在这里做 —— 它由外层 .sl-layer 的 transform 承担（见 splitLayersTransformCss）。
+    return `<span class="sl-text" style="font-family:${escapeAttr(splitLayersFontStack(layer))};`
+        + `font-size:${size}px;font-weight:${weight};`
+        + `font-style:${layer.italic ? 'italic' : 'normal'};`
+        + `letter-spacing:${splitLayersLetterSpacing(layer, size)}px;`
+        + `color:${escapeAttr(String(layer.color || '#111827'))};text-align:${align};`
+        + `justify-content:${justify};${fitStyle}">${escapeHtml(String(layer.text || ''))}</span>`;
+}
+
+// 图片层的 <img>：后端产出的 PNG **永远是整幅画布尺寸**，而盒子可能是元素自己那一小块
+// （见 splitLayersBoxFor）。所以盒子小于画布时要给「全画布尺寸 + 负偏移」，让整张图
+// 仍然落在画布原点 —— 少了这一步，元素图会被压扁进 bbox 里，位置全错。
+function splitLayersImageHtml(layer){
+    const cw = Math.max(1, Number(splitLayersState.canvas.width) || 1);
+    const ch = Math.max(1, Number(splitLayersState.canvas.height) || 1);
+    const b = layer.box || {x:0, y:0, w:cw, h:ch};
+    const full = !b.x && !b.y && Math.abs(b.w - cw) < 0.5 && Math.abs(b.h - ch) < 0.5;
+    const style = full ? ''
+        : ` style="position:absolute;left:${-b.x}px;top:${-b.y}px;width:${cw}px;height:${ch}px"`;
+    return `<img src="${escapeAttr(layer.url)}" alt="" draggable="false"${style}>`;
+}
+
+// 把画布缩到容器里。fit 同时被指针坐标换算复用，所以存进 state。
+function splitLayersFitBoard(){
+    const board = splitLayersEl('splitLayersBoard');
+    const wrap = board?.parentElement;
+    if(!board || !wrap) return;
+    const cw = Math.max(1, Number(splitLayersState.canvas.width) || 1);
+    const ch = Math.max(1, Number(splitLayersState.canvas.height) || 1);
+    const rect = wrap.getBoundingClientRect();
+    const fit = Math.min(
+        (Math.max(120, rect.width) - 48) / cw,
+        (Math.max(120, rect.height) - 48) / ch,
+        1
+    );
+    splitLayersState.view.fit = fit > 0 ? fit : 1;
+    board.style.width = `${cw}px`;
+    board.style.height = `${ch}px`;
+    board.style.transform = `translate(-50%, -50%) scale(${splitLayersState.view.fit})`;
+    // 控制点/描边要按 1/fit 反向放大，否则大图缩到 0.3 倍时它们只有 3px，根本抓不住
+    board.style.setProperty('--sl-hs', String(1 / splitLayersState.view.fit));
+}
+
+function splitLayersRenderBoard(){
+    const board = splitLayersEl('splitLayersBoard');
+    if(!board) return;
+    splitLayersFitBoard();
+    const layers = splitLayersState.layers.slice()
+        .sort((a, b) => (Number(a.z) || 0) - (Number(b.z) || 0));
+    board.innerHTML = layers.map(layer => {
+        splitLayersEnsureEditable(layer);
+        const sel = layer.id === splitLayersState.selectedId;
+        // 🚨 `.text` 类只给「真的在渲染 <span> 文字」的层（编辑态）。
+        //    像素态文字层渲染的是整幅画布的 <img>，走的是普通图片层那条路 ——
+        //    套上 .text 的 flex/overflow 反而会让 img 的 100% 高宽解析不稳。
+        const textNode = layer.kind === 'text' && !splitLayersIsPixelText(layer);
+        const cls = `sl-layer${textNode ? ' text' : ''}`
+            + `${layer.hidden ? ' off' : ''}${sel ? ' sel' : ''}`;
+        const style = `left:${layer.box.x}px;top:${layer.box.y}px;`
+            + `width:${layer.box.w}px;height:${layer.box.h}px;`
+            + `transform:${splitLayersTransformCss(layer.edit)};opacity:${layer.edit.opacity}`;
+        const inner = layer.kind === 'text'
+            ? splitLayersTextNodeHtml(layer)
+            : (layer.url ? splitLayersImageHtml(layer) : '');
+        // 选中才给控制点：不选中时画板就是一张干净的效果图
+        const handles = sel
+            ? SPLIT_LAYERS_HANDLES.map(h =>
+                `<i class="sl-handle ${h}" data-split-handle="${h}"></i>`).join('')
+              + '<i class="sl-handle rot" data-split-handle="rot"></i>'
+            : '';
+        return `<div class="${cls}" data-split-node="${escapeAttr(layer.id)}" style="${style}">`
+            + `${inner}${handles}</div>`;
+    }).join('');
+    splitLayersRenderSelTools();
+}
+
+// 拖拽过程中只改被拖那一层的 style，不整块重排（否则控制点会跟着抖）
+function splitLayersApplyLiveTransform(layer){
+    const node = splitLayersLayerNode(layer.id);
+    if(!node) return;
+    node.style.transform = splitLayersTransformCss(layer.edit);
+    // 🚨 不透明度也必须在这里落到 DOM。原先只写 transform，于是拖动不透明度滑块时
+    // layer.edit.opacity 变了、数值也变了，但画面纹丝不动 —— 要整块重排才看得见，
+    // 而滑块只调这个函数，所以等于没作用（老板报的「不透明度功能没有实质作用」就是这个）。
+    node.style.opacity = String(Math.max(0, Math.min(1, Number(layer.edit.opacity ?? 1))));
+}
+
+function splitLayersRenderSelTools(){
+    const layer = splitLayersSelected();
+    const nameEl = splitLayersEl('splitLayersSelName');
+    if(nameEl) nameEl.textContent = layer ? (layer.name || layer.id) : tr('smart.splitLayersNoSel');
+    const op = splitLayersEl('splitLayersOpacity');
+    const opv = splitLayersEl('splitLayersOpacityVal');
+    const val = layer ? Math.round((layer.edit.opacity ?? 1) * 100) : 100;
+    if(op){ op.value = String(val); op.disabled = !layer; }
+    if(opv) opv.textContent = `${val}%`;
+    splitLayersRenderTextTools();
+}
+
+/* ---------- 文字层可编辑：改文案 / 字号 / 颜色 / 加粗 / 对齐 ----------
+   改的都是 layer 上的字段，而导出、合成、铺到画布读的是同一份数据，
+   所以画板上改完，两边自动一致，不需要额外同步。 */
+
+function splitLayersTextAlignOf(layer){
+    const raw = String(layer?.align || '').toLowerCase();
+    return ['center', 'right'].includes(raw) ? raw : 'left';
+}
+
+function splitLayersRenderTextTools(){
+    const bar = splitLayersEl('splitLayersTextBar');
+    if(!bar) return;
+    const layer = splitLayersSelected();
+    const isText = !!layer && layer.kind === 'text';
+    const wasHidden = bar.hidden;
+    bar.hidden = !isText;
+    // 编辑栏占掉一行，画板可用高度变了 —— 不重算 fit 的话画板会溢出/留白
+    if(wasHidden !== bar.hidden && splitLayersState.open) splitLayersFitBoard();
+    if(!isText) return;
+
+    // 像素态：文字像素取自原图，改文案/字号/颜色都不该影响画面 —— 全部禁用并说明，
+    // 否则用户拖了没反应，又变成「功能没实质作用」。
+    // （编辑态是默认态，所以下面这些控件默认都是可用的。）
+    const pixel = splitLayersIsPixelText(layer);
+    for(const id of ['splitLayersTextInput', 'splitLayersTextSize',
+                     'splitLayersTextColor', 'splitLayersTextBold', 'splitLayersTextAlign']){
+        const el = splitLayersEl(id);
+        if(el) el.disabled = pixel;
+    }
+    const hintEl = splitLayersEl('splitLayersTextHint');
+    if(hintEl){
+        hintEl.textContent = pixel
+            ? tr('smart.splitLayersTextPixelHint') : tr('smart.splitLayersTextHint');
+        // 提示色给「非默认」的那一边：像素态是降级态（改不动字），才值得提醒
+        hintEl.classList.toggle('warn', pixel);
+    }
+    const modeBtn = splitLayersEl('splitLayersTextMode');
+    if(modeBtn){
+        // 按钮高亮 = 当前处于像素态（特殊态）；标签写的是「点一下会变成什么」
+        modeBtn.classList.toggle('on', pixel);
+        const label = splitLayersEl('splitLayersTextModeLabel');
+        const action = pixel ? tr('smart.splitLayersTextEdit') : tr('smart.splitLayersTextRestore');
+        if(label) label.textContent = action;
+        modeBtn.title = action;
+    }
+
+    // 🚨 不回写「正在输入」的那个控件：每敲一个字都会重排画板，
+    // 回写 value 会把光标弹到末尾，中文输入法还会把候选词打断。
+    const active = document.activeElement;
+    const put = (id, value) => {
+        const el = splitLayersEl(id);
+        if(el && el !== active) el.value = value;
+    };
+    put('splitLayersTextInput', String(layer.text || ''));
+    put('splitLayersTextSize', String(Math.max(6, Number(layer.font_size) || 24)));
+    put('splitLayersTextColor', /^#[0-9a-f]{6}$/i.test(String(layer.color || ''))
+        ? String(layer.color) : '#111827');
+    const bold = splitLayersEl('splitLayersTextBold');
+    if(bold) bold.classList.toggle('on', layer.font_weight === 'bold');
+    const al = splitLayersEl('splitLayersTextAlign');
+    if(al) al.dataset.align = splitLayersTextAlignOf(layer);
+}
+
+function splitLayersEditText(patch){
+    const layer = splitLayersSelected();
+    if(!layer || layer.kind !== 'text') return;
+    Object.assign(layer, patch);
+    // 文字变了要整块重排：换行/字号都会改变该层在画板上的呈现
+    splitLayersRenderBoard();
+}
+
+// 编辑态（默认）↔ 像素态。像素态叠加恒等于原图（后端裁的原图像素），但不能改字；
+// 编辑态用估出来的字体重画，能改字，字体/字距/描边与原图仍可能有细微差异 —— 这是取舍，不是 bug。
+function splitLayersSetTextMode(mode){
+    const layer = splitLayersSelected();
+    if(!layer || layer.kind !== 'text') return;
+    // 🚨 默认编辑态：只有显式传 'pixel' 才是像素态（与 splitLayersIsPixelText 同一口径）
+    layer.textMode = mode === 'pixel' ? 'pixel' : 'edit';
+    // 两种模式的盒子不一样（编辑态贴 bbox、像素态铺满画布），切态必须重算：
+    // 否则 span 会被撑满整幅画布 / 全画布 PNG 会被压进 bbox 里。
+    layer.box = splitLayersBoxFor(layer);
+    splitLayersRenderList();
+    splitLayersRenderBoard();
+}
+
+function splitLayersToggleTextMode(){
+    const layer = splitLayersSelected();
+    if(!layer || layer.kind !== 'text') return;
+    splitLayersSetTextMode(splitLayersIsPixelText(layer) ? 'edit' : 'pixel');
+}
+
+function splitLayersSetOpacity(percent){
+    const layer = splitLayersSelected();
+    if(!layer) return;
+    layer.edit.opacity = Math.max(0, Math.min(1, (Number(percent) || 0) / 100));
+    splitLayersApplyLiveTransform(layer);
+    splitLayersRenderSelTools();
+}
+
+function splitLayersRotateSel(deg){
+    const layer = splitLayersSelected();
+    if(!layer) return;
+    layer.edit.rotate = Math.round((layer.edit.rotate + (Number(deg) || 0)) * 10) / 10;
+    splitLayersRenderBoard();
+}
+
+function splitLayersResetSel(){
+    const layer = splitLayersSelected();
+    if(!layer) return;
+    layer.edit = {...layer.editInit};
+    splitLayersRenderBoard();
+}
+
+// 画板坐标 ← 屏幕坐标：board 上有 translate(-50%,-50%) scale(fit)，用 getBoundingClientRect
+// 拿到的是变换后的框，所以除以 fit 就是画布内部坐标。
+function splitLayersBoardPoint(event){
+    const board = splitLayersEl('splitLayersBoard');
+    if(!board) return {x:0, y:0};
+    const rect = board.getBoundingClientRect();
+    const fit = splitLayersState.view.fit || 1;
+    return {x:(event.clientX - rect.left) / fit, y:(event.clientY - rect.top) / fit};
+}
+
+/* ---------- 本地合成：导出与「铺到画布」都不再依赖 Photopea ---------- */
+
+// 🚨 2026-10-10 老板「字体倾斜角度」的根因修复：
+//    编辑态**不画像素板**，只用系统字体重画；而后端 `font_size` 是按
+//    「行宽 ≈ 字数 × 0.68 × 字号」估出来的，实测比真实字体**窄 6%~41%**、高度也偏小
+//    （用 Arial 逐条量像素板墨迹 vs 重画：Anya 56→50、Woman portrait 227→161、
+//      9:16 57→41、Nano Banana 148→120、Mahmud 99→93）。
+//    于是重画的字比原字小一圈，把下面那层原图像素从四周露出来 —— 视觉上就是
+//    「双影 / 斜体角度对不上」。
+//    所以这里量一次真实墨迹盒，把整块缩放到 box 大小、并把墨迹左上角对齐 box 左上角，
+//    让重画的字**尽量盖住**原字。实测「重画墨迹 vs 像素板墨迹」的 IoU：
+//      Anya 0.227→0.612、Nano Banana 0.212→0.505、Mahmud 0.274→0.631、9:16 0.142→0.355。
+//    ⚠️ 盖不满是必然的（Arial 与原字体字形不同），目标是「不露出原字的轮廓」。
+
+// 共享离屏 2D context：DOM 与 canvas 是**同一个排版引擎**，所以用它量出来的墨迹盒
+// 对画板（DOM）与合成（canvas）两条路径同时成立，不必各量一套。
+let SPLIT_LAYERS_INK_CTX = null;
+function splitLayersInkCtx(){
+    if(!SPLIT_LAYERS_INK_CTX){
+        try{ SPLIT_LAYERS_INK_CTX = document.createElement('canvas').getContext('2d'); }
+        catch(err){ SPLIT_LAYERS_INK_CTX = null; }
+    }
+    return SPLIT_LAYERS_INK_CTX;
+}
+
+// 把 ctx 的字体/字距设成该层的排版参数，返回字号
+function splitLayersApplyTextFont(ctx, layer){
+    const size = Math.max(6, Number(layer.font_size) || 24);
+    const weight = layer.font_weight === 'bold' ? '700' : '400';
+    // 🚨 字体 / 斜体 / 字距都取自后端从原图估出来的字段，不再是写死的系统字体 ——
+    //    这是老板「转为编辑状态后字体样式、斜体角度没有保持不变」的修复。
+    //    ctx.letterSpacing 只有 Chromium 99+ 支持，不支持就当没设（不影响其它属性）。
+    ctx.font = `${layer.italic ? 'italic ' : ''}${weight} ${size}px ${splitLayersFontStack(layer)}`;
+    try{ ctx.letterSpacing = `${splitLayersLetterSpacing(layer, size)}px`; }catch(err){ /* 老内核不支持 */ }
+    ctx.textAlign = 'left';           // 墨迹盒拟合需要「以原点为对齐点」才量得准
+    ctx.textBaseline = 'alphabetic';
+    return size;
+}
+
+// 量当前 font 下这段文字的墨迹盒。
+// 坐标约定：x 相对**盒子左端**（已按 align 摆好）；y 相对**第 0 行的基线**（负数 = 基线之上）。
+// 返回 null = 量不出来（空文字 / 老内核没有 actualBoundingBox*）→ 调用方退回老口径。
+function splitLayersMeasureInk(ctx, layer, lines, lineHeight){
+    const w0 = Math.max(1, layer.box.w);
+    const align = splitLayersTextAlignOf(layer);
+    let l = Infinity, r = -Infinity, t = Infinity, b = -Infinity;
+    let fontAscent = 0, fontDescent = 0;
+    const items = [];
+    lines.forEach((line, i) => {
+        if(!line) return;
+        const m = ctx.measureText(line);
+        // ⚠️ 这四个值是**有符号**的：actualBoundingBoxLeft/Ascent 表示「从对齐点往左/往上」的距离，
+        //    不能取绝对值 —— 取绝对值会把右对齐、负过冲的字体量歪。
+        const al = Number(m.actualBoundingBoxLeft) || 0;
+        const ar = Number(m.actualBoundingBoxRight) || 0;
+        const as = Number(m.actualBoundingBoxAscent) || 0;
+        const ad = Number(m.actualBoundingBoxDescent) || 0;
+        const iw = al + ar;
+        if(!(iw > 0) || !(as + ad > 0)) return;
+        // fontBoundingBox* 是「行盒」用的字体级上下伸（DOM 的 line-height 居中要用它）；
+        // 老内核没有就退回墨迹伸，误差只是垂直方向几像素。
+        fontAscent = Math.max(fontAscent, Number(m.fontBoundingBoxAscent) || as);
+        fontDescent = Math.max(fontDescent, Number(m.fontBoundingBoxDescent) || ad);
+        const x0 = align === 'center' ? (w0 - iw) / 2 : (align === 'right' ? w0 - iw : 0);
+        const base = i * lineHeight;                       // 该行基线相对第 0 行基线
+        l = Math.min(l, x0); r = Math.max(r, x0 + iw);
+        t = Math.min(t, base - as); b = Math.max(b, base + ad);
+        items.push({line, x: x0 + al, base});              // textAlign=left 时墨迹左端 = x - actualBoundingBoxLeft
+    });
+    if(!items.length || !(r > l) || !(b > t)) return null;
+    return {items, l, r, t, b, fontAscent, fontDescent};
+}
+
+// 标定/取回「墨迹盒 → 盒子」的缩放倍率。
+// 🚨 倍率**只标定一次**，且**不把 font_size 算进签名**：
+//    墨迹宽度与字号成正比 ⇒ 这个比值与字号无关，用户改字号时仍然能等比放大（字号控件不会被抵消）。
+//    但字体/斜体/字重/文案一变，字形就变了，必须重新标定。
+function splitLayersTextFit(layer, ink){
+    const sig = `${layer.font_family}|${layer.italic ? 1 : 0}|${layer.font_weight}|${layer.text}`;
+    if(layer._fit && layer._fit.sig === sig) return layer._fit;
+    if(!ink){ layer._fit = {sig, x:1, y:1}; return layer._fit; }
+    layer._fit = {
+        sig,
+        // 夹一下：估出来的字号可能离谱，缩放太狠会把字压成异形 —— 宁可留点偏差也不要画歪
+        x: Math.max(0.4, Math.min(2.5, layer.box.w / Math.max(1, ink.r - ink.l))),
+        y: Math.max(0.5, Math.min(2.0, layer.box.h / Math.max(1, ink.b - ink.t))),
+    };
+    return layer._fit;
+}
+
+function splitLayersDrawText(ctx, layer){
+    const lines = String(layer.text || '').split('\n');
+    const size = splitLayersApplyTextFont(ctx, layer);
+    ctx.fillStyle = String(layer.color || '#111827');
+    const lineHeight = size * 1.15;
+
+    const ink = splitLayersMeasureInk(ctx, layer, lines, lineHeight);
+    if(!ink){
+        // 量不出来（空文字 / 老内核）→ 退回老口径，至少位置不错
+        const align = splitLayersTextAlignOf(layer);
+        ctx.textAlign = align;
+        ctx.textBaseline = 'top';
+        const x = align === 'center' ? layer.box.x + layer.box.w / 2
+            : (align === 'right' ? layer.box.x + layer.box.w : layer.box.x);
+        lines.forEach((line, i) => ctx.fillText(line, x, layer.box.y + i * lineHeight));
+        return;
+    }
+    const k = splitLayersTextFit(layer, ink);
+    ctx.save();
+    ctx.translate(layer.box.x, layer.box.y);
+    ctx.scale(k.x, k.y);
+    ctx.translate(-ink.l, -ink.t);    // 墨迹左上角 → 盒子左上角
+    ink.items.forEach(it => ctx.fillText(it.line, it.x, it.base));
+    ctx.restore();
+}
+
+// 合成到离屏 canvas。CSS 的 transform-origin 默认是元素中心，这里按同一套顺序还原，
+// 保证「画板上看到的」和「导出/铺画布的」逐像素对得上。
+async function splitLayersCompositeTo(ctx, cw, ch, onlyLayer){
+    const layers = splitLayersState.layers.slice()
+        .sort((a, b) => (Number(a.z) || 0) - (Number(b.z) || 0));
+    for(const layer of layers){
+        if(onlyLayer && layer.id !== onlyLayer) continue;
+        splitLayersEnsureEditable(layer);
+        if(layer.hidden && !onlyLayer) continue;
+        const e = layer.edit;
+        const cx = layer.box.x + layer.box.w / 2;
+        const cy = layer.box.y + layer.box.h / 2;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, Math.min(1, e.opacity));
+        ctx.translate(cx + e.tx, cy + e.ty);
+        ctx.rotate(e.rotate * Math.PI / 180);
+        // 与 splitLayersTransformCss 同一口径：等比倍率 × 单轴拉伸倍率
+        ctx.scale((Number(e.scale ?? 1) || 1) * (Number(e.sx ?? 1) || 1),
+                  (Number(e.scale ?? 1) || 1) * (Number(e.sy ?? 1) || 1));
+        ctx.translate(-cx, -cy);
+        // 🚨 顺序必须是「像素文字层 → 编辑态文字 → 普通图片层」：
+        //    像素态的文字层是一张全画布尺寸的 PNG（与其他层同构），必须 drawImage；
+        //    若先判 kind==='text' 就会走 fillText，等于把后端裁好的原图像素丢掉。
+        if(splitLayersIsPixelText(layer) || (layer.url && layer.kind !== 'text')){
+            try{
+                const img = await splitLayersLoadImage(layer.url);
+                // 🚨 PNG 是整幅画布尺寸，而盒子可能是元素自己那一小块（见 splitLayersBoxFor）：
+                //    平移后坐标系的原点在**盒子左上角**，所以要把整张图挪到 -box 处才落在画布原点。
+                //    漏了这一步，元素在「导出 / 铺到画布」时会整体偏移（画板上却是对的）。
+                ctx.drawImage(img, -layer.box.x, -layer.box.y, cw, ch);
+            }catch(err){
+                console.warn('[split-layers] 合成时跳过该层', layer.id, err);
+            }
+        }else if(layer.kind === 'text' && layer.text){
+            splitLayersDrawText(ctx, layer);
+        }
+        ctx.restore();
+    }
+}
+
+function splitLayersNewCanvas(){
+    const cw = Math.max(1, Number(splitLayersState.canvas.width) || 1);
+    const ch = Math.max(1, Number(splitLayersState.canvas.height) || 1);
+    const cv = document.createElement('canvas');
+    cv.width = cw;
+    cv.height = ch;
+    return {cv, ctx:cv.getContext('2d'), cw, ch};
+}
+
+async function splitLayersComposite(){
+    const {cv, ctx, cw, ch} = splitLayersNewCanvas();
+    await splitLayersCompositeTo(ctx, cw, ch, '');
+    return cv;
+}
+
+function splitLayersCanvasToBlob(cv){
+    return new Promise(resolve => cv.toBlob(resolve, 'image/png'));
+}
+
+// 把 base64 交给后端落盘换回 /assets 地址 —— 画布节点只能存服务端 URL，
+// blob: 地址刷新一次就失效了。
+async function splitLayersUploadCanvas(cv, name){
+    const blob = await splitLayersCanvasToBlob(cv);
+    if(!blob) throw new Error(tr('smart.splitLayersExportEmpty'));
+    const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(reader.error || new Error('read failed'));
+        reader.readAsDataURL(blob);
+    });
+    const res = await fetch('/api/ai/upload-base64', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({data:dataUrl, content_type:'image/png', name})
+    });
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = await res.json();
+    const url = body?.files?.[0]?.url;
+    if(!url) throw new Error(tr('smart.splitLayersExportEmpty'));
+    return url;
+}
+
+function splitLayersIsIdentity(layer){
+    const e = layer.edit || {};
+    const init = layer.editInit || {};
+    return !e.tx && !e.ty && (e.scale ?? 1) === 1 && (e.rotate ?? 0) === (init.rotate ?? 0)
+        && (e.sx ?? 1) === 1 && (e.sy ?? 1) === 1
+        && (e.opacity ?? 1) === 1;
+}
+
+// 「精细编辑」：切到 Photopea（按需创建 iframe，不用时完全不占资源）
+async function splitLayersTogglePea(){
+    const stage = splitLayersEl('splitLayersStage');
+    const btnLabel = splitLayersEl('splitLayersPeaBtnLabel');
+    if(!stage) return;
+    if(splitLayersState.peaMode){
+        splitLayersState.peaMode = false;
+        stage.classList.remove('pea');
+        if(btnLabel) btnLabel.textContent = tr('smart.splitLayersFineEdit');
+        return;
+    }
+    if(!splitLayersState.layers.length){
+        toast(tr('smart.splitLayersEmpty'));
+        return;
+    }
+    splitLayersState.peaMode = true;
+    stage.classList.add('pea');
+    if(btnLabel) btnLabel.textContent = tr('smart.splitLayersBackToBoard');
+    try{
+        splitLayersSetProgress(true, tr('smart.splitLayersLoadingEditor'), 0.5);
+        await splitLayersBuildDocument();
+        splitLayersSetProgress(false);
+    }catch(err){
+        splitLayersState.peaMode = false;
+        stage.classList.remove('pea');
+        if(btnLabel) btnLabel.textContent = tr('smart.splitLayersFineEdit');
+        splitLayersSetProgress(false);
+        toast(err?.message || String(err));
+    }
+}
+
+
+function splitLayersSetStatus(text, hint){
+    const el = splitLayersEl('splitLayersStatus');
+    if(el) el.textContent = text || '';
+    const hintEl = splitLayersEl('splitLayersHint');
+    if(hintEl) hintEl.textContent = hint || '';
+}
+
+function splitLayersSetProgress(show, text, ratio){
+    const overlay = splitLayersEl('splitLayersOverlay');
+    if(!overlay) return;
+    overlay.classList.toggle('show', !!show);
+    if(show){
+        overlay.classList.remove('prep');   // 真进度开始时收起预检面板
+        overlay.classList.remove('fail');   // 重试时收起失败卡片
+    }
+    if(text){
+        const label = splitLayersEl('splitLayersProgressText');
+        if(label) label.textContent = text;
+    }
+    const fill = splitLayersEl('splitLayersProgressFill');
+    if(fill) fill.style.width = `${Math.max(0, Math.min(1, Number(ratio) || 0)) * 100}%`;
+}
+
+function splitLayersSetBusy(busy){
+    splitLayersState.busy = !!busy;
+    const has = splitLayersState.layers.length > 0 && splitLayersState.ready;
+    const exportBtn = splitLayersEl('splitLayersExportBtn');
+    const psdBtn = splitLayersEl('splitLayersPsdBtn');
+    const rerunBtn = splitLayersEl('splitLayersRerunBtn');
+    if(exportBtn) exportBtn.disabled = !has || !!busy;
+    if(psdBtn) psdBtn.disabled = !has || !!busy;
+    splitLayersSyncCanvasAction();
+    // 跑到一半不让改层数 / 换模型 / 重拆，否则会留下一个没人收的后端任务（白花钱）
+    if(rerunBtn) rerunBtn.disabled = !!busy;
+    for(const id of ['splitLayersLayerSelect', 'splitLayersChatProvider', 'splitLayersChatModel',
+                     'splitLayersImageProvider', 'splitLayersImageModel',
+                     'splitLayersOpacity', 'splitLayersPeaBtn', 'splitLayersTextMode',
+                     'splitLayersTextInput', 'splitLayersTextSize', 'splitLayersTextColor',
+                     'splitLayersTextBold', 'splitLayersTextAlign']){
+        const el = splitLayersEl(id);
+        if(el) el.disabled = !!busy;
+    }
+    // 上面的循环会把文字控件一律解禁，但「像素态」要求它们保持禁用 ——
+    // 重跑一次文字栏渲染，让模式判定重新落到 disabled 上（否则任务跑完就变成可改，等于白禁）。
+    if(!busy) splitLayersRenderTextTools();
+}
+
+/* 「铺到画布」按钮有两个入口：标题栏右上角 + 图层栏底部。
+   🚨 老板 2026-10-10 反馈「选完圆点找不到导出到画布的按钮」——
+   标题栏那个在窗口最右边，容易被整块忽略，所以图层栏底部再放一个主按钮，
+   并把「已选几个」直接写在按钮上，避免用户不知道导出范围。
+   2026-10-10 追加：「在线 PS」也是「有分层结果才能点」的动作，一起在这里收口，
+   免得两个入口各写一份 disabled 逻辑、日后改一处漏一处。
+   ⚠️ 「在线 PS」只留标题栏一个入口 —— 老板当天反馈「左侧栏重复了一个在线 PS」。 */
+function splitLayersSyncCanvasAction(){
+    const has = splitLayersState.layers.length > 0 && splitLayersState.ready;
+    const count = splitLayersState.selectedCanvasIds.length;
+    for(const id of ['splitLayersToCanvasBtn', 'splitLayersToCanvasSideBtn',
+                     'splitLayersOnlinePsBtn']){
+        const btn = splitLayersEl(id);
+        if(btn) btn.disabled = !has || Boolean(splitLayersState.busy);
+    }
+    const badge = splitLayersEl('splitLayersToCanvasCount');
+    if(badge) badge.textContent = count ? `· ${count}` : '';
+}
+
+function splitLayersPickProviders(){
+    // 直接读用户在预检面板里选的 (通道, 模型)；没选过时 splitLayersRenderModelSelects() 已填好默认值。
+    const st = splitLayersState;
+    return {
+        provider_id: st.chatProvider || '',
+        model: st.chatModel || '',
+        image_provider_id: st.imageProvider || '',
+        image_model: st.imageModel || ''
+    };
+}
+
+function splitLayersBindOnce(){
+    const modal = splitLayersEl('splitLayersModal');
+    if(!modal || modal.dataset.splitBound === '1') return;
+    modal.dataset.splitBound = '1';
+    // 拖拽排序松手后浏览器还会补一个 click，不挡掉就会顺手把「刚拖过的那层」又切换一次选中。
+    // 用时间戳而不是一次性标志：万一浏览器没补 click，标志会一直留着，反而把用户下一次正常点击吃掉。
+    let suppressClickUntil = 0;
+    modal.addEventListener('click', (event) => {
+        if(Date.now() < suppressClickUntil) return;
+        if(event.target === modal){ closeSplitLayersEditor(); return; }
+        const eye = event.target.closest('[data-split-eye]');
+        if(eye){
+            event.stopPropagation();
+            splitLayersToggleVisible(eye.getAttribute('data-split-eye'));
+            return;
+        }
+        const canvasCheck = event.target.closest('[data-split-canvas-check]');
+        if(canvasCheck){
+            event.stopPropagation();
+            splitLayersToggleCanvasSelection(canvasCheck.getAttribute('data-split-canvas-check'), canvasCheck.checked);
+            return;
+        }
+        const canvasPick = event.target.closest('[data-split-canvas-pick]');
+        if(canvasPick){
+            event.stopPropagation();
+            return;
+        }
+        // 只认列表行：画板上的层走下面的拖拽手势，点它不该触发「选中」以外的逻辑
+        const row = event.target.closest('.sl-item[data-split-layer]');
+        if(row) splitLayersSelectLayer(row.getAttribute('data-split-layer'));
+    });
+
+    /* ---------- 图层列表：按住整行上下拖动改顺序 ----------
+       🚨 用 pointer 事件手写，不用原生 HTML5 拖放（draggable + dragstart/drop）：
+       老板 2026-10-10 反馈「拖拽不支持」—— 桌面壳（WebView2）里原生拖放经常整个不触发，
+       而且行上留着 draggable="true" 时，浏览器一旦开始原生拖拽就会**吞掉 pointermove**，
+       两条路互相打架。所以行上不写 draggable，只走 pointerdown/move/up。 */
+    const list = splitLayersEl('splitLayersList');
+    if(list){
+        let dragState = null;
+
+        // 除了被拖的那一行，其余行按显示顺序（上→下）列出来
+        const otherRows = (draggedId) => [...list.querySelectorAll('.sl-item[data-split-layer]')]
+            .filter(row => row.getAttribute('data-split-layer') !== draggedId);
+
+        /* 把指针的 y 换算成「显示列表里的插入下标」（0 = 最顶，n = 最底）。
+           🚨 不能用「指针落在哪一行的上半/下半」来定落点：行高才 40 来 px，
+           指针还压在自己那一行里、只挪了 6px，就会被判成「插到下一行的上面」→
+           整行直接甩到列表头部。正确做法是**跳过被拖的行**，
+           数一数有几行的中线落在指针上方，那个计数就是插入位置 ——
+           指针没离开自己那行时计数恒等于原位，误拖不会跳。 */
+        const dropInsertIndexAt = (clientY, draggedId) => {
+            let index = 0;
+            for(const row of otherRows(draggedId)){
+                const rect = row.getBoundingClientRect();
+                if(clientY > rect.top + rect.height / 2) index += 1;
+            }
+            return index;
+        };
+        const clearDropMarks = () => {
+            list.querySelectorAll('.is-drop-before, .is-drop-after')
+                .forEach(el => el.classList.remove('is-drop-before', 'is-drop-after'));
+        };
+        // 插入线画在「下标对应那一行的上沿」；下标到底就画在最后一行的下沿
+        const markDropIndex = (index, draggedId) => {
+            clearDropMarks();
+            const rows = otherRows(draggedId);
+            if(!rows.length) return;
+            const row = rows[Math.min(index, rows.length - 1)];
+            row.classList.add(index >= rows.length ? 'is-drop-after' : 'is-drop-before');
+        };
+
+        list.addEventListener('pointerdown', (event) => {
+            if(event.button !== 0 || !splitLayersState.ready) return;
+            if(splitLayersState.layers.length < 2) return;
+            const row = event.target.closest?.('.sl-item[data-split-layer]');
+            if(!row) return;
+            // 眼睛 / 圆点 / 复选框是独立控件，不能当拖拽起点，否则「点一下」就变成换位
+            if(event.target.closest('button, input, label, a, [data-split-canvas-pick]')) return;
+            dragState = {
+                id: row.getAttribute('data-split-layer'),
+                row,
+                pointerId: event.pointerId,
+                startY: event.clientY,
+                moved: false
+            };
+        });
+
+        list.addEventListener('pointermove', (event) => {
+            if(!dragState || event.pointerId !== dragState.pointerId) return;
+            if(!dragState.moved){
+                // 4px 死区：单纯点击（选中 / 编辑）不该被当成拖拽
+                if(Math.abs(event.clientY - dragState.startY) < 4) return;
+                dragState.moved = true;
+                dragState.row.classList.add('is-dragging');
+                // 指针移出列表也要继续收事件（层多、列表可滚时尤其重要）
+                try{ dragState.row.setPointerCapture(event.pointerId); }catch(e){ /* 捕获失败不影响本次拖拽 */ }
+            }
+            event.preventDefault();
+            markDropIndex(dropInsertIndexAt(event.clientY, dragState.id), dragState.id);
+        });
+
+        const finishListDrag = (event) => {
+            if(!dragState || (event && event.pointerId !== dragState.pointerId)) return;
+            const state = dragState;
+            dragState = null;
+            try{ state.row.releasePointerCapture?.(state.pointerId); }catch(e){ /* 行可能已被重绘摘掉 */ }
+            state.row.classList.remove('is-dragging');
+            clearDropMarks();
+            if(!state.moved) return;
+            suppressClickUntil = Date.now() + 350;
+            const index = dropInsertIndexAt(event ? event.clientY : NaN, state.id);
+            splitLayersMoveLayerToIndex(state.id, index);
+        };
+        list.addEventListener('pointerup', finishListDrag);
+        list.addEventListener('pointercancel', finishListDrag);
+
+        /* 键盘等价入口：行上 Alt+↑/↓ 上下挪一位。
+           🚨 必须有 —— 原先靠「上移/下移」按钮才能排序，改成拖拽后如果不补这条，
+           纯键盘用户就彻底没法调图层顺序了（拖拽只有鼠标/触摸能做）。
+           入参是「去掉被拖行之后」的插入下标，所以上移 = from-1、下移 = from+1。 */
+        list.addEventListener('keydown', (event) => {
+            if(!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return;
+            const row = event.target.closest?.('.sl-item[data-split-layer]');
+            if(!row || !splitLayersState.ready) return;
+            const shown = [...list.querySelectorAll('.sl-item[data-split-layer]')];
+            const from = shown.indexOf(row);
+            const to = event.key === 'ArrowUp' ? from - 1 : from + 1;
+            if(from < 0 || to < 0 || to >= shown.length) return;
+            event.preventDefault();
+            const id = row.getAttribute('data-split-layer');
+            splitLayersMoveLayerToIndex(id, to);
+            list.querySelector(`.sl-item[data-split-layer="${id}"]`)?.focus();
+        });
+    }
+    document.addEventListener('keydown', (event) => {
+        if(event.key === 'Escape' && splitLayersState.open) closeSplitLayersEditor();
+    });
+
+    // ---- 画板上的位移 / 缩放 / 旋转 ----
+    // 手势状态放在闭包里：BindOnce 只会跑一次，不需要挂到 state 上
+    let drag = null;
+    const onDown = (event) => {
+        if(!splitLayersState.ready || splitLayersState.peaMode || event.button !== 0) return;
+        const node = event.target.closest?.('.sl-layer[data-split-node]');
+        if(!node) return;
+        const id = node.getAttribute('data-split-node');
+        // 选中会重排画板、旧 node 失效，但这次手势继续 —— 否则「先点一次选中、再点一次才拖」
+        if(id !== splitLayersState.selectedId) splitLayersSelectLayer(id);
+        const layer = splitLayersState.layers.find(l => l.id === id);
+        if(!layer) return;
+        splitLayersEnsureEditable(layer);
+        const handle = event.target.closest('[data-split-handle]');
+        const center = {x:layer.box.x + layer.box.w / 2, y:layer.box.y + layer.box.h / 2};
+        const point = splitLayersBoardPoint(event);
+        // 四边控制点用：把指针偏移投影到该层**旋转后的轴向**上，作为拉伸倍率的基准
+        const mode = handle ? handle.getAttribute('data-split-handle') : 'move';
+        const rad = (Number(layer.edit.rotate) || 0) * Math.PI / 180;
+        const axis = (mode === 'e' || mode === 'w')
+            ? {x:Math.cos(rad), y:Math.sin(rad)}
+            : {x:-Math.sin(rad), y:Math.cos(rad)};
+        drag = {
+            layer,
+            mode,
+            startX: event.clientX, startY: event.clientY,
+            center, edit:{...layer.edit},
+            startAngle: Math.atan2(point.y - center.y, point.x - center.x) * 180 / Math.PI,
+            startDist: Math.hypot(point.x - center.x, point.y - center.y) || 1,
+            axisProj: (point.x - center.x) * axis.x + (point.y - center.y) * axis.y || 1
+        };
+        event.preventDefault();
+    };
+    const onMove = (event) => {
+        if(!drag) return;
+        const e = drag.layer.edit;
+        const point = splitLayersBoardPoint(event);
+        if(drag.mode === 'move'){
+            const fit = splitLayersState.view.fit || 1;
+            e.tx = drag.edit.tx + (event.clientX - drag.startX) / fit;
+            e.ty = drag.edit.ty + (event.clientY - drag.startY) / fit;
+        }else if(drag.mode === 'rot'){
+            const angle = Math.atan2(point.y - drag.center.y, point.x - drag.center.x) * 180 / Math.PI;
+            e.rotate = Math.round((drag.edit.rotate + (angle - drag.startAngle)) * 10) / 10;
+        }else if(drag.mode === 'n' || drag.mode === 'e' || drag.mode === 's' || drag.mode === 'w'){
+            // 四边控制点 = **单轴拉伸**（老板 2026-10-10 要的「变形工具」）。
+            // 🚨 必须把指针偏移投影到**该层旋转后的轴向**上再取比值：图层本身可能已经转过角度，
+            //    直接用画板 x/y 算，转过的层拖起来会往斜方向跑。
+            //    投影在「按下瞬间」的轴向基准上算（drag.axis），拖动中改倍率不会让轴向跟着漂。
+            const rad = (Number(drag.edit.rotate) || 0) * Math.PI / 180;
+            const axis = drag.mode === 'e' || drag.mode === 'w'
+                ? {x:Math.cos(rad), y:Math.sin(rad)}
+                : {x:-Math.sin(rad), y:Math.cos(rad)};
+            const proj = (p) => (p.x - drag.center.x) * axis.x + (p.y - drag.center.y) * axis.y;
+            const base = drag.axisProj || 1;
+            const now = proj(point);
+            const k = Math.max(0.05, Math.min(20, Math.abs(now) / Math.abs(base)));
+            if(drag.mode === 'e' || drag.mode === 'w') e.sx = Math.max(0.05, Math.min(20, drag.edit.sx * k));
+            else e.sy = Math.max(0.05, Math.min(20, drag.edit.sy * k));
+        }else{
+            // 角控制点按「到中心的距离比」缩放：直观，且不用管旋转后的局部轴向
+            const dist = Math.hypot(point.x - drag.center.x, point.y - drag.center.y);
+            e.scale = Math.max(0.05, Math.min(20, drag.edit.scale * (dist / drag.startDist)));
+        }
+        splitLayersApplyLiveTransform(drag.layer);
+    };
+    const onUp = () => { drag = null; };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+
+    const opacity = splitLayersEl('splitLayersOpacity');
+    if(opacity) opacity.addEventListener('input', () => splitLayersSetOpacity(opacity.value));
+
+    // 文字层编辑栏（只在选中文字层时可见，见 splitLayersRenderTextTools）
+    const ti = splitLayersEl('splitLayersTextInput');
+    if(ti) ti.addEventListener('input', () => splitLayersEditText({text:ti.value}));
+    const ts = splitLayersEl('splitLayersTextSize');
+    if(ts) ts.addEventListener('input', () => splitLayersEditText(
+        {font_size:Math.max(6, Math.min(400, Math.round(Number(ts.value) || 24)))}));
+    const tc = splitLayersEl('splitLayersTextColor');
+    if(tc) tc.addEventListener('input', () => splitLayersEditText({color:tc.value}));
+    const tb = splitLayersEl('splitLayersTextBold');
+    if(tb) tb.addEventListener('click', () => {
+        const l = splitLayersSelected();
+        if(l) splitLayersEditText({font_weight:l.font_weight === 'bold' ? '400' : 'bold'});
+    });
+    const ta = splitLayersEl('splitLayersTextAlign');
+    if(ta) ta.addEventListener('click', () => {
+        const l = splitLayersSelected();
+        if(!l) return;
+        const order = ['left', 'center', 'right'];
+        splitLayersEditText({align:order[(order.indexOf(splitLayersTextAlignOf(l)) + 1) % 3]});
+    });
+    // 像素态 ↔ 编辑态（默认像素：叠加恒等于原图；切编辑态才能改字，但会与原图有差异）
+    const tm = splitLayersEl('splitLayersTextMode');
+    if(tm) tm.addEventListener('click', () => splitLayersToggleTextMode());
+
+    // 容器尺寸变了要重算 fit，否则窗口一缩画板就溢出
+    let resizeTimer = null;
+    window.addEventListener('resize', () => {
+        if(!splitLayersState.open || splitLayersState.peaMode) return;
+        if(resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+            resizeTimer = null;
+            if(splitLayersState.open && !splitLayersState.peaMode) splitLayersRenderBoard();
+        }, 120);
+    });
+}
+
+function openSplitLayersEditor(nodeId, index){
+    const node = nodes.find(n => n.id === nodeId);
+    if(!node) return;
+    const item = imageForDisplay(node.images?.[index]);
+    if(!item?.url || mediaKindForItem(item) !== 'image'){
+        toast(tr('smart.splitLayersNeedImage'));
+        return;
+    }
+    const modal = splitLayersEl('splitLayersModal');
+    if(!modal) return;
+    if(typeof Photopea === 'undefined'){
+        toast(tr('smart.splitLayersNoPhotopea'));
+        return;
+    }
+    splitLayersState.open = true;
+    splitLayersState.nodeId = nodeId;
+    splitLayersState.imageIndex = index;
+    splitLayersState.source = item.url;
+    splitLayersState.layers = [];
+    splitLayersState.selectedId = '';
+    splitLayersState.selectedCanvasIds = [];
+    splitLayersState.ready = false;
+    splitLayersState.taskId = '';
+    splitLayersState.canvas = {width:0, height:0};
+    splitLayersState.peaMode = false;
+    splitLayersState.view = {fit:1};
+    splitLayersState.imageCache = {};
+    if(splitLayersState.pollTimer){ clearTimeout(splitLayersState.pollTimer); splitLayersState.pollTimer = null; }
+    splitLayersBindOnce();
+    modal.classList.add('open');
+    const stage = splitLayersEl('splitLayersStage');
+    if(stage) stage.classList.remove('pea');
+    const sub = splitLayersEl('splitLayersSubtitle');
+    if(sub) sub.textContent = item.name || node.title || '';
+    splitLayersRenderList();
+    splitLayersRenderBoard();
+    refreshIcons();
+    // 🚨 有留存记录就直接回到上次结果，**不再弹预检面板** ——
+    //    老板 2026-10-10：手误关掉弹窗后重开只能从头重拆一次。
+    //    想重拆点标题栏的「重新拆分」（走 splitLayersOpenPrep，那条路径没动）。
+    const record = splitLayersReadRecord(nodeId, index, item.url);
+    if(record){
+        splitLayersRestoreRecord(record);
+        return;
+    }
+    // 先让用户定层数再开跑：auto 模式一次要打几十次上游模型，用错层数等于白花钱
+    splitLayersOpenPrep();
+}
+
+function closeSplitLayersEditor(){
+    // 🚨 必须在清空 state **之前**留存 —— 下面几行就把 layers / ready 全清了。
+    //    这里存的是「用户关窗那一刻」的最终样子（含关窗前的排序 / 显隐 / 变换 / 文字改动）。
+    splitLayersSaveRecord();
+    const modal = splitLayersEl('splitLayersModal');
+    if(modal) modal.classList.remove('open');
+    splitLayersState.open = false;
+    if(splitLayersState.pollTimer){
+        clearTimeout(splitLayersState.pollTimer);
+        splitLayersState.pollTimer = null;
+    }
+    // 释放 Photopea iframe：它是外部站点，长期驻留会白占一个文档与若干 Worker
+    const host = splitLayersEl('splitLayersPea');
+    if(host) host.innerHTML = '';
+    const overlay = splitLayersEl('splitLayersOverlay');
+    if(overlay){
+        overlay.classList.remove('show');
+        overlay.classList.remove('prep');
+        overlay.classList.remove('fail');
+    }
+    const stage = splitLayersEl('splitLayersStage');
+    if(stage) stage.classList.remove('pea');
+    const board = splitLayersEl('splitLayersBoard');
+    if(board) board.innerHTML = '';
+    splitLayersState.pea = null;
+    splitLayersState.peaMode = false;
+    splitLayersState.ready = false;
+    splitLayersState.taskId = '';
+    splitLayersState.layers = [];
+    splitLayersState.selectedId = '';
+    splitLayersState.selectedCanvasIds = [];
+    splitLayersState.recordMeta = null;
+    splitLayersState.imageCache = {};
+}
+
+// 失败卡片：不只是「失败了」，而是「卡在哪一步 + 为什么 + 下一步怎么办」。
+// detail 来自后端 task.error_detail；老任务没有这个字段时退化成纯文本提示。
+function splitLayersFail(message, detail){
+    splitLayersSetProgress(false);
+    splitLayersSetStatus(tr('smart.splitLayersFailed'), '');
+    splitLayersSetBusy(false);
+    const overlay = splitLayersEl('splitLayersOverlay');
+    const info = detail && typeof detail === 'object' ? detail : null;
+    if(overlay && info){
+        const set = (id, text) => {
+            const el = splitLayersEl(id);
+            if(el) el.textContent = text || '';
+        };
+        set('splitLayersFailPhase', info.phase_label || info.phase || tr('smart.splitLayersUnknownPhase'));
+        set('splitLayersFailMsg', info.message || message || tr('smart.splitLayersFailed'));
+        set('splitLayersFailAdvice', info.advice || tr('smart.splitLayersDefaultAdvice'));
+        const triedEl = splitLayersEl('splitLayersFailTried');
+        if(triedEl){
+            const tried = Array.isArray(info.tried) ? info.tried : [];
+            triedEl.textContent = tried.length
+                ? `${tr('smart.splitLayersTried')}：${tried.join('、')}`
+                : '';
+            triedEl.style.display = tried.length ? '' : 'none';
+        }
+        overlay.classList.add('show');
+        overlay.classList.remove('prep');
+        overlay.classList.add('fail');
+        refreshIcons();
+        toast(message || tr('smart.splitLayersFailed'));
+        return;
+    }
+    toast(message || tr('smart.splitLayersFailed'));
+    // 没有阶段信息（例如前端自己抛的错）时退回预检面板，让用户直接改层数/换模型重跑
+    splitLayersShowPrepOverlay();
+}
+
+async function splitLayersCreateTask(){
+    const pick = splitLayersPickProviders();
+    if(!pick.provider_id && !pick.image_provider_id){
+        splitLayersFail(tr('smart.splitLayersNoProvider'));
+        return;
+    }
+    try{
+        const res = await fetch('/api/split-layers-tasks', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+                image_url: splitLayersState.source,
+                provider_id: pick.provider_id,
+                model: pick.model,
+                image_provider_id: pick.image_provider_id,
+                image_model: pick.image_model,
+                // 🚨 mode:'model'（2026-10-10 老板定）= **生图路线**，就是他给的原始方法：
+                //   把**整幅原图**交给图像模型 -> 每个元素单独生成一张**全画幅透明 PNG**
+                //   -> 用模型生成的像素。元素最完整干净。
+                //   为什么从 'auto' 换回来：'auto' 是「像素优先」—— 模型只出轮廓、像素从原图裁，
+                //   叠加恒等于原图，但**抠图范围被硬裁在「LLM bbox + 6% 外扩」那个矩形里**，
+                //   bbox 一旦比主体小（实测只盖到腰），裙摆/手臂就被矩形边切平 ——
+                //   这就是「抠图仍旧残缺不完整」。裁剪矩形之外的像素任何算法都拿不到，
+                //   只有让模型看整图才能根治。
+                //   代价：叠加不再等于原图（实测 mean 3.915/255）—— 这是刻意取舍，不是 bug；
+                //   状态栏会按「生图模式」措辞说明（见 splitLayersFidelityText）。
+                //   旧值 'auto'（像素优先）后端仍支持，保留以便回退。
+                mode:'model',
+                // 已废弃：像素优先后不再有「抹除文字」阶段（文字本身就是从原图裁出的像素层，
+                // 背景又是「原图减去各层覆盖范围」，文字自然不在背景里）。后端保留该字段但不读。
+                erase_text:false,
+                // 背景层做成「纯背景」：把各层的覆盖范围从原图上挖掉再补上。
+                // 🚨 用不用**图像模型**由后端按 LLM 的 background.need_model 决定（2026-10-10 老板
+                // 口径：「背景层允许 LLM 决策生成的，可调用模型」）—— 大面积连续背景走本地补
+                // （零费用零等待），前景背后压着复杂纹理才调一次模型。前端不需要开关。
+                pure_background:true,
+                // 用户选的层数（最低 2）：后端据此收紧提示词，元素层数会大幅减少
+                target_layers: splitLayersState.targetLayers || SPLIT_LAYERS_MIN_LAYERS
+            })
+        });
+        if(!res.ok){
+            let detail = `HTTP ${res.status}`;
+            try{ const body = await res.json(); detail = body.detail || detail; }catch(e){}
+            throw new Error(detail);
+        }
+        const data = await res.json();
+        splitLayersState.taskId = data.task_id || '';
+        splitLayersState.startedAt = Date.now();
+        splitLayersPoll();
+    }catch(err){
+        splitLayersFail(err?.message || String(err));
+    }
+}
+
+async function splitLayersPoll(){
+    if(!splitLayersState.open || !splitLayersState.taskId) return;
+    if(Date.now() - splitLayersState.startedAt > SPLIT_LAYERS_TIMEOUT_MS){
+        splitLayersFail(tr('smart.splitLayersTimeout'));
+        return;
+    }
+    try{
+        const res = await fetch(`/api/split-layers-tasks/${encodeURIComponent(splitLayersState.taskId)}`);
+        if(!res.ok) throw new Error(`HTTP ${res.status}`);
+        const task = await res.json();
+        const progress = task.progress || {};
+        const total = Math.max(1, Number(progress.total) || 1);
+        const current = Number(progress.current) || 0;
+        // 阶段与后端 run_split_layers_task 一一对应。🚨 没有 'erase' 了（像素优先后
+        // 不再有「抹除文字」阶段），新增 'background'（原图挖洞 + 本地补全）。
+        let ratio = 0.05;
+        if(progress.phase === 'analyze') ratio = 0.05;
+        else if(progress.phase === 'refine') ratio = 0.10 + 0.15 * (current / total);
+        else if(progress.phase === 'extract') ratio = 0.25 + 0.67 * (current / total);
+        else if(progress.phase === 'background') ratio = 0.92;
+        else if(progress.phase === 'done') ratio = 1;
+        splitLayersSetProgress(true, progress.message || tr('smart.splitLayersWorking'), ratio);
+        splitLayersSetStatus(progress.message || '', '');
+        if(task.status === 'succeeded'){
+            await splitLayersApplyResult(task.result || {});
+            return;
+        }
+        if(task.status === 'failed'){
+            splitLayersFail(task.error || tr('smart.splitLayersFailed'), task.error_detail);
+            return;
+        }
+    }catch(err){
+        // 单次网络抖动不致命，继续轮询；真正的失败由后端 status 给出
+        console.warn('[split-layers] poll error', err);
+    }
+    splitLayersState.pollTimer = setTimeout(splitLayersPoll, SPLIT_LAYERS_POLL_MS);
+}
+
+async function splitLayersApplyResult(result){
+    splitLayersState.canvas = {
+        width: Number(result?.canvas?.width) || 0,
+        height: Number(result?.canvas?.height) || 0
+    };
+    const layers = Array.isArray(result?.layers) ? result.layers.slice() : [];
+    layers.sort((a, b) => (Number(a.z) || 0) - (Number(b.z) || 0));
+    splitLayersState.layers = layers;
+    splitLayersState.selectedId = '';
+    splitLayersRenderList();
+    if(!layers.length){
+        splitLayersFail(tr('smart.splitLayersEmpty'));
+        return;
+    }
+    const stats = result?.stats || {};
+    // 不再往 Photopea 里灌图层：默认视图就是自研画板，渲染是同步的，没有等待外部站点的环节
+    splitLayersState.ready = true;
+    splitLayersRenderBoard();
+    splitLayersSetProgress(false);
+    splitLayersSetBusy(false);
+    // 状态栏一次写到位：层数构成 + 还原度。原先这里写了两遍 SetStatus，第二遍直接把
+    // 层数统计覆盖掉了，用户根本看不到；现在合成一条 hint。
+    const hint = [
+        splitLayersFidelityText(result?.reconstruction, result?.stats?.redraw),
+        result?.bg_pure ? tr('smart.splitLayersBgPure') : tr('smart.splitLayersErased')
+    ].filter(Boolean).join(' · ');
+    splitLayersSetStatus(
+        `${tr('smart.splitLayersDone')} · ${layers.length} (${tr('smart.splitLayersKindBase')} ${stats.base || 0} / ${tr('smart.splitLayersKindModel')} ${stats.model || 0} / ${tr('smart.splitLayersKindLocal')} ${stats.local || 0})`,
+        hint || tr('smart.splitLayersReadyHint'));
+    // 拆完立刻留存一份：即使马上误关弹窗，重开也能回到这个结果
+    splitLayersState.recordMeta = {
+        reconstruction: result?.reconstruction || null,
+        redraw: result?.stats?.redraw || null,
+        bg_pure: !!result?.bg_pure
+    };
+    splitLayersSaveRecord();
+}
+
+/* ---------- 拆分记录留存 ----------
+   场景（老板 2026-10-10）：手误关掉分层弹窗，再打开只能从头重拆一次。
+   做法：把这次拆出来的完整结果按 `节点id::图片下标` 存进 localStorage，
+   再次打开同一个节点的同一张图时直接恢复 —— 含用户后来在画板上做的排序 / 显隐 / 变换 / 文字改动。
+   🚨 恢复是**自动**的：打开即回到上次结果，不再弹预检面板。
+      想重拆点标题栏的「重新拆分」，那条路径一点没变。
+   🚨 用 `rec.source !== 当前图 url` 做失效判断：节点上换了图时下标可能指到另一张，
+      光比下标会把别的图的结果贴过来。 */
+function splitLayersRecordKey(nodeId, index){
+    return `${nodeId}::${Number(index) || 0}`;
+}
+
+function splitLayersLoadRecords(){
+    try{
+        const raw = localStorage.getItem(SPLIT_LAYERS_RECORD_KEY);
+        const obj = raw ? JSON.parse(raw) : null;
+        return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {};
+    }catch(e){
+        // 隐私模式 / 存储被禁用 / 旧版本写坏了：当作没有记录，不能让它影响主流程
+        return {};
+    }
+}
+
+function splitLayersReadRecord(nodeId, index, source){
+    if(!nodeId) return null;
+    const rec = splitLayersLoadRecords()[splitLayersRecordKey(nodeId, index)];
+    if(!rec || rec.v !== SPLIT_LAYERS_RECORD_VERSION) return null;
+    if(source && rec.source && rec.source !== source) return null;
+    if(!Array.isArray(rec.layers) || !rec.layers.length) return null;
+    return rec;
+}
+
+function splitLayersSaveRecord(){
+    const st = splitLayersState;
+    // 只有「真的拆完了」才配被留存：重拆进行中 / 失败的中间态绝不能覆盖掉上一次的好结果
+    if(!st.nodeId || !st.ready || !st.layers.length) return;
+    try{
+        const all = splitLayersLoadRecords();
+        all[splitLayersRecordKey(st.nodeId, st.imageIndex)] = {
+            v: SPLIT_LAYERS_RECORD_VERSION,
+            at: Date.now(),
+            source: st.source,
+            targetLayers: st.targetLayers,
+            canvas: st.canvas,
+            layers: st.layers,
+            selectedCanvasIds: st.selectedCanvasIds,
+            meta: st.recordMeta || null
+        };
+        const keys = Object.keys(all);
+        if(keys.length > SPLIT_LAYERS_RECORD_MAX){
+            keys.sort((a, b) => (Number(all[a]?.at) || 0) - (Number(all[b]?.at) || 0));
+            for(const k of keys.slice(0, keys.length - SPLIT_LAYERS_RECORD_MAX)) delete all[k];
+        }
+        localStorage.setItem(SPLIT_LAYERS_RECORD_KEY, JSON.stringify(all));
+    }catch(e){
+        // 配额满 / 存储被禁用：留不下就留不下，不能把已经拆好的结果搞崩
+        console.warn('[split-layers] 拆分记录没能留存', e);
+    }
+}
+
+function splitLayersRecordTime(at){
+    try{ return new Date(Number(at) || 0).toLocaleString(); }catch(e){ return ''; }
+}
+
+// 恢复上次结果：和 splitLayersApplyResult 走同一套渲染，只是数据来自本地记录
+function splitLayersRestoreRecord(rec){
+    const st = splitLayersState;
+    st.canvas = {
+        width: Number(rec?.canvas?.width) || 0,
+        height: Number(rec?.canvas?.height) || 0
+    };
+    const layers = (rec.layers || []).slice()
+        .sort((a, b) => (Number(a.z) || 0) - (Number(b.z) || 0))
+        .map(layer => splitLayersEnsureEditable(layer));
+    st.layers = layers;
+    st.selectedId = '';
+    st.selectedCanvasIds = Array.isArray(rec.selectedCanvasIds) ? rec.selectedCanvasIds.slice() : [];
+    st.targetLayers = Number(rec.targetLayers) || SPLIT_LAYERS_MIN_LAYERS;
+    // 顺手把「上次用的层数」写回预检面板的记忆值：恢复后再点「重新拆分」时，
+    // 下拉里显示的就是这次记录用的层数，而不是更早的某一次。
+    splitLayersWriteTarget(st.targetLayers);
+    st.recordMeta = rec.meta || null;
+    st.ready = true;
+    splitLayersRenderList();
+    splitLayersRenderBoard();
+    splitLayersSetProgress(false);
+    splitLayersSetBusy(false);
+    const meta = st.recordMeta || {};
+    const hint = [
+        splitLayersFidelityText(meta.reconstruction, meta.redraw),
+        meta.bg_pure ? tr('smart.splitLayersBgPure') : tr('smart.splitLayersErased')
+    ].filter(Boolean).join(' · ');
+    splitLayersSetStatus(
+        `${tr('smart.splitLayersRestored')} · ${layers.length} · ${splitLayersRecordTime(rec.at)}`,
+        hint || tr('smart.splitLayersRestoredHint'));
+}
+
+// 还原度：所有图层按 z 叠加后与原图逐像素比，后端在 result.reconstruction 里给出。
+// 像素优先（旧的 'auto' 模式）下理论值应为 0 —— 每层像素都取自原图同一坐标，贴回原处等于什么都没变。
+// 🚨 但 'model'（生图，2026-10-10 起的默认）下**必然不为 0**：元素层用的就是图像模型重新
+//    生成的像素，它本来就不等于原图（实测 mean 3.915/255）。这是老板明确选的取舍
+//    ——「元素完整干净」优先于「叠加等于原图」—— 所以按 stats.redraw 分措辞，
+//    别把预期内的偏差渲染成报错。
+function splitLayersFidelityText(rec, redraw){
+    if(!rec) return '';
+    const mean = Number(rec.mean);
+    if(!Number.isFinite(mean)) return '';
+    if(rec.ok && mean <= 0.005) return `${tr('smart.splitLayersFidelity')} ${tr('smart.splitLayersFidelityOk')}`;
+    const max = Number(rec.max) || 0;
+    const tail = redraw ? tr('smart.splitLayersFidelityExpected')
+        : `${Math.round((Number(rec.bad_ratio) || 0) * 1000) / 10}%`;
+    return `${tr('smart.splitLayersFidelity')} ${mean.toFixed(2)}/255 · max ${max} · ${tail}`;
+}
+
+// Photopea 的 iframe 地址按官方 API 的 `#<config>` 形式给出（photopea.min.js 内部就是
+// `https://www.photopea.com/#${encodeURI(config)}`）：
+//   不传 config → `https://www.photopea.com/#`
+//   传了 config → `https://www.photopea.com/#%7B...%7D`
+// 🚨 2026-10-10 老板要求「所有 photopea.com 都换成带 STRING 的形式」，实测后确认这个方向是对的，
+//    理由比「去广告」硬得多 —— **裸 `https://www.photopea.com/` 根本不是编辑器**：
+//      裸 `/`        → 16.7KB 的营销落地页（0 个 iframe，无工具栏），用户看不到任何图层
+//      `/#`          → 240KB，编辑器正常启动
+//      `/#<config>`  → 245KB，编辑器正常启动
+//    所以本文件里**任何** createEmbed 调用都必须带 config，连兜底也不许退到「不带」。
+//    实测脚本：output/spike/probe_photopea_boot.py。
+// 这里把界面语言设成中文、关掉「空文档时的介绍面板」，把无关区域压到最小。
+// 🚨 广告是 Photopea 自己投放的，**嵌入方关不掉**：官方 config 文档里 `environment` 的全部
+//    可选项（theme/lang/vmode/intro/eparams/customIO/localsave/autosave/showtools/menus/
+//    panels/phrases/topt/tmnu/icons/plugins）里没有任何广告开关；官方 FAQ 也明说去广告要靠
+//    Distributor（白标）或 Premium 账号。所以本项目默认仍用自研画板，Photopea 只在
+//    「精细编辑」和导出时按需打开。
+// 这一份 environment 是**唯一来源**：后台内嵌编辑器（createEmbed）和新标签页的
+// `#STRING` 都从它构造，保证两边配置一模一样。
+const SPLIT_LAYERS_PEA_ENV = {lang:'zh', intro:false, vmode:0};
+const SPLIT_LAYERS_PEA_CONFIG = JSON.stringify({environment: SPLIT_LAYERS_PEA_ENV});
+// ⚠️ 兜底用的**精简**配置：万一上面那串被 Photopea 判非法，退到这份只留最不可能出问题的键，
+//    别让一个配置问题把编辑器整个拖死。
+// 🚨 兜底**不是**「不传 config」—— 那会退到落地页（见上面的实测），等于编辑器直接没了。
+const SPLIT_LAYERS_PEA_FALLBACK_CONFIG = JSON.stringify({
+    environment: {intro:false}
+});
+
+async function splitLayersEmbedPea(host){
+    const guard = () => new Promise((_, reject) => setTimeout(
+        () => reject(new Error(tr('smart.splitLayersEditorTimeout'))), 60000));
+    try{
+        return await Promise.race([Photopea.createEmbed(host, SPLIT_LAYERS_PEA_CONFIG), guard()]);
+    }catch(err){
+        console.warn('[split-layers] Photopea 带配置加载失败，退回精简配置重试', err);
+        host.innerHTML = '';
+        return await Promise.race([Photopea.createEmbed(host, SPLIT_LAYERS_PEA_FALLBACK_CONFIG), guard()]);
+    }
+}
+
+async function splitLayersEnsurePea(){
+    if(splitLayersState.pea) return splitLayersState.pea;
+    const host = splitLayersEl('splitLayersPea');
+    if(!host) throw new Error(tr('smart.splitLayersNoStage'));
+    if(typeof Photopea === 'undefined') throw new Error(tr('smart.splitLayersNoPhotopea'));
+    host.innerHTML = '';
+    const pea = await splitLayersEmbedPea(host);
+    splitLayersState.pea = pea;
+    return pea;
+}
+
+async function splitLayersUrlToDataUri(url){
+    const res = await fetch(url);
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    return await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(reader.error || new Error('read failed'));
+        reader.readAsDataURL(blob);
+    });
+}
+
+// 精细编辑用的图层图：画板上动过就先把变换烘进去，让 Photopea 里看到的
+// 和画板上一模一样；没动过就直接用原图，省一次重编码。
+// 🚨🚨 2026-10-12 老板截图报「PS 中文字层的颜色/位置/字体粗细没还原」——根因就在这里：
+//    **编辑态文字层绝不能走 identity 直通**。它的 `layer.url` 是后端从原图裁出来的
+//    **旧像素**（只为「还原像素」按钮准备），而画板上渲染的 <span> 是拿后端估出的
+//    字体/斜体/字距/颜色**重画**的 —— 两者根本不是同一张图。原来
+//    `splitLayersIsIdentity(layer) && layer.url` 一判真就直接吐旧像素 URL，
+//    于是 Photopea 里永远是原图那版字（粗细/颜色/位置全错），老板看到的就是这个。
+//
+//    允许直通的只有两类「渲染源就是这张 url」的层：
+//      ① 普通图片层（element 等）；
+//      ② **像素态**文字层 —— 它渲染的就是 `layer.url` 那张原图（见 splitLayersImageHtml）。
+//    编辑态文字层（默认态）一律走下面的合成分支。
+async function splitLayersLayerDataUri(layer){
+    const rendersOwnUrl = layer.kind !== 'text' || splitLayersIsPixelText(layer);
+    if(rendersOwnUrl && splitLayersIsIdentity(layer) && layer.url){
+        return await splitLayersUrlToDataUri(layer.url);
+    }
+    const {cv, ctx, cw, ch} = splitLayersNewCanvas();
+    await splitLayersCompositeTo(ctx, cw, ch, layer.id);
+    return cv.toDataURL('image/png');
+}
+
+async function splitLayersInjectImage(pea, layer){
+    const dataUri = await splitLayersLayerDataUri(layer);
+    let count = 'done';
+    while(count === 'done'){
+        count = (await pea.runScript('app.echoToOE(app.activeDocument.layers.length)'))[0];
+    }
+    count = parseInt(count, 10);
+    await pea.runScript(`app.open(${JSON.stringify(dataUri)}, null, true);`);
+    for(let i = 0; i < 300; i += 1){
+        const n = parseInt((await pea.runScript('app.echoToOE(app.activeDocument.layers.length)'))[0], 10);
+        if(n === count + 1) break;
+        await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    // 统一改名，后面才能按名字稳定地显隐 / 选中
+    await pea.runScript(
+        `(function(){ try { app.activeDocument.layers[0].name = ${JSON.stringify(splitLayersLayerName(layer))}; } catch (e) {} })();`
+    );
+}
+
+/* 🚨🚨 2026-10-12：这里曾经有一整套「在 Photopea 里建真 TEXT 文字层」的代码
+   （CSS 字体栈→PS 字体名映射表 splitLayersPsFont / splitLayersPeaRun / splitLayersInjectText），
+   已**整段删除**，文字层统一走 splitLayersInjectImage（像素注入）。原因（老板三次报「位置不对」）：
+     ① 只要读文字层的 layer.bounds，Photopea 主线程就卡死，连 ping 都不回
+        —— 线上表现为「正在重建图层 3/19」永远停住；
+     ② textItem.position 只是「第一行基线起点」，与画板「墨迹盒左上角贴盒」差一截；
+     ③ 编辑态的 rotate/scale/sx/sy 压根没搬进 Photopea。
+   取证：output/spike/probe_pea_attr_bisect.py（逐属性 ping，全通）、
+        output/spike/probe_pea_text_pos3.py（建完文字层后第一个 bounds 读取就 __TIMEOUT__）。
+   像素注入复用 splitLayersLayerDataUri() → splitLayersCompositeTo()，与画板同一套口径，
+   位置/缩放/旋转/不透明度全对；代价是 Photopea 里不能改字（改字请回画板）。
+   ⚠️ 别手贱把 TEXT 层加回来 —— 除非先解决 bounds 卡死，否则又是同样的战报。 */
+
+async function splitLayersBuildDocument(){
+    const width = Number(splitLayersState.canvas.width) || 0;
+    const height = Number(splitLayersState.canvas.height) || 0;
+    if(!(width > 0 && height > 0)) throw new Error(tr('smart.splitLayersBadCanvas'));
+    const pea = await splitLayersEnsurePea();
+    await pea.runScript(
+        `app.documents.add(${width}, ${height}, 72, ${JSON.stringify('Split Layers')}, NewDocumentMode.RGB, DocumentFill.TRANSPARENT);`
+    );
+    // doc.layers[0] 是最上层，后加的在上 —— 按 z 从小到大注入，堆放顺序天然与原图一致
+    const ordered = splitLayersState.layers.slice()
+        .sort((a, b) => (Number(a.z) || 0) - (Number(b.z) || 0));
+    let done = 0;
+    for(const layer of ordered){
+        done += 1;
+        splitLayersSetProgress(true,
+            `${tr('smart.splitLayersInjecting')} ${done}/${ordered.length} · ${layer.name || ''}`, 0.97);
+        // 🚨 文字层（像素态 / 编辑态）**一律走图片注入**，不许在 Photopea 里建成 TEXT 层。
+        //    2026-10-12 实测（output/spike/probe_pea_attr_bisect.py、probe_pea_text_pos3.py）：
+        //    ① 一读文字层的 `layer.bounds`，Photopea 主线程就卡死（连 ping 都不回）——
+        //       线上就是「正在重建图层 3/19」永远停住；
+        //    ② `textItem.position` 只是「第一行基线起点」，和画板「墨迹盒左上角贴盒」的口径
+        //       差一截；编辑态的 rotate/scale/sx/sy 当时也完全没搬进去。按 TEXT 层思路改过
+        //       三次仍不达标，2026-10-12 彻底放弃：真 TEXT 层的代码已删除（见下方注释）。
+        //    图片注入复用 splitLayersLayerDataUri()：它按 splitLayersCompositeTo() 的同一套
+        //    口径（墨迹盒拟合 + 编辑态变换）把该层合成成一张**整幅画布**的透明 PNG，
+        //    画板上什么样，Photopea 里就什么样 —— 位置、缩放、旋转、透明度全对。
+        if(layer.kind === 'text' && layer.text){
+            await splitLayersInjectImage(pea, layer);
+        }else if(layer.url){
+            await splitLayersInjectImage(pea, layer);
+        }
+    }
+}
+
+// 文字层的「参数摘要」：把该层的关键排版参数摊开，不用选中就能核对。
+// 🚨 2026-10-12 老板反馈「拆分图层里的参数：颜色、位置、字体粗细…」——他要的是
+//    在图层列表就能看到这些值，而不是每选一层去右侧工具栏逐项确认。
+//    参数本身早就有了（后端估出来写进 layer，见 splitLayersApplyResult），
+//    这里只是把它们渲染出来。⚠️ 别在这个函数里改任何 layer 字段 —— 它只读。
+//
+// ⚠️ 实测：侧栏 268px 里，行内 grip/eye/thumb/dot 占掉约 100px，meta 只剩 ~150px，
+//    一行塞不下 7 个参数（会被省略号吃掉，等于没做）。所以**刻意分两行**：
+//      第一行 = 颜色 + 字号 + 粗细（最常核对的）；
+//      第二行 = 字距 + 旋转 + 位置（次要的）。
+//    行高是内容撑的（拖拽落点用 getBoundingClientRect 实测，不吃硬编码行高），
+//    多 11px 不影响手感。完整值（含字体名/宽高）另挂 title。
+function splitLayersTextParamsHtml(layer){
+    const size = Math.round(Math.max(6, Number(layer.font_size) || 24));
+    const bb = Array.isArray(layer.bbox) && layer.bbox.length >= 4 ? layer.bbox : null;
+    const color = /^#[0-9a-f]{6}$/i.test(String(layer.color || '')) ? String(layer.color) : '';
+    // 第 1 行：颜色 / 字号 / 粗细（斜体）
+    const line1 = [];
+    if(color) line1.push(`<i class="sl-p-color" style="background:${escapeAttr(color)}"></i>${escapeHtml(color.toUpperCase())}`);
+    line1.push(`${size}px`);
+    line1.push(layer.font_weight === 'bold' ? 'B' : 'R');
+    if(layer.italic) line1.push('斜');
+    // 第 2 行：字距 / 旋转 / 位置（都只在有意义时才出现）
+    const line2 = [];
+    const track = Number(layer.letter_spacing);
+    if(Number.isFinite(track) && Math.round(track) !== 0) {
+        line2.push(`${Math.round(track) >= 0 ? '+' : ''}${Math.round(track)}`);
+    }
+    const rot = Number(layer.rotation);
+    if(Number.isFinite(rot) && Math.round(rot) !== 0) line2.push(`${Math.round(rot)}°`);
+    if(bb) line2.push(`(${Math.round(bb[0])},${Math.round(bb[1])})`);
+    const tip = splitLayersTextParamsTip(layer, size, bb, color);
+    const html = `<span class="sl-params" title="${escapeAttr(tip)}">${line1.join('<em>·</em>')}</span>`;
+    return line2.length
+        ? html + `<span class="sl-params" title="${escapeAttr(tip)}">${line2.join('<em>·</em>')}</span>`
+        : html;
+}
+
+
+// 参数摘要的完整文案（挂 title）：鼠标停一下能看到「字号 32px · 粗体 · 斜体 · 字距 +4.2 · 旋转 -12° · 位置 (120,60) 300×44」
+function splitLayersTextParamsTip(layer, size, bb, color){
+    const bits = [];
+    if(color) bits.push(`${tr('smart.splitLayersParamColor')} ${color.toUpperCase()}`);
+    bits.push(`${tr('smart.splitLayersParamSize')} ${size}px`);
+    bits.push(layer.font_weight === 'bold' ? tr('smart.splitLayersParamBold') : tr('smart.splitLayersParamRegular'));
+    if(layer.italic) bits.push(tr('smart.splitLayersParamItalic'));
+    if(layer.font_family) bits.push(String(layer.font_family).split(',')[0].trim());
+    const track = Number(layer.letter_spacing);
+    if(Number.isFinite(track) && track) bits.push(`${tr('smart.splitLayersParamTrack')} ${track > 0 ? '+' : ''}${Math.round(track * 10) / 10}`);
+    const rot = Number(layer.rotation);
+    if(Number.isFinite(rot) && rot) bits.push(`${tr('smart.splitLayersParamRot')} ${Math.round(rot)}°`);
+    if(bb) bits.push(`${tr('smart.splitLayersParamPos')} (${Math.round(bb[0])},${Math.round(bb[1])}) ${Math.round(bb[2])}×${Math.round(bb[3])}`);
+    return bits.join(' · ');
+}
+
+function splitLayersRenderList(){
+    const list = splitLayersEl('splitLayersList');
+    const countEl = splitLayersEl('splitLayersCount');
+    if(countEl) countEl.textContent = String(splitLayersState.layers.length);
+    if(!list) return;
+    if(!splitLayersState.layers.length){
+        list.innerHTML = `<div class="sl-empty">${escapeHtml(tr('smart.splitLayersEmptyHint'))}</div>`;
+        return;
+    }
+    // 列表按「上层在上」展示，与后端 z 的方向相反，符合图层面板的直觉
+    const shown = splitLayersState.layers.slice()
+        .sort((a, b) => (Number(b.z) || 0) - (Number(a.z) || 0));
+    list.innerHTML = shown.map(layer => {
+        const off = layer.hidden ? ' off' : '';
+        const active = layer.id === splitLayersState.selectedId ? ' active' : '';
+        const canvasChecked = splitLayersState.selectedCanvasIds.includes(layer.id);
+        // 🚨 文字层缩略图仍然用 T 徽章，不用真图：像素文字层是一张全画布尺寸的透明 PNG，
+        //    缩到 40px 后只剩一个几乎看不见的淡淡痕迹，反而不如徽章一眼认出「这是文字层」。
+        //    「它长什么样」由画板负责，「它在画面哪儿」由下面的 sl-spot 定位框负责。
+        const thumb = layer.kind === 'text'
+            ? '<span class="sl-text-badge">T</span>'
+            : (layer.url ? `<img src="${escapeAttr(layer.url)}" alt="">` : '');
+        const kindText = layer.kind === 'text'
+            ? `${tr('smart.splitLayersKindText')} · ${splitLayersIsPixelText(layer)
+                ? tr('smart.splitLayersTextPixel') : tr('smart.splitLayersTextEditMode')}`
+                + ` · ${escapeHtml(String(layer.text || '').slice(0, 16))}`
+            : (layer.method === 'model' ? tr('smart.splitLayersKindModel')
+                : (layer.method === 'base' ? tr('smart.splitLayersKindBase') : tr('smart.splitLayersKindLocal')));
+        // 文字层光看名字找不到在画面哪儿 —— 缩略图给一个「文字块在原图里的位置」小示意图
+        const spot = layer.kind === 'text' ? splitLayersSpotHtml(layer) : '';
+        return `<div class="sl-item${off}${active}" data-split-layer="${escapeAttr(layer.id)}" role="button" tabindex="0" title="${escapeAttr(layer.name || '')}">
+            <span class="sl-grip" aria-hidden="true"><i data-lucide="grip-vertical"></i></span>
+            <button type="button" class="sl-eye" data-split-eye="${escapeAttr(layer.id)}" title="${escapeAttr(tr('smart.splitLayersToggle'))}">
+                <i data-lucide="${layer.hidden ? 'eye-off' : 'eye'}"></i>
+            </button>
+            <span class="sl-thumb">${thumb}${spot}</span>
+            <span class="sl-meta">
+                <span class="sl-name">${escapeHtml(layer.name || '')}</span>
+                <span class="sl-kind">${kindText}</span>${layer.kind === 'text' ? splitLayersTextParamsHtml(layer) : ''}
+            </span>
+            <label class="sl-canvas-pick" data-split-canvas-pick="${escapeAttr(layer.id)}" title="${escapeAttr(tr('smart.splitLayersSelectForCanvas'))}">
+                <input type="checkbox" class="sl-canvas-check" data-split-canvas-check="${escapeAttr(layer.id)}"${canvasChecked ? ' checked' : ''} aria-label="${escapeAttr(tr('smart.splitLayersSelectForCanvas'))}">
+                <span class="sl-canvas-dot" aria-hidden="true"></span>
+            </label>
+        </div>`;
+    }).join('');
+    refreshIcons();
+    splitLayersSyncCanvasAction();
+}
+
+// 在缩略图上叠一个「该层在整幅画面里的位置」小方框，文字层尤其需要
+function splitLayersSpotHtml(layer){
+    const cw = Math.max(1, Number(splitLayersState.canvas.width) || 1);
+    const ch = Math.max(1, Number(splitLayersState.canvas.height) || 1);
+    // 🚨 用 bbox 而不是 layer.box：像素态下 box 是**整幅画布**（为了旋转支点正确），
+    //    拿它画定位框就变成「整幅都是这一层」，定位作用直接没了。
+    const bb = Array.isArray(layer.bbox) && layer.bbox.length >= 4 ? layer.bbox : null;
+    const box = bb
+        ? {x:Number(bb[0]) || 0, y:Number(bb[1]) || 0,
+           w:Math.max(1, Number(bb[2]) || 1), h:Math.max(1, Number(bb[3]) || 1)}
+        : (layer.box || {x:0, y:0, w:cw, h:ch});
+    const left = Math.max(0, Math.min(100, (box.x / cw) * 100));
+    const top = Math.max(0, Math.min(100, (box.y / ch) * 100));
+    const width = Math.max(6, Math.min(100 - left, (box.w / cw) * 100));
+    const height = Math.max(6, Math.min(100 - top, (box.h / ch) * 100));
+    return `<i class="sl-spot" style="left:${left}%;top:${top}%;width:${width}%;height:${height}%"></i>`;
+}
+
+async function splitLayersToggleVisible(layerId){
+    const layer = splitLayersState.layers.find(l => l.id === layerId);
+    if(!layer) return;
+    layer.hidden = !layer.hidden;
+    splitLayersRenderList();
+    splitLayersRenderBoard();
+    if(!splitLayersState.peaMode || !splitLayersState.pea) return;
+    try{
+        await splitLayersState.pea.runScript(
+            `(function(){ try { var __l = app.activeDocument.layers.getByName(${JSON.stringify(splitLayersLayerName(layer))}); if(__l) __l.visible = ${layer.hidden ? 'false' : 'true'}; } catch (e) {} })();`
+        );
+    }catch(err){
+        console.warn('[split-layers] toggle visible failed', err);
+    }
+}
+
+function splitLayersToggleCanvasSelection(layerId, checked){
+    const ids = new Set(splitLayersState.selectedCanvasIds);
+    if(checked) ids.add(layerId); else ids.delete(layerId);
+    splitLayersState.selectedCanvasIds = [...ids];
+    splitLayersRenderList();
+    const count = splitLayersState.selectedCanvasIds.length;
+    splitLayersSetStatus(count ? tr('smart.splitLayersSelectedCount').replace('{n}', String(count)) : '', '');
+}
+
+/* 把某一行移动到「显示列表里的第 displayIndex 位」（0 = 最顶）。
+   🚨 两个坐标系方向相反，这里只做一次换算，调用方一律用**列表显示方向**：
+     · 列表显示：最上面 = 最高 z（`splitLayersRenderList` 按 z 降序排）
+     · 内部数组：按 z **升序**（最下面 = 最低 z），合成 / 注入 / 导出都按它走
+   ⇒ 显示顺序倒过来就是 z 升序，重新编号 z 时按倒序写。
+   2026-10-10 踩过两次：先是拿「指针落在目标行上半还是下半」当落点（行高 40px，
+   指针还在自己那行里就被判成插到下一行上面 → 整行甩到列表头），
+   改成显示下标后又把 z 编号方向写反过。现由 output/spike/verify_split_layers_dom.py
+   用真实指针事件 + 真实布局锁住方向与落点。 */
+function splitLayersMoveLayerToIndex(draggedId, displayIndex){
+    const shown = splitLayersState.layers.slice()
+        .sort((a, b) => (Number(b.z) || 0) - (Number(a.z) || 0));
+    const from = shown.findIndex(layer => layer.id === draggedId);
+    if(from < 0) return;
+    const [dragged] = shown.splice(from, 1);
+    const at = Math.max(0, Math.min(shown.length, Number(displayIndex) || 0));
+    shown.splice(at, 0, dragged);
+    const asc = shown.slice().reverse();      // 显示顺序倒过来 = z 升序
+    asc.forEach((layer, i) => { layer.z = i; });
+    splitLayersState.layers = asc;
+    splitLayersState.selectedId = draggedId;
+    splitLayersRenderList();
+    splitLayersRenderBoard();
+}
+
+function splitLayersSelectLayer(layerId){
+    splitLayersState.selectedId = layerId === splitLayersState.selectedId ? '' : layerId;
+    splitLayersRenderList();
+    splitLayersRenderBoard();
+    // 列表里选中的那条滚进可视区：层多的时候用户才知道自己选到了哪一个
+    const list = splitLayersEl('splitLayersList');
+    const row = list?.querySelector(`.sl-item[data-split-layer="${splitLayersState.selectedId}"]`);
+    if(row?.scrollIntoView) row.scrollIntoView({block:'nearest'});
+    if(!splitLayersState.ready) return;
+    // 选中后让该层闪一下，明确「它长这样、在画面这个位置」
+    const node = splitLayersLayerNode(splitLayersState.selectedId);
+    if(node){
+        node.classList.remove('flash');
+        // 强制重排，否则连续两次选中同一个元素时动画不会重播
+        void node.offsetWidth;
+        node.classList.add('flash');
+    }
+    if(splitLayersState.peaMode && splitLayersState.pea){
+        const layer = splitLayersState.layers.find(l => l.id === splitLayersState.selectedId);
+        if(!layer) return;
+        splitLayersState.pea.runScript(
+            `(function(){ try { var __l = app.activeDocument.layers.getByName(${JSON.stringify(splitLayersLayerName(layer))}); if(__l) app.activeDocument.activeLayer = __l; } catch (e) {} })();`
+        ).catch(() => {});
+    }
+}
+
+async function splitLayersExport(){
+    if(!splitLayersState.ready || !splitLayersState.layers.length) return;
+    try{
+        splitLayersSetBusy(true);
+        splitLayersSetStatus(tr('smart.splitLayersExporting'), '');
+        const cv = await splitLayersComposite();
+        const blob = await splitLayersCanvasToBlob(cv);
+        if(!blob) throw new Error(tr('smart.splitLayersExportEmpty'));
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `split-layers-${Date.now()}.png`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 4000);
+        splitLayersSetStatus(tr('smart.splitLayersExported'), '');
+    }catch(err){
+        toast(err?.message || String(err));
+    }finally{
+        splitLayersSetBusy(false);
+    }
+}
+
+// 触发一次浏览器下载（导出 PNG / PSD 共用）
+function splitLayersDownloadBlob(blob, filename){
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 4000);
+}
+
+// 「导出分层 PSD」——按内置的合成规则（后端 SPLIT_LAYERS_COMPOSE_RULES）走 Photopea：
+//   把每张 PNG 作为独立图层合成到画布，再用 Photopea 扩展 saveToOE("psd:true") 把二进制取回宿主。
+// 🚨 必须先 splitLayersBuildDocument()：它内部就是「建文档 + 按 z 升序逐层注入」，
+//    少了这一步导出的会是 Photopea 里残留的上一份文档。
+// 🚨 saveToOE 的返回值在 out[0]（ArrayBuffer），不是 Blob —— 要自己包一层。
+async function splitLayersExportPsd(){
+    if(!splitLayersState.ready || !splitLayersState.layers.length) return;
+    try{
+        splitLayersSetBusy(true);
+        // 🚨 2026-10-10 老板：「导出分层 PSD 时不显示 Photopea 的页面给用户」——
+        //    这里**不切视图**（不设 peaMode、不加 .pea）：`.sl-pea` 在 CSS 里默认
+        //    `display:none`，Photopea 只在后台建文档 + 注入，用户全程只看到「正在导出」，
+        //    导出完直接下载。要接手改仍可走「精细编辑」（入口在 CSS 里隐藏了，函数保留）。
+        splitLayersSetProgress(true, tr('smart.splitLayersPsdWorking'), 0.9);
+        await splitLayersBuildDocument();
+        const pea = splitLayersState.pea;
+        if(!pea) throw new Error(tr('smart.splitLayersNoPhotopea'));
+        const out = await pea.runScript('app.activeDocument.saveToOE("psd:true");');
+        const bytes = out?.[0];
+        if(!bytes) throw new Error(tr('smart.splitLayersExportEmpty'));
+        splitLayersDownloadBlob(
+            new Blob([bytes], {type:'application/octet-stream'}),
+            `split-layers-${Date.now()}.psd`);
+        splitLayersSetProgress(false);
+        splitLayersSetStatus(tr('smart.splitLayersPsdDone'), '');
+    }catch(err){
+        splitLayersSetProgress(false);
+        toast(err?.message || String(err));
+    }finally{
+        splitLayersSetBusy(false);
+    }
+}
+
+/* 「导出到在线 PS」——把本次拆分结果打成 PSD 换一个可访问地址，
+   再新开 www.photopea.com，用它的 `files` 参数一次性载入全部图层。
+
+   🚨 为什么必须先把 PSD 落到服务端、不能直接把内存里的字节交给 Photopea：
+     · `blob:` 地址绑在当前页面的源上，新开的 photopea.com 取不到；
+     · `data:` 地址受浏览器 URL 长度限制（Chrome 约 2MB），分层 PSD 轻松超；
+     · Photopea 官方 API 要求「由它自己按 URL 去 fetch」，所以只能给一个 http 地址。
+   本机 /assets 实测返回 `Access-Control-Allow-Origin: *`，正是 photopea.com/api 文档里点名的那个头。
+   ⚠️ Photopea 是 https，取 `http://127.0.0.1/...` 靠的是 Chromium 把 localhost 当可信来源；
+      如果画布是用局域网 IP 打开的，这个地址会被混合内容策略挡掉（那里会报「打不开」而不是静默失败）。
+
+   🚨 走 multipart `/api/ai/upload` 而不是 `/api/ai/upload-base64`：后者在 kind 认不出时
+      会把扩展名强制改成 `.png`（见 main.py `_local_upload_kind_ext` 的回落分支），
+      PSD 字节顶着 `.png` 的名字有被 Photopea 按 PNG 解析的风险。multipart 这条对
+      `application/octet-stream` + `.psd` 会原样保留扩展名。 */
+function splitLayersPhotopeaUrl(fileUrl){
+    // ⚠️ 这条现在**不是**「在线 PS」的主路径了，而是**兜底直链**：
+    //    主路径走 splitLayersViewerUrl()（我们自己托管的查看器，无广告）。
+    // 🚨 但别删这个函数 —— 查看器载入失败时要把用户送到这条链接上（有广告，但一定能用），
+    //    而且 photopea.com 的 URL 构造只该有这一处。
+    // 🚨 `#` 后面**不能加斜杠**（老板 2026-10-10 曾要求改成 `#/<配置>`，实测会坏，已改回）。
+    //    实测方式（output/spike/probe_photopea_fetch.py）：本地起一个带 CORS 的静态服务器，
+    //    看 Photopea 有没有真的来 fetch 这个 PSD —— 它不解析 hash 就绝不会发这个请求。
+    //      `#<配置>`  -> 收到 1 个请求，origin=https://www.photopea.com   ✅ 正常
+    //      `#/<配置>` -> 收到 0 个请求                                     🚨 一个图层都载不进来
+    //    同一台机器、同一个 PSD、只差一个斜杠，所以结论很硬：Photopea 把 `#` 之后整段当
+    //    JSON 解析，多一个 `/` 就 parse 失败，files 和 script 全部不生效（页面看着正常、
+    //    但空的）。官方文档 photopea.com/api/ 与本项目内嵌的 photopea.min.js 也都是不带斜杠的写法。
+    // ⚠️ 这个形式**一定有广告**（合法 JSON 就不会中断 Photopea 的广告初始化，见 AR.1f）。
+    return `https://www.photopea.com/#${encodeURIComponent(JSON.stringify({
+        environment: SPLIT_LAYERS_PEA_ENV,
+        files: [fileUrl]
+    }))}`;
+}
+
+/* 「在线 PS」实际打开的新标签页：我们自己的查看器页面（static/photopea-viewer.html）。
+   🚨 为什么不直接开 photopea.com：2026-10-10 老板拍板「去掉广告」。实测三条路 ——
+      · `#STRING`（JSON 非法）→ 真编辑器且 0 广告域名，但**不会载入任何文件**；
+      · `#{"files":[…]}`（合法 JSON）→ 会载入文件，但带 ~40 个广告域名；
+      · 新标签页开 `#STRING` 再 postMessage 远程灌图层 → Photopea 只认父窗口，收不到。
+      所以「地址栏=photopea.com」+「无广告」+「带图层」三者不可兼得，只能自己托管一个页面，
+      在里面 createEmbed(host,'STRING') 拿无广告实例、再用 Live Messaging API 灌 PSD。
+   `direct` 是兜底直链（photopea.com，带广告）：查看器自己载入失败时给用户点。 */
+function splitLayersViewerUrl(fileUrl){
+    const u = new URL('/static/photopea-viewer.html', location.href);
+    u.searchParams.set('file', fileUrl);
+    u.searchParams.set('direct', splitLayersPhotopeaUrl(fileUrl));
+    return u.href;
+}
+
+async function splitLayersUploadPsd(bytes){
+    const form = new FormData();
+    form.append('files', new File([bytes], `split-layers-${Date.now()}.psd`, {type:'application/octet-stream'}));
+    const res = await fetch('/api/ai/upload', {method:'POST', body:form});
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = await res.json();
+    const rel = body?.files?.[0]?.url;
+    if(!rel) throw new Error(tr('smart.splitLayersExportEmpty'));
+    return new URL(rel, location.href).href;
+}
+
+async function splitLayersOpenOnlinePs(){
+    if(!splitLayersState.ready || !splitLayersState.layers.length) return;
+    let win = null;
+    try{
+        // 🚨 必须先同步开窗、再去生成 PSD：生成 + 上传要好几秒，
+        //    等 await 回来再 window.open 就出了用户手势窗口，会被浏览器当弹窗拦掉。
+        win = window.open('', '_blank');
+        if(!win) throw new Error(tr('smart.splitLayersOnlinePsBlocked'));
+        try{
+            win.document.write('<!doctype html><meta charset="utf-8">'
+                + '<body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;'
+                + 'background:#1f2227;color:#cbd5e1;font:13px/1.6 system-ui,-apple-system,\'Segoe UI\',sans-serif">'
+                + escapeHtml(tr('smart.splitLayersOnlinePsPreparing')) + '</body>');
+            win.document.close();
+        }catch(e){ /* 占位页写不进去不影响后面的跳转 */ }
+
+        splitLayersSetBusy(true);
+        splitLayersSetProgress(true, tr('smart.splitLayersPsdWorking'), 0.9);
+        await splitLayersBuildDocument();
+        const pea = splitLayersState.pea;
+        if(!pea) throw new Error(tr('smart.splitLayersNoPhotopea'));
+        const out = await pea.runScript('app.activeDocument.saveToOE("psd:true");');
+        const bytes = out?.[0];
+        if(!bytes) throw new Error(tr('smart.splitLayersExportEmpty'));
+        splitLayersSetStatus(tr('smart.splitLayersOnlinePsUploading'), '');
+        const url = await splitLayersUploadPsd(bytes);
+        // 开的是我们自己的查看器（无广告）；失败时它自己会给出 photopea.com 兜底直链
+        win.location.href = splitLayersViewerUrl(url);
+        splitLayersSetProgress(false);
+        splitLayersSetStatus(tr('smart.splitLayersOnlinePsDone'), '');
+    }catch(err){
+        splitLayersSetProgress(false);
+        // 失败时别把一个空白页留在用户面前
+        try{ win?.close(); }catch(e){ /* 已经跳走了就关不掉，忽略 */ }
+        toast(err?.message || String(err));
+    }finally{
+        splitLayersSetBusy(false);
+    }
+}
+
+async function splitLayersToCanvas(){
+    const source = nodes.find(n => n.id === splitLayersState.nodeId);
+    if(!source){ toast(tr('smart.splitLayersNoNode')); return; }
+    const selected = new Set(splitLayersState.selectedCanvasIds);
+    const hasSelection = selected.size > 0;
+    // 未勾选时保持旧行为：铺出全部可导出图层；勾选后只铺勾选项，文字层也可作为图片节点导出。
+    const pickable = splitLayersState.layers
+        .slice()
+        .sort((a, b) => (Number(a.z) || 0) - (Number(b.z) || 0))
+        .filter(l => (!hasSelection || selected.has(l.id)) && (l.url || l.kind === 'text'));
+    if(!pickable.length){ toast(tr('smart.splitLayersNothingToCanvas')); return; }
+    splitLayersSetBusy(true);
+    splitLayersSetStatus(tr('smart.splitLayersToCanvasWorking'), '');
+    try{
+        pushUndo();
+        const rect = nodeRect(source);
+        let offsetX = rect.x + rect.width + 200;
+        const created = [];
+        for(const layer of pickable){
+            splitLayersEnsureEditable(layer);
+            // 画板上动过就把变换烘进图里再上传 —— 画布节点只能存服务端 URL
+            let url = layer.url;
+            if(!url || !splitLayersIsIdentity(layer)){
+                const {cv, ctx, cw, ch} = splitLayersNewCanvas();
+                await splitLayersCompositeTo(ctx, cw, ch, layer.id);
+                url = await splitLayersUploadCanvas(cv, `${layer.name || layer.id}.png`);
+            }
+            const newNode = createImageNodeAt(
+                {x:offsetX, y:rect.y},
+                [{url, name:`${layer.name || layer.id}.png`}],
+                {select:false, skipUndo:true}
+            );
+            if(newNode){
+                newNode.title = layer.name || 'Layer';
+                created.push(newNode.id);
+            }
+            offsetX += 240;
+        }
+        if(!created.length){ toast(tr('smart.splitLayersNothingToCanvas')); return; }
+        selectedIds = created.slice();
+        selectedId = created[0];
+        render();
+        scheduleSave();
+        toast(`${tr('smart.splitLayersToCanvasDone')} (${created.length})`);
+    }catch(err){
+        toast(err?.message || String(err));
+    }finally{
+        splitLayersSetBusy(false);
+    }
+}
+
 async function runJimengUpscale(node, index){
     node = liveSmartNode(node) || node;
     const item = imageForDisplay(node?.images?.[index]);
@@ -10227,13 +13390,14 @@ function render(){
         .sort((a, b) => (isSmartGroupNode(a) ? 0 : 1) - (isSmartGroupNode(b) ? 0 : 1))
         .map(node => {
         const imgs = node.images || [];
-        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : node.type === 'smart-minimax' ? 'MiniMax H3' : isSmart3DNode(node) ? escapeHtml(tr('smart.3dTitle')) : smartImageNodeTitle(node, imgs);
+        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : node.type === 'smart-minimax' ? 'MiniMax H3' : isSmart3DNode(node) ? escapeHtml(tr('smart.3dTitle')) : isHy3dNode(node) ? escapeHtml(tr('smart.hy3dTitle')) : smartImageNodeTitle(node, imgs);
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
         const isLoop = node.type === 'smart-loop';
         const isMinimax = node.type === 'smart-minimax';
         const is3D = isSmart3DNode(node);
+        const isHy3d = isHy3dNode(node);
         const isSmartGroup = node.type === 'smart-group';
         const isCompactMember = isSmartGroupCompactMember(node);
         const isImageNode = node.type === 'smart-image' || !node.type;
@@ -10248,18 +13412,18 @@ function render(){
         // 3D 节点的交互说明（拖拽旋转 · 滚轮缩放）移到标题栏内、跟在节点名后面的灰色小字，底部不再有说明行。
         // 仅在「已有场景」时显示：空场景/生成失败的提示由舞台中央的占位层负责，避免同一句话重复出现，
         // 也避免生成失败时标题栏错误地显示「连接上传后点生成」。
-        const headSub = (is3D && smart3DHasScene(node)) ? `<span class="node-head-sub">${escapeHtml(tr('smart.3dDragHint'))}</span>` : '';
-        const hint = is3D ? '' : isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${is3D ? 'smart3d-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
+        const headSub = (is3D && smart3DHasScene(node)) ? `<span class="node-head-sub">${escapeHtml(tr('smart.3dDragHint'))}</span>` : (isHy3d && hy3dHasContent(node)) ? `<span class="node-head-sub">${escapeHtml(tr('smart.3dDragHint'))}</span>` : '';
+        const hint = (is3D || isHy3d) ? '' : isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${(is3D || isHy3d) ? 'smart3d-node' : ''} ${isHy3d ? 'smart-hy3d-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
 
             <div class="node-head"><div class="node-title">${title}</div>${headSub}<div class="node-actions">${deleteBtn}</div></div>
-            ${!isEmpty && !isGroup && !isMinimax && !is3D ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
+            ${!isEmpty && !isGroup && !isMinimax && !is3D && !isHy3d ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
             ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}
             ${runTimePillHtml(node)}
             <div class="node-body">${body}</div>
             ${isCompactMember && (isPrompt || isLoop) ? '<div class="smart-group-member-grab" title="拖动移出分组"></div>' : ''}
             ${hint ? `<div class="node-hint">${hint}</div>` : ''}
-            ${imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isMinimax || is3D || isSmartGroup ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
+            ${imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isMinimax || is3D || isHy3d || isSmartGroup ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
             <div class="node-port port-in" data-port="in" title="input"></div>
             <div class="node-port port-out" data-port="out" title="output"></div>
         </div>`;
@@ -10299,6 +13463,7 @@ function render(){
     restoreMediaPlaybackStates(mediaStates);
     bindNodeEvents();
     sync3DViewers();
+    syncHy3dViewers();
     bindConnectionEvents();
     updateComposer();
     updateSmartSaveWorkflowPosition();
@@ -11456,6 +14621,7 @@ function bindNodeEvents(){
         if(nodeForControls?.type === 'smart-loop') bindLoopNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-minimax') bindMinimaxNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-3d') bind3DNodeControls(el, nodeForControls);
+        else if(nodeForControls?.type === 'smart-hy3d') bindHy3dNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-group') {
             el.ondblclick = e => {
                 e.preventDefault();
@@ -11814,11 +14980,11 @@ function canAutoConnectDraggedNode(sourceNode, targetNode){
     if(!sourceNode || !targetNode || sourceNode.id === targetNode.id) return false;
     if(isHistoryGroupNode(sourceNode) || isHistoryGroupNode(targetNode)) return false;
     if(isSmartGroupNode(targetNode)) return false;
-    if(isSmartImageNode(sourceNode)) return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || targetNode.type === 'smart-prompt' || isSmart3DNode(targetNode);
-    if(isSmart3DNode(sourceNode)) return isSmartImageNode(targetNode);
+    if(isSmartImageNode(sourceNode)) return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || targetNode.type === 'smart-prompt' || isSmart3DNode(targetNode) || isHy3dNode(targetNode);
+    if(isSmart3DNode(sourceNode) || isHy3dNode(sourceNode)) return isSmartImageNode(targetNode);
     if(sourceNode.type === 'smart-prompt') return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop';
     if(sourceNode.type === 'smart-loop') return isSmartImageNode(targetNode);
-    if(sourceNode.type === 'smart-group') return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop';
+    if(sourceNode.type === 'smart-group') return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || isSmart3DNode(targetNode) || isHy3dNode(targetNode);
     return false;
 }
 function restoreDraggedNodePosition(){
@@ -12469,6 +15635,12 @@ function setImageEditMode(mode, userTouched=false){
     cropCanvasEl.classList.toggle('outpaint-mode', imageEditMode === 'outpaint');
     syncGridCustomCursor();
     document.querySelectorAll('[data-image-edit-mode]').forEach(btn => btn.classList.toggle('active', btn.dataset.imageEditMode === imageEditMode));
+    // 「拆分图层」入口：与上传节点菜单同一个门禁 —— 只在**当前对话模型是 GPT 系**时才露出
+    // （见 splitLayersGptGateOpen）。视频不显示（拆分只吃图片）。
+    const splitLayersEntry = document.getElementById('imageSplitLayersBtn');
+    if(splitLayersEntry){
+        splitLayersEntry.style.display = (!isVideoPreview && splitLayersGptGateOpen()) ? 'inline-flex' : 'none';
+    }
     document.getElementById('imagePreviewTools').classList.toggle('active', isPreview && !isVideoPreview);
     document.getElementById('imageCropTools')?.classList.toggle('active', imageEditMode === 'crop');
     document.getElementById('imageMaskTools').classList.toggle('active', imageEditMode === 'mask');
@@ -15868,9 +19040,11 @@ function connectInputNode(fromId, toId){
     const from = nodes.find(n => n.id === fromId);
     const to = nodes.find(n => n.id === toId);
     if(!from || !to || from.id === to.id) return false;
-    // 3D预览 只与「上传」双向相连：上游只能是上传，下游也只能是上传。
-    if(isSmart3DNode(to) && !isSmartImageNode(from)) return false;
-    if(isSmart3DNode(from) && !isSmartImageNode(to)) return false;
+    // 3D预览 上游只接「上传」或「智能分组」：分组会被展平成组内多张图当多视图，
+    // 因此「多图并组 → 3D」必须放行（否则拖线松手就被拒，表现为「连接不上」）。
+    // 下游仍只接「上传」（把 3D 实时截图喂给上传节点）。
+    if((isSmart3DNode(to) || isHy3dNode(to)) && !isSmartImageNode(from) && !isSmartGroupNode(from)) return false;
+    if((isSmart3DNode(from) || isHy3dNode(from)) && !isSmartImageNode(to)) return false;
     if(to.type === 'smart-loop'){
         const groupImages = isSmartGroupNode(from) ? imagesForNode(from).filter(img => img?.url) : [];
         const groupPrompts = isSmartGroupNode(from) ? promptTextItemsForNode(from).filter(Boolean) : [];
@@ -16075,6 +19249,15 @@ function outputImagesForNode(node, consume=false, ctx=smartLoopContext){
             return [];
         }
         return [{url, name:tr('smart.3dSnapshotName'), kind:'image', nodeId:node.id, imageIndex:0}];
+    }
+    // 混元3D：同样对外输出查看器实时截图（下游上传节点连上即取到当前画面）
+    if(node?.type === 'smart-hy3d'){
+        const url = String(node.hy3dSnapshotUrl || '');
+        if(!url){
+            if(hy3dHasContent(node)) queueHy3dSnapshot(node.id, 0);
+            return [];
+        }
+        return [{url, name:tr('smart.hy3dSnapshotName'), kind:'image', nodeId:node.id, imageIndex:0}];
     }
     if(node?.type === 'smart-group') return imagesForNode(node).filter(img => img?.url);
     if(node?.type === 'smart-loop') return smartLoopInputImages(node, ctx);
@@ -18121,6 +21304,7 @@ async function runGeneration(){
     const node = selectedNode();
     if(node?.type === 'smart-minimax') return runMinimaxNode(node.id);
     if(node?.type === 'smart-3d') return run3DNode(node.id);
+    if(node?.type === 'smart-hy3d') return runHy3dNode(node.id);
     const request = buildPromptRequest(node, null, true, smartLoopContext);
     let prompt = request.prompt.trim();
     if(!node) return;
@@ -19808,6 +22992,7 @@ function createNodeFromMenu(type){
     else if(type === 'loop') created = createLoopNode(p.x - 135, p.y - 95);
     else if(type === 'minimax') created = createMinimaxNode(p.x - 520, p.y - 320);
     else if(type === '3d') created = create3DNode(p.x - 280, p.y - 235);
+    else if(type === 'hy3d') created = createHy3dNode(p.x - 260, p.y - 230);
     // 附件不再是独立的创建入口：附件本质上就是上传节点里的 file/text 媒体卡片，
     // 所以「附件」卡片已从创建菜单移除，统一走上传（type='image'）。
     else created = createImageNodeAt(p);
@@ -19865,6 +23050,7 @@ function applyAgentCanvasOps(ops){
             if(type.includes('prompt')) created = createPromptNode(p.x - 158, p.y - 97, {skipUndo:true});
             else if(type.includes('loop')) created = createLoopNode(p.x - 135, p.y - 95, {skipUndo:true});
             else if(type.includes('minimax')) created = createMinimaxNode(p.x - 520, p.y - 320, {skipUndo:true});
+            else if(type.includes('hy3d')) created = createHy3dNode(p.x - 260, p.y - 230, {skipUndo:true});
             else if(type.includes('3d')) created = create3DNode(p.x - 280, p.y - 235, {skipUndo:true});
             else if(type.includes('group')) created = createSmartGroupNode(p.x - 170, p.y - 110, {skipUndo:true});
             else created = createImageNodeAt(p, [], {skipUndo:true});
@@ -25775,6 +28961,17 @@ document.querySelectorAll('[data-image-edit-mode]').forEach(btn => {
         setImageEditMode(btn.dataset.imageEditMode || 'crop', true);
     });
 });
+// 预览窗口里的「拆分图层」入口：与上传节点菜单的 splitLayers 动作完全等价，
+// 直接拿**当前预览的节点 + 图片索引**进拆分流程（预览窗口先关掉 —— 拆分弹层自带画板，
+// 留着预览只会在后面挡视线，关掉后用户想再看图双击一下即可）。
+document.getElementById('imageSplitLayersBtn')?.addEventListener('click', event => {
+    event.stopPropagation();
+    const nodeId = String(previewNavState?.nodeId || selectedImage?.nodeId || '');
+    if(!nodeId){ toast(tr('smart.splitLayersNeedImage')); return; }
+    const index = Number(previewNavState?.index ?? selectedImage?.index ?? 0) || 0;
+    closeImageEditor();
+    openSplitLayersEditor(nodeId, index);
+});
 imageEditModal.addEventListener('pointerdown', event => {
     event.stopPropagation();
 });
@@ -26046,3 +29243,4 @@ window.onload = async () => {
     checkWorkflowInbox();
     render();
 };
+

@@ -10,6 +10,10 @@
 !*.env.template
 API/.env
 
+# 3D 预览节点：用户填的 HuggingFace Token（选「记住」时写）。
+# ⚠️ 这是真密钥容器，**绝不允许入库**；.secretsignore 里也加了同名豁免。
+.secretsignore.hf3d.json
+
 # 运行时数据
 assets/
 data/*

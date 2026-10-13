@@ -2259,7 +2259,35 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
    在某个宽度区间反而比最小尺寸更挤。折叠后 meta/run 只剩图标，两语言宽度一致。 */
 .smart3d-body.is-narrow .smart3d-meta { padding:0 7px; }
 .smart3d-body.is-narrow .smart3d-meta > span { display:none; }
-.smart3d-body.is-narrow .smart3d-run { padding:0 8px; }
+.smart3d-body.is-narrow /* 混元3D 节点：bar 下方的进行中状态行（生成阶段 / 上传进度）。复用 3D 节点的
+   舞台/白模样式，只补一行状态文本；is-error 与占位层同一套红色（白底 #dc2626）。 */
+.hy3d-phase { padding:5px 10px 0; font-size:10px; font-weight:700; color:#8b95a8; text-align:center; }
+.hy3d-phase.is-error { color:#dc2626; }
+/* 混元3D 与 3D 预览同为 3D 类节点：创建菜单第 7 张卡片后 grid 仍按 3 列流式布局 */
+/* 显示样式工具栏（对齐站点底部工具条）：自动旋转 | 纹理/白模/线框/反照率/法线 | 包围盒/光照/适配 */
+.hy3d-tools { flex:0 0 auto; display:flex; flex-wrap:wrap; align-items:center; gap:2px; padding:2px 5px;
+    border-radius:10px; background:var(--soft); border:1px solid var(--line); }
+.hy3d-tools-sep { width:1px; height:14px; margin:0 3px; background:var(--line); }
+.hy3d-tool { display:inline-flex; align-items:center; justify-content:center; width:24px; height:22px; padding:0;
+    border:0; border-radius:7px; background:transparent; color:var(--muted); cursor:pointer; transition:background .14s ease, color .14s ease; }
+.hy3d-tool:hover { background:rgba(148,163,184,.16); color:var(--text); }
+.hy3d-tool.is-active { background:var(--strong); color:var(--strong-text); }
+.hy3d-tool i, .hy3d-tool svg { width:13px; height:13px; }
+/* bar 在窄节点里换行，别把按钮挤没 */
+.smart-hy3d-body .smart3d-bar { flex-wrap:wrap; row-gap:4px; }
+/* 操作按钮组（分享/下载/剩余次数/生成）靠右：给第一个子元素（meta）吃掉左侧剩余空间 */
+.smart-hy3d-body .smart3d-bar > :first-child { margin-right:auto; }
+/* 下载是 <a>，复用 .smart3d-run 外观 */
+a.smart3d-run { text-decoration:none; cursor:pointer; }
+/* 混元3D 剩余次数 chip（数值实时来自后端 quotainfo，点击刷新） */
+.hy3d-quota { flex:0 0 auto; display:inline-flex; align-items:center; gap:5px; height:26px; padding:0 8px;
+    border-radius:9px; background:var(--soft); border:1px solid var(--line); color:var(--muted);
+    font-size:10px; font-weight:800; white-space:nowrap; cursor:pointer; font-variant-numeric:tabular-nums;
+    transition:color .14s ease, border-color .14s ease; }
+.hy3d-quota:hover { color:var(--text); border-color:rgba(148,163,184,.5); }
+.hy3d-quota i, .hy3d-quota svg { width:12px; height:12px; }
+.smart-hy3d-body.is-narrow .hy3d-quota > span { display:none; }
+.smart3d-run { padding:0 8px; }
 .smart3d-body.is-narrow .smart3d-run > span { display:none; }
 .smart3d-select { flex:1 1 0; min-width:0; height:26px; padding:0 6px; border-radius:9px; border:1px solid rgba(148,163,184,.34); background:rgba(255,255,255,.62); color:var(--text); font-size:10px; font-weight:700; outline:none; cursor:pointer; text-overflow:ellipsis; }
 .theme-dark .smart3d-select { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.24); }
@@ -2276,6 +2304,9 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart3d-nomodel { flex:1 1 auto; min-width:0; display:inline-flex; align-items:center; gap:5px; height:auto; min-height:26px; padding:4px 8px; border-radius:9px; background:rgba(239,68,68,.1); border:1px solid rgba(239,68,68,.34); color:#b91c1c; font-size:10px; font-weight:750; line-height:1.35; white-space:normal; overflow-wrap:anywhere; overflow:hidden; }
 .theme-dark .smart3d-nomodel { color:#f87171; }
 .smart3d-nomodel i, .smart3d-nomodel svg { width:12px; height:12px; flex:0 0 auto; }
+/* 多视图模式：不是"缺模型"，是"不需要模型" —— 走中性成功色，别报红 */
+.smart3d-nomodel.is-ok { background:rgba(59,130,246,.1); border-color:rgba(59,130,246,.3); color:#1d4ed8; }
+.theme-dark .smart3d-nomodel.is-ok { color:#93c5fd; }
 .smart3d-run { flex:0 0 auto; height:26px; padding:0 11px; border-radius:9px; display:inline-flex; align-items:center; justify-content:center; gap:5px; background:var(--strong); color:var(--strong-text); font-size:10px; font-weight:850; white-space:nowrap; transition:transform .14s ease, opacity .14s ease; }
 .smart3d-run i, .smart3d-run svg { width:12px; height:12px; }
 .smart3d-run:hover:not(:disabled) { transform:translateY(-1px); }
@@ -2339,6 +2370,10 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 /* ⚠️ 不要再给 .smart3d-fovval 加深色覆盖（曾经有过 `.theme-dark { color:var(--faint) }`）。
    实测：--faint 在深色面板上只有 3.49:1，低于 AA 的 4.5:1；--muted 是 5.93:1。
    焦距读数是功能性信息，浅色下本来就是 --muted（4.74:1），深色必须同档，否则「深色反而更难读」。 */
+
+/* 加载态占位：转圈图标，与「空态」区分开 */
+.smart3d-placeholder.is-loading { color:#64748b; }
+.smart3d-placeholder.is-loading i, .smart3d-placeholder.is-loading svg { animation:smart3d-spin 1s linear infinite; }
 
 /* ==================== Skill 市场 ====================
    浮层样式已迁到 static/css/skill-market.css（画布页与 GPT 对话页共用同一份，

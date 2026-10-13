@@ -1,0 +1,904 @@
+/* ==========================================================================
+   拆分图层：仿 PhotoShop 的 Mac 风格窗口
+   浮层挂在 #shell 之外（见 smart-canvas.html 注释），这里只负责观感。
+   深浅两套主题都覆盖，颜色跟随项目既有的 --text/--muted/--strong 等变量。
+   ========================================================================== */
+
+.split-layers-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 23, 42, .46);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+}
+
+.split-layers-modal.open { display: flex; }
+
+.split-layers-window {
+    width: min(1240px, 94vw);
+    height: min(820px, 90vh);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: 13px;
+    background: #f6f7f9;
+    border: 1px solid rgba(15, 23, 42, .14);
+    box-shadow: 0 30px 80px rgba(15, 23, 42, .34), 0 2px 8px rgba(15, 23, 42, .16);
+}
+
+/* ---------- 标题栏 ---------- */
+
+.split-layers-titlebar {
+    position: relative;
+    flex: 0 0 auto;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px;
+    background: linear-gradient(180deg, #fbfbfc, #f0f1f4);
+    border-bottom: 1px solid rgba(15, 23, 42, .1);
+}
+
+/* 标题靠左（原先绝对居中；左侧那三个 Mac 交通灯已按需求去掉） */
+.split-layers-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 62%;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: #1f2937;
+}
+
+/* 🚨 必须同时写 i 与 svg：lucide 会把 <i data-lucide> 整个替换成 <svg>，
+   只写 i 的规则不生效，图标会退回 lucide 默认的 24px。 */
+.split-layers-title i,
+.split-layers-title svg { width: 12px; height: 12px; flex: 0 0 auto; }
+.split-layers-title > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.split-layers-subtitle {
+    font-size: 10.5px !important;
+    font-weight: 600 !important;
+    color: #94a3b8;
+}
+
+.split-layers-head-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    /* 🚨 不能缩：窗口变窄时如果让这排按钮收缩，会被 .split-layers-window 的 overflow:hidden
+       直接裁掉最右边那个（也就是「铺到画布」），看起来就像「按钮不存在」。要缩让标题去缩。 */
+    flex: 0 0 auto;
+}
+
+.sl-btn {
+    height: 26px;
+    padding: 0 11px;
+    border-radius: 7px;
+    border: 1px solid rgba(15, 23, 42, .14);
+    background: #fff;
+    color: #334155;
+    font-size: 11px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    transition: background .14s ease, border-color .14s ease, color .14s ease;
+}
+
+.sl-btn i, .sl-btn svg { width: 12px; height: 12px; flex: 0 0 auto; }
+.sl-btn:hover:not(:disabled) { background: #f1f5f9; }
+.sl-btn:disabled { opacity: .42; cursor: not-allowed; }
+.sl-btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.sl-btn.primary:hover:not(:disabled) { background: #1d4ed8; }
+
+/* ---------- 主体 ---------- */
+
+.split-layers-body { flex: 1 1 auto; min-height: 0; display: flex; }
+
+.split-layers-sidebar {
+    /* 2026-10-12：226 → 268px。文字层的参数摘要（颜色/字号/粗细/字距/旋转/位置）
+       在 226px 下会被省略号吃掉，老板等于看不到 —— 加宽才放得下。 */
+    flex: 0 0 268px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    background: #eceef2;
+    border-right: 1px solid rgba(15, 23, 42, .1);
+}
+
+.split-layers-side-head {
+    flex: 0 0 auto;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 10px;
+    font-size: 10.5px;
+    font-weight: 800;
+    color: #64748b;
+    letter-spacing: .03em;
+}
+
+.sl-count {
+    min-width: 20px;
+    height: 17px;
+    padding: 0 6px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 23, 42, .07);
+    font-size: 10px;
+}
+
+.split-layers-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 6px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, .45) transparent;
+}
+
+.split-layers-list::-webkit-scrollbar { width: 7px; }
+.split-layers-list::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, .42);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+.sl-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 6px;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    /* 整行是拖拽手柄，别让浏览器把拖动当「选文字」 */
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.sl-item:hover { background: rgba(255, 255, 255, .7); }
+.sl-item.active { background: #fff; border-color: rgba(37, 99, 235, .42); }
+
+/* 拖拽手柄：只是视觉提示，事件由整行承担（见 splitLayersBindOnce 的 pointer 手势） */
+.sl-grip {
+    flex: 0 0 auto;
+    width: 12px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #b6bfcc;
+    cursor: grab;
+}
+.sl-grip i, .sl-grip svg { width: 12px; height: 12px; flex: 0 0 auto; }
+.sl-item:hover .sl-grip { color: #64748b; }
+
+.sl-canvas-pick {
+    position: relative;
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    cursor: pointer;
+}
+.sl-canvas-check {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+.sl-canvas-dot {
+    width: 11px;
+    height: 11px;
+    border: 1.5px solid #94a3b8;
+    border-radius: 50%;
+    background: transparent;
+    box-shadow: inset 0 0 0 2px transparent;
+    transition: border-color .14s ease, background .14s ease, box-shadow .14s ease;
+}
+.sl-canvas-pick:hover .sl-canvas-dot { border-color: #2563eb; }
+.sl-canvas-check:checked + .sl-canvas-dot {
+    border-color: #2563eb;
+    background: #2563eb;
+    box-shadow: inset 0 0 0 2px #fff;
+}
+.sl-canvas-check:focus-visible + .sl-canvas-dot {
+    outline: 2px solid #60a5fa;
+    outline-offset: 2px;
+}
+
+/* 拖拽中的行 + 插入位置指示线（上半 = 插到该行前面，下半 = 后面） */
+.sl-item.is-dragging { opacity: .42; }
+.sl-item.is-drop-before { box-shadow: inset 0 2px 0 0 #2563eb; }
+.sl-item.is-drop-after { box-shadow: inset 0 -2px 0 0 #2563eb; }
+
+.sl-eye {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: #64748b;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.sl-eye:hover { background: rgba(15, 23, 42, .07); }
+.sl-eye i, .sl-eye svg { width: 13px; height: 13px; flex: 0 0 auto; }
+.sl-item.off .sl-eye { color: #cbd5e1; }
+.sl-item.off .sl-thumb,
+.sl-item.off .sl-name { opacity: .48; }
+
+/* 透明棋盘格底，能直观看出该层是否带透明通道 */
+.sl-thumb {
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    border-radius: 5px;
+    border: 1px solid rgba(15, 23, 42, .1);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #fff;
+    background-image:
+        linear-gradient(45deg, #e5e7eb 25%, transparent 25%, transparent 75%, #e5e7eb 75%),
+        linear-gradient(45deg, #e5e7eb 25%, #fff 25%, #fff 75%, #e5e7eb 75%);
+    background-size: 10px 10px;
+    background-position: 0 0, 5px 5px;
+}
+
+.sl-thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.sl-thumb .sl-text-badge { font-size: 14px; font-weight: 800; color: #334155; }
+
+.sl-meta { flex: 1 1 auto; min-width: 0; }
+.sl-name {
+    font-size: 11px;
+    font-weight: 700;
+    color: #1f2937;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sl-kind { font-size: 9.5px; font-weight: 600; color: #94a3b8; }
+
+/* 文字层参数摘要（颜色/字号/粗细/字距/旋转/位置）—— 2026-10-12 老板要「列表里就能看到参数」。
+   单行、可省略号截断：宁可尾巴被吃掉，也不能把行撑高（行高变化会影响拖拽落点手感）。 */
+.sl-params {
+    display: block;
+    margin-top: 1px;
+    font-size: 9.5px;
+    font-weight: 600;
+    color: #7c8798;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
+}
+.sl-params em {
+    font-style: normal;
+    margin: 0 3px;
+    color: #c3cad6;
+}
+/* 颜色色块：小圆点，直接看颜色对不对 */
+.sl-params .sl-p-color {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 3px;
+    border-radius: 2px;
+    border: 1px solid rgba(15, 23, 42, .22);
+    vertical-align: -1px;
+}
+.theme-dark .sl-params { color: #94a3b8; }
+.theme-dark .sl-params em { color: #4b5563; }
+.theme-dark .sl-params .sl-p-color { border-color: rgba(226, 232, 240, .3); }
+
+.sl-empty {
+    padding: 18px 12px;
+    text-align: center;
+    font-size: 10.5px;
+    color: #94a3b8;
+    line-height: 1.5;
+}
+
+/* 图层栏底部的主按钮：把选中的图层铺到画布（标题栏也有一个，这里更靠近选择圆点）。
+   保留列向 flex + 100% 宽：图层栏本身不宽，将来再加按钮时横向并排会把
+   「铺到画布 · N」的角标挤掉。
+   ⚠️ 「在线 PS」曾经也放这里，2026-10-10 老板反馈「左侧栏重复了一个在线 PS」后已移除 ——
+      它只保留标题栏那一个（紧邻「导出分层 PSD」）。别再加回来。 */
+.split-layers-side-foot {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 6px;
+    border-top: 1px solid rgba(15, 23, 42, .1);
+}
+
+.sl-side-cta {
+    width: 100%;
+    height: 30px;
+    justify-content: center;
+    gap: 6px;
+}
+
+.sl-side-cta-count { font-weight: 800; }
+.sl-side-cta-count:empty { display: none; }
+
+/* ---------- 舞台：默认是自研画板，Photopea 只在「精细编辑」时出现 ---------- */
+
+.split-layers-stage {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    background: #3a3d44;
+}
+
+/* 工具条：左边是当前选中层，右边是编辑控件 + 精细编辑入口 */
+.sl-stage-bar {
+    flex: 0 0 auto;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 10px;
+    background: #2f333a;
+    border-bottom: 1px solid rgba(0, 0, 0, .28);
+    color: #cbd5e1;
+    font-size: 11px;
+}
+
+/* 🚨 2026-10-10 老板：「页面中的精细编辑功能可以隐藏掉」——
+   Photopea 对用户完全不可见：导出分层 PSD 也在后台跑（见 splitLayersExportPsd），
+   「精细编辑」这个入口一并隐藏。DOM 与 splitLayersTogglePea 都保留（导出链路仍要用
+   Photopea），只是不给入口 —— 想恢复删掉这一条即可。 */
+.sl-stage-bar #splitLayersPeaBtn { display: none; }
+
+.sl-sel-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 180px;
+    font-weight: 700;
+    color: #e2e8f0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sl-op {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    color: #94a3b8;
+    font-weight: 600;
+}
+
+.sl-op input[type="range"] {
+    width: 96px;
+    height: 3px;
+    accent-color: #60a5fa;
+    cursor: pointer;
+}
+
+.sl-op input[type="range"]:disabled { opacity: .4; cursor: not-allowed; }
+.sl-op b { min-width: 32px; font-size: 10.5px; color: #cbd5e1; }
+
+.sl-sel-actions { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+
+/* ---------- 文字层编辑栏（只在选中文字层时出现） ---------- */
+
+.sl-text-bar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    background: #262a31;
+    border-bottom: 1px solid rgba(0, 0, 0, .28);
+    color: #cbd5e1;
+    font-size: 11px;
+}
+
+/* 🚨 必须显式写 [hidden]：作者样式表里的 display:flex 会盖掉 UA 的 [hidden]{display:none}，
+   漏了这条编辑栏就永远收不起来（只在选中文字层时出现）。 */
+.sl-text-bar[hidden] { display: none; }
+/* 切到 Photopea 时整条让位（那边自带文字工具） */
+.split-layers-stage.pea .sl-text-bar { display: none; }
+
+.sl-text-bar > i,
+.sl-text-bar > svg { width: 12px; height: 12px; flex: 0 0 auto; color: #94a3b8; }
+
+/* 模式说明：像素态 = 与原图逐像素一致；编辑态 = 系统字体重画，会与原图有差异。
+   文案由 splitLayersRenderTextTools 填，切态时加 .warn 变成提示色。 */
+.sl-text-bar .sl-ti-hint {
+    flex: 0 1 auto;
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    font-weight: 600;
+    color: #64748b;
+}
+.sl-text-bar .sl-ti-hint.warn { color: #f59e0b; }
+
+/* 像素态下这些控件改不动画面，禁用后要看得出来（否则又变成「拖了没反应」） */
+.sl-text-bar .sl-ti:disabled,
+.sl-text-bar .sl-num input:disabled,
+.sl-text-bar .sl-mini:disabled { opacity: .45; cursor: not-allowed; }
+
+.sl-text-bar .sl-ti {
+    flex: 1 1 auto;
+    min-width: 60px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, .28);
+    background: #1f2329;
+    color: #e2e8f0;
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+.sl-text-bar .sl-num {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: 0 0 auto;
+    color: #94a3b8;
+    font-weight: 600;
+}
+
+.sl-text-bar .sl-num input[type="number"] {
+    width: 54px;
+    height: 24px;
+    padding: 0 6px;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, .28);
+    background: #1f2329;
+    color: #e2e8f0;
+    font-size: 11px;
+}
+
+.sl-text-bar .sl-num input[type="color"] {
+    width: 30px;
+    height: 24px;
+    padding: 1px;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, .28);
+    background: #1f2329;
+    cursor: pointer;
+}
+
+.sl-text-bar .sl-ti:focus-visible,
+.sl-text-bar .sl-num input:focus-visible { outline: 2px solid #60a5fa; outline-offset: 1px; }
+
+.sl-mini {
+    height: 22px;
+    min-width: 22px;
+    padding: 0 6px;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, .24);
+    background: #3b414b;
+    color: #cbd5e1;
+    font-size: 10.5px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+}
+
+.sl-mini:hover { background: #454c58; }
+/* 「已按下」态（加粗、对齐这类开关按钮） */
+.sl-mini.on { background: #2563eb; border-color: #2563eb; color: #fff; }
+.sl-mini i, .sl-mini svg { width: 11px; height: 11px; flex: 0 0 auto; }
+.sl-stage-bar .sl-btn { margin-left: auto; }
+
+/* 画板容器：深色底 + 居中。overflow:hidden 保证缩放后的画板不会顶出容器 */
+.sl-board-wrap {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    background: #3a3d44;
+}
+
+.sl-board {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform-origin: center center;
+    /* 透明棋盘格：一眼看出哪些层是真透明 */
+    background-color: #fff;
+    background-image:
+        linear-gradient(45deg, #d8dbe0 25%, transparent 25%, transparent 75%, #d8dbe0 75%),
+        linear-gradient(45deg, #d8dbe0 25%, #fff 25%, #fff 75%, #d8dbe0 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 8px 8px;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, .22), 0 18px 44px rgba(0, 0, 0, .42);
+}
+
+/* 画板上的一个图层：整块就是该层的内容，transform 与 canvas 合成逻辑一一对应 */
+.sl-layer {
+    position: absolute;
+    transform-origin: center center;
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+}
+
+.sl-layer img { display: block; width: 100%; height: 100%; pointer-events: none; }
+.sl-layer.text { display: flex; align-items: flex-start; overflow: visible; }
+.sl-layer .sl-text {
+    display: block;
+    width: 100%;
+    white-space: pre;
+    line-height: 1.15;
+    font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    pointer-events: none;
+}
+
+.sl-layer.off { opacity: .12 !important; }
+.sl-layer:active { cursor: grabbing; }
+
+/* 选中：描边 + 控制点。只给选中层画，不选中时画板就是干净的效果图。
+   🚨 画板整体被 scale(fit) 缩过（大图时 fit 只有 0.3 量级），控制点和描边会一起缩到
+   抓不住/看不见。所以这些尺寸全部乘 --sl-hs（= 1/fit，由 splitLayersFitBoard 写在画板上），
+   换算回「屏幕上的固定像素」。 */
+.sl-layer.sel {
+    outline: calc(1.5px * var(--sl-hs, 1)) solid #60a5fa;
+    outline-offset: 0;
+}
+
+.sl-layer.sel::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    box-shadow: 0 0 0 1px rgba(96, 165, 250, .5);
+    pointer-events: none;
+}
+
+.sl-handle {
+    position: absolute;
+    width: calc(10px * var(--sl-hs, 1));
+    height: calc(10px * var(--sl-hs, 1));
+    border-radius: calc(2px * var(--sl-hs, 1));
+    background: #fff;
+    border: calc(1.5px * var(--sl-hs, 1)) solid #2563eb;
+    box-sizing: border-box;
+}
+
+.sl-handle.nw {
+    left: calc(-5px * var(--sl-hs, 1));
+    top: calc(-5px * var(--sl-hs, 1));
+    cursor: nwse-resize;
+}
+
+.sl-handle.ne {
+    right: calc(-5px * var(--sl-hs, 1));
+    top: calc(-5px * var(--sl-hs, 1));
+    cursor: nesw-resize;
+}
+
+.sl-handle.sw {
+    left: calc(-5px * var(--sl-hs, 1));
+    bottom: calc(-5px * var(--sl-hs, 1));
+    cursor: nesw-resize;
+}
+
+.sl-handle.se {
+    right: calc(-5px * var(--sl-hs, 1));
+    bottom: calc(-5px * var(--sl-hs, 1));
+    cursor: nwse-resize;
+}
+
+/* 四边中点 = 单轴拉伸（变形）：模型产出的元素与源图长宽比有差时，
+   只有单轴拉伸能把元素拉到与原图逐边重合。角控制点仍是等比缩放。 */
+.sl-handle.n {
+    left: 50%;
+    top: calc(-5px * var(--sl-hs, 1));
+    margin-left: calc(-5px * var(--sl-hs, 1));
+    cursor: ns-resize;
+}
+
+.sl-handle.s {
+    left: 50%;
+    bottom: calc(-5px * var(--sl-hs, 1));
+    margin-left: calc(-5px * var(--sl-hs, 1));
+    cursor: ns-resize;
+}
+
+.sl-handle.e {
+    right: calc(-5px * var(--sl-hs, 1));
+    top: 50%;
+    margin-top: calc(-5px * var(--sl-hs, 1));
+    cursor: ew-resize;
+}
+
+.sl-handle.w {
+    left: calc(-5px * var(--sl-hs, 1));
+    top: 50%;
+    margin-top: calc(-5px * var(--sl-hs, 1));
+    cursor: ew-resize;
+}
+
+.sl-handle.rot {
+    left: 50%;
+    top: calc(-22px * var(--sl-hs, 1));
+    width: calc(11px * var(--sl-hs, 1));
+    height: calc(11px * var(--sl-hs, 1));
+    margin-left: calc(-5.5px * var(--sl-hs, 1));
+    border-radius: 50%;
+    background: #2563eb;
+    border-color: #fff;
+    cursor: grab;
+}
+
+/* 从列表里选中时闪一下，明确「它长这样、在画面这个位置」 */
+@keyframes sl-flash {
+    0%, 100% { outline-color: #60a5fa; }
+    50% { outline-color: #f59e0b; box-shadow: 0 0 0 4px rgba(245, 158, 11, .45); }
+}
+
+.sl-layer.flash { animation: sl-flash .5s ease 2; }
+
+/* 精细编辑：切到 Photopea，画板整体让位 */
+.sl-pea { display: none; position: absolute; inset: 0; }
+.sl-pea iframe { display: block; width: 100%; height: 100%; border: 0; }
+.split-layers-stage.pea .sl-board { display: none; }
+.split-layers-stage.pea .sl-pea { display: block; }
+
+/* 缩略图上的「该层在整幅画面的位置」小方框 */
+.sl-spot {
+    position: absolute;
+    border: 1.5px solid #ef4444;
+    background: rgba(239, 68, 68, .18);
+    border-radius: 2px;
+    pointer-events: none;
+}
+
+.sl-thumb { position: relative; }
+
+.split-layers-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 20px;
+    overflow-y: auto;
+    background: rgba(24, 27, 33, .92);
+    color: #e2e8f0;
+}
+
+.split-layers-overlay.show { display: flex; }
+
+/* 预检态（overlay 加 .prep）：先选层数再开跑，避免用错层数白跑一次模型 */
+.sl-prep { display: none; flex-direction: column; align-items: center; gap: 12px; }
+.split-layers-overlay.prep .sl-prep { display: flex; }
+.split-layers-overlay.prep .sl-progress { display: none; }
+.sl-progress { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+
+/* ---------- 失败卡片：卡在哪一步 + 原因 + 建议 ---------- */
+
+.sl-fail { display: none; flex-direction: column; align-items: flex-start; gap: 9px; max-width: 520px; }
+.split-layers-overlay.fail .sl-fail { display: flex; }
+.split-layers-overlay.fail .sl-progress { display: none; }
+.split-layers-overlay.fail .sl-prep { display: none; }
+
+.sl-fail-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 800;
+    color: #fca5a5;
+}
+
+.sl-fail-head i, .sl-fail-head svg { width: 15px; height: 15px; flex: 0 0 auto; }
+
+.sl-fail-row { display: flex; align-items: flex-start; gap: 9px; font-size: 11.5px; line-height: 1.65; }
+
+.sl-fail-k {
+    flex: 0 0 34px;
+    text-align: right;
+    font-weight: 700;
+    color: #94a3b8;
+}
+
+.sl-fail-v { flex: 1 1 auto; min-width: 0; color: #e2e8f0; word-break: break-word; }
+.sl-fail-v.advice { color: #93c5fd; }
+
+.sl-fail-tried { font-size: 10.5px; color: #64748b; word-break: break-word; }
+.sl-fail .sl-btn { margin-top: 4px; }
+
+.sl-prep-title { font-size: 12.5px; font-weight: 700; letter-spacing: .02em; }
+.sl-prep-row { display: flex; align-items: center; gap: 8px; }
+
+/* 「分析模型 / 生图模型」两行的行首标签，固定宽度让两个下拉左边缘对齐 */
+.sl-prep-label {
+    width: 52px;
+    text-align: right;
+    font-size: 11px;
+    font-weight: 600;
+    color: #cbd5e1;
+    flex: 0 0 auto;
+}
+
+/* 模型名很长（如 gpt-5.6-terra-openai-compact），给一个能放下的宽度 */
+.sl-select.wide { width: 236px; }
+/* 通道名短，窄一点，跟 Agent 面板「通道 + 模型」两级联动的观感一致 */
+.sl-select.prov { width: 108px; }
+
+.sl-prep-hint {
+    max-width: 430px;
+    text-align: center;
+    font-size: 10.5px;
+    line-height: 1.65;
+    color: #94a3b8;
+}
+
+/* overlay 底是固定的深色，所以下拉不跟随主题，两套主题下都用深色 */
+.sl-select {
+    height: 26px;
+    padding: 0 8px;
+    border-radius: 7px;
+    border: 1px solid rgba(148, 163, 184, .34);
+    background: #2b2f38;
+    color: #e2e8f0;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.sl-select:disabled { opacity: .5; cursor: not-allowed; }
+/* overlay 是深色，焦点环要用亮色，否则看不见 */
+.sl-select:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
+
+.sl-spinner {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 2.5px solid rgba(226, 232, 240, .24);
+    border-top-color: #60a5fa;
+    animation: sl-spin .8s linear infinite;
+}
+
+@keyframes sl-spin { to { transform: rotate(360deg); } }
+
+.sl-progress-text { font-size: 12px; font-weight: 600; }
+
+.sl-progress-track {
+    width: 220px;
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(226, 232, 240, .2);
+    overflow: hidden;
+}
+
+.sl-progress-fill {
+    height: 100%;
+    width: 0;
+    border-radius: 999px;
+    background: #60a5fa;
+    transition: width .3s ease;
+}
+
+/* ---------- 状态栏 ---------- */
+
+.split-layers-statusbar {
+    flex: 0 0 auto;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px;
+    background: #f0f1f4;
+    border-top: 1px solid rgba(15, 23, 42, .1);
+    font-size: 10.5px;
+    color: #64748b;
+}
+
+.sl-hint { margin-left: auto; color: #94a3b8; }
+
+/* ---------- 深色主题 ---------- */
+
+.theme-dark .split-layers-window {
+    background: #1c1f26;
+    border-color: rgba(148, 163, 184, .22);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, .6);
+}
+
+.theme-dark .split-layers-titlebar {
+    background: linear-gradient(180deg, #262a33, #21242c);
+    border-bottom-color: rgba(148, 163, 184, .18);
+}
+
+.theme-dark .split-layers-title { color: #e2e8f0; }
+.theme-dark .split-layers-subtitle { color: #64748b; }
+
+.theme-dark .sl-btn {
+    background: #2b2f38;
+    border-color: rgba(148, 163, 184, .24);
+    color: #cbd5e1;
+}
+
+.theme-dark .sl-btn:hover:not(:disabled) { background: #343943; }
+.theme-dark .sl-btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.theme-dark .sl-btn.primary:hover:not(:disabled) { background: #1d4ed8; }
+
+.theme-dark .split-layers-sidebar { background: #22252c; border-right-color: rgba(148, 163, 184, .18); }
+.theme-dark .split-layers-side-head { color: #94a3b8; }
+.theme-dark .sl-count { background: rgba(148, 163, 184, .16); }
+.theme-dark .sl-item:hover { background: rgba(148, 163, 184, .1); }
+.theme-dark .sl-item.active { background: rgba(37, 99, 235, .18); border-color: rgba(96, 165, 250, .5); }
+.theme-dark .sl-name { color: #e2e8f0; }
+.theme-dark .sl-eye { color: #94a3b8; }
+.theme-dark .sl-eye:hover { background: rgba(148, 163, 184, .16); }
+.theme-dark .sl-item.off .sl-eye { color: #4b5563; }
+.theme-dark .sl-canvas-dot { border-color: #64748b; }
+.theme-dark .sl-canvas-pick:hover .sl-canvas-dot { border-color: #60a5fa; }
+.theme-dark .sl-canvas-check:checked + .sl-canvas-dot {
+    border-color: #60a5fa;
+    background: #60a5fa;
+    box-shadow: inset 0 0 0 2px #22252c;
+}
+.theme-dark .sl-item.is-drop-before { box-shadow: inset 0 2px 0 0 #60a5fa; }
+.theme-dark .sl-item.is-drop-after { box-shadow: inset 0 -2px 0 0 #60a5fa; }
+.theme-dark .sl-grip { color: #4b5563; }
+.theme-dark .sl-item:hover .sl-grip { color: #94a3b8; }
+.theme-dark .split-layers-side-foot { border-top-color: rgba(148, 163, 184, .18); }
+.theme-dark .sl-thumb { background-color: #2b2f38; border-color: rgba(148, 163, 184, .2); }
+.theme-dark .sl-thumb .sl-text-badge { color: #cbd5e1; }
+.theme-dark .sl-empty { color: #64748b; }
+
+.theme-dark .split-layers-statusbar {
+    background: #21242c;
+    border-top-color: rgba(148, 163, 184, .18);
+    color: #94a3b8;
+}
+
+.theme-dark .sl-hint { color: #64748b; }
+
+/* ---------- 键盘焦点可见性（WCAG 2.4.7） ---------- */
+
+.sl-btn:focus-visible,
+.sl-eye:focus-visible,
+.sl-item:focus-visible {
+    outline: 2px solid var(--strong, #111827);
+    outline-offset: 2px;
+}

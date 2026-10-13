@@ -31,7 +31,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from threading import Lock, Thread
 from concurrent.futures import ThreadPoolExecutor
 import httpx
-from PIL import Image, ImageOps, ImageFilter
+from PIL import Image, ImageOps, ImageFilter, ImageDraw, ImageChops
 from io import BytesIO
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Header, Request
 from fastapi.exceptions import RequestValidationError
@@ -39,6 +39,20 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
+
+# 混元3D 节点：多视图上传 → 3d.hunyuan.tencent.com 生成 → GLB（浏览器通道）。
+# 放在独立模块里，便于单测与探针脚本复用。选择器/API 依据 = REFERENCE AV。
+#
+# 🚨 必须先把**本文件所在目录**塞进 sys.path 再 import：
+#    随包分发的嵌入式 Python（python/python.exe）的 sys.path 里**没有脚本目录**
+#    （只有 python310.zip / python / site-packages），直接 import 同目录模块会
+#    ModuleNotFoundError。上游的 run.bat 也是这么拉起服务的。
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+import hunyuan3d_client
+from hunyuan3d_client import Hunyuan3DBrowserClient, Hunyuan3DError, Hunyuan3DNeedLogin
 
 QUIET_ACCESS_PATHS = {
     "/api/queue_status",
@@ -23467,6 +23481,3055 @@ def run_workflow(name: str, payload: WorkflowRunRequest):
         client_id=payload.client_id or str(uuid.uuid4()),
     )
     return generate(req)
+
+
+# ======================================================================
+# 拆分图层（Split Layers）
+#
+# 把上传节点里的一张图拆成「元素透明图层 + 可编辑文字图层」，供画布的仿 PhotoShop 页面使用。
+#   1) 多模态模型分析版面 -> 图层清单（元素 bbox / z 序 / 文字内容与样式）
+#   2) 抹除文字：把文字区域交给图像模型补平，得到一张「干净底图」
+#   3) 逐元素提取：按 bbox 裁切 -> 正方形化 -> 图像模型重绘透明 PNG
+#      -> 检查 alpha 是否真的透明 -> 不合格则本地 flood-fill 去背兜底
+#      -> 缩放回原尺寸并贴回全画布（位置天然与原图一致）
+#   4) 文字层不带图片，只回样式元数据，前端在 Photopea 里建成可编辑 TEXT 图层
+#
+# 全程异步任务 + progress 轮询（一次拆分要调很多次模型，可能几分钟）。
+# ======================================================================
+
+SPLIT_LAYERS_SYSTEM = "你是专业的图像分解与版面分析助手。只输出 JSON，不要解释，不要 markdown 代码块。"
+
+# ======================================================================
+# 内置「关键提示词」（2026-10-09 按老板给的两步法内置）
+#   第一步 拆图：规则写死在下面。LLM 只负责「认出画面里有什么、框在哪」，
+#                并逐层判断该元素能否只靠本地按原图像素裁切，不能就给出抠图提示词。
+#   第二步 合成：拆出的 PNG 作为独立图层合成到画布并导出分层 PSD（前端 Photopea 侧执行）。
+# 🚨 这些规则是**内置常量**，不随用户输入变化。用户唯一能调的是「拆分层数」，
+#    层数会经 split_granularity_prompt() 追加一段「本次粒度要求」来**重新优化提示词**。
+# ======================================================================
+
+SPLIT_LAYERS_SPLIT_RULES = """【拆图规则（严格遵守）】
+1. 每个视觉元素单独成一层，不要合并、不要遗漏任何画面内容。
+2. 严格保持元素的原始比例与原始相对位置，不随意放大或缩小。
+3. 素材必须高清无损；严格按元素本身的实际大小自适应精准裁切。
+4. 小元素按原生尺寸输出，禁止把小元素强行拉大去占满整页留白。
+5. 每一层的抠图必须是纯净透明背景：杜绝残影、重影、边缘锯齿、杂边、底色残留；
+   边缘干净利落、无任何多余像素干扰，保证后续叠加文字不出现重影与画面脏乱。
+6. 元素数量超过 10 个时分批处理，不要一次性铺满。"""
+
+# 交给**图像模型**的抠图品质规则：与 SPLIT_LAYERS_SPLIT_RULES 同源，
+# 但改写成英文祈使句（生图模型对英文指令的遵从度明显更好）。
+SPLIT_LAYERS_CUTOUT_RULES = (
+    "Cut out ONLY the described object from the reference image and output it on a FULLY "
+    "TRANSPARENT background as a PNG with a real alpha channel. Strictly keep the object's "
+    "original proportions, its original relative position inside the frame and its native "
+    "pixel size: do NOT enlarge, shrink, re-frame or re-compose it, and never scale a small "
+    "element up to fill the canvas. Follow the object's own outline TIGHTLY: everything that "
+    "is not the described object — background, scenery, other objects, text and labels — must "
+    "be fully transparent, and do NOT leave a rectangular or card-shaped patch behind. "
+    "Keep lossless quality. The cutout must be perfectly clean: "
+    "no ghosting, no double edges, no jagged edges, no colour fringe, no matte or background "
+    "residue, and no stray pixels anywhere. Do not add any new element, shadow, text, logo "
+    "or watermark."
+)
+
+# 第二步（合成）的规则。实际执行在前端 Photopea 侧（splitLayersBuildDocument + 导出 PSD），
+# 这里作为**内置规格**留档，也是「导出分层 PSD」按钮的文案依据。
+SPLIT_LAYERS_COMPOSE_RULES = """【Photoshop 图层合成规则】
+1. 把拆出来的每张 PNG 作为独立图层合成到画布，保持其原始位置与比例。
+2. 导出一份可在 Photoshop 打开的**分层 PSD**。
+3. 若某个素材不是完全透明的 PNG，先做透明化 / 裁边处理再入图层。
+4. 确保所有元素都导入图层中，不遗漏任一画面。"""
+
+SPLIT_LAYERS_USER_PROMPT = """分析这张图，把它拆成可独立编辑的图层清单。
+
+""" + SPLIT_LAYERS_SPLIT_RULES + """
+
+输出严格 JSON：
+{
+  "canvas": {"width": <原图宽像素>, "height": <原图高像素>},
+  "background": {
+    "need_model": <布尔。判断「把下面所有层移走后，背景能不能靠程序本地补出来」：
+                   纯色 / 渐变 / 天空 / 墙面 / 地面 / 虚化这类大面积连续背景填 false（本地补更快更准）；
+                   前景背后压着复杂纹理（花园、人群、货架、密排文字、重复图案）或大片区域被遮挡
+                   填 true（会调一次图像模型重绘补全）。拿不准填 false>,
+    "prompt": "<仅 need_model=true：交给图像模型的英文提示词，只描述「要补成什么样的背景」，
+                不要重复通用规则>"
+  },
+  "layers": [
+    {
+      "z": <整数，0 表示最底层，越大越靠上>,
+      "kind": "element" 或 "text",
+      "name": "<图层名，中文>",
+      "bbox": [x, y, w, h],
+      "note": "<给图像模型的一句话描述：这个元素是什么（用来让它单独生成这张透明 PNG）>",
+      "cutout_prompt": "<仅 kind=element：交给图像模型的英文提示词，只描述这一个元素本身，
+                        不要重复通用规则。每个 element 都要给。>",
+      "need_model": <仅 kind=element：布尔。true = 这一层轮廓很复杂（毛发/半透明/边缘与背景
+                     同色），本地按原图像素裁切做不干净；false = 本地裁切即可。拿不准填 false。>,
+      "text": "<仅 kind=text：文字内容>",
+      "font_size": <仅 kind=text：估算字号像素>,
+      "font_weight": "<仅 kind=text：normal 或 bold>",
+      "italic": <仅 kind=text：布尔。字形是斜体 / 有倾斜角度就 true，否则 false>,
+      "font_family": "<仅 kind=text：从下面的字体表里挑最像的一个，**原样照抄整串**>",
+      "letter_spacing": <仅 kind=text：字距像素。正常 0；字挤在一起给负数，字很散给正数>,
+      "color": "<仅 kind=text：十六进制颜色>",
+      "rotation": <仅 kind=text：旋转角度，无则 0>,
+      "align": "<仅 kind=text：left/center/right>"
+    }
+  ]
+}
+
+font_family 只能从下面这张表里挑一个**原样照抄**（前端直接拿它当 CSS font-family 用）：
+  "Georgia, serif"               衬线、经典
+  "Times New Roman, serif"       衬线、正文感
+  "Palatino, serif"              衬线、优雅
+  "Garamond, serif"              衬线、文艺
+  "Didot, Bodoni MT, serif"      衬线、时尚杂志标题
+  "Arial, sans-serif"            无衬线、通用
+  "Helvetica, Arial, sans-serif" 无衬线、现代
+  "Verdana, sans-serif"          无衬线、粗壮
+  "Trebuchet MS, sans-serif"     无衬线、亲和
+  "Impact, Charcoal, sans-serif" 无衬线、超粗标题
+  "Courier New, monospace"       等宽、打字机
+  "Brush Script MT, cursive"     手写、花体
+  "Comic Sans MS, cursive"       手写、随意
+  "Microsoft YaHei, sans-serif"  中文无衬线（黑体）
+  "SimSun, serif"                中文宋体
+  "KaiTi, STKaiti, serif"        中文楷体
+  "FangSong, STFangsong, serif"  中文仿宋
+
+规则：
+1. 每个视觉上独立的物体单独一层，不要合并。
+2. 文字层不要当图片，必须 kind=text 并给出内容与样式。
+3. bbox 尽量贴合物体实际范围，坐标相对原图左上角。
+4. z 顺序必须符合原图遮挡关系（被挡住的在下层）。
+5. **同一块文字只能出现一次**：不要把两块互不相干的文字合并成一条 kind=text
+   （例如把「标题」和旁边的「标签」并成一条多行文字）；也不要对同一块文字输出两条。
+   每条 kind=text 的 bbox 必须只框住它自己那一块文字，不要顺带框到旁边的另一块文字。
+   两块文字之间只要有肉眼可见的间距（约一个字宽以上），就必须分成两条，不许并成一条。
+6. kind=element 的 bbox 不要刻意把文字圈进去：文字一律单独成层，元素只描述它自己。
+7. **界面覆盖物必须单独成层**：画面里的鼠标指针 / 光标 / 箭头图形、选中框、悬浮小图标、
+   进度点这类「压在图片上面的小图形」都要各成一层 kind=element，z 高于它盖住的那一层。
+   它们往往很小（几十像素）、是纯色的尖角形状，最容易被当成装饰漏掉 ——
+   **逐个检查画面四角、工具条附近、以及任何标签或文字旁边有没有这类小图形**，有就单独列出来，
+   并在 cutout_prompt 里写清它是什么颜色、什么形状（例如 a pink mouse cursor arrow）。
+   ⚠️ 即使这个指针压在照片、人物或风景上，也**必须**单独成层 —— 它属于界面覆盖物，
+   不要因为「它叠在照片上」就把它当成照片内容的一部分而漏掉。
+只输出 JSON。"""
+
+# 🚨 「拆分层数」：用户可指定粒度（最低 2 = 背景 + 前景）。上面的规则 1「每个物体单独一层」
+# 在指定粒度时**必须显式覆盖** —— 否则模型仍会按几十个细碎元素返回（实测 47 个），层数控件等于没用。
+# 🚨 **文字层不占层数**（老板 2026-10-09 确认）：N = 背景 1 + 前景 (N-1)，文字按实际块数另算条数。
+# 🚨 背景层不在这里要 —— 由后端兜底生成（见 run_split_layers_task）。实测让模型「合并成 {n} 层」
+# 时它会把背景并进前景（target_layers=3 只回了 1 个元素层），而背景层本来就不需要抠图。
+# 🚨 **2 层模式的背景补全固定调用一次图像模型**：用户明确选择「元素层 + 背景层」时，
+#    背景不能因为 LLM 偏保守而退回本地补洞；这样输出就是稳定的 2 个基础层，文字层另算。
+#    3 层及以上仍由 LLM 的 background.need_model 决定是否调用模型。
+# 🚨 层数一变就要**重新优化提示词**（老板 2026-10-09 要求）：不是把数字替换一下了事，
+#    不同粒度要用不同的合并策略 —— 2~3 层要「大胆合并」，7~12 层才「按视觉分区拆细」。
+SPLIT_LAYERS_GRANULARITY_BANDS = (
+    (2, 3, "只保留最关键的视觉主体，其余全部并进背景或并进同一层；宁少勿多，绝不细碎。"),
+    (4, 6, "按「主体 / 主要陪衬 / 装饰」的层级合并，视觉重要性相近的并进同一层。"),
+    (7, 12, "按视觉分区拆细：主体、道具、装饰、纹理、光效各自成层，但同一物体的部件不要拆散。"),
+)
+
+
+def split_granularity_prompt(target):
+    """按目标层数生成「本次粒度要求」——层数变了，提示词就跟着重新优化。
+
+    返回空串表示不追加（未指定层数，走「每个物体单独一层」的默认行为）。
+    """
+    try:
+        n = int(target)
+    except (TypeError, ValueError):
+        return ""
+    if n < 2:
+        return ""
+    fore = max(1, n - 1)          # 背景固定 1 层，剩下都是前景
+    strategy = SPLIT_LAYERS_GRANULARITY_BANDS[-1][2]
+    for lo, hi, text in SPLIT_LAYERS_GRANULARITY_BANDS:
+        if lo <= n <= hi:
+            strategy = text
+            break
+    return f"""
+
+【本次粒度要求（覆盖上面的规则 1，以本节为准）】
+用户要的是 {n} 层 = 背景 1 层 + 前景 {fore} 层。背景层由程序自动补，你只负责前景、文字与界面覆盖物：
+- 不要输出覆盖整幅画面的背景/底图图层（程序会自带最底层背景）。
+- 前景只输出 {fore} 层：{strategy}
+- **当用户选择 2 层时，背景层必须由程序调用一次图像生成模型补全**；你仍只输出前景，不要输出背景图层。
+- 文字不占这 {n} 层：画面里有几块文字就输出几条 kind=text，各带自己的内容与样式。
+- 界面覆盖物（鼠标指针 / 光标 / 箭头这类小图形）也不占这 {n} 层：它们必须按规则 7 单独成层，
+  不要被上面那句「其余全部并进背景或并进同一层」吞掉，也不要当成照片或背景的一部分。
+- 层数宁少勿多：合并优于拆碎（但上面两条例外项不算在内）。"""
+
+SPLIT_LAYERS_ERASE_PROMPT = (
+    "Remove the text or logo in this image completely and seamlessly, filling the area "
+    "with the surrounding background texture so it looks like the text was never there. "
+    "Do not add any new text or objects. Keep everything else pixel-identical."
+)
+
+# ⚠️ **已被 SPLIT_LAYERS_CUTOUT_RULES 取代**（2026-10-09 内置关键提示词时改写为英文祈使句版本，
+#    由 split_element_cutout_prompt() 拼上 LLM 给的单层描述）。保留常量只为兼容旧引用。
+SPLIT_LAYERS_EXTRACT_PROMPT = (
+    "Cut out ONLY this object from the reference image. Remove the background completely "
+    "and output the object on a fully TRANSPARENT background as a PNG with a real alpha "
+    "channel. Keep the object's exact shape, proportions and appearance unchanged, and "
+    "keep it centered at the same position inside the frame. Do not add any extra "
+    "elements, shadows or text."
+)
+
+# 「纯背景」：把所有前景元素一次性从底图里抹掉。
+# 🚨 为什么是一次调用而不是逐个元素：逐个要按元素数线性增加耗时与费用，
+#    而这些区域彼此独立、一张遮罩就能全部表达完，所以合成一张遮罩交一次调用即可。
+# 遮罩约定沿用项目里既有的局部重绘：白色 = 允许改动（要移除的物体），黑色 = 必须原样保留。
+# 🚨 提示词必须写明「这是局部裁切 + 不许重构图」：只说「保持黑色区域不变」时模型照样会把
+#    整帧重画一遍，产出的背景跟原图对不上（见 split_erase_elements 的说明）。
+SPLIT_LAYERS_BACKGROUND_PROMPT = (
+    "You are given two images. Image 1 is a CROP of a larger photo. "
+    "Image 2 is a MASK for image 1: its WHITE regions mark exactly the objects you must remove, "
+    "its BLACK regions must stay pixel-identical to image 1. "
+    "Remove every person, object, product, graphic and text inside the WHITE regions, and fill "
+    "each of those regions seamlessly with the surrounding background texture (sky, wall, floor, "
+    "foliage, gradient, bokeh…) so it looks like those objects were never there. "
+    "Everything outside the white regions must stay EXACTLY as it is: same framing, same camera "
+    "angle, same lighting, same colors, same grain. Do not re-render, re-style, re-compose, zoom "
+    "or crop the picture. Do not add any new object, text, logo or watermark. "
+    "Output a clean, fully opaque image with no transparent areas."
+)
+
+# 🚨 auto 模式下每个元素、每个文字块都要打一次上游模型（实测成功约 30s/个）：
+# 47 个元素串行 ≈ 23 分钟、refine 9 个 ≈ 10 分钟，加上 erase 已远超前端
+# `SPLIT_LAYERS_TIMEOUT_MS`（20 分钟）→ 前端先判超时，界面永远空白（2026-10-09 事故）。
+# 这些调用彼此独立、绝大部分时间在等 I/O，所以并发跑把等待叠加起来。
+# 并发数别调太高：上游本身会返回 Cloudflare 524（~100s 读超时），并发越大越容易触发。
+SPLIT_LAYERS_EXTRACT_CONCURRENCY = 4
+SPLIT_LAYERS_REFINE_CONCURRENCY = 3
+SPLIT_LAYERS_ERASE_CONCURRENCY = 3
+
+# 文字块二次精修：把局部裁出来放大再问一次。整图问的时候模型给的 bbox 会偏
+# （实测偏 40px 量级），放大后同一个模型能给出贴合得多的框与字号。
+SPLIT_LAYERS_TEXT_PROMPT = """这是从原图裁切并放大 {zoom} 倍的局部图，本块左上角对应原图坐标 ({x0}, {y0})。
+
+请只分析图中的文字，输出严格 JSON：
+{{"found": true, "text": "<文字内容>", "bbox": [x, y, w, h], "font_size": <字号像素>,
+  "font_weight": "normal 或 bold", "color": "#rrggbb", "rotation": <角度>, "align": "left/center/right",
+  "lines": [{{"text": "<这一处的文字>", "bbox": [x, y, w, h]}}]}}
+
+规则：
+1. bbox 用「本图」的像素坐标，必须紧贴文字墨迹的外轮廓，不要留多余留白。
+2. font_size 也用「本图」的像素单位。
+3. 文字竖排或倾斜时，rotation 填旋转角度。
+4. 🚨 本块里若有**几处互不相邻**的文字（例如左上角一个标签、工具条上一排按钮里的字、
+   下面一行标题），`text` 用 \\n 把它们按从上到下、从左到右连起来，
+   `lines` 必须**逐处**给出：每一处的文字 + 它**自己**紧贴墨迹的 bbox（同样是本图坐标）。
+   只有一处文字时 `lines` 就放一条（与 text / bbox 一致）。
+5. 本块里没有文字就输出 {{"found": false}}。
+只输出 JSON。"""
+
+
+class SplitLayersRequest(BaseModel):
+    image_url: str = ""
+    provider_id: str = ""
+    model: str = ""
+    image_provider_id: str = ""
+    image_model: str = ""
+    mode: str = "auto"          # auto | local | model（auto/local 都走像素优先，只有 model 才让生图模型重绘元素层）
+    # ⚠️ 已废弃：像素优先后不再有「抹除文字」阶段（文字本身就是从原图裁出的像素层，
+    #    背景又是「原图减去各层覆盖范围」，文字自然不在背景里）。保留字段只为兼容旧前端。
+    erase_text: bool = True
+    # 用户要的拆分层数（最低 2 = 背景 + 前景）。0 = 不限制（旧的「每个物体单独一层」行为）。
+    # 🚨 **文字层不占层数**：画面里有几块文字就额外多几条 kind=text，N 只约束 背景 1 + 前景 (N-1)。
+    target_layers: int = 0
+    # 背景层要不要做成「纯背景」：把各层的覆盖范围从原图上挖掉再补上。关掉就退化成「整幅原图当背景」。
+    # 🚨 2026-10-10 老板口径：「背景层允许 LLM 决策生成的，可调用模型」——
+    #    开着的时侯，**用不用图像模型由 LLM 的 `background.need_model` 决定**：
+    #    背景是大面积连续色块就本地补（零费用零等待），前景背后压着复杂纹理才调一次模型
+    #    （`split_erase_elements`：局部重绘 + 按精确 alpha 并集贴回）。模型失败自动回落本地。
+    pure_background: bool = True
+
+
+# 「卡在哪一步」要能说清楚：每个阶段记一个中文名，失败卡片直接显示。
+SPLIT_LAYERS_PHASE_LABELS = {
+    "prepare": "读取图片",
+    "analyze": "分析画面元素",
+    "erase": "抹除文字",
+    "background": "生成纯背景",
+    "refine": "校准文字位置",
+    "extract": "提取图层",
+}
+
+
+def split_phase_advice(phase):
+    """按阶段给「下一步该怎么办」——这是用户最需要的，光报错没用。"""
+    if phase == "prepare":
+        return ("这一步还没开始调用模型，是图片本身读不出来。"
+                "请确认这张图还在素材里（没被清理）、格式是常见图片、且尺寸不小于 16×16 像素后重试。")
+    if phase in ("analyze", "refine"):
+        return ("这一步用的是**对话/视觉模型**。建议换「分析通道」或「分析模型」后重试："
+                "优先选带视觉能力的多模态模型（gpt-5/6 系列、gemini 系列），"
+                "小参数量或纯文本模型识别不出画面内容。若换了模型仍认不出，"
+                "多半是这张图元素太碎或太抽象，换一张主体明确的图更容易拆开。")
+    if phase in ("erase", "background", "extract"):
+        return ("这一步用的是**生图模型**。建议换「生图通道」或「生图模型」后重试："
+                "优先选 gpt-image 系列。若错误里出现 credits/quota/余额，"
+                "说明该通道额度用尽，换通道或充值后再试。")
+    return "建议换一个 API 通道或模型后重试。"
+
+
+def split_extract_json(text):
+    """从模型输出里抠出第一个配平的 JSON 对象。"""
+    if not isinstance(text, str):
+        return None
+    raw = text.strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```[A-Za-z]*\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+    start = raw.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(raw)):
+        ch = raw[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(raw[start:i + 1])
+                except Exception:
+                    return None
+    return None
+
+
+def split_norm_color(value, fallback="#111827"):
+    text = str(value or "").strip()
+    m = re.match(r"^#?([0-9a-fA-F]{6})$", text)
+    if m:
+        return "#" + m.group(1).lower()
+    m = re.match(r"^#?([0-9a-fA-F]{3})$", text)
+    if m:
+        r, g, b = m.group(1)
+        return ("#" + r + r + g + g + b + b).lower()
+    return fallback
+
+
+# 文字层的字体白名单。🚨 只认这一张表里的整串，模型写别的（或塞进 `;` / `"` 之类）
+# 一律回落到默认值 —— 这个值会原样进前端的 `style="font-family:..."`，
+# 不白名单就等于把 CSS 注入的口子敞开。
+SPLIT_LAYERS_FONT_STACKS = (
+    "Georgia, serif",
+    "Times New Roman, serif",
+    "Palatino, serif",
+    "Garamond, serif",
+    "Didot, Bodoni MT, serif",
+    "Arial, sans-serif",
+    "Helvetica, Arial, sans-serif",
+    "Verdana, sans-serif",
+    "Trebuchet MS, sans-serif",
+    "Impact, Charcoal, sans-serif",
+    "Courier New, monospace",
+    "Brush Script MT, cursive",
+    "Comic Sans MS, cursive",
+    "Microsoft YaHei, sans-serif",
+    "SimSun, serif",
+    "KaiTi, STKaiti, serif",
+    "FangSong, STFangsong, serif",
+)
+SPLIT_LAYERS_FONT_DEFAULT = "Arial, sans-serif"
+# 大小写不敏感 + 允许模型只给第一个族名（`"Georgia"` / `"georgia,serif"` 都算命中 Georgia）
+SPLIT_LAYERS_FONT_LOOKUP = {
+    stack: stack for stack in SPLIT_LAYERS_FONT_STACKS
+} | {
+    stack.split(",")[0].strip().lower(): stack for stack in SPLIT_LAYERS_FONT_STACKS
+}
+
+
+def split_norm_font_family(value, fallback=SPLIT_LAYERS_FONT_DEFAULT):
+    """把模型给的字体串归一到白名单里的一个整串（拿不到就回落默认）。"""
+    text = str(value or "").strip().strip("\"'").strip()
+    if not text:
+        return fallback
+    if text in SPLIT_LAYERS_FONT_LOOKUP:
+        return SPLIT_LAYERS_FONT_LOOKUP[text]
+    key = text.lower()
+    if key in SPLIT_LAYERS_FONT_LOOKUP:
+        return SPLIT_LAYERS_FONT_LOOKUP[key]
+    head = key.split(",")[0].strip()
+    return SPLIT_LAYERS_FONT_LOOKUP.get(head, fallback)
+
+
+def split_alpha_ok(img, min_ratio=0.02, max_ratio=0.98):
+    """判断一张图是不是「真的带有效透明通道」。"""
+    if not image_has_alpha(img):
+        return False
+    try:
+        rgba = img.convert("RGBA")
+        hist = rgba.getchannel("A").histogram()
+        total = max(1, rgba.size[0] * rgba.size[1])
+        ratio = hist[0] / total
+        return min_ratio <= ratio <= max_ratio
+    except Exception:
+        return False
+
+
+def split_measure_rotation(rgba, max_angle=45.0):
+    """从文字层的**像素**里量出真实倾斜角（度，顺时针为正，与 CSS `rotate()` 同号）。
+
+    量不出来返回 None（调用方保留模型给的值）。
+
+    🚨 为什么必须从像素量：模型给的 `rotation` 经常是 0（它读不出倾斜），
+    而像素层里文字明明就是斜的 —— 编辑态按 0 渲染，字就"立正"了。
+    这正是老板反馈的「转为编辑状态后旋转角度没有保持不变」。像素层是唯一真值来源，
+    且这是纯本地计算，不花一分钱、不依赖模型。
+
+    做法：粗到细扫角度，取「旋转后外接矩形面积最小」的那个角 —— 即最小面积矩形。
+
+    🚨 一道闸，缺了就等于把噪声当结论（拿老板真实产物踩出来的）：
+      **旋转不变形不量**：圆 / 环转任何角度外接矩形都一样大，那个"最小值"是噪声
+      （实测会把圆块报成边界 -45°）。判据用「扫描区间内最大 / 最小」的比值：
+      圆/环 ≈ 1.0，真文字 ≥ 1.6，分得很开。
+      ⚠️ 不能用「±10° 邻域」当判据：稀疏字形的邻域比值只有 1.077，会误杀真文字。
+      ⚠️ 也不能用 bbox 长宽比：横条倾到 44° 时 bbox 也是方的，那样会否掉真角度。
+      ⚠️ 更不能用「bbox 填充率高 = 实心块」当判据：文字带徽章底（实测 6 个文字层里
+         3 个是这样，填充率 0.85）时 alpha 就是一块圆角矩形 —— 而那块矩形的朝向
+         恰恰就是文字的朝向，量它反而正合适。
+
+    ⚠️ 内层循环的基准角必须先在 `base` 里冻结：`best` 在循环里会被改写，
+       直接写 `a = best + i * step` 会让采样网格跟着漂移（实测会一路漂到边界 -45°）。
+    """
+    alpha = rgba.getchannel("A")
+    box = alpha.getbbox()
+    if not box:
+        return None
+    crop = alpha.crop(box)
+    w, h = crop.size
+    if min(w, h) < 6 or w * h < 64:
+        return None
+
+    def area_at(angle):
+        probe = crop.rotate(angle, expand=True, resample=Image.BILINEAR)
+        bb = probe.getbbox()
+        return (bb[2] - bb[0]) * (bb[3] - bb[1]) if bb else 0
+
+    best, best_area = 0.0, None
+    for span, step in ((max_angle, 3.0), (3.0, 0.5), (0.6, 0.1)):
+        base = best
+        for i in range(-int(span / step), int(span / step) + 1):
+            angle = base + i * step
+            if abs(angle) > max_angle:
+                continue
+            area = area_at(angle)
+            if not area:
+                continue
+            if best_area is None or area < best_area - 1e-9:
+                best_area, best = area, angle
+    if best_area is None:
+        return None
+    # 闸：扫描区间内面积几乎不变 ⇒ 形状对旋转不敏感（圆/环），最小值是噪声
+    worst = max(area_at(a) for a in (-max_angle, -max_angle / 2, 0.0,
+                                     max_angle / 2, max_angle))
+    if worst <= best_area * 1.15:
+        return None
+    return round(best, 1)
+
+
+def split_measure_text_angle(src_rgba, bbox, pad_ratio=0.25, quantile=88.0):
+    """从**原图**量文字的真实倾斜角（度，顺时针为正，与 CSS `rotate()` 同号）。
+
+    🚨 为什么不能只用 `split_measure_rotation`（2026-10-10 老板「字体倾斜角度」实测）：
+    那条路量的是**文字层自己的 alpha**，而这块 alpha 已经被两道加工改过 ——
+      ① `split_clamp_alpha` 把 15% 外扩夹回 LLM bbox（+4px），胶囊/底板的圆角被切掉一块；
+      ② 本地抠图会把底板的亮边框一起抠进来。
+    于是「最小面积矩形」量到的是**这块残缺形状**的朝向，不是文字的朝向。
+    实测老板那张图（全局 UI 倾角由三条长边一致量得 **+1.26°**：卡片上缘 +1.27 /
+    下缘 +1.26 / 工具栏上缘 +1.25）：
+        后端(旧)   Anya **+6.0**   Woman portrait 0.0   Nano Banana **+3.0**   Mahmud +1.0
+        真值        +1.26          +1.26               +1.26                    +1.26
+    Anya 差 4.7°、Nano Banana 差 1.7° —— 编辑态照这个渲染，字就是歪的（老板看到的就是这个）。
+
+    做法（只看**原图**那一小块，完全不碰 alpha）：取亮度最高的一档像素当墨迹（亮字暗底 /
+    暗字亮底两种极性都试，取「有效列更多」的那一种 —— 极性选错时逐列会被整列背景占满，
+    被下面的高度闸滤掉），再逐列取墨迹的**上缘与下缘**，各自做 Theil-Sen 稳健回归
+    （点对斜率取中位），两个角再取中位。
+    「上缘 + 下缘取中位」是为了抵消降部（y / p / g）的偏置 —— 单看下缘会被降部拉斜。
+    实测（老板那张图）：Anya +0.9 / Woman portrait +1.25 / Nano Banana +1.24 / Mahmud +1.25。
+
+    闸（量不准宁可不改，让调用方保留原值）：
+      · 有效列 < 12 → None（文字太短/太稀，回归不可信）；
+      · 某列的墨迹高度 > 0.75 × 框高 → 丢掉（那是底板/边框，不是文字笔画）；
+      · 拟合残差 IQR > 2.5px → None（背景太花，直线拟合不成立）；
+      · |角度| > 20° → None（文字极少斜成这样，更可能是量错了）。
+    """
+    if src_rgba is None or not bbox or len(bbox) < 4:
+        return None
+    try:
+        x, y, w, h = (int(round(float(v))) for v in bbox[:4])
+    except (TypeError, ValueError):
+        return None
+    if w <= 4 or h <= 4:
+        return None
+    pad = max(4, int(h * pad_ratio))
+    bw, bh = src_rgba.size
+    x0, y0 = max(0, x - pad), max(0, y - pad)
+    x1, y1 = min(bw, x + w + pad), min(bh, y + h + pad)
+    if x1 - x0 < 8 or y1 - y0 < 8:
+        return None
+    gray = src_rgba.crop((x0, y0, x1, y1)).convert("L")
+    cw, ch = gray.size
+    total = float(cw * ch)
+    if total <= 0:
+        return None
+    hist = gray.histogram()
+
+    def level_for(frac):
+        acc = 0
+        for v in range(256):
+            acc += hist[v]
+            if acc >= frac * total:
+                return v
+        return 255
+
+    hi = level_for(min(0.99, quantile / 100.0))
+    lo = level_for(max(0.01, 1.0 - quantile / 100.0))
+    px = gray.load()
+    max_h = 0.75 * ch
+
+    def fit(pred):
+        cols = []
+        for cx in range(cw):
+            t = -1
+            b = -1
+            n = 0
+            for cy in range(ch):
+                if pred(px[cx, cy]):
+                    if t < 0:
+                        t = cy
+                    b = cy
+                    n += 1
+            if n < 2 or (b - t + 1) > max_h:
+                continue
+            cols.append((cx, t, b))
+        if len(cols) < 12:
+            return None
+        xs = [c[0] for c in cols]
+
+        def theil(idx):
+            ys = [c[idx] for c in cols]
+            slopes = []
+            n = len(xs)
+            for i in range(0, n - 1, 2):
+                for j in range(i + 1, n, 3):
+                    dx = xs[j] - xs[i]
+                    if dx:
+                        slopes.append((ys[j] - ys[i]) / float(dx))
+            if not slopes:
+                return None, None
+            slopes.sort()
+            return slopes[len(slopes) // 2], ys
+
+        kt, tops = theil(1)
+        kb, bots = theil(2)
+        if kt is None or kb is None:
+            return None
+        resid = []
+        for i, cx in enumerate(xs):
+            resid.append(tops[i] - (kt * (cx - xs[0]) + tops[0]))
+            resid.append(bots[i] - (kb * (cx - xs[0]) + bots[0]))
+        resid.sort()
+        iqr = resid[int(0.75 * (len(resid) - 1))] - resid[int(0.25 * (len(resid) - 1))]
+        return iqr, (kt + kb) / 2.0, len(cols) / float(cw)
+
+    # 🚨 极性（亮字暗底 / 暗字亮底）靠**拟合残差更小**的那一极选，不看「哪一极像素多」：
+    #    文字那一极能拟成一条干净的直线，选错的那一极拟的是背景，残差大得多。
+    #    实测反例：`Woman portrait` 的暗极有效列 197 > 亮极 166，但暗极 IQR 10.9、亮极 7.6
+    #    —— 按「列数多」会选错，按 IQR 就选对了（五块实测全都选中亮极）。
+    # ⚠️ 但 IQR **不能**当「准不准」的闸：文字墨迹本身就高低不齐（升降部、标点、字间空隙），
+    #    实测真文字的 IQR 就有 5~9px；拿它拒收会把五块文字全拒掉（实测过一次，全 None）。
+    #    它只负责在两种极性之间挑一个。
+    fits = [f for f in (fit(lambda v: v >= hi), fit(lambda v: v <= lo)) if f is not None]
+    if not fits:
+        return None
+    iqr, k, frac = min(fits, key=lambda t: t[0])
+    # 「像不像文字」闸：墨迹要占住大半个框宽（实测真文字 0.64~0.71），但又不能铺满整框
+    # （铺满说明那一极选的是背景，不是笔画）。
+    if not (0.30 <= frac <= 0.92):
+        return None
+    deg = math.degrees(math.atan(k))
+    if abs(deg) > 20.0:
+        return None
+    return round(deg, 1)
+
+
+def split_local_cutout(img, thresh=42):
+    """本地去背兜底：从四边 flood-fill 连通的近背景色区域，只吃连通背景，不碰内部白色。"""
+    rgba = img.convert("RGBA")
+    w, h = rgba.size
+    if w < 2 or h < 2:
+        return rgba
+    marker = (255, 0, 255, 255)
+    work = rgba.copy()
+    step = max(1, min(w, h) // 60)
+    seeds = []
+    for x in range(0, w, step):
+        seeds.append((x, 0))
+        seeds.append((x, h - 1))
+    for y in range(0, h, step):
+        seeds.append((0, y))
+        seeds.append((w - 1, y))
+    for seed in seeds:
+        try:
+            if work.getpixel(seed)[:3] == marker[:3]:
+                continue
+            ImageDraw.floodfill(work, seed, marker, thresh=thresh)
+        except Exception:
+            pass
+    src_px = rgba.load()
+    mk_px = work.load()
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    out_px = out.load()
+    for y in range(h):
+        for x in range(w):
+            c = mk_px[x, y]
+            if c[0] == 255 and c[1] == 0 and c[2] == 255:
+                continue
+            out_px[x, y] = src_px[x, y]
+    return out
+
+
+def split_square_pad(img, min_side=0):
+    """居中补成正方形（透明填充），可选先放大到 min_side。返回 (方形图, 原始内框尺寸)。"""
+    cur = img
+    if min_side:
+        k = max(1.0, float(min_side) / max(1, min(cur.size)))
+        if k > 1.0:
+            cur = cur.resize((int(round(cur.size[0] * k)), int(round(cur.size[1] * k))), Image.LANCZOS)
+    inner = cur.size
+    side = max(inner)
+    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    canvas.paste(cur, ((side - inner[0]) // 2, (side - inner[1]) // 2))
+    return canvas, inner
+
+
+def split_unpad(img, inner_size):
+    """split_square_pad 的逆操作：从正方形里裁回原始比例。"""
+    side = img.size[0]
+    iw, ih = inner_size
+    left = (side - iw) // 2
+    top = (side - ih) // 2
+    return img.crop((left, top, left + iw, top + ih))
+
+
+# ---------- 像素优先：每层像素都取自原图，模型只回答「哪里有什么」 ----------
+#
+# 🚨 为什么要有这一组函数（2026-10-09 老板反馈「对比原图的还原度还是不够」）：
+#    早期流程里元素层交给生图模型**重绘**、文字层由前端用系统字体**重画**。
+#    模型重绘必然漂移，系统字体更是永远对不上原图的字体/字距/描边/发光。
+#    实测取证：背景层 + 元素层叠加与原图的偏差是 **0/255**（这两层本来就是像素保持的），
+#    唯一的漂移源就是被重画的文字层。
+#    现在改成「像素优先」：模型只回答「哪里有什么、框在哪」，每层像素一律从原图裁，
+#    alpha 用本地算法（split_local_cutout 本来就是像素保持的，只改 alpha 不动 RGB）。
+#    这样有个很强的性质 ——
+#    **只要每层像素都取自原图同一坐标，叠加就恒等于原图，与 bbox 准不准无关**
+#    （把原图像素原样贴回原处 = 什么都没变）。
+
+
+def split_layer_hole(alpha, thresh=128):
+    """把图层 alpha 变成「背景要挖掉的洞」：>= thresh 就算挖（二值化）。
+
+    🚨 必须二值化：只有「完全不透明 / 完全透明」两种状态，叠加才是逐像素恒等；
+    留半透明像素的话，背景在那些位置的补丁会透出来，叠加就不再等于原图。
+    split_local_cutout 产出的本来就是二值 alpha（0/255），阈值取多少都一样。
+
+    🚨 阈值取 **128** 而不是「>0」（2026-10-10 改）：图像模型返回的掩码是**抗锯齿软边**，
+    实测老板 2026-10-10 产物里 alpha 落在 1..254 的像素占 4.5%（实心内部值 ≈250）。
+    用「>0」等于把整圈过渡带连同零星噪点全算成实心 —— 边界发毛、还散落小点；
+    取中点 128 才是这类软边掩码的标准二值化。两层用的是同一个函数，
+    所以「叠加恒等于原图」这条性质不受影响（还原度仍为 0）。
+    """
+    return alpha.convert("L").point(lambda v: 255 if v >= thresh else 0)
+
+
+def split_local_fill(img, hole):
+    """把 hole（L，255 = 要补的洞）用「降采样再放大」得到的低频内容填上。
+
+    纯 PIL、不调模型：洞里的内容只在「单独看背景层」时可见，叠加时正好被元素层盖住，
+    所以只要颜色连续、没有硬边就够，不值得为它花钱调一次生图模型。
+
+    🚨 洞的边界**不羽化**：必须与元素层的 alpha 边界逐像素重合，否则补丁溢出洞外，
+    叠加时就在元素层旁边露出一圈「不是原图」的颜色。
+    """
+    rgba = img.convert("RGBA")
+    w, h = rgba.size
+    box = hole.getbbox()
+    if not box:
+        return rgba
+    span = max(box[2] - box[0], box[3] - box[1])
+    # k 越大越糊：够把洞填平、又保住大尺度结构（天空/墙面/渐变这类最常见）
+    k = max(2, min(16, span // 12))
+    small = rgba.resize((max(2, w // k), max(2, h // k)), Image.BOX)
+    fill = small.resize((w, h), Image.BICUBIC)
+    out = rgba.copy()
+    out.paste(fill, (0, 0), hole)
+    return out
+
+
+def split_clamp_alpha(img, box):
+    """把图层 alpha 夹进 box=(x0,y0,x1,y1)：框外的 alpha 一律清 0，RGB 不动。
+
+    🚨 为什么文字层必须夹（2026-10-10 实测）：`split_pixel_layer` 为了给 flood-fill 留背景
+    会按「bbox + 15% 外扩」裁切，`split_local_cutout` 只吃「从四边连通的背景」，于是框里
+    **其它亮东西也被当文字留下来** —— 实测老板那张图里，文字层的 alpha 除了 `Woman portrait`
+    还多出**工具条下沿**和**卡片上沿**两条横线（y=170~179 / y=243~251）。
+    这些假像素会顺着 alpha 流到两个地方，两处都伤原图：
+      ① 背景层的洞（把工具条/卡片边也挖掉）；
+      ② 元素层挖文字（把工具条/卡片边从元素里挖掉）。
+    LLM 的 bbox 是「这一块文字」的范围，夹一下就能把邻居剔掉。
+    """
+    if img is None:
+        return img
+    x0, y0, x1, y1 = (int(round(float(v))) for v in box)
+    w, h = img.size
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(w, x1), min(h, y1)
+    if x1 <= x0 or y1 <= y0:
+        return Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    keep = Image.new("L", (w, h), 0)
+    keep.paste(255, (x0, y0, x1, y1))
+    out = img.convert("RGBA").copy()
+    out.putalpha(ImageChops.multiply(out.getchannel("A"), keep))
+    return out
+
+
+def split_fill_text_holes(img, hole, rounds=6):
+    """把**文字洞**用「低频补 + 迭代收敛」彻底糊掉。
+
+    🚨 为什么不能只用一次 `split_local_fill`（2026-10-10 实测）：文字笔画很细，一次降采样
+    会把**笔画自己的亮度**摊进平均值里 —— 洞补完还剩一层淡影（实测洞内文字亮度仍保留 82%）。
+    迭代几次之后，补进来的内容会参与下一轮平均，文字能量按几何级数衰减，几轮就看不出来了。
+    而文字层会在最上面把文字重画一遍，所以这里「糊掉」是安全的。
+
+    🚨 rounds 默认从 3 提到 6（2026-10-10 老板「文字层/元素层边缘」实测）：3 轮在细笔画上还
+    不够 —— 实测文字层 `9:16`（洞内其实是胶囊底）补完后仍比周围亮 **8.7**，6 轮压到 **4.9**、
+    10 轮 2.4。取 6 是因为再往上收益递减（其余四块在 3 轮时就已经 ≤2.7），而每多一轮都是
+    一次全画布降采样 + 上采样。⚠️ 元素洞不能这么糊：那里没有东西盖回来，糊过头会露出补丁。
+    """
+    out = img.convert("RGBA")
+    if hole is None or not hole.getbbox():
+        return out
+    for _ in range(max(1, int(rounds))):
+        out = split_local_fill(out, hole)
+    return out
+
+
+def split_text_key(value):
+    """文字内容归一化：去掉所有空白再转小写，用来判「同一条文字」。"""
+    return re.sub(r"\s+", "", str(value or "")).lower()
+
+
+def split_prune_text_layers(items):
+    """丢掉 LLM 重复 / 合并出来的文字层（2026-10-10 加，老板实测产物为据）。
+
+    实测（老板 2026-10-10 那张图）LLM 一次返回了 5 条 kind=text，其中 3 条是坏的：
+      · 「图像标题」bbox 把 Anya / 9:16 / Woman portrait 三块全框进去，text 是三行拼接；
+      · 「画幅比例」text 只有 `9:16 Na`（被截断），和「模型名称」的 `9:16 Nano Banana` 撞车；
+      · 两条同区域文字叠加渲染 → 画面上出现**重复文字**（老板说的「文字层不对」）。
+    坏层不删的代价是双份：既多画一遍，又各自把别人的像素从元素层里挖掉。
+
+    🚨 删掉一条文字层是**安全**的：后端不会为它挖洞，那块文字就以原图像素的形式留在
+    元素层/背景层里，画面上仍然只出现一次 —— 只是不再可编辑。所以这里的判据可以保守，
+    宁可漏删不可错删。
+    """
+    if not items or len(items) < 2:
+        return items
+
+    def box(it):
+        b = it.get("bbox") or []
+        if len(b) < 4:
+            return None
+        try:
+            x, y, w, h = (int(round(float(v))) for v in b[:4])
+        except (TypeError, ValueError):
+            return None
+        return (x, y, w, h) if w > 0 and h > 0 else None
+
+    def inside(a, b, tol=6):
+        # tol：容差。LLM 两次给同一块文字时框会差几像素（实测 693 vs 697），硬判包含会漏。
+        return (a[0] >= b[0] - tol and a[1] >= b[1] - tol
+                and a[0] + a[2] <= b[0] + b[2] + tol and a[1] + a[3] <= b[1] + b[3] + tol)
+
+    def overlap(a, b):
+        ix = max(0, min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0]))
+        iy = max(0, min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1]))
+        return ix * iy
+
+    drop = set()
+
+    # ① 合并层：自己的框里装着 ≥2 条别的文字，且自己写了多行 —— 典型的「把几块文字并成一条」。
+    #    先判这条，否则它会把下面的截断/重复判据搅乱。
+    for i, a in enumerate(items):
+        ba = box(a)
+        if ba is None or len(str(a.get("text") or "").split("\n")) < 2:
+            continue
+        n = sum(1 for j, b in enumerate(items)
+                if j != i and box(b) is not None and inside(box(b), ba))
+        if n >= 2:
+            drop.add(i)
+
+    for i, a in enumerate(items):
+        if i in drop:
+            continue
+        ba, ta = box(a), split_text_key(a.get("text"))
+        if ba is None or not ta:
+            continue
+        for j, b in enumerate(items):
+            if j == i or j in drop:
+                continue
+            bb, tb = box(b), split_text_key(b.get("text"))
+            if bb is None or not tb:
+                continue
+            ov = overlap(ba, bb)
+            small = min(ba[2] * ba[3], bb[2] * bb[3])
+            if not small or ov < 0.5 * small:
+                continue
+            # ② 截断重复：`9:16 Nanc` 是被截断的 `9:16 Nano Banana` —— 删短的那条。
+            #    判据 = ① 短的那条框在长的框里（说明是同一处文字）
+            #           ② 归一化后短的整串是长的前缀，或前 60% 字符相同
+            #    （LLM 截断时经常把最后一个字读错 —— 实测就是 `9:16 Nanc`，所以不能只判严格前缀）。
+            #    「框在内」这一条是为了不误伤：两块真的不同、只是开头相同的文字
+            #    （`Total: 10` / `Total: 20`）位置不会互相包含。
+            if ta != tb and len(ta) < len(tb) and inside(ba, bb):
+                common = 0
+                for ca, cb in zip(ta, tb):
+                    if ca != cb:
+                        break
+                    common += 1
+                if tb.startswith(ta) or common >= 0.6 * len(ta):
+                    drop.add(i)
+                    break
+            # ③ 完全重复：同一块文字输出了两条 —— 删框更松的那条（保留贴得更紧的）
+            if ta == tb and inside(bb, ba):
+                drop.add(i)
+                break
+
+    kept = [it for k, it in enumerate(items) if k not in drop]
+    for k in sorted(drop):
+        print(f"[split-layers] 丢弃重复/合并的文字层：{items[k].get('name')} "
+              f"{items[k].get('bbox')} {str(items[k].get('text'))[:40]!r}")
+    return kept or items[:1]
+
+
+def split_pick_space(text, ratio):
+    """在 text 里挑一个空格，使「它左边的排版宽度占比」最接近 ratio。返回 None = 没有合适的。
+
+    为什么按空格位置估占比而不是逐字符量宽度：前端用的是系统字体栈，量不出宽度；
+    但「空格」是唯一可能对应像素空隙的字符，只要空隙落在某个空格附近就能对上。
+    权重取「非空格 1、空格 0.4」（空格本身很窄），足够分辨「9:16 | Nano Banana」
+    与「Woman | portrait」这种两段式。
+    """
+    spaces = [i for i, ch in enumerate(text) if ch.isspace()]
+    if not spaces:
+        return None
+    weights = [0.4 if ch.isspace() else 1.0 for ch in text]
+    total = sum(weights) or 1.0
+    best, best_err = None, None
+    for i in spaces:
+        frac = sum(weights[:i]) / total
+        err = abs(frac - ratio)
+        if best_err is None or err < best_err:
+            best, best_err = i, err
+    # 占比差太多说明这个空隙对不上任何空格（可能是图形内部的空隙），宁可不拆
+    return best if best_err is not None and best_err <= 0.22 else None
+
+
+def split_text_runs(full, item, min_gap_ratio=0.7):
+    """把「一次 LLM 把两块分开的文字并成一条」的文字层拆回两块。
+
+    🚨 为什么必须有（2026-10-10 老板「9:16 和 Nano Banana 没有对齐」）：
+    LLM 把工具条上的 `9:16` 画幅芯片和 `Nano Banana` 模型名并成了一条
+    kind=text（text="9:16 Nano Banana"，bbox 宽 232）。前端编辑态是按 bbox 用系统字体
+    `fillText` **整串重画**的 —— 原图里这两块之间隔着 **41px**，而一条字符串只有一个空格，
+    于是 `Nano Banana` 被画到 `9:16` 旁边，与原图位置错开一截（老板截图里的错位就是这个）。
+    同时合并后的框又宽又空，背景层挖的洞也盖不准原文字，叠出来还有一层残影。
+
+    修法用**像素真值**：文字层的 alpha 是刚从原图裁出来的，它的列向墨迹剖面里
+    那块 41px 的空隙是实打实的。测得空隙 ≥ 0.7 倍行高、且文案里有一个空格能对上它，
+    就按空隙把这一层拆成两条（各自贴自己的实测 bbox，文案按空格切）。
+
+    返回 [(item, plate), ...]，通常就是原样一条；只有真的测到大空隙才拆成两条。
+    """
+    if full is None:
+        return [(item, full)]
+    text = str(item.get("text") or "")
+    # 多行文字不拆：行与行之间的语义结构在 \n 里，横向拆会把 \n 弄丢
+    if "\n" in text or len(text.strip()) < 3:
+        return [(item, full)]
+    alpha = split_layer_hole(full.getchannel("A"))
+    box = alpha.getbbox()
+    if not box:
+        return [(item, full)]
+    x0, y0, x1, y1 = box
+    h = y1 - y0
+    if h <= 0:
+        return [(item, full)]
+    cols = [any(alpha.getpixel((x, y)) for y in range(y0, y1)) for x in range(x0, x1)]
+    runs = []
+    x = 0
+    while x < len(cols):
+        if cols[x]:
+            s = x
+            while x < len(cols) and cols[x]:
+                x += 1
+            runs.append((s, x - 1))
+        else:
+            x += 1
+    if len(runs) < 2:
+        return [(item, full)]
+    gaps = [(runs[i][1] + 1, runs[i + 1][0] - 1) for i in range(len(runs) - 1)]
+    gi = max(range(len(gaps)), key=lambda i: gaps[i][1] - gaps[i][0])
+    gs, ge = gaps[gi]
+    if (ge - gs + 1) < max(10, int(round(h * min_gap_ratio))):
+        return [(item, full)]
+    ratio = ((gs + ge) / 2.0) / max(1.0, float(x1 - x0))
+    idx = split_pick_space(text, ratio)
+    if idx is None:
+        return [(item, full)]
+    left_text, right_text = text[:idx].strip(), text[idx + 1:].strip()
+    if not left_text or not right_text:
+        return [(item, full)]
+
+    left_runs, right_runs = runs[:gi + 1], runs[gi + 1:]
+
+    def rows_of(xa, xb):
+        ys = [y for y in range(y0, y1)
+              if any(alpha.getpixel((x, y)) for x in range(xa, xb))]
+        return (min(ys), max(ys) + 1) if ys else (y0, y1)
+
+    def make(sub_text, xa, xb, suffix):
+        ya, yb = rows_of(xa, xb)
+        it = dict(item)
+        it["id"] = f"{item.get('id')}{suffix}"
+        it["bbox"] = [xa, ya, max(1, xb - xa), max(1, yb - ya)]
+        it["text"] = sub_text
+        # 拆出来的两条原来同名，图层列表里看就是两行一模一样的名字 —— 把文字缀上，
+        # 用户一眼能认出哪条是 `9:16`、哪条是 `Nano Banana`。
+        it["name"] = (f"{item.get('name')} · {sub_text}")[:60]
+        chars = len(sub_text)
+        if chars >= 2:
+            # 与 split_refine_text 同一口径：单行文字「行长度 ≈ 字数 x 0.68 x 字号」
+            it["font_size"] = int(round(max(6.0, min(400.0,
+                                                     max(xb - xa, yb - ya) / (chars * 0.68)))))
+        return it
+
+    left = make(left_text, x0 + left_runs[0][0], x0 + left_runs[-1][1] + 1, "a")
+    right = make(right_text, x0 + right_runs[0][0], x0 + right_runs[-1][1] + 1, "b")
+    print(f"[split-layers] 文字层含 {ge - gs + 1}px 空隙，已拆成两条："
+          f"{left['name']} {left['bbox']} {left_text!r} / "
+          f"{right['name']} {right['bbox']} {right_text!r}")
+    return [(left, full), (right, full)]
+
+
+def split_text_by_lines(full, item, pad=4):
+    """把「LLM 把好几处分散的文字并成一条多行文字」按**逐处 bbox** 拆成多条图层。
+
+    🚨 为什么必须有（2026-10-10 老板「文字层更不对了」）：
+    前端编辑态是**按 bbox 用系统字体重画**的 —— 它把 `text` 里的 \\n 当成**一个段落**，
+    按「字号 x 1.15」的行距从盒子左上角**左对齐**排下来。
+    而 LLM 常把「左上角 Anya 胶囊 + 工具条上的 9:16 / Nano Banana + 工具条下面的
+    Woman portrait」这种**散布在画面各处**的界面文字并成一条多行文字；
+    于是画面上出现一个「四行左对齐的大字块」：既不在原位，整段还会被墨迹盒拟合撑满 bbox 而变大。
+    实测老板 2026-10-10 截图就是这个（`text` 四行、bbox 却横跨整个工具条区）。
+
+    位置真值只有一条可靠来源：`item["lines"]` —— split_refine_text 让模型在**放大 zoom 倍**的
+    局部图上逐处标的 bbox。**纯像素分段在这里靠不住**：`Anya` 的胶囊比它自己的字还宽，
+    按宽度配对会和 `9:16` 换位；而 LLM 给的行序又不是阅读序，位置约束也救不回来。
+    所以没有 `lines` 就原样返回（宁可不动，也不要乱拆）。
+
+    还要过两道自检，任何一道不过就原样返回：
+      ① `lines` 的条数 == `text` 按 \\n 切出来的条数；
+      ② 每一处的框在**本层 alpha** 里真的压着墨迹，且各框不互相大面积重叠（>40%）。
+
+    返回 [(item, plate), ...]，通常就是原样一条。
+    """
+    lines = item.get("lines")
+    if full is None or not isinstance(lines, (list, tuple)) or len(lines) < 2:
+        return [(item, full)]
+    parts = [s.strip() for s in str(item.get("text") or "").split("\n")]
+    parts = [s for s in parts if s]
+    if len(parts) != len(lines):
+        return [(item, full)]
+    alpha = split_layer_hole(full.getchannel("A"))
+    ab = alpha.getbbox()
+    if not ab:
+        return [(item, full)]
+    boxes = []
+    for ln in lines:
+        b = (ln or {}).get("bbox") if isinstance(ln, dict) else None
+        if not isinstance(b, (list, tuple)) or len(b) < 4:
+            return [(item, full)]
+        try:
+            x, y, w, h = (int(round(float(v))) for v in b[:4])
+        except (TypeError, ValueError):
+            return [(item, full)]
+        if w <= 1 or h <= 1:
+            return [(item, full)]
+        boxes.append((x, y, w, h))
+    for i, (x, y, w, h) in enumerate(boxes):
+        cx0, cy0 = max(ab[0], x), max(ab[1], y)
+        cx1, cy1 = min(ab[2], x + w), min(ab[3], y + h)
+        if cx1 - cx0 < 2 or cy1 - cy0 < 2:
+            return [(item, full)]
+        if not alpha.crop((cx0, cy0, cx1, cy1)).getbbox():
+            return [(item, full)]
+        for j, (x2, y2, w2, h2) in enumerate(boxes):
+            if j == i:
+                continue
+            ix = max(0, min(x + w, x2 + w2) - max(x, x2))
+            iy = max(0, min(y + h, y2 + h2) - max(y, y2))
+            if ix * iy > 0.40 * min(w * h, w2 * h2):
+                return [(item, full)]
+
+    out = []
+    for i, ((x, y, w, h), ln) in enumerate(zip(boxes, lines)):
+        it = dict(item)
+        it.pop("lines", None)
+        it["id"] = f"{item.get('id')}L{i + 1}"
+        it["text"] = str((ln or {}).get("text") or parts[i])[:200]
+        it["name"] = f"{item.get('name')} · {it['text']}"[:60]
+        plate = split_clamp_alpha(full, (x - pad, y - pad, x + w + pad, y + h + pad))
+        tight = split_layer_hole(plate.getchannel("A")).getbbox() if plate is not None else None
+        it["bbox"] = ([tight[0], tight[1], tight[2] - tight[0], tight[3] - tight[1]]
+                      if tight else [x, y, w, h])
+        nb = it["bbox"]
+        chars = len(it["text"])
+        if chars >= 2:
+            # 与 split_refine_text / split_text_runs 同一口径：
+            # 单行文字「行长度 ≈ 字数 x 0.68 x 字号」
+            it["font_size"] = int(round(max(6.0, min(400.0,
+                                                     max(nb[2], nb[3]) / (chars * 0.68)))))
+        out.append((it, plate))
+    print(f"[split-layers] 多行文字层按逐处 bbox 拆成 {len(out)} 条："
+          f"{[p[0]['text'] for p in out]}")
+    return out
+
+
+def split_pixel_layer(src_rgba, width, height, item, pad_ratio=0.06, min_pad=8):
+    """从**原图**裁出这一层的像素 + 本地抠图出的 alpha，产出全画布尺寸的透明图层。
+
+    🚨 像素必须取自 src_rgba（原图），不能取抹过文字的底图：
+    否则这一层的像素与原图不一致，叠加就不再等于原图。
+
+    抠不出有效透明区时整块保留（alpha 全 255）—— 叠加还原度不受影响，
+    只是「单独看这一层」会是一块矩形，detail 里会说明，cut_ok 会返回 False。
+
+    返回 (全画布图层, method, detail, cut_ok)；bbox 无效时图层为 None。
+    🚨 cut_ok 是「本地到底抠出来没有」的唯一权威结论，调用方据此决定要不要去调图像模型。
+      不要另写一个「统计 bbox 内 alpha」的判据 —— 实心矩形元素 bbox 内本来就全不透明，
+      那样会把「元素本来就是方的」误判成「抠图失败」，白花一次模型钱还引入漂移。
+    """
+    bbox = item.get("bbox") or []
+    if len(bbox) < 4:
+        return None, "local", "bbox 无效", False
+    try:
+        x, y, w, h = (int(round(float(v))) for v in bbox[:4])
+    except (TypeError, ValueError):
+        return None, "local", "bbox 不是数字", False
+    if w <= 0 or h <= 0:
+        return None, "local", "bbox 宽高为 0", False
+    # 外扩一点：本地抠图靠「从四边 flood-fill 吃掉背景」，贴边的框没有背景可吃
+    pad = max(min_pad, int(max(w, h) * pad_ratio))
+    x0, y0 = max(0, x - pad), max(0, y - pad)
+    x1, y1 = min(width, x + w + pad), min(height, y + h + pad)
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return None, "local", "bbox 超出画布", False
+    crop = src_rgba.crop((x0, y0, x1, y1)).convert("RGBA")
+    cut = split_local_cutout(crop)
+    cut_ok = split_alpha_ok(cut)
+    detail = "原图像素 + 本地抠图"
+    if not cut_ok:
+        cut = crop.copy()
+        detail = "原图像素（没抠出透明区，整块保留）"
+    full = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    full.paste(cut, (x0, y0))
+    return full, "local", detail, cut_ok
+
+
+def split_model_outline_layer(src_rgba, model_full, base_full=None):
+    """模型只提供**轮廓**：alpha 取自模型，RGB 一律取自原图（2026-10-09 老板口径）。
+
+    🚨 2026-10-10 起，主流程**不再传 `base_full`**（保留参数只为兼容/回放旧逻辑）。
+    实测（老板 2026-10-10 真实产物）取并集是**有害**的：模型掩码本身是干净的人形剪影
+    （不透明 15.00%），并集后变成 20.53% —— 多出来的 5.65% 全是本地 flood-fill 没抠掉的
+    花园背景（纹理背景上 thresh=42 几乎无效），元素层从「一个人」被撑成「整张卡片」。
+    所以现在以模型掩码为唯一 alpha 来源；本地只在**模型失败时**兜底。
+
+    `base_full`（本地抠图那一版）传进来时才取**并集**：模型轮廓只能「加」，不能「减」。
+    原因（2026-10-09 老板实测「抠图不够完整」）：模型重绘时会把主体整体挪几像素，
+    于是它的 alpha 相对原图是**错位**的 —— 直接拿它当 alpha 会把主体的头顶/手臂切掉、
+    同时在另一侧多出一块背景。而本地抠图是像素对齐的（不会错位），只是边界可能不干净。
+    仅当本地抠图确实比模型更完整时，这个并集才划算。
+
+    🚨 为什么不能直接用模型那张图：模型重绘必然有位移/缩放，像素一旦不来自原图，
+    「叠加恒等于原图」这条性质就没了 —— 实测直接整层替换后 reconstruction 从 0 掉到
+    mean 3.915 / bad_ratio 0.1326，叠加图上物体边缘出现重影，正是内置拆图规则第 5 条
+    （「杜绝残影、重影、边缘锯齿」）明令禁止的现象。
+
+    🚨 alpha 必须走 split_layer_hole（`v >= 128 -> 255`），与背景挖洞**同一口径**：
+    否则「洞是全透明、层是半透明」会在边缘把原图压暗（`layer*α + plate*(1-α)`），
+    还原度同样回不到 0 —— 实测软边 alpha 只能到 mean 0.125，同口径二值化才是 0.0。
+
+    代价：模型轮廓若与原物错位，会切掉/多留一点原图像素，但**不会整幅漂移**。
+    """
+    alpha = split_layer_hole(model_full.getchannel("A"))
+    if base_full is not None:
+        alpha = ImageChops.lighter(alpha, split_layer_hole(base_full.getchannel("A")))
+    out = src_rgba.convert("RGB")
+    out.putalpha(alpha)
+    return out
+
+
+def split_mask_covers_bbox(mask, bbox, min_ratio=0.15):
+    """整图抠图的**合理性闸**：模型给的掩码必须真的盖住 LLM 指的那块 bbox。
+
+    🚨 为什么必须有（2026-10-10 加）：整图模式下模型看的是整幅画面，万一它答成了别的
+    物体（或返回一张全透明 / 全不透明的图），这一层就是错的 —— 而这种错**不会**被
+    split_alpha_ok 拦住（它只看「有没有透明通道」，全透明 100% 也能过）。
+    宁可回落本地像素，也不要把错的东西当成元素层。
+
+    min_ratio 取 0.15 而不是 1.0：模型掩码本来就允许比 bbox 紧一点或松一点，
+    只要盖住 bbox 的 15% 以上就说明「指的是同一个东西」。
+    """
+    if not mask or not bbox or len(bbox) < 4:
+        return True
+    try:
+        x, y, w, h = (int(round(float(v))) for v in bbox[:4])
+    except (TypeError, ValueError):
+        return True
+    if w <= 0 or h <= 0:
+        return True
+    x = max(0, min(mask.size[0] - 1, x))
+    y = max(0, min(mask.size[1] - 1, y))
+    x2 = max(x + 1, min(mask.size[0], x + w))
+    y2 = max(y + 1, min(mask.size[1], y + h))
+    covered = sum(mask.crop((x, y, x2, y2)).histogram()[1:])
+    return covered >= (x2 - x) * (y2 - y) * min_ratio
+
+
+def split_measure_shape_angle(img, bbox, max_angle=20.0, min_side=80, edge_gain=24):
+    """量一块元素**长边**的真实倾角，返回「把它转正需要给 Image.rotate 的角度」。
+
+    🚨 为什么需要它（2026-10-10 老板「元素层图片的变形状态没有对齐」）：
+    旧口径是「① 按 bbox 长宽比反解一个旋转角 → ② 非等比铺满 bbox」。问题是
+    **旋转过的矩形再做非等比缩放会变成平行四边形（被剪切）**，不再是矩形 ——
+    实测中央卡片：上边倾角 6.1°、左/右边 10.6°，而源图真值是 8.84°；
+    后果就是右缘越往下越跑到卡片外面（y=303 外溢 4px、y=943 外溢 15px），
+    画面上是一条**渐宽的缝**（老板截图里卡片右侧那条）。
+    正确的做法要拿**真值倾角**：把模型产物转正 → 缩放到目标矩形 → 再转回真值倾角，
+    这样结果恒是一个矩形。
+
+    做法：在 bbox 内逐行找左、右两条长边（各在左右 18% 宽的一条带里找最强亮度梯度），
+    两串 x 各做 Theil-Sen 稳健回归；**两条边的倾角必须接近**（差 > 1.5° 判为量不准）才返回均值。
+    返回 None = 量不出来（调用方保留原行为）。
+
+    `img` 可以是原图（RGB/RGBA），也可以直接传 alpha 通道（L）—— 后者用来量模型产物自己的倾角。
+    ⚠️ 返回值的符号按 `Image.rotate` 的口径（实测：卡片 dx/dy = -0.155 ⇒ 返回 +8.84，
+    给 `alpha.rotate(+8.84)` 后左右缘变成 -0.48° / +0.97°，即转正）。
+    """
+    if img is None or not bbox or len(bbox) < 4:
+        return None
+    try:
+        x, y, w, h = (int(round(float(v))) for v in bbox[:4])
+    except (TypeError, ValueError):
+        return None
+    if w < min_side or h < min_side:
+        return None
+    iw, ih = img.size
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(iw, x + w), min(ih, y + h)
+    if x1 - x0 < min_side or y1 - y0 < min_side:
+        return None
+    gray = img.crop((x0, y0, x1, y1)).convert("L")
+    cw, ch = gray.size
+    if cw < 8 or ch < 8:
+        return None
+    px = gray.load()
+
+    def strong(yy, xa, xb):
+        best, bv = None, 0
+        for xx in range(xa, xb):
+            v = abs(px[xx + 2, yy] - px[xx - 2, yy])
+            if v > bv:
+                bv, best = v, xx
+        return best if bv >= edge_gain else None
+
+    band = max(6, int(cw * 0.18))
+    rows = []
+    for yy in range(2, ch - 2):
+        lx = strong(yy, 2, min(cw - 3, 2 + band))
+        rx = strong(yy, max(3, cw - 2 - band), cw - 2)
+        if lx is not None and rx is not None and (rx - lx) > cw * 0.4:
+            rows.append((yy, lx, rx))
+    if len(rows) < 12:
+        return None
+
+    def theil(idx):
+        n = len(rows)
+        sl = []
+        for i in range(0, n - 1, 2):
+            for j in range(i + 1, n, 3):
+                dy = rows[j][0] - rows[i][0]
+                if dy:
+                    sl.append((rows[j][idx] - rows[i][idx]) / float(dy))
+        if not sl:
+            return None
+        sl.sort()
+        return sl[len(sl) // 2]
+
+    kL, kR = theil(1), theil(2)
+    if kL is None or kR is None:
+        return None
+    aL, aR = math.degrees(math.atan(kL)), math.degrees(math.atan(kR))
+    if abs(aL - aR) > 1.5:
+        return None
+    # 🚨 还要确认这两条「边」真的是**直线**：矩形才有直边。花草/人像这种不规则元素，
+    #    左右带里最强梯度也会串成一条曲线，Theil-Sen 照样能拟出斜率 —— 拿它去转整个元素就毁图了。
+    #    残差 IQR 是判「直不直」的现成量：实测卡片是 0.0~0.5px，曲线会到十几像素。
+    def resid_iqr(idx, k):
+        y0, v0 = rows[0][0], rows[0][idx]
+        r = sorted(rows[i][idx] - (k * (rows[i][0] - y0) + v0) for i in range(len(rows)))
+        n = len(r)
+        return r[int(0.75 * (n - 1))] - r[int(0.25 * (n - 1))]
+
+    if resid_iqr(1, kL) > 4.0 or resid_iqr(2, kR) > 4.0:
+        return None
+    deg = -((aL + aR) / 2.0)
+    if abs(deg) > max_angle:
+        return None
+    return round(deg, 2)
+
+
+def split_measure_shape_angle_h(img, bbox, max_angle=20.0, min_side=80, edge_gain=24):
+    """量一块元素**横边**（上、下两条）的倾角，返回 `atan(dy/dx)` 的度数。
+
+    🚨 为什么需要它（2026-10-10 老板「元素层的图片左下角和右上角还没有对齐」）：
+    源图那张卡片**不是旋转矩形，是被剪切过的平行四边形** —— 实测上/下边 +1.28°（rms 0.3，
+    很可信），而左/右边 −8.84°。也就是说「横边倾角 + 竖边倾角 ≈ 0」这条矩形判据在**源图上
+    本来就不成立**，所以只按竖边倾角去转（split_measure_shape_angle）永远对不上：
+    产物横边落在 +4.4°，源图是 +1.3°，差 3.1° × 卡片宽 550px ≈ 30px ——
+    正好是右上角「差一截」、左下角「差一截」。
+    拿到横边倾角之后，split_anchor_to_bbox 就能把模型那块**仿射映射到源图这个平行四边形**上。
+
+    做法与竖边版对称：在 bbox 内逐列找上、下两条边（各在上/下 12% 高的一条带里找最强
+    纵向亮度梯度），两串 y 各做 Theil-Sen 稳健回归；残差 IQR ≤ 4px（确认是直线）才认。
+
+    🚨 **上边优先、下边兜底**（2026-10-10 实测）：卡片上边紧贴 bbox 顶、外侧就是背景，
+    梯度干净；而**下边**那条带覆盖了卡片下部，人像/衣物的纵向纹理会把 Theil-Sen 的中位
+    斜率带偏 —— 同一个 bbox 上边恒 1.23~1.25°，下边却在 −0.44 / 0.0 / −0.15 之间乱跳，
+    取均值反而把 1.24 拉成 0.55。所以**只信先过 IQR 闸的那条边**，不取均值。
+    带从 18% 收到 12% 也是为此（18% 时连整幅图都会被误量出 0.0°）。
+
+    返回 None = 量不出来（调用方保留原行为）。
+    """
+    if img is None or not bbox or len(bbox) < 4:
+        return None
+    try:
+        x, y, w, h = (int(round(float(v))) for v in bbox[:4])
+    except (TypeError, ValueError):
+        return None
+    if w < min_side or h < min_side:
+        return None
+    iw, ih = img.size
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(iw, x + w), min(ih, y + h)
+    if x1 - x0 < min_side or y1 - y0 < min_side:
+        return None
+    gray = img.crop((x0, y0, x1, y1)).convert("L")
+    cw, ch = gray.size
+    if cw < 8 or ch < 8:
+        return None
+    px = gray.load()
+
+    def strong(xx, ya, yb):
+        best, bv = None, 0
+        for yy in range(ya, yb):
+            v = abs(px[xx, yy + 2] - px[xx, yy - 2])
+            if v > bv:
+                bv, best = v, yy
+        return best if bv >= edge_gain else None
+
+    band = max(6, int(ch * 0.12))
+    cols = []
+    for xx in range(2, cw - 2):
+        ty = strong(xx, 2, min(ch - 3, 2 + band))
+        by = strong(xx, max(3, ch - 2 - band), ch - 2)
+        if ty is not None and by is not None and (by - ty) > ch * 0.4:
+            cols.append((xx, ty, by))
+    if len(cols) < 12:
+        return None
+
+    def theil(idx):
+        n = len(cols)
+        sl = []
+        for i in range(0, n - 1, 2):
+            for j in range(i + 1, n, 3):
+                dx = cols[j][0] - cols[i][0]
+                if dx:
+                    sl.append((cols[j][idx] - cols[i][idx]) / float(dx))
+        if not sl:
+            return None
+        sl.sort()
+        return sl[len(sl) // 2]
+
+    kT, kB = theil(1), theil(2)
+    if kT is None and kB is None:
+        return None
+
+    def resid_iqr(idx, k):
+        x0_, v0 = cols[0][0], cols[0][idx]
+        r = sorted(cols[i][idx] - (k * (cols[i][0] - x0_) + v0) for i in range(len(cols)))
+        n = len(r)
+        return r[int(0.75 * (n - 1))] - r[int(0.25 * (n - 1))]
+
+    # 🚨 上边优先、下边兜底，**不取均值**（理由见 docstring）：上边那串干净，
+    #    下边那串常被卡片内部纹理带偏；取均值会被下边拖走。
+    for idx, k in ((1, kT), (2, kB)):
+        if k is None:
+            continue
+        deg = math.degrees(math.atan(k))
+        if abs(deg) > max_angle:
+            continue
+        if resid_iqr(idx, k) > 4.0:
+            continue
+        return round(deg, 2)
+    return None
+
+
+def split_match_bbox_angle(card_alpha, bw, bh, max_angle=20.0):
+    """求「把这块形状转多少度，它的外接框长宽比才等于 bbox 的长宽比」。
+
+    🚨 为什么需要它（2026-10-10 老板「元素层也没有完整对齐原图边缘」的根因之一）：
+    模型**连朝向都不可信**。实测老板那张图：源图卡片倾角 8.7°，模型画出来只有 7.9° ——
+    于是模型产物的外接框是 641x790，而 LLM bbox 是 664x790。原来只做「等比放进 + 居中」，
+    这 23px 的宽度差就变成**左右各 11px 的空隙** → 背景层挖的洞盖不住原图卡片边
+    → 画面上出现一条**双边缘**（老板截图里卡片右上角那条）。
+    而「旋转过的矩形，外接框长宽比随角度单调变化」，所以反解只需一维搜索：
+    让外接框长宽比等于 bbox 的长宽比，就是该转的角度。纯本地、不调模型、零成本。
+
+    搜索在**降采样**的副本上做（长宽比与尺度无关），否则 640x790 的 BILINEAR 旋转
+    一次十几毫秒、扫几十个角度就白等好几秒。
+
+    返回 0.0 = 不用转（已经够接近 / 找不到解）。
+    """
+    if card_alpha is None or bw <= 0 or bh <= 0:
+        return 0.0
+    target = bw / float(bh)
+    src = card_alpha.convert("L")
+    w, h = src.size
+    side = max(w, h)
+    if side > 200:
+        k = 200.0 / side
+        src = src.resize((max(2, int(round(w * k))), max(2, int(round(h * k)))), Image.BILINEAR)
+
+    def ratio_at(deg):
+        probe = src.rotate(deg, expand=True, resample=Image.BILINEAR)
+        bb = probe.getbbox()
+        if not bb:
+            return None
+        ph = bb[3] - bb[1]
+        return ((bb[2] - bb[0]) / float(ph)) if ph else None
+
+    base = ratio_at(0.0)
+    if base is None:
+        return 0.0
+    err0 = abs(base - target)
+    if err0 < 0.004:
+        return 0.0
+    sign = 1.0 if target > base else -1.0
+    best, best_err = 0.0, err0
+    for span, step in ((max_angle, 1.0), (1.0, 0.1)):
+        anchor = best
+        n = int(round(span / step))
+        for i in range(1, n + 1):
+            deg = anchor + sign * i * step
+            if abs(deg) > max_angle:
+                break
+            r = ratio_at(deg)
+            if r is None:
+                break
+            err = abs(r - target)
+            if err < best_err - 1e-9:
+                best, best_err = deg, err
+            else:
+                break
+    # 转了还不如不转（长宽比没明显改善）就别插值一次，免得白糊一遍像素
+    if abs(best) < 0.2 or best_err > err0 * 0.8:
+        return 0.0
+    return best
+
+
+def split_anchor_to_bbox(full, bbox, min_scale=0.25, max_scale=4.0, allow_rotate=True,
+                         src_rgba=None):
+    """几何锚定：把模型产物里的元素，按它自己的 alpha 外接框搬到 LLM 给的 bbox 上。
+
+    🚨 为什么必须做（2026-10-10，老板「元素位置没有贴合 / 文字层没有对齐」的根因）：
+    图像模型**不可信于几何**。让 gpt-image-2 在整幅原图上「严格保持原始比例与相对位置」地
+    抠出「中央倾斜女性肖像卡片」，实测它把元素**放大到 1.34~1.43 倍**、还左上偏了 (86,184) px
+    （模型产物 alpha 外接框 894x1122 vs LLM bbox 669x786）。
+    后果不止「看着歪」：元素盖不住背景层挖的洞 → 洞里被低频补全糊过的原文字透出来，
+    与单独的文字层**重影**；前端拿来定位高亮的 bbox 也和真实像素对不上。
+
+    所以口径是：**模型只负责「元素长什么样」，位置、尺寸、朝向一律由 bbox + 源图实测倾角决定。**
+
+    两条路，优先走 ①：
+      ① **仿射映射到「源图那块形状」**（2026-10-10 重写，修老板「元素层图片左下角和右上角
+         还没对齐」）：把模型那块转正（竖边竖直、横边残留斜率 s），再**仿射映射**到
+         「由源图实测竖边倾角 + 横边倾角 + 外接框 (bw, bh) 反解出的平行四边形」。
+         🚨 为什么必须是「平行四边形」而不是「旋转矩形」：源图那张卡片本身**就是被剪切的
+         平行四边形** —— 实测上/下边 +1.2°（rms 0.3），左/右边 −8.8°，
+         「横边倾角 + 竖边倾角 ≈ 0」这条矩形判据在源图上根本不成立。
+         旧口径（按长宽比反解一个角 + 非等比铺满）产出的横边落在 +4.4°，与源图差 3.1°，
+         × 卡片宽 550px ≈ 30px ⇒ 右上角、左下角各差一截（老板圈的两处）。
+         需要两个实测倾角：split_measure_shape_angle（竖边）+ split_measure_shape_angle_h（横边）。
+         任一个量不出来就退回 ②。
+      ② 旧口径（回退）：**先转朝向**（split_match_bbox_angle 按长宽比反解），**再非等比铺满 bbox**。
+         非等比是为了不让短边留出对称空隙（实测左右各 11px → 背景的洞盖不住原图边缘 → 双边缘）。
+
+    min_scale/max_scale 是保险：bbox 与模型产物差一个数量级时，更可能是 LLM 的 bbox 离谱，
+    这时硬搬只会更糟 —— 原样返回，让 detail 里的还原度指标去暴露问题。
+    """
+    if full is None or not bbox or len(bbox) < 4:
+        return full
+    try:
+        bx, by, bw, bh = (int(round(float(v))) for v in bbox[:4])
+    except (TypeError, ValueError):
+        return full
+    if bw <= 0 or bh <= 0:
+        return full
+    alpha = split_layer_hole(full.getchannel("A"))
+    box = alpha.getbbox()
+    if not box:
+        return full
+    tw, th = box[2] - box[0], box[3] - box[1]
+    if tw <= 0 or th <= 0:
+        return full
+
+    # ① 仿射映射到「源图那块形状」（首选，2026-10-10 重写）：
+    #    🚨 源图那张卡片**不是旋转矩形**，是被剪切过的**平行四边形** —— 实测上/下边 +1.2°
+    #    （rms 0.3），左/右边 −8.8°。所以「只按竖边倾角转 + 非等比铺满」永远对不上：
+    #    产物横边落在 +4.4°、源图 +1.3°，差 3.1° × 卡片宽 550px ≈ 30px，
+    #    画面上就是右上角「差一截」、左下角「差一截」（老板 2026-10-10 圈的两处）。
+    #    这里改成：把模型那块（转正后是「竖边竖直 + 横边斜率 s」的平行四边形）**仿射映射**
+    #    到「由源图实测竖边倾角 ta、横边倾角 tb 与外接框 (bw, bh) 反解出的平行四边形」。
+    #    仿射把平行四边形映成平行四边形，结果**必然**与源图这块同形同位。
+    if allow_rotate and src_rgba is not None:
+        deg_src = split_measure_shape_angle(src_rgba, [bx, by, bw, bh])
+        hgt_src = split_measure_shape_angle_h(src_rgba, [bx, by, bw, bh])
+        if deg_src is not None and hgt_src is not None:
+            # 🚨 bbox 单位坑：box 是 getbbox() 的 (l, t, r, b)，函数要的是 (x, y, w, h)。
+            #    传错时 split_measure_shape_angle 会在一个偏到右下的空区域上量，恒返回 None
+            #    → 整段矩形化/仿射被静默跳过，退回旧口径。第一版就是这么失效的。
+            deg_mod = split_measure_shape_angle(
+                alpha, [box[0], box[1], box[2] - box[0], box[3] - box[1]])
+            deg_mod = 0.0 if deg_mod is None else deg_mod
+            flat = full.rotate(deg_mod, resample=Image.BICUBIC, expand=True)
+            falpha = split_layer_hole(flat.getchannel("A"))
+            fbox = falpha.getbbox()
+            if fbox and (fbox[2] - fbox[0]) > 1 and (fbox[3] - fbox[1]) > 1:
+                fw, fh = fbox[2] - fbox[0], fbox[3] - fbox[1]
+                s_deg = split_measure_shape_angle_h(falpha, [fbox[0], fbox[1], fw, fh])
+                s = math.tan(math.radians(0.0 if s_deg is None else s_deg))
+                ta = math.tan(math.radians(-deg_src))   # 源图竖边 dx/dy
+                tb = math.tan(math.radians(hgt_src))    # 源图横边 dy/dx
+                # 目标平行四边形 Q：上边 A=(Wq, Wq*tb)，侧边 B=(Hq*ta, Hq)，外接框 = (bw, bh)
+                #   bw = Wq - Hq*ta（ta<0）；bh = Hq + Wq*|tb|
+                den = 1.0 + ta * abs(tb)
+                if abs(den) > 1e-6:
+                    hq = (bh - bw * abs(tb)) / den
+                    wq = bw + hq * ta
+                    hp = fh - fw * abs(s)               # 模型这块的侧边长度
+                    if wq > 1 and hq > 1 and hp > 1:
+                        sx2, sy2 = wq / float(fw), hq / float(hp)
+                        if min_scale <= min(sx2, sy2) and max(sx2, sy2) <= max_scale:
+                            p0 = (0.0, max(0.0, -fw * s))       # 模型这块的外接框左上角
+                            a_v = (float(fw), fw * s)          # 上边向量
+                            b_v = (0.0, float(hp))             # 侧边向量
+                            q0 = (0.0, max(0.0, -wq * tb))
+                            qa = (float(wq), wq * tb)
+                            qb = (hq * ta, float(hq))
+                            qminx = min(q0[0], q0[0] + qa[0], q0[0] + qb[0],
+                                        q0[0] + qa[0] + qb[0])
+                            qminy = min(q0[1], q0[1] + qa[1], q0[1] + qb[1],
+                                        q0[1] + qa[1] + qb[1])
+                            off = (bx - qminx, by - qminy)
+                            # 正变换 P→Q：M·(P1-P0)=qa，M·(P2-P0)=qb
+                            m01 = qb[0] / hp
+                            m11 = qb[1] / hp
+                            m00 = (qa[0] - (fw * s) * m01) / fw
+                            m10 = (qa[1] - (fw * s) * m11) / fw
+                            tx = q0[0] + off[0] - (m00 * p0[0] + m01 * p0[1])
+                            ty = q0[1] + off[1] - (m10 * p0[0] + m11 * p0[1])
+                            detm = m00 * m11 - m01 * m10
+                            if abs(detm) > 1e-9:
+                                i00, i01 = m11 / detm, -m01 / detm
+                                i10, i11 = -m10 / detm, m00 / detm
+                                # p = Minv·(q - T)，而 q = (bx + X, by + Y)（输出图贴在 (bx,by)）
+                                #   ⇒ p = Minv·(X, Y) + Minv·((bx,by) - T)
+                                cx = i00 * (bx - tx) + i01 * (by - ty)
+                                cy = i10 * (bx - tx) + i11 * (by - ty)
+                                warped = flat.crop(fbox).transform(
+                                    (max(1, bw), max(1, bh)), Image.AFFINE,
+                                    (i00, i01, cx, i10, i11, cy),
+                                    resample=Image.BICUBIC)
+                                out = Image.new("RGBA", full.size, (0, 0, 0, 0))
+                                out.paste(warped, (bx, by))
+                                print(f"[split-layers] 元素几何锚定（仿射到源图形状）：模型竖边 "
+                                      f"{deg_mod:.2f}° / 横边 {0.0 if s_deg is None else s_deg:.2f}°"
+                                      f"  ->  源图竖边 {deg_src:.2f}° / 横边 {hgt_src:.2f}°"
+                                      f"，目标平行四边形 {int(round(wq))}x{int(round(hq))}")
+                                return out
+
+    # ① 朝向对齐（回退口径）
+    if allow_rotate:
+        deg = split_match_bbox_angle(alpha.crop(box), bw, bh)
+        if deg:
+            cx = box[0] + tw / 2.0
+            cy = box[1] + th / 2.0
+            probe = full.rotate(deg, resample=Image.BICUBIC, center=(cx, cy))
+            pbox = split_layer_hole(probe.getchannel("A")).getbbox()
+            if pbox and pbox[2] > pbox[0] and pbox[3] > pbox[1]:
+                full, box = probe, pbox
+                tw, th = box[2] - box[0], box[3] - box[1]
+                print(f"[split-layers] 元素朝向对齐：模型外接框 {bw}x{bh} 反解旋转 {deg:.1f}°")
+
+    # ② 非等比铺满 bbox
+    sx, sy = bw / float(tw), bh / float(th)
+    if not (min_scale <= min(sx, sy) and max(sx, sy) <= max_scale):
+        return full
+    tight = full.crop(box).resize((max(1, bw), max(1, bh)), Image.LANCZOS)
+    out = Image.new("RGBA", full.size, (0, 0, 0, 0))
+    out.paste(tight, (bx, by))
+    return out
+
+
+def split_element_cutout_prompt(element, whole_image=False):
+    """这一层交给图像模型时的抠图提示词 = 内置品质规则 + LLM 给的专属描述。
+
+    🚨 规则必须内置（老板给的方法：关键提示词写死），LLM 只负责补「这是什么东西」。
+    模型自己写的 cutout_prompt 优先于通用的 note，两者都没有也能跑（只有内置规则）。
+
+    🚨 whole_image=True 时必须额外说清「画面里还有别的东西」：模型看到的是整幅原图
+    （可能还有 UI、文字、别的元素），不提醒的话它很容易把整块区域都当成目标留下。
+    """
+    parts = [SPLIT_LAYERS_CUTOUT_RULES]
+    extra = str(element.get("cutout_prompt") or "").strip()
+    note = str(element.get("note") or "").strip()
+    if whole_image:
+        parts.append("The reference image is the WHOLE picture and it also contains other "
+                     "objects, scenery and text that are NOT part of this task.")
+    if extra:
+        parts.append(f"The object to cut out is: {extra}")
+    elif note:
+        parts.append(f"The object to cut out is: {note}")
+    return " ".join(parts)
+
+
+def split_background_plate(src_rgba, width, height, plates):
+    """背景层 = 原图减去所有其它层的覆盖范围，洞里用本地低频内容补上。
+
+    🚨 「减去」而不是「让模型重画」：模型重画会把整帧改掉（实测产出的「背景」
+    跟原图构图都不一样），而这里只挖洞、不动其它像素，叠加才可能恒等于原图。
+    🚨 背景层强制不透明：否则画板会透出棋盘格，用户以为拆坏了。
+    🚨 不再需要「抹除文字」那一步：文字是从原图裁出的像素层，背景又是「原图减各层」，
+    文字自然就不在背景里了；而抹文字会改掉底图像素，反而让叠加不再等于原图。
+
+    返回 (背景图, 洞的并集)。
+    """
+    union = Image.new("L", (width, height), 0)
+    for plate in plates or []:
+        if plate is None:
+            continue
+        union = ImageChops.lighter(union, split_layer_hole(plate.getchannel("A")))
+    base = src_rgba.convert("RGBA").copy()
+    base.putalpha(255)
+    return split_local_fill(base, union), union
+
+
+def split_reconstruction_check(src_rgba, plates):
+    """把所有图层按 z 升序叠加，与原图逐像素比 —— 这就是「还原度」的硬指标。
+
+    像素优先（mode='auto'）下理论值应为 0；一旦不为 0，说明某层走了模型重绘、
+    或者 alpha 没盖住自己那块像素。
+
+    🚨 但 **mode='model'（生图路线，当前默认）下必然不为 0** —— 元素层用的就是图像模型
+    重新生成的像素，它本来就不等于原图（实测 mean 3.915 / bad_ratio 0.1326）。这是老板
+    2026-10-10 明确选择的取舍（要「元素完整干净」而不是「叠加等于原图」），不是失败。
+    结果会写进任务 result，前端按 stats.redraw 区分措辞，别把它渲染成报错。
+    """
+    width, height = src_rgba.size
+    comp = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    for _, plate in sorted(plates, key=lambda t: t[0]):
+        if plate is not None:
+            comp.alpha_composite(plate.convert("RGBA"))
+    diff = ImageChops.difference(comp.convert("RGB"), src_rgba.convert("RGB")).convert("L")
+    hist = diff.histogram()
+    total = sum(hist) or 1
+    mean = sum(i * n for i, n in enumerate(hist)) / total
+    worst = max(i for i, n in enumerate(hist) if n)
+    bad = sum(n for i, n in enumerate(hist) if i > 8) / total
+    return {
+        "mean": round(mean, 3),
+        "max": int(worst),
+        "bad_ratio": round(bad, 5),
+        "ok": mean < 1.0 and bad < 0.002,
+    }
+
+
+async def split_save_png(img, prefix="split_layer_"):
+    buf = BytesIO()
+    img.convert("RGBA").save(buf, format="PNG")
+    return await save_ai_image_to_output(
+        {"type": "b64", "value": base64.b64encode(buf.getvalue()).decode("ascii"),
+         "mime_type": "image/png"},
+        prefix=prefix,
+    )
+
+
+# 「请求被上游直接拒掉」的错误特征 —— 这类错误基本不会产生扣费，换通道重试是安全的。
+# 超时类（524/502）故意不在列：上游可能已经扣了费，再打一次就是重复花钱，
+# 项目里其它生图路径也是这个约定（见 GPT-Image 编辑接口的「已停止自动重试」）。
+SPLIT_REJECT_HINTS = (
+    "credits not enough", "insufficient", "quota", "balance", "余额",
+    "unauthorized", "invalid api key", "invalid_api_key", "not found",
+    "no such model", "model_not_found", "permission",
+)
+
+
+def split_rejected(exc):
+    text = str(getattr(exc, "detail", None) or exc or "").lower()
+    return any(hint in text for hint in SPLIT_REJECT_HINTS)
+
+
+def split_candidate_channels(kind, payload):
+    """候选 (provider_id, model)：用户选的排第一，其余按配置顺序兜底。
+
+    kind='image' -> 取 image_models；kind='chat' -> 取 chat_models。
+    实测踩过：前端 `splitLayersPickProviders()` 取的是 `agentGenProviders()[0]`，在老板这台机器上
+    正好是 grsai，而 grsai 的生图通道报 `apikey credits not enough`；同一份配置里的 coder 却完全正常。
+    单通道硬失败会让整条链路降级（或直接失败），所以这里逐个试。
+    """
+    key = "image_models" if kind == "image" else "chat_models"
+    first = (payload.image_provider_id, payload.image_model) if kind == "image" \
+        else (payload.provider_id, payload.model)
+    out, seen = [], set()
+    if first[0] and first[1]:
+        out.append(first)
+    try:
+        for prov in load_api_providers():
+            if prov.get("enabled") is False:
+                continue
+            pid = str(prov.get("id") or "")
+            models = [m for m in (prov.get(key) or []) if m]
+            if pid and models:
+                out.append((pid, models[0]))
+    except Exception as exc:
+        print(f"[split-layers] 读取 {kind} 通道候选失败: {exc}")
+    deduped = []
+    for item in out:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+async def split_call_image_model(payload, img, prompt, extra_images=None):
+    """把一张（或几张）图交给图像模型处理，返回本地落盘后的 URL。
+
+    首选通道被拒（余额/鉴权/模型不存在）时自动换下一个可用通道 —— 这类错误不会扣费。
+
+    `extra_images` 用于「原图 + 遮罩」这类多图输入（顺序即模型看到的 1、2、3…），
+    生成纯背景层时就是靠它把遮罩一次带过去。
+    """
+    images = [img] + [im for im in (extra_images or []) if im is not None]
+    ref_urls = [await split_save_png(im, prefix="split_in_") for im in images]
+    w, h = img.size
+    size = f"{max(16, (int(w) // 16) * 16)}x{max(16, (int(h) // 16) * 16)}"
+    candidates = split_candidate_channels("image", payload)
+    if not candidates:
+        raise HTTPException(status_code=400, detail="没有配置可用的生图通道")
+    last = None
+    for index, (provider_id, model) in enumerate(candidates):
+        try:
+            res = await build_online_image_result(OnlineImageRequest(
+                prompt=prompt,
+                provider_id=provider_id,
+                model=model,
+                size=size,
+                reference_images=[
+                    AIReference(url=u, role="reference_image", name=f"ref{i + 1}.png")
+                    for i, u in enumerate(ref_urls)
+                ],
+            ))
+            urls = [u for u in (res.get("images") or []) if u]
+            if urls:
+                if index:
+                    print(f"[split-layers] 生图通道 {candidates[0][0]} 不可用，已改用 {provider_id}/{model}")
+                return urls[0]
+            last = HTTPException(status_code=502, detail="图像模型没有返回图片")
+        except Exception as exc:
+            last = exc
+            print(f"[split-layers] 生图通道 {provider_id}/{model} 失败: {exc}")
+            if not split_rejected(exc):
+                break
+    err = last or HTTPException(status_code=502, detail="没有可用的生图通道")
+    # 把「试过哪些通道」挂到异常上，失败卡片要能告诉用户换哪一个
+    try:
+        err.tried = [f"{pid}/{mdl}" for pid, mdl in candidates]
+    except Exception:
+        pass
+    raise err
+
+
+async def split_analyze(payload, width, height):
+    """多模态分析 -> 规范化后的图层清单（bbox 已还原到原图坐标）。"""
+    candidates = split_candidate_channels("chat", payload)
+    if not candidates:
+        raise HTTPException(status_code=400, detail="没有配置可用的对话通道")
+    # 用户指定的拆分层数（最低 2 = 背景 + 前景；文字层不占层数）。
+    try:
+        target = int(payload.target_layers or 0)
+    except (TypeError, ValueError):
+        target = 0
+    prompt = SPLIT_LAYERS_USER_PROMPT
+    granular = split_granularity_prompt(target)
+    if granular:
+        prompt += granular
+        print(f"[split-layers] 目标粒度 {target} 层（前景 {max(1, target - 1)}）")
+    data = None
+    last = None
+    for index, (provider_id, model) in enumerate(candidates):
+        try:
+            res = await canvas_llm(CanvasLLMRequest(
+                message=prompt,
+                system_prompt=SPLIT_LAYERS_SYSTEM,
+                provider=provider_id,
+                model=model,
+                images=[payload.image_url],
+                messages=[],
+            ))
+            text = (res or {}).get("text") or ""
+            parsed = split_extract_json(text)
+            if isinstance(parsed, dict) and isinstance(parsed.get("layers"), list):
+                if index:
+                    print(f"[split-layers] 分析通道 {candidates[0][0]}/{candidates[0][1]} 不可用，"
+                          f"已改用 {provider_id}/{model}")
+                else:
+                    # 成功路径也记一笔：前端现在允许用户自选模型，出问题时要能回答「到底用了哪个」
+                    print(f"[split-layers] 分析用 {provider_id}/{model}")
+                data = parsed
+                break
+            last = HTTPException(status_code=502,
+                                 detail=f"图像分析没有返回可用的图层清单：{text[:200]}")
+            # 模型答了、只是内容不可用 —— 这是质量问题而不是「被拒」，不再换通道重试（避免重复扣费）
+            print(f"[split-layers] 分析通道 {provider_id}/{model} 返回无法解析的清单")
+            break
+        except Exception as exc:
+            last = exc
+            print(f"[split-layers] 分析通道 {provider_id}/{model} 失败: {exc}")
+            # 只有「被拒」类错误才换通道；超时/5xx 换通道可能重复花钱
+            if not split_rejected(exc):
+                break
+    if data is None:
+        err = last or HTTPException(status_code=502, detail="图像分析失败")
+        # 失败卡片要告诉用户「换哪一个」，所以把试过的通道一起带出去
+        try:
+            err.tried = [f"{pid}/{mdl}" for pid, mdl in candidates]
+        except Exception:
+            pass
+        raise err
+
+    # 后端喂给模型的是「长边 <= 1024」的缩放版，模型回报的 canvas 尺寸据此换算回原图坐标。
+    canvas = data.get("canvas") or {}
+    try:
+        seen_w = int(float(canvas.get("width") or 0))
+        seen_h = int(float(canvas.get("height") or 0))
+    except (TypeError, ValueError):
+        seen_w = seen_h = 0
+    scale = 1024.0 / max(width, height) if max(width, height) > 1024 else 1.0
+    exp_w = max(1, int(round(width * scale)))
+    exp_h = max(1, int(round(height * scale)))
+    if seen_w <= 0 or seen_h <= 0 \
+            or abs(seen_w - exp_w) > exp_w * 0.15 or abs(seen_h - exp_h) > exp_h * 0.15:
+        seen_w, seen_h = exp_w, exp_h
+    sx, sy = width / seen_w, height / seen_h
+
+    layers = []
+    for index, raw in enumerate(data["layers"]):
+        if not isinstance(raw, dict):
+            continue
+        bbox = raw.get("bbox") or []
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            continue
+        try:
+            bx, by, bw, bh = [float(v) for v in bbox]
+        except (TypeError, ValueError):
+            continue
+        x0 = max(0, min(width - 1, int(round(bx * sx))))
+        y0 = max(0, min(height - 1, int(round(by * sy))))
+        x1 = max(x0 + 1, min(width, int(round((bx + bw) * sx))))
+        y1 = max(y0 + 1, min(height, int(round((by + bh) * sy))))
+        kind = "text" if str(raw.get("kind") or "").strip().lower() == "text" else "element"
+        item = {
+            "id": f"L{index + 1}",
+            "kind": kind,
+            "name": str(raw.get("name") or ("文字" if kind == "text" else f"图层{index + 1}"))[:60],
+            "z": int(raw.get("z") or 0),
+            "bbox": [x0, y0, x1 - x0, y1 - y0],
+        }
+        if kind == "text":
+            try:
+                raw_size = float(raw.get("font_size") or 0)
+            except (TypeError, ValueError):
+                raw_size = 0.0
+            # 模型看的是「长边 <= 1024」的缩放图，字号和 bbox 一样必须换回原图尺度，
+            # 否则文字层会比原图小一大截（实测 1200x1500 的图会被少算 32%）。
+            font_size = raw_size * ((sx + sy) / 2.0) if raw_size > 0 else 0.0
+            # 护栏：字号量级要和文字块几何对得上，避免模型给出离谱值。
+            # 以「短边 / 0.72」当作字号的几何参考（单行文字的字高≈短边）。
+            geo = max(6.0, min(x1 - x0, y1 - y0) / 0.72)
+            if font_size <= 0:
+                font_size = geo
+            font_size = max(geo * 0.25, min(geo * 1.8, font_size))
+            # 字距同样按喂图缩放换算回原图尺度，并夹在一个合理范围里
+            try:
+                raw_track = float(raw.get("letter_spacing") or 0)
+            except (TypeError, ValueError):
+                raw_track = 0.0
+            letter_spacing = raw_track * ((sx + sy) / 2.0)
+            letter_spacing = max(-font_size * 0.3, min(font_size * 2.0, letter_spacing))
+            item.update({
+                "text": str(raw.get("text") or ""),
+                "font_size": int(round(max(6.0, min(400.0, font_size)))),
+                "font_weight": "bold" if str(raw.get("font_weight") or "").lower() == "bold" else "normal",
+                # 🚨 2026-10-09 老板反馈：切「编辑态」后字体样式 / 旋转 / 斜体都对不上。
+                #    根因是 schema 里压根没有字体与斜体这两个字段 —— 前端只能用系统默认字体、
+                #    且永远是正体。这里补上，前端编辑态直接消费。
+                "italic": bool(raw.get("italic")),
+                "font_family": split_norm_font_family(raw.get("font_family")),
+                "letter_spacing": round(letter_spacing, 2),
+                "color": split_norm_color(raw.get("color")),
+                # 归一化到 (-180, 180]：模型时而给 -90 时而给 270，统一成前者
+                "rotation": (float(raw.get("rotation") or 0) + 180.0) % 360.0 - 180.0,
+                "align": str(raw.get("align") or "left").strip().lower(),
+            })
+        else:
+            item["note"] = str(raw.get("note") or raw.get("name") or "")[:200]
+            # 🚨 LLM 主导：由它判断这一层能不能只靠「本地按原图像素裁切」搞定。
+            #    need_model=true 才会自动去调图像模型抠图（见 run_split_layers_task）。
+            #    拿不准时模型会填 false —— 这正是我们要的保守方向（本地裁像素零漂移）。
+            item["need_model"] = bool(raw.get("need_model"))
+            item["cutout_prompt"] = str(raw.get("cutout_prompt") or "")[:400]
+        layers.append(item)
+
+    # 过滤「整张背景」这类伪元素：占满画布的层不是独立元素，去背后会与其它图层完全重叠，
+    # 而且现在后端本来就会补一层真背景，留着就是重复。
+    # 🚨 但**不能把唯一的前景也滤掉** —— 下限降到 2 层后「前景只有 1 层」是常态，
+    # 满版图（整幅就是前景）会因此变成空结果甚至 422。
+    suspects = [it for it in layers if it["kind"] == "element"
+                and it["bbox"][2] * it["bbox"][3] >= width * height * 0.92]
+    if suspects and len(suspects) < sum(1 for it in layers if it["kind"] == "element"):
+        drop = {id(it) for it in suspects}
+        for it in suspects:
+            print(f"[split-layers] 跳过疑似背景层: {it['name']} bbox={it['bbox']}")
+        layers = [it for it in layers if id(it) not in drop]
+
+    layers.sort(key=lambda it: it["z"])
+    if target >= 2:
+        n_elem = sum(1 for it in layers if it["kind"] == "element")
+        n_text = sum(1 for it in layers if it["kind"] == "text")
+        print(f"[split-layers] 目标 {target} 层（前景 {max(1, target - 1)}）"
+              f" -> 实际 元素 {n_elem} + 文字 {n_text}（模型未完全按粒度返回时以实际为准）")
+    # 🚨 背景层的「用不用模型」由 **LLM 决策**（老板 2026-10-10：「背景层允许 LLM 决策生成的，
+    #    可调用模型」）。模型看不到背景（被前景挡着），只有它知道背后是连续色块还是复杂纹理，
+    #    所以这个判断交给它，后端只负责按结论执行。
+    bg_raw = data.get("background") if isinstance(data.get("background"), dict) else {}
+    background_spec = {
+        "need_model": bool(bg_raw.get("need_model")),
+        "prompt": str(bg_raw.get("prompt") or "")[:400],
+    }
+    if background_spec["need_model"]:
+        print("[split-layers] LLM 判定背景层需模型重绘补全")
+
+    return {"canvas": {"width": width, "height": height}, "layers": layers,
+            "background": background_spec}
+
+
+async def split_erase_text(payload, src_rgba, width, height, texts, on_done=None):
+    """把文字区域交给图像模型补平，返回「干净底图」。
+
+    ⚠️ **已不在默认流程里**（2026-10-09 改成像素优先后不再调用）：文字现在是
+    从原图裁出来的像素层，背景是「原图减去各层覆盖范围」，不需要先抹一遍；
+    而且抹文字会改掉底图像素，反而让叠加不再等于原图。保留实现是因为它是项目里
+    「用模型把某块补平」的唯一完整实现，`verify_split_*` 与 `REFERENCE.md` 仍在引用。
+
+    🚨 这里也是 auto 模式的耗时大头：实测 6 块**串行**要 ~5 分钟（占全程 68%），
+    每块一次模型调用 ~50s。各文字块区域互不重叠、且都以**同一张 src_rgba** 为基准裁切，
+    所以能并发跑；补丁按原顺序**串行 paste** 回底图，避免并发写同一张图。
+    """
+    async def erase_one(item):
+        x, y, w, h = item["bbox"]
+        pad = max(24, int(max(w, h) * 0.8))
+        x0 = max(0, x - pad)
+        y0 = max(0, y - pad)
+        x1 = min(width, x + w + pad)
+        y1 = min(height, y + h + pad)
+        crop = src_rgba.crop((x0, y0, x1, y1))
+        inner = crop.size
+        square, _ = split_square_pad(crop, min_side=384)
+        # 透明背景上的补全不稳，先合成白底再喂给模型
+        flat = Image.new("RGB", square.size, (255, 255, 255))
+        flat.paste(square, mask=square.split()[3])
+        url = await split_call_image_model(
+            payload, flat.convert("RGBA"), SPLIT_LAYERS_ERASE_PROMPT)
+        got = Image.open(output_file_from_url(url)).convert("RGBA")
+        return (x0, y0, split_unpad(got.resize(square.size, Image.LANCZOS), inner))
+
+    results = await split_run_limited(
+        texts, SPLIT_LAYERS_ERASE_CONCURRENCY, erase_one, on_done)
+    out = src_rgba.copy()
+    for item, got in zip(texts, results):
+        if isinstance(got, Exception):
+            print(f"[split-layers] 抹除文字失败，保留原样: {got}")
+            continue
+        x0, y0, patch = got
+        out.paste(patch, (x0, y0))
+    return out
+
+
+def split_element_mask(width, height, elements, pad_ratio=0.06, min_pad=8):
+    """把所有前景元素的 bbox 合成一张遮罩：白色 = 要移除的物体，黑色 = 原样保留。
+
+    返回 (mask_L, 覆盖比例)；没有任何有效 bbox 时返回 (None, 0.0)。
+    外扩一点是必要的：模型的 bbox 本来就偏（实测 ~41px 量级），紧贴会把物体边缘留下。
+    """
+    mask = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(mask)
+    drawn = 0
+    for item in elements or []:
+        bbox = item.get("bbox") or []
+        if len(bbox) < 4:
+            continue
+        try:
+            x, y, w, h = (float(v) for v in bbox[:4])
+        except (TypeError, ValueError):
+            continue
+        if w <= 0 or h <= 0:
+            continue
+        pad = max(min_pad, int(max(w, h) * pad_ratio))
+        # 🚨 PIL 的 rectangle 两端都是**闭区间**（会多盖 1px），这里减 1 让覆盖范围
+        # 精确等于 [x-pad, x+w+pad) × [y-pad, y+h+pad)。
+        draw.rectangle(
+            [max(0, int(x - pad)), max(0, int(y - pad)),
+             min(width, int(x + w + pad)) - 1, min(height, int(y + h + pad)) - 1],
+            fill=255,
+        )
+        drawn += 1
+    if not drawn:
+        return None, 0.0
+    box = mask.getbbox()
+    if not box:
+        return None, 0.0
+    hist = mask.histogram()
+    ratio = hist[255] / float(max(1, width * height))
+    return mask, ratio
+
+
+async def split_erase_elements(payload, base_rgba, width, height, elements,
+                               mask=None, extra_prompt=None):
+    """把「所有前景元素」从底图里抹掉，产出**纯背景**层 —— 只改遮罩区，其余像素与原图逐字节相同。
+
+    🚨 **2026-10-10 起重新接回主流程**（老板：「背景层允许 LLM 决策生成的，可调用模型」）：
+    由 `split_analyze` 的 `background.need_model` 决定走不走这里；不满足条件或本函数失败时，
+    仍然回落 `split_background_plate`（纯本地「挖洞 + 低频补」，零费用零等待）。
+    ⚠️ 2026-10-09 曾被下线，原因是像素优先时代它没必要（那时叠加恒等于原图）；现在元素层走
+    生图路线，背景本来就不可能「叠加等于原图」了，用模型换更好的背景观感是划算的。
+
+    `mask` 可以**直接传精确的洞**（= 各层 alpha 的并集，由 split_background_plate 算出），
+    比按 bbox 画矩形准得多；不传才退回 `split_element_mask` 的 bbox 近似。
+    `extra_prompt` 是 LLM 写的「要补成什么样的背景」，追加在内置英文规则之后。
+
+    🚨 为什么必须「只贴回遮罩区」：早期实现是把模型输出**整幅**当作背景层，而 gpt-image 这类
+    模型拿到全画幅的生成任务会把整帧重绘一遍 —— 实测产出的「背景」是一张**构图都变了的新花园**，
+    跟原图对不上（老板原话：「背景跟原图不同所以是不对的」）。现在改成
+    **局部重绘 + 按遮罩贴回**：遮罩外的像素直接沿用原图，背景只在前景原本的位置不同。
+
+    🚨 为什么是一次调用而不是逐个元素各打一次：逐个要按元素数线性增加耗时与费用，
+    而这些区域彼此独立、一张遮罩就能全部表达完，所以合成一张遮罩交一次调用即可。
+
+    失败返回 None，由调用方回落到本地补洞。
+    """
+    if mask is None:
+        mask, ratio = split_element_mask(width, height, elements)
+        if mask is None:
+            return None
+    else:
+        ratio = mask.histogram()[255] / float(max(1, width * height))
+    if ratio >= 0.98:
+        # 遮罩几乎盖满整幅：这已经不是「去前景」而是「重画整张图」，做了也是白花钱
+        print(f"[split-layers] 前景遮罩覆盖 {ratio:.0%}，跳过纯背景生成")
+        return None
+
+    box = mask.getbbox()
+    if not box:
+        return None
+    # 局部重绘：给模型一块「比遮罩大一圈」的局部图。整幅图喂进去模型会顺手把整帧重画，
+    # 裁小之后它只需要管这一块，漂移小得多（与 split_erase_text 同一套路）。
+    pad = max(64, int(max(box[2] - box[0], box[3] - box[1]) * 0.25))
+    x0 = max(0, box[0] - pad)
+    y0 = max(0, box[1] - pad)
+    x1 = min(width, box[2] + pad)
+    y1 = min(height, box[3] + pad)
+    crop = base_rgba.crop((x0, y0, x1, y1)).convert("RGBA")
+    crop_mask = mask.crop((x0, y0, x1, y1))
+
+    square, inner = split_square_pad(crop, min_side=384)
+    # 透明背景上的补全不稳，先合成白底再喂给模型
+    flat = Image.new("RGB", square.size, (255, 255, 255))
+    flat.paste(square, mask=square.split()[3])
+    # 🚨 遮罩必须跟着同一套补方走，否则模型看到的 1、2 两张图对不上位置
+    offset = ((square.size[0] - inner[0]) // 2, (square.size[1] - inner[1]) // 2)
+    mask_up = crop_mask if crop_mask.size == inner else crop_mask.resize(inner, Image.NEAREST)
+    mask_sq = Image.new("L", square.size, 0)
+    mask_sq.paste(mask_up, offset)
+    # 模型对「白底 + 黑区保留」的理解比纯 L 通道稳，所以把遮罩转成不透明黑白图
+    mask_rgb = Image.new("RGBA", square.size, (0, 0, 0, 255))
+    mask_rgb.paste((255, 255, 255, 255), (0, 0), mask_sq)
+
+    # LLM 写的「要补成什么样的背景」追加在内置英文规则之后（与元素层的 cutout_prompt 同一套路：
+    # 内置规则不可覆盖，LLM 只补专属描述）。
+    prompt = SPLIT_LAYERS_BACKGROUND_PROMPT
+    if extra_prompt:
+        prompt = f"{prompt} What the background should look like: {str(extra_prompt).strip()}"
+    url = await split_call_image_model(
+        payload, flat.convert("RGBA"), prompt,
+        extra_images=[mask_rgb],
+    )
+    got = Image.open(output_file_from_url(url)).convert("RGBA")
+    if got.size != square.size:
+        got = got.resize(square.size, Image.LANCZOS)
+    patch = split_unpad(got, inner)
+    if patch.size != crop.size:
+        patch = patch.resize(crop.size, Image.LANCZOS)
+
+    # 🚨 只把遮罩内的像素贴回去，边缘羽化一下免得出现硬边。
+    # 遮罩外的像素 = base_rgba 原样，所以「背景」除了被抹掉的那几块，跟原图完全一致。
+    # 🚨 羽化半径必须小：PIL 的 GaussianBlur(σ) 内部换算成 3 次盒模糊，实际影响半径约
+    #    3 × σ × 3√(2π)/4 ≈ 5.6σ —— σ=8 时遮罩外 45px 都会被模型输出部分覆盖，
+    #    那圈正是「背景跟原图不一样」最容易露馅的地方。σ=3（≈18px）足够过渡又不伤保真度。
+    feather = crop_mask.filter(ImageFilter.GaussianBlur(3))
+    out = base_rgba.convert("RGBA").copy()
+    out.paste(patch, (x0, y0), feather)
+    return out
+
+
+async def split_extract_element(payload, base_rgba, width, height, element,
+                                force_model=False, whole_image=False):
+    """提取单个元素 -> 全画布尺寸的透明图层。
+
+    🚨 `whole_image=True`（2026-10-10，老板定的**默认路线**）= 把**整幅原图**交给图像模型，
+    让它自己判断主体的完整范围、返回一张**全画幅的透明 PNG**。
+    为什么必须这样（老板 2026-10-10 真实产物实测）：原来只喂「LLM bbox + 6% 外扩」那一小块，
+    而**裁剪矩形之外的像素任何算法都拿不到** —— LLM 的 bbox 一旦比主体小（这次只盖到腰），
+    裙摆和左臂就被矩形边**硬切平**。证据：模型掩码与产物 bbox 都**恰好等于**裁剪矩形
+    `(256,347,818,1069)`，内容触满上下边。这也正是老板贴的原始方法：
+    「整图 → 每个元素单独生成一张 PNG，保持元素原始比例与相对位置」。
+
+    🚨 `force_model=True` = 即便 mode=auto 也直接走模型；只有 mode='local'（用户明确要求
+    纯本地）才不调模型。
+
+    🚨 提示词是「内置抠图品质规则 + LLM 给的这一层的专属描述」，见 split_element_cutout_prompt。
+    """
+    bbox = element.get("bbox") or []
+    try:
+        bx, by, bw, bh = (int(round(float(v))) for v in bbox[:4])
+    except (TypeError, ValueError):
+        bx = by = 0
+        bw = bh = 0
+    if bw <= 0 or bh <= 0:
+        bx, by, bw, bh = 0, 0, width, height
+
+    if whole_image:
+        x0 = y0 = 0
+        crop = base_rgba.convert("RGBA")
+        inner = (width, height)
+    else:
+        pad = max(8, int(max(bw, bh) * 0.06))
+        x0 = max(0, bx - pad)
+        y0 = max(0, by - pad)
+        x1 = min(width, bx + bw + pad)
+        y1 = min(height, by + bh + pad)
+        crop = base_rgba.crop((x0, y0, x1, y1))
+        inner = crop.size
+
+    result = None
+    method = "local"
+    detail = ""
+
+    mode = str(payload.mode or "auto").lower()
+    use_model = False if mode == "local" else (force_model or mode in ("auto", "model"))
+    if use_model:
+        try:
+            square, _ = split_square_pad(crop)
+            flat = Image.new("RGB", square.size, (255, 255, 255))
+            flat.paste(square, mask=square.split()[3])
+            url = await split_call_image_model(
+                payload, flat.convert("RGBA"),
+                split_element_cutout_prompt(element, whole_image=whole_image))
+            got = Image.open(output_file_from_url(url)).convert("RGBA")
+            if split_alpha_ok(got):
+                candidate = split_unpad(got.resize(square.size, Image.LANCZOS), inner)
+                # 🚨 整图模式的合理性闸：模型看的是整幅画面，万一它答成了别的物体，这一层
+                #    就是错的，而 split_alpha_ok 拦不住（它只看「有没有透明通道」）。
+                if whole_image and not split_mask_covers_bbox(
+                        split_layer_hole(candidate.getchannel("A")), [bx, by, bw, bh]):
+                    detail = "模型整图结果没盖住该元素（疑似答成了别的物体）"
+                    print(f"[split-layers] {element.get('name')} 整图掩码未覆盖 bbox，已放弃")
+                else:
+                    result = candidate
+                    method = "model"
+            else:
+                detail = "模型输出不含有效透明通道"
+        except Exception as exc:
+            detail = f"模型重绘失败：{exc}"
+            print(f"[split-layers] {element.get('name')} 模型重绘失败: {exc}")
+
+    if result is None:
+        # 🚨 本地兜底退回「bbox + 6%」那一小块，**不用整图**：整图 flood-fill 是从画布四边
+        #    往外吃背景的，在截图这类图上会把整张 UI 都留下当元素层，比裁块更离谱。
+        lpad = max(8, int(max(bw, bh) * 0.06))
+        lx0 = max(0, bx - lpad)
+        ly0 = max(0, by - lpad)
+        lx1 = min(width, bx + bw + lpad)
+        ly1 = min(height, by + bh + lpad)
+        if lx1 - lx0 < 2 or ly1 - ly0 < 2:
+            lx0, ly0, lx1, ly1 = 0, 0, width, height
+        result = split_local_cutout(base_rgba.crop((lx0, ly0, lx1, ly1)))
+        x0, y0 = lx0, ly0
+        method = "local"
+        if split_alpha_ok(result):
+            detail = (detail + "；" if detail else "") + "已用本地去背兜底"
+        else:
+            detail = (detail + "；" if detail else "") + "本地去背未产生透明区域（背景可能非纯色）"
+
+    full = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    full.paste(result.convert("RGBA"), (x0, y0))
+    if method == "model":
+        # 🚨 几何锚定（2026-10-10）：模型只负责「元素长什么样」，**位置与尺寸一律以 LLM bbox 为准**。
+        #    不做这一步，模型把元素放大 1.34~1.43 倍又左上偏 (86,184)px，就会同时出现
+        #    「元素位置没贴合」和「文字层重影」（元素盖不住背景层的洞）。
+        before = split_layer_hole(full.getchannel("A")).getbbox()
+        full = split_anchor_to_bbox(full, [bx, by, bw, bh], src_rgba=base_rgba)
+        after = split_layer_hole(full.getchannel("A")).getbbox()
+        if before and after and before != after:
+            print(f"[split-layers] {element.get('name')} 元素已按 bbox 锚定位置：{before} -> {after}")
+    return full, method, detail
+
+
+async def split_refine_text(payload, src_rgba, width, height, item):
+    """把文字块裁出来放大后再问一次模型，拿到更精确的位置与字号。
+
+    为什么要放大：后端喂图（reference_to_data_url）只会缩小、不会放大，小图直接送
+    过去等于没有放大；而整图提问时模型给的 bbox 会偏几十像素（实测 1200x1500 的图
+    上偏 ~41px）。裁出来自己放大 3 倍再问，同一个模型就能给出贴合得多的框。
+    返回 None 表示精修不可用，调用方保留原值。
+    """
+    x, y, w, h = item["bbox"]
+    pad = max(40, int(max(w, h) * 1.2))
+    x0, y0 = max(0, x - pad), max(0, y - pad)
+    x1, y1 = min(width, x + w + pad), min(height, y + h + pad)
+    crop = src_rgba.crop((x0, y0, x1, y1)).convert("RGB")
+    cw, ch = crop.size
+    if cw < 4 or ch < 4:
+        return None
+    zoom = max(1, min(3, 1024 // max(cw, ch)))
+    if zoom > 1:
+        crop = crop.resize((cw * zoom, ch * zoom), Image.LANCZOS)
+    url = await split_save_png(crop.convert("RGBA"), prefix="split_text_")
+    res = await canvas_llm(CanvasLLMRequest(
+        message=SPLIT_LAYERS_TEXT_PROMPT.format(zoom=zoom, x0=x0, y0=y0),
+        system_prompt=SPLIT_LAYERS_SYSTEM,
+        provider=payload.provider_id,
+        model=payload.model,
+        images=[url],
+        messages=[],
+    ))
+    data = split_extract_json((res or {}).get("text") or "")
+    if not isinstance(data, dict) or not data.get("found"):
+        return None
+    bbox = data.get("bbox")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return None
+    try:
+        bx, by, bw, bh = [float(v) for v in bbox]
+    except (TypeError, ValueError):
+        return None
+
+    nx = max(0, min(width - 1, x0 + int(round(bx / zoom))))
+    ny = max(0, min(height - 1, y0 + int(round(by / zoom))))
+    nw = max(4, min(width - nx, int(round(bw / zoom))))
+    nh = max(4, min(height - ny, int(round(bh / zoom))))
+    # 精修结果必须和原框有实质重叠，否则视为模型跑偏，保留原值更安全
+    if min(x + w, nx + nw) <= max(x, nx) or min(y + h, ny + nh) <= max(y, ny):
+        print(f"[split-layers] 文字精修结果与原框不重叠，保留原值: {item['name']}")
+        return None
+
+    out = {"bbox": [nx, ny, nw, nh]}
+    text = str(data.get("text") or "").strip()
+    if text:
+        out["text"] = text[:200]
+    if str(data.get("font_weight") or "").lower() == "bold":
+        out["font_weight"] = "bold"
+    color = split_norm_color(data.get("color"), item.get("color") or "#111827")
+    if color:
+        out["color"] = color
+    try:
+        rot = float(data.get("rotation") or 0)
+    except (TypeError, ValueError):
+        rot = 0.0
+    out["rotation"] = (rot + 180.0) % 360.0 - 180.0
+    align = str(data.get("align") or "").strip().lower()
+    if align in ("left", "center", "right"):
+        out["align"] = align
+    # 位置框变紧之后，字号就可以由几何直接定：单行文字「行长度 ≈ 字数 x 0.68 x 字号」。
+    # 比模型给的稳得多 —— 同一张图三次跑出来是 14 / 20 / 23，而按原图墨迹反推应为 23。
+    plain = str(out.get("text") or item.get("text") or "")
+    if "\n" not in plain:
+        chars = len(plain.strip())
+        if chars >= 2:
+            out["font_size"] = int(round(max(6.0, min(400.0, max(nw, nh) / (chars * 0.68)))))
+    # 🚨 逐处文字的位置（2026-10-10 加，老板「文字层更不对了」）：
+    #    LLM 常把「散布在画面各处」的界面文字并成一条多行文字；前端编辑态是按 bbox
+    #    把 \n 当成**一个段落**左对齐重画的 → 画面上出现一个四行大字块，既不在原位也被撑大。
+    #    这里让模型在**放大 zoom 倍**的局部图上逐处标 bbox，换算回原图坐标，
+    #    由 split_text_by_lines 拆成逐条图层。条数与文案对不上时那边会原样放过。
+    raw_lines = data.get("lines")
+    if isinstance(raw_lines, (list, tuple)):
+        lines_out = []
+        for ln in raw_lines[:12]:
+            if not isinstance(ln, dict):
+                continue
+            lt = str(ln.get("text") or "").strip()
+            lb = ln.get("bbox")
+            if not lt or not isinstance(lb, (list, tuple)) or len(lb) != 4:
+                continue
+            try:
+                lx, ly, lw, lh = [float(v) for v in lb]
+            except (TypeError, ValueError):
+                continue
+            ox = max(0, min(width - 1, x0 + int(round(lx / zoom))))
+            oy = max(0, min(height - 1, y0 + int(round(ly / zoom))))
+            ow = max(4, min(width - ox, int(round(lw / zoom))))
+            oh = max(4, min(height - oy, int(round(lh / zoom))))
+            lines_out.append({"text": lt[:120], "bbox": [ox, oy, ow, oh]})
+        if len(lines_out) >= 2:
+            out["lines"] = lines_out
+    return out
+
+
+async def split_run_limited(items, limit, worker, on_done=None):
+    """有界并发：最多同时跑 `limit` 个 `worker(item)`，结果按原顺序返回。
+
+    为什么不用裸 `asyncio.gather`：47 个元素同时打上游会被限流（实测会拿到 Cloudflare 524）。
+    为什么要并发：见 `SPLIT_LAYERS_EXTRACT_CONCURRENCY` 上面的注释。
+
+    worker 抛出的异常会被**捕获后原样放进结果里**，由调用方决定怎么处理 ——
+    这样单个元素失败不会把整个任务打成 failed（原来的串行实现会）。
+    """
+    items = list(items)
+    if not items:
+        return []
+    sem = asyncio.Semaphore(max(1, int(limit)))
+    results = [None] * len(items)
+    counter = {"done": 0}
+
+    async def run_one(index, item):
+        async with sem:
+            try:
+                results[index] = await worker(item)
+            except Exception as exc:  # noqa: BLE001 —— 故意兜住，交给调用方判断
+                results[index] = exc
+            counter["done"] += 1
+            if on_done:
+                try:
+                    on_done(counter["done"], len(items), item)
+                except Exception as exc:
+                    print(f"[split-layers] 进度回调失败: {exc}")
+
+    await asyncio.gather(*(run_one(i, it) for i, it in enumerate(items)))
+    return results
+
+
+async def run_split_layers_task(task_id: str, payload: SplitLayersRequest):
+    def progress(phase, current, total, message):
+        with CANVAS_TASK_LOCK:
+            task = CANVAS_TASKS.get(task_id)
+            if task:
+                task.update({
+                    "status": "running",
+                    "updated_at": time.time(),
+                    "progress": {"phase": phase, "current": current,
+                                 "total": total, "message": message},
+                })
+
+    # 🚨 「卡在哪一步」靠这个变量：每个阶段开跑前改一次，except 里据此给出建议。
+    # 用户看到的失败卡片就是 phase_label + message + advice 三行。
+    phase = "prepare"
+    try:
+        src_path = output_file_from_url(payload.image_url)
+        if not src_path or not os.path.exists(src_path):
+            raise HTTPException(status_code=400, detail="找不到要拆分的图片")
+        with Image.open(src_path) as img:
+            img.load()
+            width, height = img.size
+            src_rgba = img.convert("RGBA")
+        if width < 16 or height < 16:
+            raise HTTPException(status_code=400, detail="图片尺寸过小，无法拆分图层")
+
+        phase = "analyze"
+        progress("analyze", 0, 1, "正在分析画面元素…")
+        layout = await split_analyze(payload, width, height)
+        elements = [it for it in layout["layers"] if it["kind"] == "element"]
+        texts = [it for it in layout["layers"] if it["kind"] == "text"]
+        if not elements and not texts:
+            raise HTTPException(status_code=422, detail="没有识别出可拆分的图层")
+        # 🚨 LLM 会把几块文字合并成一条、或把同一块文字输出两条（2026-10-10 老板产物实测 5 条里
+        #    3 条是坏的）—— 不删就会在画面上把文字画两遍。见 split_prune_text_layers 的注释。
+        texts = split_prune_text_layers(texts)
+        # 🚨 背景层策略：默认由 LLM 的 background.need_model 决定；但用户选择 2 层时，
+        #    明确要求「元素层 + 背景层」两个基础层，背景固定调用一次图像模型补全。
+        #    文字层继续额外生成，不占 target_layers。
+        background_spec = layout.get("background") or {}
+        target_layers = int(payload.target_layers or 0)
+        force_model_background = target_layers == 2
+        if force_model_background:
+            background_spec = dict(background_spec)
+            background_spec["need_model"] = True
+            background_spec["prompt"] = str(background_spec.get("prompt") or "")[:400]
+            print("[split-layers] 2 层模式：强制背景层调用一次图像模型补全")
+
+        mode = str(payload.mode or "auto").lower()
+        # 🚨 不再有「抹除文字」阶段（2026-10-09 改）：
+        #    文字是从原图裁出来的像素层，背景又是「原图减去各层覆盖范围」，
+        #    文字自然不在背景里；而抹文字会改掉底图像素，反而让叠加不再等于原图。
+        #    payload.erase_text 保留字段但已不参与流程（前端现在传 false）。
+        # ⚠️ `mode='model'` 是「用户明确要求整图重绘」的独立模式（前端目前恒传 'auto'），
+        #    它仍然直接用模型自己的像素，因此那种模式下叠加**不**等于原图 —— 这是刻意的。
+        want_redraw = mode == "model"
+
+        # 文字层：整图提问给的 bbox 偏几十像素，裁出来放大再问一次校准位置与字号。
+        # 每块彼此独立、只是等模型，所以并发跑（原来串行 9 块要 ~10 分钟）。
+        # 像素优先下 bbox 只影响「这一层单独看好不好看」，不影响叠加还原度。
+        phase = "refine"
+        if texts and mode != "local":
+            async def refine_one(item):
+                try:
+                    return await split_refine_text(payload, src_rgba, width, height, item)
+                except Exception as exc:
+                    print(f"[split-layers] 文字精修失败，保留原值: {exc}")
+                    return None
+
+            refined = await split_run_limited(
+                texts, SPLIT_LAYERS_REFINE_CONCURRENCY, refine_one,
+                lambda done, total, item: progress(
+                    "refine", done, total,
+                    f"正在校准文字位置：{item.get('text') or item['name']}"))
+            for item, better in zip(texts, refined):
+                if isinstance(better, dict) and better:
+                    item.update(better)
+                    print(f"[split-layers] 文字精修: {item['name']} bbox -> {item['bbox']} "
+                          f"font_size -> {item.get('font_size')}")
+
+        # 🚨 精修会改写 bbox，所以**修剪要再来一次**（2026-10-10）：
+        #    上面那次用的是 LLM 的原始框，漏判了「比例标签 `9:16`」这种 —— 原始框没被
+        #    「模型名称」包住，精修之后才包住。两次都跑是刻意的：第一次省掉精修白花的钱，
+        #    第二次用更准的框兜住漏网的。修剪本身纯本地，几乎不花时间。
+        texts = split_prune_text_layers(texts)
+
+        # 元素层：**两条路，由 payload.mode 决定**（前端当前恒传 'model'）。
+        #   mode='model'（老板 2026-10-10 定的默认，= 他给的原始方法）：
+        #     整幅原图交给图像模型 -> 每个元素单独生成一张全画幅透明 PNG -> **用模型生成的像素**。
+        #     元素最完整干净；代价是叠加不再等于原图（实测 mean 3.915 / bad_ratio 0.1326，
+        #     边缘可能有轻微重影）—— 这是刻意的取舍，前端会按「生图模式」措辞提示。
+        #   mode='auto'（2026-10-09 的旧方案，保留以便回退，前端不再使用）：
+        #     像素优先 —— 模型只出**轮廓**，RGB 一律从原图取，叠加恒等于原图。
+        async def extract_one(element):
+            if want_redraw:
+                full, method, detail = await split_extract_element(
+                    payload, src_rgba, width, height, element, whole_image=True)
+            else:
+                full, method, detail, cut_ok = split_pixel_layer(src_rgba, width, height, element)
+                if full is not None:
+                    need = bool(element.get("need_model"))
+                    if need or not cut_ok:
+                        reason = "LLM 判定需模型抠图" if need else "本地去背未产生透明区"
+                        try:
+                            m_full, m_method, m_detail = await split_extract_element(
+                                payload, src_rgba, width, height, element,
+                                force_model=True, whole_image=True)
+                        except Exception as exc:
+                            m_full, m_method, m_detail = None, "local", str(exc)
+                        if m_full is not None and m_method == "model":
+                            # 🚨 只取模型的**轮廓**，像素仍来自原图（2026-10-09 口径）。
+                            # 🚨 2026-10-10：**不再与本地抠图取并集** —— 实测有害：本地 flood-fill
+                            #    在纹理背景（花园/天空）上几乎无效，它的残留被并进来，把「一个人」
+                            #    撑成「整张卡片」（模型掩码 15.00% -> 并集 20.53%，多出的 5.65%
+                            #    全是背景）。现在模型掩码是唯一 alpha 来源。
+                            full = split_model_outline_layer(src_rgba, m_full)
+                            method = "model"
+                            detail = f"{reason}；已自动调用图像模型在**整幅图**上取轮廓（像素仍取自原图）"
+                        else:
+                            detail = f"{reason}；图像模型抠图未成功，保留原图像素（{m_detail}）"
+                        print(f"[split-layers] {element.get('name')} {detail}")
+            if full is None:
+                return None
+            return ({**element, "url": await split_save_png(full),
+                     "method": method, "detail": detail}, full)
+
+        phase = "extract"
+        out_layers = []
+        plate_by_id = {}
+        extracted = await split_run_limited(
+            elements, SPLIT_LAYERS_EXTRACT_CONCURRENCY, extract_one,
+            lambda done, total, element: progress(
+                "extract", done, total, f"正在提取图层：{element['name']}"))
+        for element, item in zip(elements, extracted):
+            if isinstance(item, Exception) or item is None:
+                # 单个元素挂掉不拖垮整个任务，记一笔跳过
+                print(f"[split-layers] {element.get('name')} 提取失败，已跳过: {item}")
+                continue
+            entry, plate = item
+            out_layers.append(entry)
+            plate_by_id[entry["id"]] = plate
+
+        # 🚨 「组 bbox 抄邻居」闸（2026-10-10 老板「元素层边缘对齐」实测）：
+        #    LLM 偶尔会把一**组**东西当成一个元素、给出横跨整幅的 bbox（实测老板那张图
+        #    「侧边参考图片卡片组」= [0,82,1248,767]，把中央卡片整个含在里面）。模型这条路
+        #    失败后回落到本地抠图，而本地抠图只会「把这块矩形里不像背景的都留下」——
+        #    它没法知道哪些像素是「我的」，于是这一层把中央卡片**原样抄了一遍**，还带着更高的 z
+        #    盖在真正的卡片层上面 → 画面上就是**两层错开的卡片边缘**（老板截图里那条双边缘）。
+        #    实测该层：bbox 占画布 61.5%，94.8% 的实心像素落在卡片层 bbox 内，且其不透明像素与
+        #    源图**逐像素相同**（平均绝对差 0.00）—— 就是原图卡片的一份硬边拷贝。
+        #    判据（实测数据定的，两条同时满足才丢）：
+        #      ① bbox 面积 ≥ 画布 40%（该层 61.5%，其余元素最大 3.2%，分得很开）；
+        #      ② ≥ 80% 的 alpha 落在**别的**元素层 alpha 里（该层 93.8%）。
+        #    ⚠️ 只丢 out_layers、**不删 plate_by_id**：背景层挖洞用的还是它（卡片本来就该从
+        #       背景里挖掉），少挖一块反而会让背景残留卡片。
+        try:
+            holes = {}
+            for entry in out_layers:
+                if entry.get("kind") != "element":
+                    continue
+                plate = plate_by_id.get(entry.get("id"))
+                if plate is not None:
+                    holes[entry["id"]] = split_layer_hole(plate.getchannel("A"))
+            canvas_area = max(1.0, float(width) * float(height))
+            drop_ids = []
+            for entry in out_layers:
+                if entry.get("kind") != "element" or entry.get("method") != "local":
+                    continue
+                own = holes.get(entry.get("id"))
+                bb = entry.get("bbox") or []
+                if own is None or len(bb) < 4:
+                    continue
+                try:
+                    ratio = float(bb[2]) * float(bb[3]) / canvas_area
+                except (TypeError, ValueError):
+                    continue
+                if ratio < 0.40:
+                    continue
+                own_px = own.histogram()[255]
+                if own_px <= 0:
+                    continue
+                union = Image.new("L", (width, height), 0)
+                for oid, hole in holes.items():
+                    if oid != entry.get("id"):
+                        union = ImageChops.lighter(union, hole)
+                covered = ImageChops.multiply(own, union).histogram()[255]
+                if covered >= 0.80 * own_px:
+                    drop_ids.append(entry.get("id"))
+                    print(f"[split-layers] {entry.get('name')} 是横跨整幅的本地兜底层"
+                          f"（bbox 占画布 {ratio:.0%}、alpha {covered / own_px:.0%} 落在别的层里），"
+                          f"已丢弃：留着会与它抄的那一层叠出双边缘")
+            if drop_ids:
+                out_layers = [it for it in out_layers if it.get("id") not in drop_ids]
+        except Exception as exc:
+            print(f"[split-layers] 兜底层去重跳过: {exc}")
+
+        # 文字层：像素优先 —— 从原图裁出文字那块的像素 + 本地抠图 alpha。
+        # 🚨 这是还原度修复的核心：以前这里只给 bbox，由前端用系统字体 fillText 重画，
+        #    字体/字距/描边/发光永远对不上。现在像素直接来自原图，叠加就是原图本身。
+        # 🚨 2026-10-10：一条 LLM 文字层里可能并着两块**分开的**文字（实测工具条上的
+        #    `9:16` 与 `Nano Banana` 中间隔着 41px），前端按 bbox 整串重画就会与原图错位。
+        #    所以下面按像素测出的空隙把这种层拆回两条（见 split_text_runs），
+        #    并把 `texts` 换成拆完的清单 —— 后面 text_hole 要按新清单算。
+        final_texts = []
+        for item in texts:
+            # 文字层不走模型：像素直接取自原图，切「编辑态」才由前端重画（cut_ok 用不上）
+            full, method, detail, cut_ok = split_pixel_layer(
+                src_rgba, width, height, item, pad_ratio=0.15, min_pad=14)
+            # 🚨 把 alpha 夹回 LLM 给的 bbox（+4px 容差）——见 split_clamp_alpha 的注释：
+            #    不夹的话 15% 外扩会把工具条下沿、卡片上沿也当成文字，连带污染背景的洞和元素层。
+            b = item.get("bbox") or []
+            if full is not None and len(b) >= 4:
+                try:
+                    bx, by, bw, bh = (int(round(float(v))) for v in b[:4])
+                except (TypeError, ValueError):
+                    bx = by = bw = bh = None
+                if bw and bh and bw > 0 and bh > 0:
+                    m = 4
+                    full = split_clamp_alpha(full, (bx - m, by - m, bx + bw + m, by + bh + m))
+                    # 🚨 再把 bbox 贴到**实测**的文字像素范围上（2026-10-10 加）：前端编辑态是
+                    #    按 bbox 用系统字体重画的，bbox 差 10px，画出来就与背景里的原文字错开
+                    #    → 画面上出现两行错位的字（老板反馈的「文字层不对」就是这个）。
+                    #    LLM 的 bbox 只是估算，实测范围才是真值；实测为空就保留 LLM 的。
+                    tight = split_layer_hole(full.getchannel("A")).getbbox()
+                    if tight:
+                        item["bbox"] = [tight[0], tight[1],
+                                        tight[2] - tight[0], tight[3] - tight[1]]
+            for piece, _ in split_text_runs(full, item):
+                plate0 = full
+                if piece is not item and full is not None:
+                    # 拆出来的子层：把整块的像素板夹到它自己那一截上（+4px 容差）
+                    pb = piece.get("bbox") or []
+                    if len(pb) >= 4:
+                        px, py, pw, ph = (int(round(float(v))) for v in pb[:4])
+                        plate0 = split_clamp_alpha(full, (px - 4, py - 4,
+                                                          px + pw + 4, py + ph + 4))
+                # 🚨 2026-10-10 老板「文字层更不对了」：一条 LLM 文字层里可能并着**好几处
+                #    互不相邻**的界面文字（Anya 胶囊 + 工具条上的 9:16 / Nano Banana +
+                #    下面的 Woman portrait）。前端把 \n 当一个段落左对齐重画 → 画面上出现
+                #    一个四行大字块。这里按模型逐处标的 bbox（item["lines"]）拆成逐条图层。
+                for sub, plate in split_text_by_lines(plate0, piece):
+                    # 🚨 2026-10-09 老板反馈「转为编辑状态后旋转角度没有保持不变」：
+                    #    模型给的 rotation 经常是 0，而像素层里文字就是斜的 —— 编辑态照 0 渲染，
+                    #    字就"立正"了。这里用实测的倾斜角补上（本地计算，零成本）。
+                    # 🚨 2026-10-10 换主口径（老板「字体倾斜角度」）：**优先用原图实测**
+                    #    （split_measure_text_angle）；它量不出来才退回「文字层 alpha 的最小面积矩形」
+                    #    （split_measure_rotation）。原因见 split_measure_text_angle 的注释：
+                    #    alpha 已被 split_clamp_alpha 夹过、还把底板亮边框抠了进来，最小面积矩形
+                    #    量到的是那块**残缺形状**的朝向 —— 实测 Anya 报 6.0°，而真值（三条长边
+                    #    一致量得）是 1.26°。源图这条路完全不依赖 alpha，所以不再需要 cut_ok 前提。
+                    #    实测修正：Anya 6.0 -> 0.9，Nano Banana 3.0 -> 1.2，Mahmud 1.0 -> 1.3，
+                    #    Woman portrait 0.0 -> 1.3。
+                    try:
+                        model_rot = float(sub.get("rotation") or 0)
+                    except (TypeError, ValueError):
+                        model_rot = 0.0
+                    measured = split_measure_text_angle(src_rgba, sub.get("bbox") or b)
+                    if measured is None and plate is not None and cut_ok:
+                        measured = split_measure_rotation(plate)
+                    if measured is not None:
+                        if abs(measured - model_rot) >= 0.6:
+                            print(f"[split-layers] 文字倾斜角 {sub['name']}: "
+                                  f"{model_rot} -> 实测 {measured}")
+                        sub["rotation"] = measured
+                    # 🚨 textMode 默认不再是 'pixel'（2026-10-09 老板口径：文字层要**直接可编辑**）。
+                    #    前端 splitLayersIsPixelText 只在 textMode === 'pixel' 时走像素渲染，
+                    #    所以这里不写这个字段 = 默认编辑态；用户点「还原像素」才会被置成 'pixel'。
+                    entry = {**sub, "method": "text", "url": "", "detail": detail}
+                    # `lines` 是**拆层用的中间数据**，不是图层字段：没拆成功时它会被原样带出去，
+                    # 白白多一份 JSON，前端也不认。这里统一剥掉。
+                    entry.pop("lines", None)
+                    if plate is not None:
+                        entry["url"] = await split_save_png(plate)
+                        plate_by_id[entry["id"]] = plate
+                    out_layers.append(entry)
+                    final_texts.append(entry)
+        texts = final_texts
+
+        # 文字洞 = 所有文字层 alpha 的并集。两处要用它：
+        #   ① 背景层：模型重绘后**必须**把文字洞本地糊掉（模型对细笔画靠不住，见下）；
+        #   ② 元素层：把文字从元素里挖掉，否则同一块文字会被画两遍（元素像素一次 + 文字层一次）。
+        text_hole = Image.new("L", (width, height), 0)
+        for item in texts:
+            plate = plate_by_id.get(item["id"])
+            if plate is not None:
+                text_hole = ImageChops.lighter(
+                    text_hole, split_layer_hole(plate.getchannel("A")))
+
+        # 背景层：三条路 ——
+        #   ① pure_background=False          -> 整幅原图（最省、最保真）
+        #   ② LLM background.need_model=True -> **调图像模型**做 object removal（局部重绘 + 遮罩贴回）
+        #   ③ 其余（含模型失败 / LLM 说不用） -> 本地「原图挖洞 + 低频补」
+        # 🚨 2026-10-10 老板口径：「背景层允许 LLM 决策生成的，可调用模型」——
+        #    不再一律走本地。模型这条路的遮罩用**各层 alpha 的精确并集**（`split_background_plate`
+        #    顺手算出来的 hole），比 `split_element_mask` 按 bbox 画矩形准得多。
+        phase = "background"
+        progress("background", 0, 1, "正在合成背景（移除各层内容）…")
+        hole = Image.new("L", (width, height), 0)
+        bg_method = "base"
+        bg_detail = "整幅原图（最底层）"
+        if payload.pure_background:
+            bg_source, hole = split_background_plate(
+                src_rgba, width, height, list(plate_by_id.values()))
+            bg_method, bg_detail = "local", "原图移除各层内容后本地补全（最底层）"
+            # 🚨 文字洞必须**再迭代补几轮**（2026-10-10 实测）：`split_background_plate` 里那次
+            #    `split_local_fill` 只做一次降采样，而细笔画的亮度会被摊进自己的平均值里 ——
+            #    实测老板那张图，`Nano Banana` 的洞里补完还剩 **83/255** 亮度（周围底色 31），
+            #    叠上去就是一层与文字层错开的**重影**（老板：「9:16 和 Nano Banana 没有对齐」）。
+            #    迭代到 3 轮压到 37、6 轮压到 30 —— 与周围底色基本一致。
+            #    ⚠️ 只糊「文字洞」：文字层会在最上面重画，所以糊掉不会留下空洞。
+            #    ⚠️ 元素洞不能这么糊：那里没有东西盖回来，糊过头会露出补丁。
+            if text_hole.getbbox():
+                bg_source = split_fill_text_holes(bg_source, text_hole)
+            if background_spec.get("need_model"):
+                progress("background", 0, 1, "正在用图像模型生成纯背景…")
+                try:
+                    made = await split_erase_elements(
+                        payload, src_rgba, width, height, None, mask=hole,
+                        extra_prompt=background_spec.get("prompt"))
+                except Exception as exc:
+                    made = None
+                    print(f"[split-layers] 背景层模型重绘失败: {exc}")
+                if made is not None:
+                    # 🚨 文字洞一律本地补（2026-10-10 实测）：图像模型不是「抹掉」文字而是
+                    #    「重画」—— 实测老板 10:27 那次产物，洞内文字笔画仍保留 82% 亮度，
+                    #    位置还整体偏了几十像素。叠加时它就是背景上的一层**重影**，
+                    #    与文字层渲染出来的字错开（老板反馈的「文字层不对」就是这个）。
+                    #    低频补能把细笔画彻底糊掉，而文字层会在最上面把文字重画一遍，
+                    #    所以这里糊掉是安全的、也是必须的。
+                    if text_hole.getbbox():
+                        made = split_fill_text_holes(made, text_hole)
+                    bg_source = made
+                    bg_method = "model"
+                    bg_detail = "图像模型移除各层内容后重绘补全（最底层）"
+                else:
+                    bg_detail += "；模型未产出，已回落本地补洞"
+                    print("[split-layers] 背景层回落本地补洞")
+        else:
+            bg_source = src_rgba.convert("RGBA").copy()
+            bg_source.putalpha(255)
+        bg_url = await split_save_png(bg_source, prefix="split_base_")
+        background = {
+            "id": "bg", "kind": "element", "name": "背景",
+            "bbox": [0, 0, width, height], "url": bg_url,
+            "method": bg_method,
+            "detail": bg_detail,
+        }
+        plate_by_id["bg"] = bg_source
+
+        # 先按模型给的 z 排好，再把背景摘出来钉在最底层，最后整体重排 z = 0..n-1。
+        # 重排是安全的：z 在前端只用于排序，从不显示（已核 smart-canvas.js 三处 .z 用法）。
+        out_layers.sort(key=lambda it: it["z"])
+        out_layers = [it for it in out_layers if it.get("id") != "bg"]
+        out_layers.insert(0, background)
+        for index, item in enumerate(out_layers):
+            item["z"] = index
+
+        # 🚨 同一块文字只能被画一次（2026-10-10 加）。LLM 的兜底元素会把文字一起框进去
+        #    （实测「画布编辑界面控件」bbox = [0,43,1248,984]，把工具条上的 Anya / 9:16 /
+        #    Woman portrait 标签全含在里面），于是文字既在元素层的像素里、又被文字层渲染一次
+        #    → 画面上出现两行错位的字。把文字 alpha 从每个元素层里挖掉，文字就只剩一个来源。
+        #    ⚠️ 只挖「文字层」的范围：文字层会在最上面重画，所以挖掉不会留下空洞；
+        #       被 split_prune_text_layers 丢掉的那些文字不在 text_hole 里，仍以元素像素形式保留。
+        #    ⚠️ 背景层（id='bg'）不挖：它在合成背景时已经按同一个洞补过了。
+        if text_hole.getbbox():
+            for entry in out_layers:
+                if entry.get("kind") != "element" or entry.get("id") == "bg":
+                    continue
+                plate = plate_by_id.get(entry.get("id"))
+                if plate is None:
+                    continue
+                alpha = split_layer_hole(plate.getchannel("A"))
+                cut = ImageChops.subtract(alpha, text_hole)
+                if ImageChops.difference(alpha, cut).getbbox() is None:
+                    continue
+                plate.putalpha(cut)
+                plate_by_id[entry["id"]] = plate
+                entry["url"] = await split_save_png(plate)
+                print(f"[split-layers] {entry.get('name')} 已挖掉文字区，避免与文字层重影")
+
+        # 还原度校验：所有层按 z 叠加 vs 原图。
+        # ⚠️ mode='model'（生图路线）下**必然不为 0** —— 元素层用的是模型重新生成的像素，
+        #    它本来就不等于原图。这是老板 2026-10-10 明确选择的取舍，不是 bug；
+        #    前端按「生图模式」措辞展示，不要当成失败提示。
+        reconstruction = split_reconstruction_check(
+            src_rgba, [(it["z"], plate_by_id.get(it["id"])) for it in out_layers])
+
+        result = {
+            "source": payload.image_url,
+            "canvas": {"width": width, "height": height},
+            "layers": out_layers,
+            "erased_text": False,
+            "bg_pure": bool(hole.getbbox()),
+            "reconstruction": reconstruction,
+            "stats": {
+                "elements": len(elements),
+                "texts": len(texts),
+                "base": 1,
+                "redraw": want_redraw,
+                "model": sum(1 for it in out_layers if it.get("method") == "model"),
+                "local": sum(1 for it in out_layers if it.get("method") == "local"),
+            },
+        }
+        print(f"[split-layers] 完成（{'生图' if want_redraw else '像素优先'}）："
+              f"背景 1 + 元素 {len(out_layers) - len(texts) - 1}"
+              f" + 文字 {len(texts)}，共 {len(out_layers)} 层；"
+              f"叠加还原度 平均偏差 {reconstruction['mean']} 最大 {reconstruction['max']}"
+              + ("（生图模式下不为 0 属预期）" if want_redraw else ""))
+        progress("done", 1, 1, "拆分完成")
+        with CANVAS_TASK_LOCK:
+            CANVAS_TASKS[task_id].update({
+                "status": "succeeded", "result": result, "error": "",
+                "error_detail": None,
+                "updated_at": time.time(),
+            })
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        tried = list(getattr(exc, "tried", None) or [])
+        print(f"[split-layers] task {task_id} failed at [{phase}]: {detail}")
+        error_detail = {
+            "phase": phase,
+            "phase_label": SPLIT_LAYERS_PHASE_LABELS.get(phase, phase),
+            "message": str(detail),
+            "advice": split_phase_advice(phase),
+            "tried": tried,
+        }
+        with CANVAS_TASK_LOCK:
+            CANVAS_TASKS[task_id].update({
+                "status": "failed", "error": str(detail),
+                "error_detail": error_detail, "updated_at": time.time(),
+            })
+
+
+@app.post("/api/split-layers-tasks")
+async def create_split_layers_task(payload: SplitLayersRequest):
+    if not output_file_from_url(payload.image_url):
+        raise HTTPException(status_code=400, detail="找不到要拆分的图片")
+    if not (payload.provider_id or payload.image_provider_id):
+        raise HTTPException(status_code=400, detail="请先配置可用的 API 通道")
+    task_id = f"split_{uuid.uuid4().hex}"
+    with CANVAS_TASK_LOCK:
+        CANVAS_TASKS[task_id] = {
+            "id": task_id,
+            "type": "split-layers",
+            "status": "queued",
+            "created_at": time.time(),
+            "updated_at": time.time(),
+            "result": None,
+            "error": "",
+            "error_detail": None,
+            "progress": {"phase": "queued", "current": 0, "total": 0, "message": "排队中"},
+            "provider_id": payload.provider_id,
+            "model": payload.model,
+        }
+    asyncio.create_task(run_split_layers_task(task_id, payload))
+    return {"task_id": task_id, "status": "queued"}
+
+
+@app.get("/api/split-layers-tasks/{task_id}")
+async def get_split_layers_task(task_id: str):
+    with CANVAS_TASK_LOCK:
+        task = dict(CANVAS_TASKS.get(task_id) or {})
+    if not task:
+        raise HTTPException(status_code=404, detail="拆分任务不存在，可能服务已重启或任务已过期")
+    return task
+
+
+# ---------------- 混元 3D 多视图节点（浏览器通道，实现见 hunyuan3d_client.py） ----------------
+
+HY3D_PHASE_LABELS = {
+    "queued": "排队中",
+    "login": "等待登录混元3D",
+    "upload": "上传视图到混元3D",
+    "generate": "提交生成",
+    "process": "混元3D 生成中",
+    "download": "下载模型",
+    "done": "完成",
+}
+
+HY3D_TASKS: Dict[str, dict] = {}
+HY3D_TASK_LOCK = Lock()
+# 一个 profile 同时只能开一个 Edge ⇒ 生成/登录/分享全部串行
+HY3D_BROWSER_LOCK = asyncio.Lock()
+HY3D_PROFILE_DIR = os.path.join(_HERE, "data", "hunyuan3d-profile")
+HY3D_MODEL_DIR = os.path.join(ASSETS_DIR, "output", "3d")
+
+
+class Hunyuan3DTaskRequest(BaseModel):
+    view_urls: List[str] = Field(default_factory=list)
+
+
+class Hunyuan3DShareRequest(BaseModel):
+    asset_id: str = ""
+
+
+HY3D_QUOTA_CACHE: Dict[str, Any] = {"at": 0.0, "data": None}
+
+
+def _hy3d_task_update(task_id: str, **fields):
+    with HY3D_TASK_LOCK:
+        task = HY3D_TASKS.get(task_id)
+        if not task:
+            return
+        task.update(fields)
+        task["updated_at"] = time.time()
+
+
+def _hy3d_progress(task_id: str, phase: str, message: str):
+    with HY3D_TASK_LOCK:
+        task = HY3D_TASKS.get(task_id)
+        if task:
+            task["progress"] = {"phase": phase, "message": message}
+            task["updated_at"] = time.time()
+
+
+async def run_hy3d_task(task_id: str, payload: Hunyuan3DTaskRequest):
+    """后台跑一遍：视图 URL → 本地文件 → 浏览器上传/生成 → GLB 落盘。"""
+    phase = "queued"
+    client = None
+    share_url = ""
+    quota = None
+    started = time.time()
+    try:
+        view_paths = []
+        for url in (payload.view_urls or []):
+            local = output_file_from_url(str(url))
+            if local and os.path.isfile(local):
+                view_paths.append(local)
+        if len(view_paths) < 2:
+            raise Hunyuan3DError("视图不足：混元3D 需要至少 2 张图片（正图必填）")
+
+        async with HY3D_BROWSER_LOCK:
+            client = Hunyuan3DBrowserClient(profile_dir=HY3D_PROFILE_DIR)
+            await client.start()
+            try:
+                await client.ensure_ready()
+            except Hunyuan3DNeedLogin:
+                _hy3d_task_update(
+                    task_id, status="need_login", error="混元3D 尚未登录",
+                    error_detail={
+                        "phase": "login",
+                        "phase_label": HY3D_PHASE_LABELS["login"],
+                        "message": "浏览器 profile 里没有混元3D 登录态",
+                        "advice": "点节点里的「去登录」，在自动打开的浏览器窗口里完成混元3D 登录，然后重新点「生成」",
+                    },
+                )
+                return
+            _hy3d_task_update(task_id, status="running")
+            # 顺手读一次额度（同一会话，零成本）：各账号额度不同，必须实时读、不能写死
+            try:
+                quota = await client.fetch_quota()
+                _hy3d_task_update(task_id, quota=quota)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[hy3d] 读取额度失败（不影响生成）：{exc}")
+                quota = None
+            glb_path = os.path.join(HY3D_MODEL_DIR, f"{task_id}.glb")  # task_id 自带 hy3d_ 前缀
+
+            def note(ph, msg):
+                nonlocal phase
+                phase = ph
+                _hy3d_progress(task_id, ph, msg)
+
+            asset = await client.generate(view_paths, glb_path, on_progress=note)
+            # 分享链接顺手拿好：同一个浏览器会话里做，省一次开浏览器（前端点「分享」可直接跳转）。
+            # 失败不影响出模型 —— 前端还有「点按再取」的兜底路径。
+            try:
+                share_url = await client.share_asset(str(asset.get("asset_id") or ""))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[hy3d] 分享链接获取失败（不影响模型）：{exc}")
+
+        result = {
+            "asset_id": asset.get("asset_id"),
+            "face_count": asset.get("face_count"),
+            "model_url": f"/assets/output/3d/{task_id}.glb",
+            "share_url": share_url,
+            "quota": quota,
+            "view_count": len(view_paths),
+            "glb_bytes": asset.get("glb_bytes"),
+            "elapsed_ms": int((time.time() - started) * 1000),
+        }
+        _hy3d_task_update(task_id, status="succeeded", result=result, error="",
+                          error_detail=None, progress={"phase": "done", "message": "完成"})
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        print(f"[hy3d] task {task_id} failed at [{phase}]: {detail}")
+        _hy3d_task_update(
+            task_id, status="failed", error=str(detail),
+            error_detail={
+                "phase": phase,
+                "phase_label": HY3D_PHASE_LABELS.get(phase, phase),
+                "message": str(detail),
+                "advice": "混元3D 生成失败。长时间停在「生成中」多为额度/排队；登录态失效时重新「去登录」再试",
+            },
+        )
+    finally:
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
+
+@app.post("/api/hy3d-tasks")
+async def create_hy3d_task(payload: Hunyuan3DTaskRequest):
+    urls = [str(u).strip() for u in (payload.view_urls or []) if str(u or "").strip()]
+    if len(urls) < 2:
+        raise HTTPException(status_code=400, detail="混元3D 需要连接至少 2 张视图图片（正图必填）")
+    task_id = f"hy3d_{uuid.uuid4().hex}"
+    with HY3D_TASK_LOCK:
+        HY3D_TASKS[task_id] = {
+            "id": task_id,
+            "type": "hy3d",
+            "status": "queued",
+            "created_at": time.time(),
+            "updated_at": time.time(),
+            "result": None,
+            "error": "",
+            "error_detail": None,
+            "progress": {"phase": "queued", "message": "排队中"},
+            "view_count": len(urls),
+        }
+    asyncio.create_task(run_hy3d_task(task_id, payload))
+    return {"task_id": task_id, "status": "queued"}
+
+
+@app.get("/api/hy3d-tasks/{task_id}")
+async def get_hy3d_task(task_id: str):
+    with HY3D_TASK_LOCK:
+        task = dict(HY3D_TASKS.get(task_id) or {})
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在，可能服务已重启或任务已过期")
+    return task
+
+
+@app.post("/api/hy3d-tasks/{task_id}/login")
+async def hy3d_login(task_id: str):
+    """弹可见窗口让用户登录混元3D（阻塞直到登录成功或 5 分钟超时）。"""
+    with HY3D_TASK_LOCK:
+        exists = task_id in HY3D_TASKS
+    if not exists:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    client = None
+    try:
+        async with HY3D_BROWSER_LOCK:
+            client = Hunyuan3DBrowserClient(profile_dir=HY3D_PROFILE_DIR)
+            await client.login_interactive()
+        return {"ok": True}
+    except Hunyuan3DNeedLogin as exc:
+        raise HTTPException(status_code=408, detail=str(exc))
+    except Hunyuan3DError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
+
+
+@app.post("/api/hy3d-tasks/{task_id}/share")
+async def hy3d_share(task_id: str):
+    """拿混元3D 分享链接（每次新建 shareId）。"""
+    with HY3D_TASK_LOCK:
+        task = HY3D_TASKS.get(task_id) or {}
+        asset_id = (task.get("result") or {}).get("asset_id")
+    if not asset_id:
+        raise HTTPException(status_code=400, detail="该任务还没有成功的资产，无法分享")
+    client = None
+    try:
+        async with HY3D_BROWSER_LOCK:
+            client = Hunyuan3DBrowserClient(profile_dir=HY3D_PROFILE_DIR)
+            await client.start()
+            await client.ensure_ready()
+            share_url = await client.share_asset(asset_id)
+        with HY3D_TASK_LOCK:
+            live = HY3D_TASKS.get(task_id)
+            if live is not None and live.get("result"):
+                live["result"]["share_url"] = share_url
+                live["updated_at"] = time.time()
+        return {"share_url": share_url}
+    except Hunyuan3DNeedLogin:
+        raise HTTPException(status_code=401, detail="混元3D 登录态失效，请重新「去登录」")
+    except Hunyuan3DError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
+
+
+@app.post("/api/hy3d-share")
+async def hy3d_share_asset(payload: Hunyuan3DShareRequest):
+    """按**资产 ID**取分享链接 —— 与任务记录解耦：服务重启后老节点照样能分享。"""
+    asset_id = str(payload.asset_id or "").strip()
+    if not asset_id:
+        raise HTTPException(status_code=400, detail="缺少资产 ID")
+    client = None
+    try:
+        async with HY3D_BROWSER_LOCK:
+            client = Hunyuan3DBrowserClient(profile_dir=HY3D_PROFILE_DIR)
+            await client.start()
+            await client.ensure_ready()
+            share_url = await client.share_asset(asset_id)
+        return {"share_url": share_url}
+    except Hunyuan3DNeedLogin:
+        raise HTTPException(status_code=401, detail="混元3D 登录态失效，请重新「去登录」")
+    except Hunyuan3DError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
+
+
+@app.get("/api/hy3d-quota")
+async def hy3d_quota(refresh: int = 0):
+    """读混元3D 额度（积分/剩余次数）。
+
+    🚨 每个账号额度不同 ⇒ 必须实时读；这里只做 60s 缓存防连点，**不写死任何数值**。
+    """
+    now = time.time()
+    if not refresh and HY3D_QUOTA_CACHE["data"] and now - float(HY3D_QUOTA_CACHE["at"]) < 60:
+        return HY3D_QUOTA_CACHE["data"]
+    client = None
+    try:
+        async with HY3D_BROWSER_LOCK:
+            client = Hunyuan3DBrowserClient(profile_dir=HY3D_PROFILE_DIR)
+            await client.start()
+            await client.ensure_ready()
+            quota = await client.fetch_quota()
+        HY3D_QUOTA_CACHE["at"] = time.time()
+        HY3D_QUOTA_CACHE["data"] = quota
+        return quota
+    except Hunyuan3DNeedLogin:
+        raise HTTPException(status_code=401, detail="混元3D 登录态失效，请重新「去登录」")
+    except Hunyuan3DError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
+
 
 if __name__ == "__main__":
     import argparse

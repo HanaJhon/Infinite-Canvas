@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>在线 PS</title>
+<!--
+  在线 PS 查看器（2026-10-10 老板拍板：去掉广告）。
+
+  🚨 为什么要有这个页面，而不是直接开 photopea.com：
+     「地址栏 = photopea.com」+「无广告」+「带全部图层」三者不可兼得，实测如下 ——
+       · `#STRING`（JSON 非法）        → 真编辑器，但 0 个广告域名 ✅（广告初始化被中断）
+       · `#{"files":[…]}`（合法 JSON） → 会载入文件，但带 ~40 个广告域名
+       · 新标签页开 `#STRING` 再从别的窗口 postMessage 灌图层 → Photopea 只认父窗口，收不到
+       · hash 放裸 URL                 → 0 广告，但根本不会去拉那个文件
+     所以「无广告 + 带图层」只能靠**我们自己托管一个页面**，在里面内嵌 `#STRING` 实例，
+     再用 Live Messaging API 把 PSD 灌进去 —— 就是这个文件。
+
+  🚨 别把 'STRING' 改成合法 JSON！一改成合法配置，广告就回来了（见上表）。
+     也别改成 '{"environment":…}' —— 一样是合法 JSON。
+
+  参数：
+     ?file=<encodeURIComponent(PSD 的绝对地址)>   必填
+  失败时会退回到 photopea.com 的直链（那条路一定有广告，但至少能用）。
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #2b2b2b; overflow: hidden; }
+  #stage { position: absolute; inset: 0; }
+  #boot {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 14px; color: #e8e8e8; background: #2b2b2b;
+    font: 14px/1.7 "Segoe UI", "Microsoft YaHei", sans-serif; text-align: center; padding: 24px;
+    box-sizing: border-box;
+  }
+  #boot .spin {
+    width: 26px; height: 26px; border: 2px solid #555; border-top-color: #8ab4f8;
+    border-radius: 50%; animation: spin .9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #boot a { color: #8ab4f8; }
+  #boot .err { color: #f09595; max-width: 560px; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="boot"><div class="spin"></div><div id="bootText">正在启动 Photopea…</div></div>
+
+<script src="/static/vendor/js/photopea.min.js?v=1.1.8.1791449514"></script>
+<script>
+(function(){
+  'use strict';
+
+  // 只有两条文案，不值得引整套 i18n
+  var ZH = (navigator.language || '').toLowerCase().indexOf('zh') === 0;
+  var T = ZH ? {
+    booting: '正在启动 Photopea…',
+    loading: '正在载入图层…',
+    noFile: '缺少文件地址，无法载入图层',
+    noLib: 'Photopea 组件没加载出来，请刷新重试',
+    timeout: '启动 Photopea 超时',
+    loadFail: '图层没能载入（PSD 可能已被清理）',
+    fallback: '改用 Photopea 官网打开（会带广告）'
+  } : {
+    booting: 'Starting Photopea…',
+    loading: 'Loading layers…',
+    noFile: 'No file URL given',
+    noLib: 'The Photopea component failed to load',
+    timeout: 'Photopea timed out',
+    loadFail: 'Layers failed to load (the PSD may have been cleaned up)',
+    fallback: 'Open on photopea.com instead (with ads)'
+  };
+
+  var stage = document.getElementById('stage');
+  var boot = document.getElementById('boot');
+  var bootText = document.getElementById('bootText');
+
+  function say(t){ bootText.textContent = t; }
+  function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+  function timeout(ms, msg){
+    return new Promise(function(_, rej){ setTimeout(function(){ rej(new Error(msg)); }, ms); });
+  }
+
+  function params(){
+    try { return new URLSearchParams(location.search); } catch(e){ return null; }
+  }
+  var q = params();
+  var fileUrl = q ? q.get('file') : null;
+
+  // 兜底直链：photopea.com 自己按 files 载入（有广告，但一定能用）。
+  // 优先用调用方传进来的 `direct`（URL 构造的唯一来源在 smart-canvas.js 的 splitLayersPhotopeaUrl）。
+  function directUrl(){
+    var given = q ? q.get('direct') : null;
+    if(given) return given;
+    if(!fileUrl) return 'https://www.photopea.com/#STRING';
+    return 'https://www.photopea.com/#' + encodeURIComponent(JSON.stringify({files: [fileUrl]}));
+  }
+
+  function fail(msg){
+    boot.innerHTML = '';
+    var box = document.createElement('div');
+    box.className = 'err';
+    box.textContent = msg;
+    var a = document.createElement('a');
+    a.href = directUrl();
+    a.textContent = T.fallback;
+    var wrap = document.createElement('div');
+    wrap.appendChild(box);
+    wrap.appendChild(document.createElement('br'));
+    wrap.appendChild(document.createElement('br'));
+    wrap.appendChild(a);
+    boot.appendChild(wrap);
+    boot.style.display = 'flex';
+  }
+
+  async function main(){
+    if(!fileUrl){ fail(T.noFile); return; }
+    if(typeof Photopea === 'undefined'){ fail(T.noLib); return; }
+    try{
+      say(T.booting);
+      // 🚨 传 'STRING' —— 无效 hash 才是无广告那版（见文件头注释），别改成合法 JSON
+      var pea = await Promise.race([
+        Photopea.createEmbed(stage, 'STRING'),
+        timeout(60000, T.timeout)
+      ]);
+      say(T.loading);
+      // app.open 是异步的：发起后轮询 documents.length，别等它的返回值
+      await pea.runScript('app.open(' + JSON.stringify(fileUrl) + ', null, false);');
+      var ok = 0;
+      for(var i = 0; i < 120; i++){
+        var r = await Promise.race([
+          pea.runScript('app.echoToOE(app.documents.length);'),
+          timeout(10000, T.timeout)
+        ]);
+        var n = parseInt(r && r[0], 10);
+        if(n > 0){ ok = n; break; }
+        await sleep(500);
+      }
+      if(!ok){ fail(T.loadFail); return; }
+      boot.style.display = 'none';
+    }catch(err){
+      fail((err && err.message) ? err.message : String(err));
+    }
+  }
+
+  main();
+})();
+</script>
+</body>
+</html>
