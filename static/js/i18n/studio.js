@@ -79,6 +79,7 @@
         "online.reuse": { zh: "复用", en: "Reuse" },
         "online.create": { zh: "创建", en: "Create" },
         "online.referenceImages": { zh: "参考图片", en: "Reference Images" },
+        "online.slotsFull": { zh: "参考图最多 3 张，已放入前 3 张", en: "Up to 3 reference images — only the first 3 were added" },
         "online.model": { zh: "模型", en: "Model" },
         "online.size": { zh: "尺寸", en: "Size" },
         "online.onlineImageFallback": { zh: "在线生图", en: "Online Image" },

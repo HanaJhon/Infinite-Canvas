@@ -19,7 +19,7 @@
     <script src="/static/vendor/js/tailwindcss-cdn.js?v=1.1.9.1788083492"></script>
     <script src="/static/vendor/js/lucide.js?v=1.1.9.1788083492"></script>
     <script src="/static/js/theme.js?v=1.1.9.1788083492"></script>
-    <script src="/static/js/i18n.js?v=1.1.9.1791878559"></script>
+    <script src="/static/js/i18n.js?v=1.1.9.1791883010"></script>
     <script src="/static/js/image-preview.js?v=1.1.9.1788083492"></script>
     <script src="/static/js/history-bulk-manager.js?v=1.1.9.1788083492"></script>
     <style>
@@ -615,17 +615,39 @@
             return match[0];
         }
 
-        [1,2,3].forEach(id => {
+        const SLOTS = [1,2,3];
+        function firstEmptySlot(){ return SLOTS.find(id => !refs[id]) || 1; }
+        // 从 start 开始按格子顺序排列（循环），让多张图依次落进 Main / Aux A / Aux B
+        function slotOrder(start){
+            const i = Math.max(0, SLOTS.indexOf(start));
+            return [...SLOTS.slice(i), ...SLOTS.slice(0, i)];
+        }
+        // 🚨 拖拽 / 粘贴多张图时必须**全部**上传（旧实现只取 files[0] / 第一个 clipboard item），
+        //    依次填进格子；超过 3 张只取前 3 张并提示。
+        function handleFilesToSlots(files, start){
+            const images = [...(files || [])].filter(f => f && String(f.type || '').startsWith('image/'));
+            if(!images.length) return;
+            const order = slotOrder(start || firstEmptySlot());
+            images.slice(0, order.length).forEach((file, i) => handleFile(file, order[i]));
+            if(images.length > order.length) alert(tr('online.slotsFull'));
+        }
+        SLOTS.forEach(id => {
             const zone = document.getElementById(`drop-zone-${id}`);
             zone.ondragover = e => { e.preventDefault(); zone.classList.add('drag-over'); };
             zone.ondragleave = () => zone.classList.remove('drag-over');
-            zone.ondrop = e => { e.preventDefault(); zone.classList.remove('drag-over'); handleFile(e.dataTransfer.files[0], id); };
+            zone.ondrop = e => {
+                e.preventDefault();
+                zone.classList.remove('drag-over');
+                handleFilesToSlots(e.dataTransfer?.files, id);
+            };
         });
         window.addEventListener('paste', e => {
-            const item = [...(e.clipboardData?.items || [])].find(x => x.kind === 'file' && x.type.startsWith('image/'));
-            if (item) handleFile(item.getAsFile(), firstEmptySlot());
+            const files = [...(e.clipboardData?.items || [])]
+                .filter(x => x.kind === 'file' && String(x.type || '').startsWith('image/'))
+                .map(x => x.getAsFile())
+                .filter(Boolean);
+            if(files.length) handleFilesToSlots(files, firstEmptySlot());
         });
-        function firstEmptySlot(){ return [1,2,3].find(id => !refs[id]) || 1; }
 
         async function handleFile(file, index){
             if(!file) return;
