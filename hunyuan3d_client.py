@@ -398,24 +398,135 @@ class Hunyuan3DBrowserClient:
 
     # ------------------------------------------------------------ 业务：登录 / 上传 / 生成
 
+    async def login_state(self) -> dict:
+        """判定登录是否**真正可用** —— 判据 = 能读到账号的积分/生成次数。
+
+        实测（2026-10-13）：
+          未登录 → `getuserinfo` HTTP 401 `{"error":{"code":"999","message":"X-Source is empty"}}`
+          已登录 → 200 `{userId, nickname, phoneNumber:"137****7538", registered:true, loginType:"phone", ...}`
+          `POST /api/3d/quotainfo {"sceneType":"3dCreations"}` → `{date, totalQuota, remainQuota, consumeQuota}`
+
+        🚨 **扫码 ≠ 登录完成**：扫码后若还需绑定手机号，URL 已经回到创作页、cookie 也已下发，
+           但账号并未就绪 —— 此时读不到积分/次数，上传与生成也必然失败。
+        所以「完成」的判据取**能读到 remainQuota**（行为判据，比字段判据更贴近真实可用性）；
+           `getuserinfo` 只用来把「差哪一步」讲清楚。
+        """
+        info_expr = """(async () => {
+          try {
+            const r = await fetch('/api/3d/getuserinfo', {credentials:'include'});
+            const t = await r.text();
+            return JSON.stringify({ok:r.ok, status:r.status, body:t.slice(0, 8000)});
+          } catch (e) { return JSON.stringify({ok:false, status:0, body:String(e)}); }
+        })()"""
+        info = await self._eval_json_with_retry(info_expr)
+        status = int(info.get("status") or 0)
+        try:
+            body = json.loads(info.get("body") or "{}") or {}
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        logged_in = status == 200 and bool(body.get("userId") or body.get("openId"))
+
+        quota = await self.fetch_quota_or_none()
+        remain = (quota or {}).get("remain")
+        complete = remain is not None          # 能读到积分/次数 = 登录真正可用
+
+        return {
+            "status": status,
+            "logged_in": logged_in,
+            "registered": bool(body.get("registered")),
+            "phone": str(body.get("phoneNumber") or "").strip(),
+            "nickname": str(body.get("nickname") or ""),
+            "quota": quota,
+            "remain": remain,
+            "complete": complete,
+        }
+
+    async def _eval_json_with_retry(self, expr: str) -> dict:
+        """页面内求值 → JSON。status=0（求值/网络抖动）时重试几次再下结论。"""
+        raw = None
+        for _ in range(3):
+            raw = await self.cdp.eval(expr, timeout=20)
+            try:
+                payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            except Exception:
+                payload = {}
+            if int((payload or {}).get("status") or 0) != 0:
+                return payload or {}
+            await asyncio.sleep(1.5)
+        try:
+            return json.loads(raw) if isinstance(raw, str) else (raw or {})
+        except Exception:
+            return {}
+
+    async def fetch_quota_or_none(self) -> Optional[dict]:
+        """读额度；读不到（未登录 / 账号未就绪 / 接口异常）返回 None，不抛异常。"""
+        try:
+            quota = await self.fetch_quota()
+        except Exception:
+            return None
+        if not quota or quota.get("remain") is None:
+            return None
+        return quota
+
+    @staticmethod
+    def _login_gap_message(state: dict) -> str:
+        """把「差哪一步」说清楚 —— 前端会把它显示给用户。"""
+        if state.get("complete"):
+            return ""
+        if not state.get("logged_in"):
+            return "混元3D 尚未登录：请在弹出的浏览器窗口里扫码并完成登录"
+        if not state.get("registered"):
+            return "混元3D 账号还未完成注册：请在弹出的窗口里继续完成手机号绑定"
+        if not state.get("phone"):
+            return "混元3D 账号还未绑定手机号：请在弹出的窗口里完成绑定后再试"
+        return "混元3D 已登录，但读不到账号的生成次数：账号可能尚未开通该能力，或稍后重试"
+
+    async def _click_login_entry(self):
+        """登录页只有一个「登录」按钮 —— 自动点开二维码，省得用户自己找。"""
+        expr = """(() => {
+          const els = Array.from(document.querySelectorAll('button, .t-button, [role=button], a'));
+          const el = els.find(n => (n.textContent||'').trim() === '登录');
+          if (!el) return 'missing';
+          el.click();
+          return 'clicked';
+        })()"""
+        try:
+            return await self.cdp.eval(expr, timeout=15)
+        except Exception:
+            return "error"
+
     async def ensure_ready(self):
-        """打开创作页；未登录抛 Hunyuan3DNeedLogin；并就绪控件等待。"""
+        """打开创作页；登录不完整（未登录 / 未绑手机 / 读不到次数）抛 Hunyuan3DNeedLogin。
+
+        返回 login_state() 的结果（含 `quota`）—— 调用方可以直接拿它显示剩余次数，
+        不必再单独读一次（判据本身就是「能读到次数」，两者天然是同一份数据）。
+        """
         await self.goto(SITE_URL)
         await asyncio.sleep(4.0)
-        href = str(await self.cdp.eval("location.href") or "")
-        if "/login" in href:
-            raise Hunyuan3DNeedLogin("混元3D 站点未登录（浏览器 profile 里没有登录态）")
+        state = await self.login_state()
+        if not state["complete"]:
+            raise Hunyuan3DNeedLogin(self._login_gap_message(state))
         ok = await self.wait_quiet(
             f"!!document.querySelector('{SEL_ADD_MULTI}') || !!document.querySelector('{SEL_GENERATE}')",
             timeout=30.0,
         )
         if not ok:
             raise Hunyuan3DError("创作页控件没出来（页面结构可能变了，见 REFERENCE AV）")
+        return state
 
-    async def login_interactive(self, timeout: float = LOGIN_WAIT, on_poll: Optional[Callable[[int], None]] = None):
-        """用同一个 profile 起**可见窗口**，等用户手动登录。
+    async def login_interactive(self, timeout: float = LOGIN_WAIT,
+                                on_poll: Optional[Callable[[str], None]] = None):
+        """用同一个 profile 起**可见窗口**，等用户完成登录（含扫码后的手机号绑定）。
 
-        登录成功后正常关窗（cookie 落盘），调用方再 start(headless) 重试。
+        🚨 **判据 = 能读到账号的积分/生成次数**（`login_state()` 的 `complete`），不是看 URL：
+           扫码后若还需绑定手机号，URL 已经回到创作页但账号并未就绪 —— 旧实现据此提前收工，
+           导致后续上传失败、生成次数也读不出来。
+        🚨 认证可能在**新窗口**里完成，本页 URL 不一定跟着变；cookie 是共享的，所以
+           API 判据与页面位置无关，正好绕开这个问题。
+        阶段（on_poll 回调）：scan = 等扫码 → bind = 等绑定手机号 → done = 已读到积分。
+        返回 login_state() 的结果（含 `quota`，调用方可直接拿去显示）。
         """
         await self._close_browser_process()
         os.makedirs(self.profile_dir, exist_ok=True)
@@ -424,32 +535,39 @@ class Hunyuan3DBrowserClient:
         await self._wait_cdp()
         await self._connect()
         await self.goto(SITE_URL)
+        await asyncio.sleep(3.0)
+        await self._click_login_entry()   # 把二维码直接调出来
         deadline = _now() + timeout
         stable = 0
-        last_href = ""
+        last_phase = ""
+        last_state = {"logged_in": False, "registered": False, "phone": ""}
         while _now() < deadline:
             await asyncio.sleep(2.0)
             try:
-                href = str(await self.cdp.eval("location.href") or "")
+                state = await self.login_state()
             except Exception:
                 continue
-            if "/login" not in href and "3d.hunyuan.tencent.com" in href:
-                # 连续两次稳定在创作页才算登录完成（避开登录跳转中的中间页）
-                stable = stable + 1 if href == last_href else 1
-                last_href = href
-                if stable >= 2:
-                    await asyncio.sleep(2.0)  # 等 cookie 落盘
+            last_state = state
+            phase = "done" if state["complete"] else ("bind" if state["logged_in"] else "scan")
+            if phase != last_phase:
+                last_phase = phase
+                if on_poll:
+                    try:
+                        on_poll(phase)
+                    except Exception:
+                        pass
+            if phase == "done":
+                stable += 1
+                if stable >= 2:          # 连续两次都能读到积分，才算真的就绪
+                    await asyncio.sleep(2.5)   # 等 cookie 落盘
                     await self._close_browser_process()
-                    return True
+                    return state
             else:
                 stable = 0
-            if on_poll:
-                try:
-                    on_poll(int(_now() - (deadline - timeout)))
-                except Exception:
-                    pass
         await self._close_browser_process()
-        raise Hunyuan3DNeedLogin(f"登录等待超时（{int(timeout)} 秒）")
+        raise Hunyuan3DNeedLogin(
+            f"登录等待超时（{int(timeout)} 秒）：{self._login_gap_message(last_state)}"
+        )
 
     async def _switch_mode(self, label: str):
         """按文案切「单张图片 / 多张图片」。🚨 选择器必须用宽网（与探针逐字一致）——

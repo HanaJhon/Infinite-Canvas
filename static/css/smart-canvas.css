@@ -2285,6 +2285,9 @@ a.smart3d-run { text-decoration:none; cursor:pointer; }
     font-size:10px; font-weight:800; white-space:nowrap; cursor:pointer; font-variant-numeric:tabular-nums;
     transition:color .14s ease, border-color .14s ease; }
 .hy3d-quota:hover { color:var(--text); border-color:rgba(148,163,184,.5); }
+
+/* 还没读到额度（未登录 / 未刷新）：显示 -- 并压暗，提示可点击读取 */
+.hy3d-quota.is-unknown { color:rgba(148,163,184,.62); border-style:dashed; }
 .hy3d-quota i, .hy3d-quota svg { width:12px; height:12px; }
 .smart-hy3d-body.is-narrow .hy3d-quota > span { display:none; }
 .smart3d-run { padding:0 8px; }

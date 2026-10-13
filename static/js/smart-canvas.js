@@ -10471,6 +10471,20 @@ function hy3dToolBtn(icon, active, title, attr, value='1'){
     return `<button class="hy3d-tool${active ? ' is-active' : ''}" type="button" data-${attr}="${escapeAttr(value)}" title="${escapeAttr(title)}"><i data-lucide="${icon}"></i></button>`;
 }
 
+// 后端各处返回的额度字段可能是 null / 空串（不同接口写法不同）⇒ 统一归一化。
+// 🚨 数值一律来自后端实时读的 quotainfo，**任何地方都不许写死**（各账号不同）。
+function hy3dNormalizeQuota(raw){
+    if(!raw || typeof raw !== 'object') return null;
+    const pick = value => (value === null || value === undefined || value === '' ? null : Number(value));
+    const quota = {
+        remain: pick(raw.remain),
+        total: pick(raw.total),
+        consume: pick(raw.consume),
+        date: String(raw.date || '')
+    };
+    return quota.remain === null ? null : quota;
+}
+
 function hy3dQuotaTitle(quota){
     const remain = Number(quota?.remain);
     const total = Number(quota?.total);
@@ -10503,7 +10517,7 @@ function hy3dBodyHtml(node){
     const phaseLabel = node.hy3dPhase ? (HY3D_PHASE_LABELS[node.hy3dPhase] || node.hy3dPhase) : '';
     const statusLine = node.running ? (node.hy3dHint || phaseLabel || '生成中…') : '';
     let placeholderText = '';
-    if(node.hy3dNeedLogin) placeholderText = tr('smart.hy3dNeedLogin');
+    if(node.hy3dNeedLogin) placeholderText = node.hy3dLoginReason || tr('smart.hy3dNeedLogin');
     else if(node.hy3dError) placeholderText = node.hy3dError;
     else if(node.running) placeholderText = statusLine || '生成中…';
     else if(hasModel) placeholderText = '';
@@ -10543,11 +10557,10 @@ function hy3dBodyHtml(node){
         : `<button class="smart3d-run" type="button" data-hy3d-share="1" title="${escapeAttr(tr('smart.hy3dShareOpen'))}"><i data-lucide="share-2"></i><span>${escapeHtml(tr('smart.hy3dShare'))}</span></button>`);
     const downloadName = `hunyuan3d-${String(node.hy3dAsset?.id || node.id || 'model').replace(/[^\w-]/g, '').slice(0, 12)}.glb`;
     const downloadBtn = hasModel ? `<a class="smart3d-run hy3d-download" href="${escapeAttr(String(node.model3dUrl || ''))}" download="${escapeAttr(downloadName)}" data-hy3d-download="1" title="${escapeAttr(tr('smart.hy3dDownload'))}"><i data-lucide="download"></i><span>${escapeHtml(tr('smart.hy3dDownload'))}</span></a>` : '';
-    // 混元3D 剩余次数：数值来自后端实时读的 quotainfo（各账号不同，不写死），点一下刷新
-    const quota = node.hy3dQuota || null;
-    const quotaChip = (quota && Number.isFinite(Number(quota.remain)))
-        ? `<button class="hy3d-quota" type="button" data-hy3d-quota="1" title="${escapeAttr(hy3dQuotaTitle(quota))}"><i data-lucide="sparkles"></i><span>${escapeHtml(trf('smart.hy3dQuota', {n:String(quota.remain)}))}</span></button>`
-        : '';
+    // 混元3D 剩余次数：始终显示在生成栏里（未读到就显示 --，点一下刷新）。
+    // 🚨 数值一律来自后端实时读的 quotainfo，**不写死**（各账号不同）。
+    const quota = hy3dNormalizeQuota(node.hy3dQuota);
+    const quotaChip = `<button class="hy3d-quota${quota ? '' : ' is-unknown'}" type="button" data-hy3d-quota="1" title="${escapeAttr(quota ? hy3dQuotaTitle(quota) : tr('smart.hy3dQuotaHint'))}"><i data-lucide="sparkles"></i><span>${escapeHtml(quota ? trf('smart.hy3dQuota', {n:String(quota.remain)}) : tr('smart.hy3dQuotaUnknown'))}</span></button>`;
     return `<div class="smart3d-body${narrow ? ' is-narrow' : ''} smart-hy3d-body" data-hy3d-root="1">
         <div class="smart3d-stage" data-hy3d-stage="1" data-hy3d-node="${escapeAttr(node.id)}">${placeholder}</div>
         <div class="smart3d-bar">
@@ -10703,6 +10716,8 @@ async function runHy3dNode(nodeId){
             if(task.status === 'need_login'){
                 live.hy3dNeedLogin = true;
                 live.hy3dError = '';
+                // 后端把「差哪一步」放在 error_detail.message（未登录 / 未注册 / 未绑手机号）
+                live.hy3dLoginReason = String(task.error_detail?.message || '');
                 render();
                 return;
             }
@@ -10745,23 +10760,31 @@ async function runHy3dNode(nodeId){
 async function hy3dLoginNode(nodeId){
     const node = nodes.find(n => n.id === nodeId);
     if(!node || !isHy3dNode(node) || node.running) return;
-    const taskId = node.hy3dTaskId;
-    if(!taskId){ toast(tr('smart.hy3dLoginNoTask')); return; }
     node.running = true;
-    node.hy3dHint = '等待登录…';
+    node.hy3dHint = tr('smart.hy3dLoginWaiting');
     render();
     try{
-        const data = await fetch(`/api/hy3d-tasks/${encodeURIComponent(taskId)}/login`, {method:'POST'})
+        // 🚨 登录不挂任务：剩余次数 chip 始终可见，用户可能在第一次生成之前就点「去登录」
+        const data = await fetch('/api/hy3d-login', {method:'POST'})
             .then(async response => {
                 if(!response.ok) throw new Error(await readErrorDetail(response));
                 return response.json();
             });
-        if(!data?.ok) throw new Error('登录接口没有返回 ok');
+        if(!data?.ok) throw new Error(tr('smart.hy3dLoginFail'));
         const live = nodes.find(n => n.id === node.id) || node;
         live.hy3dNeedLogin = false;
         live.hy3dError = '';
+        live.hy3dLoginReason = '';
         live.hy3dHint = '';
-        toast(tr('smart.hy3dLoginOk'));
+        // 登录判据 = 能读到账号积分/次数 ⇒ 后端顺手把实时额度带回来了，直接显示在生成栏
+        const quota = hy3dNormalizeQuota(data.quota);
+        if(quota){
+            live.hy3dQuota = quota;
+            toast(trf('smart.hy3dLoginOkQuota', {n:String(quota.remain)}));
+        }else{
+            toast(tr('smart.hy3dLoginOk'));
+        }
+        scheduleSave();
     }catch(error){
         const live = nodes.find(n => n.id === node.id) || node;
         live.hy3dHint = '';
@@ -10849,17 +10872,20 @@ async function hy3dRefreshQuota(nodeId){
             if(!response.ok) throw new Error(await readErrorDetail(response));
             return response.json();
         });
-        const pick = value => (value === null || value === undefined || value === '' ? null : Number(value));
+        const quota = hy3dNormalizeQuota(data);
+        if(!quota) throw new Error(tr('smart.hy3dQuotaFail'));
         const live = nodes.find(n => n.id === node.id) || node;
-        live.hy3dQuota = {
-            remain: pick(data?.remain),
-            total: pick(data?.total),
-            consume: pick(data?.consume),
-            date: String(data?.date || '')
-        };
+        live.hy3dQuota = quota;
         scheduleSave();
     }catch(error){
-        toast(String(error?.message || tr('smart.hy3dQuotaFail')).slice(0, 160));
+        const live = nodes.find(n => n.id === node.id) || node;
+        const detail = String(error?.message || tr('smart.hy3dQuotaFail')).slice(0, 160);
+        // 登录态失效 ⇒ 直接把「去登录」露出来，别只弹个 toast 让人无处可去
+        if(/登录/.test(detail)) {
+            live.hy3dNeedLogin = true;
+            live.hy3dLoginReason = detail;
+        }
+        toast(detail);
     }finally{
         const live = nodes.find(n => n.id === node.id) || node;
         live.running = false;

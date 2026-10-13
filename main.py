@@ -26318,26 +26318,29 @@ async def run_hy3d_task(task_id: str, payload: Hunyuan3DTaskRequest):
             client = Hunyuan3DBrowserClient(profile_dir=HY3D_PROFILE_DIR)
             await client.start()
             try:
-                await client.ensure_ready()
-            except Hunyuan3DNeedLogin:
+                # 🚨 ensure_ready 的判据本身就是「能读到账号的积分/生成次数」，
+                #    所以它返回的 quota 就是实时值，不必再单独读一次。
+                state = await client.ensure_ready()
+            except Hunyuan3DNeedLogin as exc:
+                # 具体差哪一步由客户端给（未登录 / 未注册 / 未绑手机号），别在这里写死
+                reason = str(exc) or "浏览器 profile 里没有混元3D 登录态"
                 _hy3d_task_update(
                     task_id, status="need_login", error="混元3D 尚未登录",
                     error_detail={
                         "phase": "login",
                         "phase_label": HY3D_PHASE_LABELS["login"],
-                        "message": "浏览器 profile 里没有混元3D 登录态",
-                        "advice": "点节点里的「去登录」，在自动打开的浏览器窗口里完成混元3D 登录，然后重新点「生成」",
+                        "message": reason,
+                        "advice": "点节点里的「去登录」，在自动打开的浏览器窗口里完成登录（若提示绑定手机号，请一并完成），然后重新点「生成」",
                     },
                 )
                 return
             _hy3d_task_update(task_id, status="running")
-            # 顺手读一次额度（同一会话，零成本）：各账号额度不同，必须实时读、不能写死
-            try:
-                quota = await client.fetch_quota()
+            # 额度随 ensure_ready 一起拿到（同一会话，零成本）：各账号额度不同，必须实时读、不能写死
+            quota = state.get("quota")
+            if quota:
                 _hy3d_task_update(task_id, quota=quota)
-            except Exception as exc:  # noqa: BLE001
-                print(f"[hy3d] 读取额度失败（不影响生成）：{exc}")
-                quota = None
+            else:
+                print("[hy3d] 未拿到额度（不影响生成）")
             glb_path = os.path.join(HY3D_MODEL_DIR, f"{task_id}.glb")  # task_id 自带 hy3d_ 前缀
 
             def note(ph, msg):
@@ -26416,19 +26419,20 @@ async def get_hy3d_task(task_id: str):
     return task
 
 
-@app.post("/api/hy3d-tasks/{task_id}/login")
-async def hy3d_login(task_id: str):
-    """弹可见窗口让用户登录混元3D（阻塞直到登录成功或 5 分钟超时）。"""
-    with HY3D_TASK_LOCK:
-        exists = task_id in HY3D_TASKS
-    if not exists:
-        raise HTTPException(status_code=404, detail="任务不存在")
+@app.post("/api/hy3d-login")
+async def hy3d_login():
+    """弹可见窗口让用户登录混元3D（阻塞直到「能读到账号积分/次数」或 5 分钟超时）。
+
+    🚨 不挂在任务上：剩余次数 chip 始终可见，用户可能在**第一次生成之前**就要登录，
+       旧的任务态端点会强制「先点一次生成」——没有必要的耦合。
+    返回里带上实时额度，前端登录成功后可直接把「剩余 N 次」显示出来。
+    """
     client = None
     try:
         async with HY3D_BROWSER_LOCK:
             client = Hunyuan3DBrowserClient(profile_dir=HY3D_PROFILE_DIR)
-            await client.login_interactive()
-        return {"ok": True}
+            state = await client.login_interactive()
+        return {"ok": True, "quota": state.get("quota"), "nickname": state.get("nickname") or ""}
     except Hunyuan3DNeedLogin as exc:
         raise HTTPException(status_code=408, detail=str(exc))
     except Hunyuan3DError as exc:
@@ -26514,8 +26518,9 @@ async def hy3d_quota(refresh: int = 0):
         async with HY3D_BROWSER_LOCK:
             client = Hunyuan3DBrowserClient(profile_dir=HY3D_PROFILE_DIR)
             await client.start()
-            await client.ensure_ready()
-            quota = await client.fetch_quota()
+            # ensure_ready 的判据就是「能读到账号积分/次数」⇒ 它返回的 quota 即实时值
+            state = await client.ensure_ready()
+            quota = state.get("quota") or await client.fetch_quota()
         HY3D_QUOTA_CACHE["at"] = time.time()
         HY3D_QUOTA_CACHE["data"] = quota
         return quota
