@@ -39,9 +39,11 @@ SITE_URL = "https://3d.hunyuan.tencent.com/creation"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0")
 
-# 选择器（REFERENCE AV.2 / AV.4 / AV.5 实测）
-SEL_MULTI_RADIO = "多张图片"                       # radio 文案（语言相关，另有兜底）
+# 选择器（REFERENCE AV.2 / AV.4 / AV.5 / AV.8 实测）
+SEL_SINGLE_RADIO = "单张图片"                      # 单图模式 tab 文案（页面默认选中）
+SEL_MULTI_RADIO = "多张图片"                       # 多图模式 tab 文案
 MULTI_TEXT_SEL = ".t-radio-button, label, div, span, button"   # 找文案的宽网（探针同款）
+SEL_SINGLE_BOX = ".uploadBox"                      # 单图模式的上传盒（isSuccess 判成）
 SEL_ADD_MULTI = ".hy-multiple-views-upload-v2"     # 「添加多视图」入口按钮
 SEL_GENERATE = ".sideBarLeft-generateBtn"          # 「立即生成」
 # 视图卡片优先级：正图必填（站点带 *），其余按连接顺序依次落位
@@ -449,8 +451,8 @@ class Hunyuan3DBrowserClient:
         await self._close_browser_process()
         raise Hunyuan3DNeedLogin(f"登录等待超时（{int(timeout)} 秒）")
 
-    async def _switch_to_multi(self):
-        """切到「多张图片」。🚨 选择器必须用宽网（与探针逐字一致）——
+    async def _switch_mode(self, label: str):
+        """按文案切「单张图片 / 多张图片」。🚨 选择器必须用宽网（与探针逐字一致）——
         实测该控件不一定是 .t-radio-button，可能是 div/span；窄选择器会漏。"""
         expr = """(() => {
           const els = Array.from(document.querySelectorAll(%s));
@@ -461,10 +463,10 @@ class Hunyuan3DBrowserClient:
           if (String(group.className).includes('t-is-checked') || (input && input.checked)) return 'checked';
           group.click();
           return 'clicked';
-        })()""" % (json.dumps(MULTI_TEXT_SEL), json.dumps(SEL_MULTI_RADIO))
+        })()""" % (json.dumps(MULTI_TEXT_SEL), json.dumps(label))
         state = await self.wait_for(expr, timeout=15.0)
         if state == "missing":
-            raise Hunyuan3DError("找不到「多张图片」控件（页面结构可能变了，见 REFERENCE AV.2）")
+            raise Hunyuan3DError(f"找不到「{label}」控件（页面结构可能变了，见 REFERENCE AV.2）")
         if state == "clicked":
             await self.wait_quiet(
                 """(() => {
@@ -474,19 +476,44 @@ class Hunyuan3DBrowserClient:
                   const group = el.closest('.t-radio-button') || el;
                   const input = group.querySelector('input[type=radio], input');
                   return String(group.className).includes('t-is-checked') || (input && input.checked);
-                })()""" % (json.dumps(MULTI_TEXT_SEL), json.dumps(SEL_MULTI_RADIO)),
+                })()""" % (json.dumps(MULTI_TEXT_SEL), json.dumps(label)),
                 timeout=10.0,
             )
 
-    async def upload_views(self, paths: List[str]):
-        """多视图上传：切「多张图片」→（按需点添加多视图）→ 按视图卡片逐张塞图。
+    async def _switch_to_single(self):
+        await self._switch_mode(SEL_SINGLE_RADIO)
 
-        🚨 只支持 ≥2 张（站点入口 Min2）；正图必填，所以第 1 张落 front。
+    async def _switch_to_multi(self):
+        await self._switch_mode(SEL_MULTI_RADIO)
+
+    async def upload_single(self, path: str):
+        """单图模式：切「单张图片」→ 塞 1 张进 .uploadBox → 等 isSuccess。"""
+        if not os.path.isfile(path):
+            raise Hunyuan3DError(f"图片不存在：{path}")
+        await self._switch_to_single()
+        sel = f"{SEL_SINGLE_BOX} input[type=file]"
+        await self.wait_for(f"!!document.querySelector('{sel}')", timeout=30.0)
+        if not await self.set_files(sel, [path]):
+            raise Hunyuan3DError("单图模式的上传控件没找到（页面结构可能变了，见 REFERENCE AV.8）")
+        ok = await self.wait_quiet(
+            """(() => { const b = document.querySelector(%s);
+                return !!b && String(b.className).includes('isSuccess'); })()""" % json.dumps(SEL_SINGLE_BOX),
+            timeout=CARD_WAIT, poll=1.5,
+        )
+        if not ok:
+            raise Hunyuan3DError("单张图片上传后长时间未确认成功（isSuccess 没出现）")
+
+    async def upload_views(self, paths: List[str]):
+        """按图片数量自动选方案：1 张 → 单图模式；≥2 张 → 多视图模式。
+
+        🚨 多视图只支持 ≥2 张（站点入口 Min2）；正图必填，所以第 1 张落 front。
         🚨 「添加多视图」入口按钮在 radio 切完后**可能直接消失**（卡片就地渲染）——
           所以真正的就绪判据是 front 卡片 input 出现；入口只在卡片没出来时才点。
         """
-        if len(paths) < 2:
-            raise Hunyuan3DError("混元3D 多视图至少需要 2 张图（正图必填）")
+        if not paths:
+            raise Hunyuan3DError("没有可上传的图片")
+        if len(paths) == 1:
+            return await self.upload_single(paths[0])
         if len(paths) > len(VIEW_ORDER):
             paths = paths[:len(VIEW_ORDER)]
 
@@ -699,7 +726,8 @@ class Hunyuan3DBrowserClient:
         await self.ensure_ready()
         baseline = await self._max_created_at()
 
-        note("upload", f"上传 {len(view_paths)} 张视图到混元3D（正图必填）")
+        mode = "单张图片" if len(view_paths) == 1 else f"多张图片（{len(view_paths)} 视图）"
+        note("upload", f"上传到混元3D（{mode}）")
         await self.upload_views(view_paths)
 
         note("generate", "点击「立即生成」")

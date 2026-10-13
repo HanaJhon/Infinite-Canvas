@@ -26311,8 +26311,8 @@ async def run_hy3d_task(task_id: str, payload: Hunyuan3DTaskRequest):
             local = output_file_from_url(str(url))
             if local and os.path.isfile(local):
                 view_paths.append(local)
-        if len(view_paths) < 2:
-            raise Hunyuan3DError("视图不足：混元3D 需要至少 2 张图片（正图必填）")
+        if len(view_paths) < 1:
+            raise Hunyuan3DError("没有可用的图片：至少连接 1 张（1 张走「单张图片」方案，多张走「多张图片」方案）")
 
         async with HY3D_BROWSER_LOCK:
             client = Hunyuan3DBrowserClient(profile_dir=HY3D_PROFILE_DIR)
@@ -26387,8 +26387,8 @@ async def run_hy3d_task(task_id: str, payload: Hunyuan3DTaskRequest):
 @app.post("/api/hy3d-tasks")
 async def create_hy3d_task(payload: Hunyuan3DTaskRequest):
     urls = [str(u).strip() for u in (payload.view_urls or []) if str(u or "").strip()]
-    if len(urls) < 2:
-        raise HTTPException(status_code=400, detail="混元3D 需要连接至少 2 张视图图片（正图必填）")
+    if len(urls) < 1:
+        raise HTTPException(status_code=400, detail="混元3D 需要至少连接 1 张图片（1 张按「单张图片」方案生成）")
     task_id = f"hy3d_{uuid.uuid4().hex}"
     with HY3D_TASK_LOCK:
         HY3D_TASKS[task_id] = {

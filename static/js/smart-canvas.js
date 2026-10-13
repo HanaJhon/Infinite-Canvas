@@ -10492,7 +10492,7 @@ function hy3dMetaText(node){
         if(!parts.length) parts.push('GLB 模型');
     }else{
         const views = hy3dConnectedViews(node).length;
-        parts.push(views ? `已连接 ${views} 张视图` : '未连接视图');
+        parts.push(views ? trf('smart.hy3dViewsConnected', {n:String(views)}) : tr('smart.hy3dViewsNone'));
     }
     return parts.join(' · ');
 }
@@ -10507,8 +10507,9 @@ function hy3dBodyHtml(node){
     else if(node.hy3dError) placeholderText = node.hy3dError;
     else if(node.running) placeholderText = statusLine || '生成中…';
     else if(hasModel) placeholderText = '';
-    else if(views.length >= 2) placeholderText = `已连接 ${views.length} 张视图，点「${tr('smart.hy3dRun')}」上传到混元3D`;
-    else placeholderText = '连接至少 2 张图片（正/侧/背…）后生成';
+    else if(views.length === 1) placeholderText = tr('smart.hy3dViewsSingle');
+    else if(views.length >= 2) placeholderText = trf('smart.hy3dViewsMulti', {n:String(views.length)});
+    else placeholderText = tr('smart.hy3dNeedImage');
     const placeholder = hasModel ? '' : `<div class="smart3d-placeholder${node.hy3dError ? ' is-error' : ''}${node.running ? ' is-loading' : ''}" data-hy3d-placeholder="1">
         <i data-lucide="${node.hy3dError ? 'triangle-alert' : 'boxes'}"></i>
         <span>${escapeHtml(placeholderText)}</span>
@@ -10660,7 +10661,7 @@ async function runHy3dNode(nodeId){
     if(!node || !isHy3dNode(node) || node.running) return;
     if(!inputNodesFor(node).length){ toast(tr('smart.3dNeedUpstream')); return; }
     const views = hy3dConnectedViews(node);
-    if(views.length < 2){ toast(tr('smart.hy3dNeedTwo')); return; }
+    if(!views.length){ toast(tr('smart.hy3dNeedImage')); return; }
     pushUndo();
     node.running = true;
     node.hy3dError = '';
