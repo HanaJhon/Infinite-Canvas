@@ -199,6 +199,13 @@ const smartNodeRunTokens = new Map();
 let smartRhRandomValues = {};
 let lastImagePasteAt = 0;
 let lastNodePasteAt = 0;
+// 🚨 「灵感库 → 画布」拖拽的暂存状态，**必须声明在全局作用域**：
+//    下方 window 的 drop 处理器要读 pendingInspireDrag；而灵感库那段代码历史上被误粘进了
+//    initAgentPanel() 内部（局部 let），导致全局 drop 处理器每次都抛 ReferenceError
+//    —— 表现就是「拖文件到画布空白处毫无反应」（拖到已有节点上没事，因为节点自己的
+//    ondrop 会 stopPropagation，根本不走全局这条）。
+let pendingInspireDrag = null;
+let _pendingInspireDragTimer = null;
 let suppressNodeClickUntil = 0;
 let textSelectionGuard = null;
 const UNDO_LIMIT = 40;
@@ -23820,8 +23827,9 @@ window.addEventListener('drop', async e => {
     } else if(targetNode && isSmartImageNode(targetNode)){
         await handleSmartImageDropPayload(payload, targetNode.id, {point:p});
     } else {
-        // 直接拖入画布空白处：自动创建并打开分组节点收纳图片
-        await handleSmartImageDropPayload(payload, '', {point:p, createGroup:true});
+        // 直接拖入画布空白处：自动创建**上传节点**（与「粘贴」一致，用户不必先手动建节点）。
+        // 🚨 forceNew：否则会往当前选中的上传节点里追加，而不是新建。
+        await handleSmartImageDropPayload(payload, '', {point:p, forceNew:true, createGroup:false});
     }
 });
 document.addEventListener('dragover', e => {
@@ -28649,8 +28657,8 @@ initInspireScroll();
 initInspireSearch();
 initInspireRepoBtn();
 // ============ 灵感库 ← 内容脚本通信（图片+提示词送回画布） ============
-let pendingInspireDrag = null;
-let _pendingInspireDragTimer = null;
+// 🚨 pendingInspireDrag / _pendingInspireDragTimer 已提升到文件顶部全局声明
+//    （全局 drop 处理器要读它，局部声明会让拖拽文件到画布时抛 ReferenceError）。
 function handleInspireImageToCanvas(imageUrl, prompt){
     const url = String(imageUrl || '');
     if(!url) return;
