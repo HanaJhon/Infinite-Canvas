@@ -107,6 +107,8 @@ ROOT_FILES = [
 
 # 整个目录纳入包（递归）
 PROGRAM_DIRS = [
+    # ⚠️ 不要加 "backend"：2026-10-18 已按老板要求整体回退到发布包 1.2.0，
+    #    那个 backend/ 目录已不存在。留在这里会让打包清单指向不存在的目录。
     "static",
     "dist",
     "launcher",

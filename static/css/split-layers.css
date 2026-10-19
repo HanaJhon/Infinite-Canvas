@@ -360,6 +360,13 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
+    /* 🚨 舞台区原先写死深色 #3a3d44（仿 PS），而窗口/图层栏是浅色 ⇒ 浅色主题下左右割裂。
+       现在跟随主题：浅色同系浅灰，深色主题保留原值。 */
+    background: #e6e9ee;
+}
+
+html.studio-theme-dark .split-layers-stage,
+body.studio-theme-dark .split-layers-stage {
     background: #3a3d44;
 }
 
@@ -371,10 +378,17 @@
     align-items: center;
     gap: 10px;
     padding: 0 10px;
-    background: #2f333a;
-    border-bottom: 1px solid rgba(0, 0, 0, .28);
-    color: #cbd5e1;
+    background: #f1f3f6;
+    border-bottom: 1px solid rgba(15, 23, 42, .08);
+    color: #475569;
     font-size: 11px;
+}
+
+html.studio-theme-dark .sl-stage-bar,
+body.studio-theme-dark .sl-stage-bar {
+    background: #2f333a;
+    border-bottom-color: rgba(0, 0, 0, .28);
+    color: #cbd5e1;
 }
 
 /* 🚨 2026-10-10 老板：「页面中的精细编辑功能可以隐藏掉」——
@@ -388,20 +402,27 @@
     min-width: 0;
     max-width: 180px;
     font-weight: 700;
-    color: #e2e8f0;
+    /* 🚨 浅色工具条上必须用深色字：原值 #e2e8f0 是配深色底写的，浅色下几乎看不见 */
+    color: #1f2937;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
+
+html.studio-theme-dark .sl-sel-name,
+body.studio-theme-dark .sl-sel-name { color: #e2e8f0; }
 
 .sl-op {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     flex: 0 0 auto;
-    color: #94a3b8;
+    color: #64748b;
     font-weight: 600;
 }
+
+html.studio-theme-dark .sl-op,
+body.studio-theme-dark .sl-op { color: #94a3b8; }
 
 .sl-op input[type="range"] {
     width: 96px;
@@ -423,10 +444,17 @@
     align-items: center;
     gap: 8px;
     padding: 5px 10px;
-    background: #262a31;
-    border-bottom: 1px solid rgba(0, 0, 0, .28);
-    color: #cbd5e1;
+    background: #eef0f4;
+    border-bottom: 1px solid rgba(15, 23, 42, .08);
+    color: #475569;
     font-size: 11px;
+}
+
+html.studio-theme-dark .sl-text-bar,
+body.studio-theme-dark .sl-text-bar {
+    background: #262a31;
+    border-bottom-color: rgba(0, 0, 0, .28);
+    color: #cbd5e1;
 }
 
 /* 🚨 必须显式写 [hidden]：作者样式表里的 display:flex 会盖掉 UA 的 [hidden]{display:none}，
@@ -463,9 +491,9 @@
     height: 24px;
     padding: 0 8px;
     border-radius: 6px;
-    border: 1px solid rgba(148, 163, 184, .28);
-    background: #1f2329;
-    color: #e2e8f0;
+    border: 1px solid rgba(15, 23, 42, .12);
+    background: #fff;
+    color: #1f2937;
     font-size: 11.5px;
     font-weight: 600;
 }
@@ -475,7 +503,7 @@
     align-items: center;
     gap: 5px;
     flex: 0 0 auto;
-    color: #94a3b8;
+    color: #64748b;
     font-weight: 600;
 }
 
@@ -484,9 +512,9 @@
     height: 24px;
     padding: 0 6px;
     border-radius: 6px;
-    border: 1px solid rgba(148, 163, 184, .28);
-    background: #1f2329;
-    color: #e2e8f0;
+    border: 1px solid rgba(15, 23, 42, .12);
+    background: #fff;
+    color: #1f2937;
     font-size: 11px;
 }
 
@@ -495,9 +523,25 @@
     height: 24px;
     padding: 1px;
     border-radius: 6px;
-    border: 1px solid rgba(148, 163, 184, .28);
-    background: #1f2329;
+    border: 1px solid rgba(15, 23, 42, .12);
+    background: #fff;
     cursor: pointer;
+}
+
+html.studio-theme-dark .sl-text-bar .sl-ti,
+body.studio-theme-dark .sl-text-bar .sl-ti,
+html.studio-theme-dark .sl-text-bar .sl-num input[type="number"],
+body.studio-theme-dark .sl-text-bar .sl-num input[type="number"],
+html.studio-theme-dark .sl-text-bar .sl-num input[type="color"],
+body.studio-theme-dark .sl-text-bar .sl-num input[type="color"] {
+    border-color: rgba(148, 163, 184, .28);
+    background: #1f2329;
+    color: #e2e8f0;
+}
+
+html.studio-theme-dark .sl-text-bar .sl-num,
+body.studio-theme-dark .sl-text-bar .sl-num {
+    color: #94a3b8;
 }
 
 .sl-text-bar .sl-ti:focus-visible,
@@ -508,9 +552,9 @@
     min-width: 22px;
     padding: 0 6px;
     border-radius: 6px;
-    border: 1px solid rgba(148, 163, 184, .24);
-    background: #3b414b;
-    color: #cbd5e1;
+    border: 1px solid rgba(15, 23, 42, .12);
+    background: #fff;
+    color: #475569;
     font-size: 10.5px;
     font-weight: 600;
     display: inline-flex;
@@ -519,18 +563,34 @@
     cursor: pointer;
 }
 
-.sl-mini:hover { background: #454c58; }
+.sl-mini:hover { background: #eef1f5; }
 /* 「已按下」态（加粗、对齐这类开关按钮） */
 .sl-mini.on { background: #2563eb; border-color: #2563eb; color: #fff; }
 .sl-mini i, .sl-mini svg { width: 11px; height: 11px; flex: 0 0 auto; }
+
+html.studio-theme-dark .sl-mini,
+body.studio-theme-dark .sl-mini {
+    border-color: rgba(148, 163, 184, .24);
+    background: #3b414b;
+    color: #cbd5e1;
+}
+html.studio-theme-dark .sl-mini:hover,
+body.studio-theme-dark .sl-mini:hover { background: #454c58; }
 .sl-stage-bar .sl-btn { margin-left: auto; }
 
-/* 画板容器：深色底 + 居中。overflow:hidden 保证缩放后的画板不会顶出容器 */
+/* 画板容器：衬托画板的底色 + 居中。overflow:hidden 保证缩放后的画板不会顶出容器。
+   🚨 底色必须**跟随主题**：这里曾写死 #3a3d44，结果浅色主题下整个中间区域是深灰，
+   与浅色的窗口/图层栏完全不协调（老板 2026-10-18 反馈「浅色页面没有完全适配好」）。 */
 .sl-board-wrap {
     position: relative;
     flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
+    background: #e6e9ee;
+}
+
+html.studio-theme-dark .sl-board-wrap,
+body.studio-theme-dark .sl-board-wrap {
     background: #3a3d44;
 }
 
@@ -546,6 +606,12 @@
         linear-gradient(45deg, #d8dbe0 25%, #fff 25%, #fff 75%, #d8dbe0 75%);
     background-size: 16px 16px;
     background-position: 0 0, 8px 8px;
+    /* 浅色下白描边看不见，改用深色描边 + 更轻的投影；深色主题保留原值 */
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, .12), 0 10px 28px rgba(15, 23, 42, .16);
+}
+
+html.studio-theme-dark .sl-board,
+body.studio-theme-dark .sl-board {
     box-shadow: 0 0 0 1px rgba(255, 255, 255, .22), 0 18px 44px rgba(0, 0, 0, .42);
 }
 
@@ -777,12 +843,19 @@
     height: 26px;
     padding: 0 8px;
     border-radius: 7px;
-    border: 1px solid rgba(148, 163, 184, .34);
-    background: #2b2f38;
-    color: #e2e8f0;
+    border: 1px solid rgba(15, 23, 42, .14);
+    background: #fff;
+    color: #1f2937;
     font-size: 11px;
     font-weight: 600;
     cursor: pointer;
+}
+
+html.studio-theme-dark .sl-select,
+body.studio-theme-dark .sl-select {
+    border-color: rgba(148, 163, 184, .34);
+    background: #2b2f38;
+    color: #e2e8f0;
 }
 
 .sl-select:disabled { opacity: .5; cursor: not-allowed; }

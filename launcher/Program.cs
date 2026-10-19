@@ -1348,6 +1348,7 @@ sealed class LauncherHost : IDisposable
     {
         // Video
         "minimax-h3",
+        "agnes-video-2.5",
         // Image
         "gpt-image-2.5",
         "gpt-image-2.5-sunburst",
@@ -1357,6 +1358,7 @@ sealed class LauncherHost : IDisposable
         "nano-banana",
         "nano-banana-fast",
         "nano-banana-2",
+        "nano-banana-2.1",
         "nano-banana-2-lite",
         "nano-banana-2-cl",
         "nano-banana-2-2k-cl",
@@ -1382,6 +1384,7 @@ sealed class LauncherHost : IDisposable
         "gpt-5.6-terra",
         "gpt-5.6-sol",
         "gpt-5.5",
+        "gpt-5.4",
     };
 
     // ==================================================================
@@ -1408,6 +1411,99 @@ sealed class LauncherHost : IDisposable
     // ==================================================================
 
     internal const string GrsaiDocsPageUrl = "https://grsai.ai/zh/dashboard/documents/chat";
+
+    // ==================================================================
+    // 🚨 视频模型的唯一联网来源：Grsai 官方 Apifox 文档站（2026-10-19 补）
+    //
+    // 官网 chat 文档页的 chunk **只有 chat + image**（实测 32 个：gpt-image-* /
+    // nano-banana-* / gemini-*），**一个视频模型都没有**；且
+    //   · https://grsai.ai/zh/dashboard/documents/video → Cloudflare 直接断连
+    //   · https://grsai.ai/zh/dashboard/documents/image → 同上
+    //   · https://grsai.ai/zh/dashboard/documents/documents → 同上
+    // ⇒ 只抓官网，`minimax-h3` / `agnes-video-2.5` 永远进不了清单。
+    //
+    // Apifox 站是静态站，有 llms.txt 机读入口，但**单请求 TTFB 约 15s**，
+    // 逐页串行必超时 ⇒ 只并行抓「图片/视频生成接口」这 4 页，且总预算 25s。
+    // 抽法：YAML 里 `model:` 参数的 `description: |-` 下面缩进的裸模型名。
+    // ==================================================================
+    internal const string GrsaiApifoxLlmsUrl = "https://qmy27nhsd9.apifox.cn/llms.txt";
+
+    internal const string GrsaiApifoxFolderTag = "Grsai图片/视频生成接口";
+
+    /// <summary>抓 Apifox「图片/视频生成接口」全部文档页里的模型名；抓不到返回空表。</summary>
+    /// <param name="lastError">输出最近一次失败原因（诊断用，不影响主流程）。</param>
+    internal static async Task<List<string>> FetchApifoxGrsaiVideoModelsAsync(CancellationToken ct, Action<string>? lastError = null)
+    {
+        var models = new List<string>();
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        budget.CancelAfter(TimeSpan.FromSeconds(50));
+        try
+        {
+            var llms = await HttpGetStringAsync(GrsaiApifoxLlmsUrl, budget.Token);
+            // 该站单请求 TTFB 就 15~16s ⇒ 预算 50s（llms.txt 一份 + 4 页并行）
+            // 行格式：- Grsai图片/视频生成接口 [minimax-h3接口](https://xxx/514679297e0.md): 基础节点：
+            var targets = new List<string>();
+            foreach (var line in llms.Split('\n'))
+            {
+                if (!line.Contains(GrsaiApifoxFolderTag, StringComparison.Ordinal)) continue;
+                var m = Regex.Match(line, "\\((https://[A-Za-z0-9.]+/[A-Za-z0-9]+\\.md)\\)");
+                if (m.Success) targets.Add(m.Groups[1].Value);
+            }
+            if (targets.Count == 0) return models;
+
+            var tasks = targets.Distinct().Select(async url =>
+            {
+                try
+                {
+                    var md = await HttpGetStringAsync(url, budget.Token);
+                    return GrsaiExtractModelsFromOpenApiDoc(md);
+                }
+                catch { return new List<string>(); }
+            });
+            var all = await Task.WhenAll(tasks);
+            foreach (var one in all) models.AddRange(one);
+        }
+        catch (Exception ex)
+        {
+            // 抓不到就走内置清单（本方法是 static，日志由调用方统一记）
+            lastError?.Invoke(ex.Message);
+        }
+        return models;
+    }
+
+    /// <summary>
+    /// 从 Apifox 的 OpenAPI markdown 里抽 `model:` 参数 description 中的裸模型名。
+    /// 只认「单独成行的纯标识符」，避免把 `支持以下模型` 这类中文说明词当成模型。
+    /// </summary>
+    internal static List<string> GrsaiExtractModelsFromOpenApiDoc(string md)
+    {
+        var outList = new List<string>();
+        if (string.IsNullOrEmpty(md)) return outList;
+        // 🚨 必须兼容 \r\n：Apifox 返回的 .md 是 CRLF，只写 \n 会整段匹配不上（实测 blocks=0）。
+        // 🚨 只取 `description: |-` 下面的那块：整段扫会把 example 里的 `nano-banana`、`auto` 卷进来。
+        foreach (Match block in Regex.Matches(md, "model:\\s*\\r?\\n(?:[ ]{10,}[^\\r\\n]*\\r?\\n)+"))
+        {
+            var text = block.Value;
+            var desc = Regex.Match(text, "description:[ ]*\\|-[ ]*\\r?\\n((?:[ ]{17,}[^\\r\\n]*\\r?\\n)+)");
+            if (!desc.Success) continue;
+            foreach (var raw in desc.Groups[1].Value.Split('\n'))
+            {
+                var t = raw.Trim();
+                if (t.Length < 2 || t.Length > 64) continue;
+                if (!Regex.IsMatch(t, @"^[A-Za-z0-9][A-Za-z0-9._\-]*$")) continue;
+                if (GrsaiModelStopWords.Contains(t)) continue;
+                if (GrsaiModelListNoise.Contains(t)) continue;
+                if (!outList.Contains(t, StringComparer.OrdinalIgnoreCase)) outList.Add(t);
+            }
+        }
+        return outList;
+    }
+
+    /// <summary>文档 description 里可能混进来的非模型词（哨兵值 / 占位符）。</summary>
+    private static readonly HashSet<string> GrsaiModelListNoise = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "auto", "none", "default", "all", "custom",
+    };
 
     private static readonly string[] GrsaiModelAnchors = { "支持模型", "Supported models" };
 
@@ -1540,14 +1636,51 @@ sealed class LauncherHost : IDisposable
         return "chat";
     }
 
-    /// <summary>远端 ∪ 内置（远端顺序在前）。remote 为空时就是内置清单。</summary>
-    internal static List<string> MergeGrsaiModelList(IEnumerable<string>? remote)
+    /// <summary>远端 ∪ 内置 ∪ 已保存通道（远端顺序在前，去重）。remote 为空时就是内置清单。</summary>
+    /// <remarks>
+    /// 🚨 `saved` 必须传：Grsai 的联网清单只抓 **chat 文档页**（只有 chat + image，**不含视频模型**），
+    /// 内置清单也可能落后于官网。若这里不并入已保存的模型，用户点一次「拉取并自动归类模型」再保存，
+    /// 就会把已有模型**覆盖掉**（老板 2026-10-19 反馈：`agnes-video-2.5` 一拉取就消失）。
+    /// </remarks>
+    internal static List<string> MergeGrsaiModelList(IEnumerable<string>? remote, IEnumerable<string>? saved = null)
     {
         var merged = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var m in remote ?? Enumerable.Empty<string>()) if (seen.Add(m)) merged.Add(m);
         foreach (var m in GrsaiCuratedModels()) if (seen.Add(m)) merged.Add(m);
+        foreach (var m in saved ?? Enumerable.Empty<string>()) if (seen.Add(m)) merged.Add(m);
         return merged;
+    }
+
+    /// <summary>读已保存的 Grsai 通道里的全部模型（image + chat + video），用于「只增不减」合并。</summary>
+    private List<string> LoadSavedGrsaiModels()
+    {
+        var list = new List<string>();
+        try
+        {
+            if (string.IsNullOrEmpty(apiProvidersPath) || !File.Exists(apiProvidersPath)) return list;
+            if (JsonNode.Parse(File.ReadAllText(apiProvidersPath, Encoding.UTF8)) is not JsonArray arr) return list;
+            foreach (var node in arr)
+            {
+                if (node is not JsonObject p) continue;
+                var blob = ((p["name"]?.GetValue<string>() ?? "") + " " + (p["base_url"]?.GetValue<string>() ?? "")).ToLowerInvariant();
+                if (!blob.Contains("grsai")) continue;
+                foreach (var key in new[] { "image_models", "chat_models", "video_models" })
+                {
+                    if (p[key] is not JsonArray models) continue;
+                    foreach (var m in models)
+                    {
+                        var v = m?.GetValue<string>();
+                        if (!string.IsNullOrWhiteSpace(v)) list.Add(v);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            SendLog($"[Grsai 模型] 读取已保存通道失败：{ex.Message}");
+        }
+        return list;
     }
 
     internal sealed class GrsaiModelsCacheFile
@@ -1710,19 +1843,38 @@ sealed class LauncherHost : IDisposable
         {
             var cache = LoadGrsaiModelsCache();
             GrsaiRemoteModels? remote = null;
+            List<string> videoModels;
+            var apifoxError = "";
             try
             {
+                // 两个来源并行：官网 chat 页（chat+image） + Apifox 文档（含视频）
+                // 🚨 各自兜错：单文件 exe 下 Apifox 那条链会抛 SSL 异常，不能连累官网清单。
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-                remote = await FetchRemoteGrsaiModelsAsync(cache?.chunk_url, cts.Token);
+                var docsTask = Task.Run(async () =>
+                {
+                    try { return await FetchRemoteGrsaiModelsAsync(cache?.chunk_url, cts.Token); }
+                    catch (Exception ex) { SendLog($"[Grsai 模型] 官网清单获取失败：{ex.Message}"); return null; }
+                });
+                var apifoxTask = FetchApifoxGrsaiVideoModelsAsync(cts.Token, msg => apifoxError = msg);
+                await Task.WhenAll(docsTask, apifoxTask);
+                remote = docsTask.Result;
+                videoModels = apifoxTask.Result;
+                if (apifoxError.Length > 0)
+                    SendLog($"[Grsai 模型] Apifox 文档获取失败：{apifoxError}（视频模型回落到内置清单）");
+                if (videoModels.Count > 0)
+                    SendLog($"[Grsai 模型] Apifox 文档取到 {videoModels.Count} 个模型：{string.Join(", ", videoModels)}");
             }
             catch (Exception ex)
             {
                 SendLog($"[Grsai 模型] 联网获取失败：{ex.Message}（继续用本地缓存 / 内置清单）");
+                return;
             }
-            if (remote is null || remote.Models.Count == 0) return;
+            // 官网抓不到时仍要能用 Apifox 的清单（原来这里直接 return，视频模型永远拿不到）
+            var remoteModels = remote?.Models ?? new List<string>();
+            if (remoteModels.Count == 0 && videoModels.Count == 0) return;
 
-            var merged = MergeGrsaiModelList(remote.Models);
-            var cacheErr = SaveGrsaiModelsCache(merged, remote.ChunkUrl);
+            var merged = MergeGrsaiModelList(remoteModels.Concat(videoModels), LoadSavedGrsaiModels());
+            var cacheErr = SaveGrsaiModelsCache(merged, remote?.ChunkUrl ?? "");
             if (cacheErr.Length > 0) SendLog($"[Grsai 模型] 写缓存失败：{cacheErr}");
 
             var added = MergeGrsaiModelsIntoProviderConfig(merged);
@@ -1745,19 +1897,34 @@ sealed class LauncherHost : IDisposable
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
         GrsaiRemoteModels? remote = null;
         var error = "";
+        var apifoxError = "";
+        List<string> videoModels = new();
         var sw = Stopwatch.StartNew();
-        try { remote = await FetchRemoteGrsaiModelsAsync(null, cts.Token); }
-        catch (Exception ex) { error = ex.Message; }
+        // 🚨 两个来源必须**各自兜错**：Apifox 站在单文件 exe 下会抛 SSL 异常，
+        //    若共用一个 try/WhenAll，官网那份清单也跟着丢。
+        var docsTask = Task.Run(async () =>
+        {
+            try { return await FetchRemoteGrsaiModelsAsync(null, cts.Token); }
+            catch (Exception ex) { error = ex.Message; return null; }
+        });
+        var apifoxTask = FetchApifoxGrsaiVideoModelsAsync(cts.Token, msg => apifoxError = msg);
+        await Task.WhenAll(docsTask, apifoxTask);
+        remote = docsTask.Result;
+        videoModels = apifoxTask.Result;
         sw.Stop();
 
-        var merged = MergeGrsaiModelList(remote?.Models);
+        var remoteAll = (remote?.Models ?? new List<string>()).Concat(videoModels).Distinct().ToList();
+        var merged = MergeGrsaiModelList(remoteAll);
         var obj = new JsonObject
         {
-            ["ok"] = remote is not null,
+            ["ok"] = remote is not null || videoModels.Count > 0,
             ["elapsed_ms"] = (long)sw.Elapsed.TotalMilliseconds,
             ["error"] = error,
+            ["apifox_error"] = apifoxError,
             ["chunk_url"] = remote?.ChunkUrl ?? "",
             ["remote_count"] = remote?.Models.Count ?? 0,
+            ["apifox_count"] = videoModels.Count,
+            ["apifox_models"] = new JsonArray(videoModels.Select(m => (JsonNode)JsonValue.Create(m)!).ToArray()),
             ["merged_count"] = merged.Count,
             ["remote_models"] = new JsonArray((remote?.Models ?? new List<string>())
                 .Select(m => (JsonNode)JsonValue.Create(m)!).ToArray()),
@@ -1864,7 +2031,8 @@ sealed class LauncherHost : IDisposable
             var cache = LoadGrsaiModelsCache();
             var hasRemote = cache is { models.Count: > 0 };
             IEnumerable<string>? remote = hasRemote ? cache!.models : null;
-            var models = MergeGrsaiModelList(remote);
+            // 🚨 必须并入已保存通道：否则点一次「拉取」再保存，会把联网/内置都没有的模型（如视频模型）覆盖掉
+            var models = MergeGrsaiModelList(remote, LoadSavedGrsaiModels());
             return new
             {
                 ok = true,
@@ -2018,6 +2186,15 @@ sealed class LauncherHost : IDisposable
             SendLog($"   → 将在空闲端口 {port} 上启动本目录（{root}）的服务，这样读到的一定是你自己的配置。");
         }
 
+        if (!CanBindPort(port))
+        {
+            var blockedPort = port;
+            port = PickFreePort();
+            appUrl = $"http://127.0.0.1:{port}/";
+            SendLog($"⚠️ 端口 {blockedPort} 当前无法绑定（可能被 Windows 排除或策略保留）。");
+            SendLog($"   → 自动切换到可用端口 {port}，局域网访问地址随之更新。");
+        }
+
         var python = FindPython(root) ?? throw new InvalidOperationException("未找到可用的 Python。请安装 Python 3.10+ 或放入便携 Python。");
         SendLog($"使用 Python: {python}");
 
@@ -2041,14 +2218,29 @@ sealed class LauncherHost : IDisposable
     }
 
     /// <summary>
-    /// 向系统要一个当前空闲的端口（让 OS 分配后立刻释放，再用它去启动服务）。
+    /// 检查服务实际使用的 0.0.0.0 监听地址是否可以绑定。
+    /// 只检查回环地址会漏掉 Windows 排除端口导致的 Any 地址绑定失败。
+    /// </summary>
+    private static bool CanBindPort(int candidate)
+    {
+        try
+        {
+            using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Any, candidate);
+            listener.Start();
+            listener.Stop();
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// 向系统要一个当前可绑定的端口（让 OS 分配后立刻释放，再用它去启动服务）。
     /// 有小概率被别的进程抢占，那种情况下服务启动会失败并由超时兜底报错。
     /// </summary>
     private static int PickFreePort()
     {
         try
         {
-            var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Any, 0);
             listener.Start();
             var free = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
             listener.Stop();

@@ -567,7 +567,126 @@ const LLM_SYSTEM_PRESETS = {
 **替换意图**：用户说"把XX改成YY" → 输出应明确"将XX区域替换为YY，保持其他元素不变..."
 **增强意图**：用户说"让花朵更鲜艳" → 输出应明确"增强花朵的色彩饱和度和层次感，保持其他特征..."
 
-❌ 常见错误：假设原图已有用户描述的元素 → 导致输出"保留XX与YY的关系"（但原图根本没有XX）`
+❌ 常见错误：假设原图已有用户描述的元素 → 导致输出"保留XX与YY的关系"（但原图根本没有XX）`,
+    minimaxH3: `# Role: MiniMax H3 视频提示词工程专家
+
+## Profile
+- Version: 1.0.0
+- Language: 中文
+- Description: 按 MiniMax H3 官方体系，把用户给的原始意图 + 已选参数 + 图片/音频/视频素材，
+  一次写成「可直接投喂 H3」的结构化视频提示词
+
+## 核心心法
+写 H3 提示词不是创作，是**工程**。结构对了效果才稳；结构错了，再好的创意也是开盲盒。
+
+## 一、先判断任务类型（这一步决定有没有指令行）
+| 类型 | 判定 | 指令行 |
+|---|---|---|
+| T2VA 纯文生 | 没有任何参考图 | **不写指令行**，直接进入三字段 |
+| I2VA 首帧锚定 | 只有 1 张图，且视频**从这张图开始**往后发展 | I2VA 指令行 |
+| FL2VA 首末双锚 | 有 2 张图，视频要在两张图之间过渡 | FL2VA 指令行 |
+| L2VA 末帧锚定 | 只有 1 张图，但视频要**最终落在**这张图上 | L2VA 指令行 |
+
+🚨 判断依据是「用户语义 + 素材数量」，不要凭占位符名猜。
+用户只说「图生视频」时默认 I2VA；用户说「最后变成/结局是这张图」时用 L2VA。
+
+## 二、输出结构（严格两段式）
+### 第一段：指令行（仅 I2VA / FL2VA / L2VA，T2VA 跳过）
+必须逐字使用下面三种句式之一，**英文句式 + 尖括号占位**，不要自创：
+
+I2VA:
+For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.
+
+FL2VA:
+How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot N) aligns with the S.SS-second mark of the target video.
+
+L2VA:
+How the reference pictures align with the target video — <Picture 1> (from [Shot N]) aligns with the S.SS-second mark of the target video.
+
+🚨 N = 最后一个镜头编号；S.SS = 视频时长，**严格两位小数**（6 秒写 6.00，不写 6、不写 6s、不写 6.0）。
+🚨 L2VA 的 Picture 1 属于 [Shot N]，**绝不能写成 Shot 1**。
+
+### 第二段：三个核心字段（所有任务都有，字段名是英文标识符，不许改）
+integrated_multimodal_description: ...
+overall_soundscape: ...
+non_diegetic_music: ...
+
+三个字段必须**首尾相接**，字段名后跟一个空格再接内容，字段之间不换行、不加序号、不加 Markdown。
+
+## 三、integrated_multimodal_description 写法
+- [Shot 1] 不写时间戳；[Shot 2] 起必须写 "At 00:SS.SSS," 且**严格递增、不倒退、不超过视频时长**。
+- 切镜动词：cuts to / transitions to / changes to / switches to。切镜必须带来新信息（新主体/新空间/新视角/新时间），否则改用运镜。
+- Shot 1 起手三件套：**风格 + 构图 + 主体**。
+  风格关键词固定用这套：Cinematic / live-action / 2D-animated / 3D CG / claymation / watercolor / vintage film；
+  用户没说风格时默认 "真人电影感, cinematic"。
+- 主体在 Shot 1 必须给清晰视觉锚定：年龄、性别、服装、位置，不能含糊。
+- 运镜 = 类型 + 幅度 + 速度，**必须写进自然句子里**，不许堆标签。
+  类型库：Zoom In/Out、Push In/Pull Out、Pan Left/Right、Truck Left/Right、Tilt Up/Down、Arc Shot、Tracking Shot、Static Shot、Shake Slightly/Strongly、POV。
+  ✅ 正确：镜头以小幅度、慢速向内推近,聚焦在她手中的折叠信件上。
+  ❌ 错误：推近,小,慢,聚焦信件。
+- 角色用稳定 ID：(S1)(S2)(S3) 跨镜头不变；多人齐说用 (S1,S2)；不开口的角色**不要**打 ID。
+  首次出场给足身份：年龄、性别、声线、语速。
+- 对白格式：<d>[语言] 原文</d>。原文**一字不改、不翻译**。
+- 旁白固定写法：says in an off-screen voiceover，**后面必须紧跟「嘴唇紧闭」**（while his/her lips remain completely closed）。
+- 对白跨切用 <scenetrans>；对白被截断用 <cutoff>。
+- 屏幕文字（招牌/字幕/霓虹/标签）用英文双引号包住，原文照抄。
+- 有参考图时，必须写明「角色外貌/服装/构图/空间关系与 Picture N 保持一致」。
+
+## 四、四种任务各自的叙事骨架
+- T2VA：风格 → 主体 → 动作 → 声音。没有图片兜底，所有视觉/动作/声音都要靠文字给齐。
+- I2VA：首帧锚定 → 动作起始 → 持续推进 → **结果/反应收尾**。
+  🚨 只写「动起来了」没有落点是常见错误，必须给结果或反应。
+- FL2VA：首帧状态 → 中间可观察变化 → 差异逐步收窄 → 末帧状态。优先**单镜头**，用户没明确要求切镜就不要切。
+  🚨 不能只重复两张静态图，要写出连接它们的运动过程；末帧必须由最终 [Shot N] 落到。
+- L2VA：合理前置状态 → 显式动作与过渡路径 → 末镜头渐进收敛 → 末帧落点。
+  🚨 前置状态必须合理，不能一上来就有末帧元素再「还原」。
+  🚨 落点句要同时对齐姿态、构图、光线、最终位置四个维度。
+
+## 五、overall_soundscape（声音景观）
+- 1~4 句中文，一段写完：环境声 + 动作声 + 非语言人声（雨、风、脚步、布料摩擦、呼吸、笑）。
+- **不要重复**主时间轴已写的对白、也不要重复音乐。
+- 完全静音才写 N/A。
+
+## 六、non_diegetic_music（非叙事音乐）
+- 1~3 句中文，只写**乐器 + 速度 + 节奏 + 动态变化**。
+- 🚨 禁用抽象情绪词（不许写「悲伤的」「治愈的」「温暖的」）。
+- 角色能听到的音乐（收音机/电视/手机外放）属于场景内声音，要写进 integrated_multimodal_description。
+- 没有音乐写 N/A。
+
+## 七、必须遵守的参数约束（系统会随请求提供）
+用户已选好的参数是**硬约束**，不得违背：
+- **画幅比例**：只能从该模型支持的档位里选；若素材构图与之冲突，用运镜/构图层面的描述去适配，不要改参数值。
+- **分辨率**：只影响清晰度描述，不要写进提示词正文。
+- **时长**：所有时间戳、S.SS、对白节奏必须落在时长内。
+  🚨 H3 在 1080p 下最长 10 秒（其余档位最长 15 秒），排镜头时按此上限规划。
+- **参考图数量**：最多 9 张、参考音频最多 3 个。图片多于 2 张时按 Shot 顺序编号 Picture 1/2/3…，
+  但只有「任务类型」需要的那 1~2 张才进指令行。
+
+## 八、素材如何转写
+- **图片**：识别其主体、姿态、服装、构图、光线、镜头景别，作为 Shot 1（或 Shot N）的锚定描述；
+  不要臆造图里没有的元素。
+- **音频**：转写为对白/声音描述——有人声就进 <d>[语言]…</d> 并配 (Sn)，纯环境声就并入 overall_soundscape，
+  有节奏/旋律就并入 non_diegetic_music。听不出语言时写 <d>[中文]…</d> 并保持原文。
+- **视频**：参考其运镜、剪辑节奏、景别变化，作为运镜与切镜设计的依据；不要照抄内容。
+
+## 九、避坑清单（每条都曾导致失败）
+① Shot 1 写了时间戳 → 报错或乱跳。
+② 运镜当标签堆 → 必须写进自然句子。
+③ FL2VA 乱切多镜头 → 默认单镜头。
+④ 音乐写「悲伤」「治愈」→ 改写成乐器+速度+动态。
+⑤ 旁白没写「嘴唇紧闭」→ 必须紧跟。
+⑥ 对白被翻译 → 原文一字不改。
+⑦ L2VA 把末帧当 Shot 1 → 错位。
+⑧ 三个字段名写错 → 英文标识符不能改。
+⑨ 时间戳跳变/倒退/超时长。
+⑩ 跨镜头角色 ID 漂移 → (S1) 永远是 (S1)。
+
+## Output Requirements
+- 直接输出最终提示词正文，**不要**解释、不要标题、不要 Markdown 代码块、不要「优化后：」之类前缀。
+- 字段名必须原样出现：integrated_multimodal_description / overall_soundscape / non_diegetic_music。
+- 除指令行与字段名外，内容全部用中文。
+- 全文一次成型，不要输出多个方案，也不要在末尾附提问。
+- 若用户原始提示词里已有明确的对白原文、数字、品牌名等硬约束，必须逐字保留。`
 };
 let settings = {
     engine:'api',
@@ -982,8 +1101,25 @@ function smartLoopRoundSettings(runSettings, ctx=smartLoopContext){
     }
     return next;
 }
+// Grsai 的 nano-banana 系（Apifox 文档 2026-10-19 核对）。
+// 🚨 用**前缀匹配 + 排除斜杠**，而不是硬编码型号：Grsai 会持续加新型号
+//    （配置里已有文档未收录的 `nano-banana-2-lite`），写死集合必然反复失效。
+// 🚨 必须排除带 "/" 的：RunningHub 的模型名形如 "nano-banana/text-to-image-official-stable"，
+//    含同样子串但走完全不同的通道。
+function isNanoBananaAutoRatioModel(model){
+    const name = String(model || '').trim().toLowerCase();
+    if(!name || name.includes('/')) return false;
+    if(name === 'nano-banana') return true;
+    // 要求横线后至少还有一个字符（'nano-banana-' 这种空后缀不算）
+    return name.startsWith('nano-banana-') && name.length > 'nano-banana-'.length;
+}
+// nano-banana-2 系列**额外**支持 1:4 / 4:1 / 1:8 / 8:1（其他 nano 系不支持）
+function isNanoBanana2SeriesModel(model){
+    return String(model || '').trim().toLowerCase().startsWith('nano-banana-2');
+}
+// 兼容旧名：原先只认 nano-banana-pro，导致 2.1 / 2 / fast 都拿不到 auto 比例选项。
 function isNanoBananaProAutoRatioModel(model){
-    return String(model || '').trim().toLowerCase() === 'nano-banana-pro';
+    return isNanoBananaAutoRatioModel(model);
 }
 function isGptImageAutoSizeModel(model){
     const raw = String(model || '').trim().toLowerCase();
@@ -2376,7 +2512,7 @@ function syncPromptNodeHeightForSplit(node, prevExtra=0){
     node.w = Math.max(Number(node.w) || 0, 316);
 }
 function promptNodeMinHeight(node){
-    return node?.llmEnabled ? promptNodeExpandedHeight(node) : 240 + promptNodeSplitExtraHeight(node);
+    return promptNodeLlmActive(node) ? promptNodeExpandedHeight(node) : 240 + promptNodeSplitExtraHeight(node);
 }
 function promptTextItemsForNode(node, ctx=smartLoopContext){
     if(!node) return [];
@@ -2407,7 +2543,7 @@ function promptNodeLLMInputText(node, ctx=smartLoopContext){
 function promptNodeExpandedHeight(node){
     // 指令文本框（发送给 LLM 的内容）可拖动加高，超出默认高度的部分要叠加进节点高度。
     const extra = Math.max(0, promptLlmInstructionHeight(node) - PROMPT_LLM_INSTRUCTION_DEFAULT_H);
-    const upstreamExtra = node?.llmEnabled && promptNodeUpstreamPromptItems(node).length ? 74 : 0;
+    const upstreamExtra = promptNodeLlmActive(node) && promptNodeUpstreamPromptItems(node).length ? 74 : 0;
     return 420 + smartNodeInputThumbsHeight(promptNodeInputImages(node)) + extra + upstreamExtra + promptNodeSplitExtraHeight(node);
 }
 function promptNodeLayoutSize(node){
@@ -3261,8 +3397,17 @@ function renderVideoModelControl(models){
     </div>`;
 }
 function renderVideoDurationControl(){
-    const v = Math.max(1, Math.min(60, Number(settings.videoDuration) || 5));
-    const quick = [3, 4, 5, 6, 8, 10, 12, 15];
+    // 🚨 时长上限按模型给（Apifox 文档 2026-10-19）：
+    //    · agnes-video-2.5 → 4~12 秒
+    //    · minimax-h3      → 1~15 秒，但**1080p 最多 10 秒**（文档原话「支持1~15秒，1080p最多支持10秒」）
+    const name = String(settings.videoModel || '').trim().toLowerCase();
+    const dMin = name.startsWith('agnes-video-') ? 4 : 1;
+    let dMax = name === 'minimax-h3' ? 15 : (name.startsWith('agnes-video-') ? 12 : 60);
+    if(name === 'minimax-h3' && String(settings.videoResolution || '').trim().toLowerCase() === '1080p'){
+        dMax = 10;
+    }
+    const v = Math.max(dMin, Math.min(dMax, Number(settings.videoDuration) || Math.max(dMin, 5)));
+    const quick = [3, 4, 5, 6, 8, 10, 12, 15].filter(n => n >= dMin && n <= dMax);
     return `<div class="smart-control duration-control" title="${escapeHtml(tr('smart.videoDurationTip'))}">
         <button class="smart-pill" type="button"><i data-lucide="timer"></i><span>${v}s</span></button>
         <div class="smart-popover compact-popover">
@@ -3272,7 +3417,7 @@ function renderVideoDurationControl(){
             </div>
             <label class="duration-custom">
                 <span>${escapeHtml(tr('smart.custom'))}</span>
-                <input type="number" min="1" max="60" step="1" data-param="videoDuration" value="${v}">
+                <input type="number" min="${dMin}" max="${dMax}" step="1" data-param="videoDuration" value="${v}">
             </label>
         </div>
     </div>`;
@@ -3296,16 +3441,22 @@ function renderVideoAspectControl(){
 }
 function renderVideoResolutionControl(){
     // MiniMax-H3 只接受 2K / 768P，其余模型保留通用档位
-    const isMinimax = /minimax[-_ ]?h3/i.test(String(settings.videoModel || '').trim());
+    // 🚨 分辨率档位必须按模型给（Apifox 文档 2026-10-19 核对）：
+    //    · minimax-h3      → 480p / 768p / 1080p（原先是错的 2K/768P）
+    //    · agnes-video-*   → 720p / 1080p / 2k（原先缺 2k）
+    //    · 其他通道        → 保持通用档位
+    const videoModelName = String(settings.videoModel || '').trim().toLowerCase();
+    const isMinimax = videoModelName === 'minimax-h3';
+    const isAgnesVideo = videoModelName.startsWith('agnes-video-');
     const options = isMinimax
-        ? [['2K','2K'], ['768P','768P']]
-        : [['', tr('smart.videoResAuto')], ['480p','480P'], ['720p','720P'], ['1080p','1080P']];
+        ? [['480p','480P'], ['768p','768P'], ['1080p','1080P']]
+        : isAgnesVideo
+            ? [['720p','720P'], ['1080p','1080P'], ['2k','2K']]
+            : [['', tr('smart.videoResAuto')], ['480p','480P'], ['720p','720P'], ['1080p','1080P']];
     let value = settings.videoResolution || '';
-    if(isMinimax && value !== '2K' && value !== '768P'){
-        value = '768P';
-        settings.videoResolution = value;
-    } else if(!isMinimax && (value === '2K' || value === '768P')){
-        value = '';
+    const allowedRes = options.map(([v]) => v);
+    if(!allowedRes.includes(value)){
+        value = allowedRes[0];
         settings.videoResolution = value;
     }
     const labelMap = Object.fromEntries(options);
@@ -3754,8 +3905,12 @@ function renderSizeControls(prefix='', includeSource=false){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
     const resKey = prefix ? `${prefix}Resolution` : 'resolution';
     const ratios = [
-        ...( !prefix && settings.engine === 'api' && settings.apiKind !== 'video' && isNanoBananaProAutoRatioModel(settings.model) ? [['auto','自动']] : []),
-        ['square','1:1'], ['portrait','2:3'], ['landscape','3:2'], ['portrait43','3:4'], ['landscape43','4:3'], ['story','9:16'], ['wide','16:9'], ['ultrawide','21:9'], ['ultratall','9:21'],
+        ...( !prefix && settings.engine === 'api' && settings.apiKind !== 'video' && isNanoBananaAutoRatioModel(settings.model) ? [['auto','自动']] : []),
+        ['square','1:1'], ['portrait','2:3'], ['landscape','3:2'], ['portrait43','3:4'], ['landscape43','4:3'], ['story','9:16'], ['wide','16:9'], ['ultrawide','21:9'],
+        // 🚨 9:21 不在 Grsai 支持列表里（Apifox 文档）：Grsai nano 系隐藏它，避免选了被上游静默忽略
+        ...(isNanoBananaAutoRatioModel(settings.model) ? [] : [['ultratall','9:21']]),
+        // nano-banana-2 系列额外支持超长/超宽比例
+        ...(isNanoBanana2SeriesModel(settings.model) ? [['1:4','1:4'], ['4:1','4:1'], ['1:8','1:8'], ['8:1','8:1']] : []),
         ...(includeSource ? [['source', tr('canvas.adaptiveRatio') || '适配比例']] : []),
         ['custom', tr('canvas.custom') || '自定义']
     ];
@@ -3969,9 +4124,13 @@ function renderSizePickerControl(prefix='', includeSource=false){
     const currentCustomRatio = settings[customRatioKey] || (currentRatio === 'source' ? sourceImageRatioLabel(prefix) : '');
     const allowAuto = !prefix && settings.engine === 'api' && settings.apiKind !== 'video' && isGptImageAutoSizeModel(settings.model);
     const ratios = [
-        ...( !prefix && settings.engine === 'api' && settings.apiKind !== 'video' && isNanoBananaProAutoRatioModel(settings.model) ? [['auto','自动','自动适配']] : []),
+        ...( !prefix && settings.engine === 'api' && settings.apiKind !== 'video' && isNanoBananaAutoRatioModel(settings.model) ? [['auto','自动','自动适配']] : []),
         ['square','1:1','正方形'], ['portrait','2:3','竖图'], ['landscape','3:2','横图'], ['portrait43','3:4','竖图'], ['landscape43','4:3','横图'],
-        ['story','9:16','竖屏'], ['wide','16:9','宽屏'], ['ultrawide','21:9','超宽'], ['ultratall','9:21','超竖'],
+        ['story','9:16','竖屏'], ['wide','16:9','宽屏'], ['ultrawide','21:9','超宽'],
+        // 9:21 不在 Grsai 支持列表（Apifox 文档）⇒ Grsai nano 系隐藏
+        ...(isNanoBananaAutoRatioModel(settings.model) ? [] : [['ultratall','9:21','超竖']]),
+        // nano-banana-2 系列额外支持超长/超宽比例
+        ...(isNanoBanana2SeriesModel(settings.model) ? [['1:4','1:4','超竖'], ['4:1','4:1','超宽'], ['1:8','1:8','极竖'], ['8:1','8:1','极宽']] : []),
         ...(includeSource ? [['source', sourceImageRatioLabel(prefix) || '原图', '适配输入']] : [])
     ];
     const wKey = prefix ? `${prefix}CustomWidth` : 'customWidth';
@@ -4777,12 +4936,27 @@ function bindDynamicParams(){
             const param = btn.dataset.smartParam;
             setDynamicSetting(param, btn.dataset.smartValue);
             if(param === 'videoModel'){
-                // MiniMax-H3 只接受 2K/768P：切换模型时联动纠正分辨率
-                const isMinimax = /minimax[-_ ]?h3/i.test(String(settings.videoModel || '').trim());
-                if(isMinimax && settings.videoResolution !== '2K' && settings.videoResolution !== '768P'){
-                    settings.videoResolution = '768P';
-                } else if(!isMinimax && (settings.videoResolution === '2K' || settings.videoResolution === '768P')){
-                    settings.videoResolution = '';
+                // 切换视频模型时把分辨率纠正到该模型支持的档位（与 renderVideoResolutionControl 同一套规则）
+                const name = String(settings.videoModel || '').trim().toLowerCase();
+                const allow = name === 'minimax-h3'
+                    ? ['480p', '768p', '1080p']
+                    : name.startsWith('agnes-video-')
+                        ? ['720p', '1080p', '2k']
+                        : ['', '480p', '720p', '1080p'];
+                if(!allow.includes(settings.videoResolution || '')){
+                    settings.videoResolution = allow[0];
+                }
+                // minimax-h3 选 1080p 时，时长上限从 15 秒降到 10 秒 → 先纠正，避免带着 15 秒提交
+                if(name === 'minimax-h3' && settings.videoResolution === '1080p' && Number(settings.videoDuration) > 10){
+                    settings.videoDuration = 10;
+                }
+                renderDynamicParams();
+            }
+            if(param === 'videoResolution'){
+                // 切到 minimax-h3 的 1080p → 同样把超长时长收回到 10 秒
+                const name = String(settings.videoModel || '').trim().toLowerCase();
+                if(name === 'minimax-h3' && String(settings.videoResolution || '').trim().toLowerCase() === '1080p' && Number(settings.videoDuration) > 10){
+                    settings.videoDuration = 10;
                 }
                 renderDynamicParams();
             }
@@ -8239,7 +8413,11 @@ function promptNodeBodyHtml(node){
     node.llmSystemPrompt = node.llmSystemPrompt !== undefined ? node.llmSystemPrompt : (LLM_SYSTEM_PRESETS[node.llmSystemMode] || LLM_SYSTEM_PRESETS.custom);
     node.promptSplitEnabled = node.promptSplitEnabled === true;
     node.promptSeparator = promptNodeSeparator(node);
-    const readonly = node.llmEnabled ? 'readonly' : '';
+    // 遮罩（局部重绘）生效时整个 LLM 扩展区都要收起来：入口隐藏 + 参数区不渲染 + 文本可编辑。
+    //   只影响渲染，不动 node.llmEnabled —— 撤掉遮罩后 LLM 面板要能原样回来。
+    const llmBlocked = llmBlockedByInpaint(node);
+    const llmEnabled = Boolean(node.llmEnabled) && !llmBlocked;
+    const readonly = llmEnabled ? 'readonly' : '';
     const systemPrompt = (node.llmSystemPrompt || '').trim();
     const currentMode = node.llmSystemMode || 'custom';
     const inputThumbs = smartNodeInputThumbsHtml(promptNodeInputImages(node));
@@ -8251,7 +8429,7 @@ function promptNodeBodyHtml(node){
         <div class="prompt-node-section-title">上游输入</div>
         <div class="prompt-node-upstream-list">${upstreamPromptItems.map((item, index) => `<div class="prompt-node-segment"><span>${index + 1}</span><p>${escapeHtml(item)}</p></div>`).join('')}</div>
     </div>` : '';
-    const llmParams = node.llmEnabled ? `
+    const llmParams = llmEnabled ? `
         <div class="prompt-node-llm">
             <select class="prompt-node-control prompt-llm-provider">${chatProviderOptions(node.llmProvider)}</select>
             <select class="prompt-node-control prompt-llm-model">${chatModelOptions(node.llmModel, node.llmProvider)}</select>
@@ -8267,6 +8445,7 @@ function promptNodeBodyHtml(node){
                 <button type="button" class="prompt-node-pill prompt-node-control prompt-system-mode-btn ${currentMode === 'custom' ? 'active' : ''}" data-system-mode="custom">${escapeHtml(tr('smart.promptLlmPresetCustom'))}</button>
                 <button type="button" class="prompt-node-pill prompt-node-control prompt-system-mode-btn ${currentMode === 'text2img' ? 'active' : ''}" data-system-mode="text2img">${escapeHtml(tr('smart.promptLlmPresetText2Img'))}</button>
                 <button type="button" class="prompt-node-pill prompt-node-control prompt-system-mode-btn ${currentMode === 'img2img' ? 'active' : ''}" data-system-mode="img2img">${escapeHtml(tr('smart.promptLlmPresetImg2Img'))}</button>
+                <button type="button" class="prompt-node-pill prompt-node-control prompt-system-mode-btn ${currentMode === 'minimaxH3' ? 'active' : ''}" data-system-mode="minimaxH3">${escapeHtml(tr('smart.promptLlmPresetMinimaxH3'))}</button>
             </div>
             <textarea class="prompt-node-control prompt-llm-system" placeholder="${escapeHtml(tr('smart.promptLlmSystemPlaceholder'))}">${escapeHtml(systemPrompt || 'You are a helpful prompt assistant.')}</textarea>
         </div>` : '';
@@ -8279,7 +8458,7 @@ function promptNodeBodyHtml(node){
         <div class="prompt-node-tools">
             <button class="prompt-node-pill prompt-node-control prompt-preset-edit ${templateActive ? 'active' : ''}" type="button"><i data-lucide="library"></i><span>模板库</span></button>
             <button class="prompt-node-pill prompt-node-control prompt-split-toggle ${node.promptSplitEnabled ? 'active' : ''}" type="button"><i data-lucide="split"></i><span>分隔符</span></button>
-            <button class="prompt-node-pill prompt-llm-toggle ${node.llmEnabled ? 'active' : ''}" type="button"><i data-lucide="sparkles"></i><span>LLM</span></button>
+            ${llmBlocked ? '' : `<button class="prompt-node-pill prompt-llm-toggle ${node.llmEnabled ? 'active' : ''}" type="button"><i data-lucide="sparkles"></i><span>LLM</span></button>`}
         </div>
         ${node.promptSplitEnabled ? `<div class="prompt-node-split-row">
             <label class="prompt-node-split-control prompt-node-control"><span>分隔符</span><input class="prompt-node-separator" type="text" value="${escapeHtml(node.promptSeparator)}" maxlength="8" placeholder=";"></label>
@@ -13712,6 +13891,11 @@ function bindPromptNodeControls(el, node){
     const toggle = el.querySelector('.prompt-llm-toggle');
     if(toggle) toggle.onclick = e => {
         e.preventDefault(); e.stopPropagation();
+        // 遮罩场景下按钮已不渲染，这里再兜一层：键盘/脚本触发也开不了
+        if(llmBlockedByInpaint(node)){
+            toast(tr('smart.promptLlmBlockedByInpaint'));
+            return;
+        }
         node.llmEnabled = !node.llmEnabled;
         if(node.llmEnabled){
             node.llmProvider = resolveChatProviderId(node.llmProvider || '');
@@ -17789,6 +17973,19 @@ function validNodeInpaint(node, imageIndex=null){
     if(!current?.url || current.url !== key) return null;
     return {...meta, index};
 }
+/* 有有效遮罩时禁用 LLM 提示词扩写。
+   🚨 为什么必须禁用：遮罩局部重绘送上游的是「裁切局部图 + 遮罩 + 用户自己选的其它参考图」，
+   而 LLM 扩写会把用户的短指令改写成整图描述（构图/主体/环境全都写一遍）。
+   局部重绘只需要「这里改成什么」，扩写后的整图描述会把模型带偏，改出来面目全非。
+   🚨 只影响「显示与运行」，**不写坏 settings.llmEnabled** —— 撤掉遮罩后要能自动恢复原状态。 */
+function llmBlockedByInpaint(node){
+    return Boolean(validNodeInpaint(node));
+}
+/* 「此刻 LLM 是否真的在用」= 用户开着 && 没被遮罩挡住。
+   渲染（按钮显隐 / 面板高度）和运行（是否扩写）统一走这一个判断，避免两边不一致。 */
+function promptNodeLlmActive(node){
+    return Boolean(node?.llmEnabled) && !llmBlockedByInpaint(node);
+}
 /* 局部重绘的参考图**顺序**很重要：上游把第一张图当基准图、把 mask 作用在它身上，
    所以 crop 必须排第一、crop_mask 紧随其后。
    用户自己选的其它参考图（例如「照参考图里的方向盘款式来改」）必须**追加在后面保留**，
@@ -18210,7 +18407,11 @@ function updateComposer(){
 }
 function renderComposerLlmSection(node){
     if(!composerLlmSection || !composerLlmToggleBtn) return;
-    const isEnabled = Boolean(settings.llmEnabled);
+    // 遮罩（局部重绘）下 LLM 扩写会把「这里改成什么」扩成整图描述，必须关掉并隐藏入口
+    const blocked = llmBlockedByInpaint(node);
+    composerLlmToggleBtn.style.display = blocked ? 'none' : '';
+    if(blocked) composerLlmToggleBtn.classList.remove('llm-processing');
+    const isEnabled = Boolean(settings.llmEnabled) && !blocked;
     composerLlmToggleBtn.classList.toggle('active', isEnabled);
     composerLlmToggleBtn.setAttribute('aria-pressed', isEnabled ? 'true' : 'false');
     composerLlmSection.style.display = isEnabled ? 'grid' : 'none';
@@ -21558,11 +21759,13 @@ async function runPromptLLMNode(nodeId){
         const mediaRefs = promptNodeInputMediaForLLM(node);
         const images = imageRefsOnly(mediaRefs).map(img => img.url).filter(Boolean);
         const videos = videoRefsOnly(mediaRefs).map(video => video.url).filter(Boolean);
+        // H3 模式：把已选参数 + 素材清单拼进消息（其它模式原样透传）
+        const h3Message = applyMinimaxH3Context(message, node.llmSystemMode, smartSettingsForNode(node), mediaRefs);
         const result = await fetch('/api/canvas-llm', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({
-                message,
+                message:h3Message,
                 messages:[],
                 images,
                 videos,
@@ -21645,9 +21848,71 @@ async function runApiGeneration(prompt, refs, runSettings=settings, options={}){
     })));
     return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:payload.provider_id, model:payload.model};
 }
+// ---- MiniMax H3 智能提示词优化：把「已选参数 + 素材」整理成随请求下发的约束块 ----
+// 🚨 为什么要把参数拼进 message 而不是让模型猜：H3 的指令行里有 S.SS（要两位小数的时长）、
+//    L2VA 要用 [Shot N]，不告诉模型真实时长它只能编。素材同理——模型看不到「用户贴了几张图」
+//    的语义，必须显式告诉它 Picture 1/2 分别是什么。
+function minimaxH3VideoSpecFor(modelName){
+    const name = String(modelName || '').trim().toLowerCase();
+    if(name === 'minimax-h3') return {aspects:['portrait','landscape'],resolutions:['480p','768p','1080p'],maxSeconds:15,maxSeconds1080:10,maxImages:9};
+    if(name.startsWith('agnes-video-')) return {aspects:['16:9','9:16','21:9','4:3','1:1','3:4'],resolutions:['720p','1080p','2k'],maxSeconds:12,maxImages:5};
+    return {aspects:['16:9','9:16','1:1','4:3','3:4','21:9'],resolutions:[],maxSeconds:15,maxImages:9};
+}
+function minimaxH3FormatSeconds(value){
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? n.toFixed(2) : '';
+}
+function buildMinimaxH3Context(s, mediaRefs){
+    const refs = Array.isArray(mediaRefs) ? mediaRefs.filter(ref => ref?.url) : [];
+    const images = imageRefsOnly(refs);
+    const audios = audioRefsOnly(refs);
+    const videos = videoRefsOnly(refs);
+    const spec = minimaxH3VideoSpecFor(s?.videoModel);
+    const resolution = String(s?.videoResolution || '').trim();
+    const rawDuration = Number(s?.videoDuration);
+    // 1080p 的时长上限更低（minimax-h3 只有 10 秒），这里的上限要和后端 GRSAI_VIDEO_SPECS 一致
+    const maxSeconds = (resolution.toLowerCase() === '1080p' && spec.maxSeconds1080) ? spec.maxSeconds1080 : spec.maxSeconds;
+    const duration = Number.isFinite(rawDuration) && rawDuration > 0 ? Math.min(rawDuration, maxSeconds) : '';
+
+    const lines = ['【本次生成参数（硬约束，不得违背）】'];
+    lines.push(`- 模型：${String(s?.videoModel || '未指定')}`);
+    lines.push(`- 分辨率：${resolution || '未指定'}`);
+    lines.push(`- 画幅比例：${String(s?.videoAspect || '未指定')}（该模型仅支持：${spec.aspects.join(' / ')}）`);
+    lines.push(`- 时长：${duration ? `${duration} 秒` : '未指定'}${spec.maxSeconds1080 && resolution.toLowerCase() === '1080p' ? `（1080p 最多 ${spec.maxSeconds1080} 秒）` : ''}`);
+    if(duration) lines.push(`- 指令行里的 S.SS 必须写 ${minimaxH3FormatSeconds(duration)}（两位小数）；所有时间戳不得超过该时长`);
+
+    lines.push('', '【本次素材清单】');
+    if(!images.length && !audios.length && !videos.length){
+        lines.push('- 无任何参考素材 → 判定为 T2VA（纯文生视频），不写指令行');
+    } else {
+        if(images.length){
+            lines.push(`- 参考图 ${images.length} 张（该模型上限 ${spec.maxImages} 张）：`);
+            images.forEach((img, index) => {
+                lines.push(`  · Picture ${index + 1}：${img.name || `图片${index + 1}`}`);
+            });
+            if(images.length === 1){
+                lines.push('  → 单图：由用户语义决定用 I2VA（从图往后发展）还是 L2VA（最终落到这张图）');
+            } else if(images.length >= 2){
+                lines.push(`  → 多图：若用户要求「在两张图之间过渡」用 FL2VA（Picture 1 对 0.00 秒，Picture 2 对 ${minimaxH3FormatSeconds(duration) || 'S.SS'} 秒）；否则仍按 I2VA 处理`);
+            }
+        }
+        if(audios.length) lines.push(`- 参考音频 ${audios.length} 个：${audios.map(a => a.name || '音频').join('、')}（有人声转写成 <d>[语言]…</d>，纯环境声并入 overall_soundscape）`);
+        if(videos.length) lines.push(`- 参考视频 ${videos.length} 个：${videos.map(v => v.name || '视频').join('、')}（只借鉴运镜节奏与景别，不照抄内容）`);
+    }
+    return lines.join('\n');
+}
+// 只在 H3 模式下注入，其它预设行为完全不变
+function applyMinimaxH3Context(message, systemMode, s, mediaRefs){
+    if(String(systemMode || '') !== 'minimaxH3') return message;
+    const block = buildMinimaxH3Context(s, mediaRefs);
+    const original = String(message || '').trim();
+    return `${original}\n\n${block}`;
+}
 async function resolvePromptWithLlmIfNeeded(prompt, refs, node, runSettings=settings){
     const s = runSettings || (node ? smartSettingsForNode(node) : settings) || settings;
     if(!s?.llmEnabled) return prompt;
+    // 遮罩局部重绘一律不扩写：扩成整图描述会把重绘带偏（LLM 入口此时也已隐藏）
+    if(llmBlockedByInpaint(node)) return prompt;
     const provider = resolveChatProviderId(s.llmProvider || '');
     const model = resolveChatModel(s.llmModel || '', provider);
     if(!provider || !model) return prompt;
@@ -21657,6 +21922,8 @@ async function resolvePromptWithLlmIfNeeded(prompt, refs, node, runSettings=sett
     const images = imageRefsOnly(mediaRefs).map(img => img.url).filter(Boolean);
     const videos = videoRefsOnly(mediaRefs).map(video => video.url).filter(Boolean);
     const systemPrompt = String(s.llmSystemPrompt || '').trim() || LLM_SYSTEM_PRESETS[s.llmSystemMode || 'custom'] || LLM_SYSTEM_PRESETS.custom;
+    // H3 模式：把已选参数 + 素材清单（含音频文件名）拼进消息；其它模式原样透传
+    const llmMessage = applyMinimaxH3Context(message, s.llmSystemMode, s, mediaRefs);
 
     const originalPromptHtml = (node && isSmartRunnableNode(node)) ? (node.promptDraftHtml || promptInput?.innerHTML || '') : (promptInput ? promptInput.innerHTML : '');
     const originalPromptPlainText = (node && isSmartRunnableNode(node)) ? (node.promptDraftText || message) : (promptPlainText() || message);
@@ -21695,7 +21962,7 @@ async function resolvePromptWithLlmIfNeeded(prompt, refs, node, runSettings=sett
             method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({
-                message,
+                message:llmMessage,
                 messages:[],
                 images,
                 videos,
@@ -24243,6 +24510,12 @@ if(composerHistoryBtn) composerHistoryBtn.onclick = event => {
 if(composerLlmToggleBtn) composerLlmToggleBtn.onclick = event => {
     event.preventDefault();
     event.stopPropagation();
+    // 遮罩场景下按钮已隐藏，这里兜一层：键盘/脚本触发也不改变用户原来的开关状态
+    const node = activeComposerNode() || selectedNode();
+    if(llmBlockedByInpaint(node)){
+        toast(tr('smart.promptLlmBlockedByInpaint'));
+        return;
+    }
     settings.llmEnabled = !settings.llmEnabled;
     if(settings.llmEnabled){
         settings.llmProvider = resolveChatProviderId(settings.llmProvider || '');

@@ -177,9 +177,21 @@ const RECOMMENDED_APIS = [
   icons: ['IMG', 'LLM'],
   summaryKey: 'Grsai超性价比图像模型，推荐优先使用nano-banana-pro',
   advantages: ['Grsai 性价比生图 + LLM', 'nano-banana 模型直连', '支持 Grsai 生图接口'],
-  image_models: ['nano-banana-pro'],
-  chat_models: ['gpt-6-astra', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.5'],
-  video_models: []
+  // Grsai `/v1/api/generate` 支持的完整模型清单。
+  // 🚨 与 `launcher/Program.cs:GrsaiCuratedModels()` 保持同一份清单（2026-10-19 对齐控制台实测）。
+  // 顺序按「性价比 → 高端」排，2.1 是新增主力档。
+  image_models: [
+    'gpt-image-2.5', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst', 'gpt-image-2', 'gpt-image-2-vip',
+    'nano-banana-2.1', 'nano-banana-2', 'nano-banana-2-cl', 'nano-banana-2-2k-cl', 'nano-banana-2-4k-cl',
+    'nano-banana-pro', 'nano-banana-pro-vt', 'nano-banana-pro-cl', 'nano-banana-pro-vip',
+    'nano-banana-pro-4k-vip', 'nano-banana-fast', 'nano-banana', 'nano-banana-2-lite'
+  ],
+  chat_models: [
+    'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.5', 'gpt-5.4',
+    'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-pro',
+    'gemini-3.1-flash-lite', 'gemini-3-pro', 'gemini-3-flash', 'gemini-2.5-pro', 'gemini-2.5-flash'
+  ],
+  video_models: ['minimax-h3', 'agnes-video-2.5']
 },
 {
   id: 'coder',
@@ -3689,6 +3701,7 @@ async function loadProviders(){
     try {
         const data = await fetch('/api/providers').then(r => r.json());
         providers = data.providers || [];
+        syncGrsaiPresetFromSaved();
         selectedId = sortedProviders()[0]?.id || '';
         renderEditor();
         openRecommendApi();
@@ -3696,6 +3709,23 @@ async function loadProviders(){
     } catch(err) {
         setStatus(tr('api.loadFailed'));
     }
+}
+// 🚨 Grsai 模型清单自动同步（2026-10-19）：
+// 启动器每次启动都会联网抓 Grsai 官方清单（`launcher/Program.cs:RefreshGrsaiModelsAsync`），
+// 并「只增不减」写回 data/api_providers.json。这里用**已保存通道**的清单覆盖静态预设，
+// 于是 Grsai 上新模型后，新建通道的默认清单自动跟上，不用再改代码。
+// 找不到已保存的 Grsai 通道时保持静态预设兜底。
+function syncGrsaiPresetFromSaved(){
+    try{
+        const saved = (providers || []).find(p => /grsai/i.test(`${p?.name || ''} ${p?.base_url || ''}`));
+        if(!saved) return;
+        const preset = RECOMMENDED_APIS.find(p => p.id === 'grsai');
+        if(!preset) return;
+        ['image_models','chat_models','video_models'].forEach(key => {
+            const list = Array.isArray(saved[key]) ? saved[key].filter(Boolean) : [];
+            if(list.length) preset[key] = list.slice();
+        });
+    }catch(_){}
 }
 async function saveProviders(){
     syncEditor();

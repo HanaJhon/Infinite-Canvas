@@ -58,3 +58,6 @@ output/
 
 # 一次性验证探针页（用完即删，别误提交）
 static/__*.html
+
+# 启动器 exe 的手工备份（69 MB 二进制，备份放 output/rollback-backup/ 即可）
+Lochou启动器.exe.bak-*

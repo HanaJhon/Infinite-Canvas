@@ -13927,8 +13927,99 @@ def runninghub_aspect_from_size(size, fallback="1:1"):
         return raw.replace(" ", "")
     return fallback
 
+# Grsai `/v1/api/generate` 支持的 nano-banana 系（Apifox 文档 2026-10-19 核对，含当时 12 个型号）。
+# 🚨 用**前缀匹配 + 排除斜杠**，而不是硬编码型号集合：Grsai 会持续加新型号
+#    （老板配置里已有文档未收录的 `nano-banana-2-lite`），写死集合必然反复失效。
+# 🚨 必须排除带 "/" 的：RunningHub 的模型名形如 "nano-banana/text-to-image-official-stable"，
+#    前缀相同但走完全不同的通道。
+# Grsai 视频模型：都走 `POST /v1/api/generate`（与图片同一端点），但**参数域不同**。
+# 文档：agnes-video / minimax-h3 各自页面（Apifox，2026-10-19 核对）
+#   · agnes-video-2.5：aspectRatio 用 16:9 这类；resolution 720p/1080p/2k；duration 4~12；最多 5 张图
+#   · minimax-h3   ：aspectRatio 只认 portrait/landscape；resolution 480p/768p/1080p；duration 1~15；最多 9 张图
+GRSAI_VIDEO_SPECS = {
+    "agnes-video-2.5": {
+        "aspects": ("16:9", "9:16", "21:9", "4:3", "1:1", "3:4"),
+        "resolutions": ("720p", "1080p", "2k"),
+        "duration": (4, 12),
+        "max_images": 5,
+    },
+    "minimax-h3": {
+        "aspects": ("portrait", "landscape"),
+        "resolutions": ("480p", "768p", "1080p"),
+        "duration": (1, 15),
+        "max_images": 9,
+        # 🚨 文档原文：「支持1~15秒，1080p最多支持10秒」⇒ 时长上限**随分辨率变化**，
+        #    只按 1~15 截断会把 1080p + 15 秒发出去，服务端直接 400。
+        "duration_by_resolution": {"1080p": 10},
+    },
+}
+
+
+def is_grsai_provider(provider):
+    """只判断「通道是不是 Grsai」，与模型无关。"""
+    provider = provider or {}
+    name = str(provider.get("name") or "").strip().lower()
+    base_url = str(provider.get("base_url") or "").strip().lower()
+    try:
+        host = (urllib.parse.urlsplit(base_url).hostname or "").lower()
+    except Exception:
+        host = ""
+    return name == "grsai" or "grsai" in host
+
+
+def is_grsai_video_model(model):
+    return str(model or "").strip().lower() in GRSAI_VIDEO_SPECS
+
+
+def grsai_video_aspect(spec, aspect_ratio, size=""):
+    """把内部比例映射成该视频模型要求的格式。
+
+    🚨 minimax-h3 只认 `portrait` / `landscape`（不认 16:9）；agnes 认 16:9 这类，
+    但它**没有 9:21**（前端 ultratall 会传过来）⇒ 回退到最接近的 9:16。
+    """
+    aspects = spec["aspects"]
+    text = str(aspect_ratio or "").strip().lower()
+    if "portrait" in aspects:
+        if text in ("portrait", "landscape"):
+            return text
+        match = re.fullmatch(r"(\d+)\s*:\s*(\d+)", text)
+        if match:
+            return "portrait" if int(match.group(2)) >= int(match.group(1)) else "landscape"
+        width, height = parse_size_pair(size)
+        if width and height:
+            return "portrait" if height >= width else "landscape"
+        return "landscape"
+    if text in aspects:
+        return text
+    return "9:16" if text in ("9:21", "portrait") else "16:9"
+
+
+def grsai_video_resolution(spec, resolution):
+    allowed = spec["resolutions"]
+    value = str(resolution or "").strip().lower()
+    if value in allowed:
+        return value
+    # 前端历史值可能是大写（2K / 768P），或模型不支持（480p 给 agnes）
+    return allowed[0]
+
+
+def is_grsai_nano_model_name(model):
+    name = str(model or "").strip().lower()
+    if not name or "/" in name:
+        return False
+    if name == "nano-banana":
+        return True
+    # 要求横线后至少还有一个字符（`nano-banana-` 这种空后缀不算）
+    return name.startswith("nano-banana-") and len(name) > len("nano-banana-")
+
 def is_grsai_nano_provider(provider, model):
-    if str(model or "").strip().lower() != "nano-banana-pro":
+    """是否走 Grsai 的 /v1/api/generate（该接口用 aspectRatio + imageSize + replyType）。
+
+    🚨 原来这里硬判断 `model == "nano-banana-pro"`，导致 Grsai 新上的
+    nano-banana-2.1 / -2 / -fast / -2-lite 等**全部走不进这个分支**，于是用了通用通道的
+    `size` 参数，表现为「4K 分辨率选了没用」且 aspectRatio 拿不到 auto（老板 2026-10-19 反馈）。
+    """
+    if not is_grsai_nano_model_name(model):
         return False
     provider = provider or {}
     name = str(provider.get("name") or "").strip().lower()
@@ -13946,11 +14037,28 @@ def grsai_image_size(resolution, size):
     inferred = runninghub_resolution_from_size(size, "1k")
     return inferred.upper() if inferred in {"1k", "2k", "4k"} else "1K"
 
-def grsai_aspect_ratio(aspect_ratio, size):
+# Grsai aspectRatio 合法值（Apifox 文档 2026-10-19 核对）。
+# nano-banana-2 系列**额外**支持 1:4 / 4:1 / 1:8 / 8:1。
+GRSAI_ASPECT_RATIOS = {
+    "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9",
+}
+GRSAI_NANO2_EXTRA_ASPECT_RATIOS = {"1:4", "4:1", "1:8", "8:1"}
+
+def grsai_aspect_ratio(aspect_ratio, size, model=""):
+    """把内部比例映射成 Grsai 的 aspectRatio。
+
+    🚨 必须做白名单校验：前端历史遗留的 `9:21`（ultratall）**不在 Grsai 支持列表里**，
+    直接透传会被上游拒绝或静默忽略。不在白名单的一律按目标尺寸反推。
+    """
     value = str(aspect_ratio or "").strip().lower().replace(" ", "")
     if value == "auto":
         return "auto"
-    return value if re.fullmatch(r"\d+:\d+", value) else runninghub_aspect_from_size(size)
+    allowed = set(GRSAI_ASPECT_RATIOS)
+    if str(model or "").strip().lower().startswith("nano-banana-2"):
+        allowed |= GRSAI_NANO2_EXTRA_ASPECT_RATIOS
+    if value in allowed:
+        return value
+    return runninghub_aspect_from_size(size)
 
 def runninghub_resolution_from_size(size, fallback="2k"):
     width, height = parse_size_pair(size)
@@ -14673,7 +14781,7 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 "model": model,
                 "prompt": prompt,
                 "images": [reference_to_data_url(ref, max_size=ref_image_max_size(len(_grsai_refs))) for ref in _grsai_refs],
-                "aspectRatio": grsai_aspect_ratio(aspect_ratio, size),
+                "aspectRatio": grsai_aspect_ratio(aspect_ratio, size, model),
                 "imageSize": grsai_image_size(resolution, size),
                 "replyType": "json",
             }
@@ -17787,6 +17895,37 @@ async def fetch_upstream_models(provider_id: str):
         raise HTTPException(status_code=400, detail=f"{provider.get('name') or provider_id} 未配置 API Key")
     return await fetch_models_from_upstream(provider.get("base_url") or "", api_key, provider_protocol(provider), provider.get("image_request_mode") or "openai")
 
+@app.get("/api/providers/grsai-models")
+async def grsai_models_preset():
+    """Grsai 当前可用模型清单，供前端「新建通道」的预设使用。
+
+    🚨 为什么需要这个端点：Grsai **没有** `/models` 接口，web 侧的
+    `/api/providers/{id}/fetch-models` 对它无效（实测 /v1/models、/v1/api/models 等全 404）。
+    真正能拿到清单的是**启动器** —— `launcher/Program.cs:RefreshGrsaiModelsAsync()`
+    每次启动都会联网抓 Grsai 官方文档页，并「只增不减」地写回 `data/api_providers.json`。
+
+    所以这里直接读**已保存的 Grsai 通道**：启动器更新过之后，前端据此刷新静态预设，
+    Grsai 上新模型就**不用再改代码**。找不到已保存通道时返回 ok=false，前端沿用静态预设兜底。
+    """
+    try:
+        for item in load_api_providers() or []:
+            if not isinstance(item, dict):
+                continue
+            blob = f"{item.get('name') or ''} {item.get('base_url') or ''}".lower()
+            if "grsai" not in blob:
+                continue
+            return {
+                "ok": True,
+                "source": "saved",
+                "provider_id": item.get("id") or "",
+                "image_models": item.get("image_models") or [],
+                "chat_models": item.get("chat_models") or [],
+                "video_models": item.get("video_models") or [],
+            }
+    except Exception as exc:
+        print(f"[providers] 读取 Grsai 预设失败: {exc}")
+    return {"ok": False, "source": "none", "image_models": [], "chat_models": [], "video_models": []}
+
 # ============================================================================
 # 遮罩局部重绘（裁切 → 生成 → 回贴）
 #
@@ -19211,6 +19350,86 @@ async def generate_agnes_video(client, payload, provider, base_url, requested_mo
     local_urls = [await save_remote_video_to_output(url) for url in urls]
     return {"videos": local_urls, "task_id": task_id or video_id, "video_id": video_id or None, "raw": result}
 
+async def wait_for_grsai_video_task(client, provider, base_url, task_id, model):
+    """轮询 Grsai 异步结果：`GET /v1/api/result?id=<task_id>`。"""
+    deadline = time.monotonic() + VIDEO_POLL_TIMEOUT
+    delay = 5.0
+    last = {}
+    query = f"{base_url}/v1/api/result"
+    while time.monotonic() < deadline:
+        await asyncio.sleep(delay)
+        response = await client.get(
+            query,
+            params={"id": task_id},
+            headers=api_headers(provider=provider, model=model),
+        )
+        if response.status_code >= 400:
+            last = {"status": "failed", "error": (response.text or "")[:300]}
+            break
+        last = response.json() or {}
+        status = str(last.get("status") or "").strip().lower()
+        if status in {"succeeded", "failed", "violation"}:
+            break
+        delay = min(10.0, delay + 1.0)
+    if str(last.get("status") or "").strip().lower() != "succeeded":
+        raise HTTPException(status_code=502, detail=f"Grsai 视频任务失败：{last.get('error') or last}")
+    return last
+
+async def generate_grsai_video(client, payload, provider, base_url, requested_model):
+    """Grsai 视频：`POST /v1/api/generate`（replyType=async）+ 轮询 `/v1/api/result`。
+
+    🚨 不能复用 `generate_agnes_video`：那个打的是 `/v1/videos` + `width/height/num_frames`，
+    而 Grsai 没有这个接口（实测 404）——它的视频和图片共用 `/v1/api/generate`，
+    参数是 `aspectRatio / resolution / duration / replyType`。
+
+    🚨 两个模型参数域不同（见 `GRSAI_VIDEO_SPECS`）：
+    · minimax-h3 的 aspectRatio **只认 portrait / landscape**；
+    · agnes-video-2.5 的 resolution 支持 2k，但**没有 9:21**。
+    """
+    spec = GRSAI_VIDEO_SPECS.get(str(requested_model or "").strip().lower())
+    if not spec:
+        raise HTTPException(status_code=400, detail=f"Grsai 不支持的视频模型：{requested_model}")
+    resolution = grsai_video_resolution(spec, payload.resolution)
+    low, high = spec["duration"]
+    # 上限按分辨率收窄：minimax-h3 的 1080p 只到 10 秒（文档 2026-10-19 核对）
+    high = min(high, spec.get("duration_by_resolution", {}).get(resolution, high))
+    duration = max(low, min(high, int(payload.duration or low)))
+    body = {
+        "model": requested_model,
+        "prompt": str(payload.prompt or ""),
+        "aspectRatio": grsai_video_aspect(spec, payload.aspect_ratio, payload.size),
+        "resolution": resolution,
+        "duration": duration,
+        "replyType": "async",
+    }
+    images = []
+    for ref in (payload.images or [])[: spec["max_images"]]:
+        url = await agnes_video_image_url(ref)
+        if url:
+            images.append(url)
+    if images:
+        body["images"] = images
+    audios = [str(a or "").strip() for a in (payload.audios or []) if str(a or "").strip()][:3]
+    if audios:
+        body["audios"] = audios
+    if payload.seed is not None:
+        body["seed"] = payload.seed
+
+    submit_url = f"{base_url}/v1/api/generate"
+    headers = api_headers(provider=provider, model=requested_model)
+    response = await client.post(submit_url, headers=headers, json=body)
+    response.raise_for_status()
+    raw = response.json()
+    task_id = str(raw.get("id") or "").strip()
+    result = raw
+    if task_id and not video_output_urls(raw):
+        result = await wait_for_grsai_video_task(client, provider, base_url, task_id, requested_model)
+    urls = video_output_urls(result)
+    if not urls:
+        raise HTTPException(status_code=502, detail=f"Grsai 视频生成成功但没有返回视频：{result}")
+    local_urls = [await save_remote_video_to_output(url) for url in urls]
+    return {"videos": local_urls, "task_id": task_id, "raw": result}
+
 # ---- 玉玉API（yuli.host）OpenAI 视频格式：/v1/videos（multipart，支持 seconds 时长）----
 def _yuli_model_norm(model: str) -> str:
     return str(model or "").strip().lower().replace("_", "").replace(".", "").replace("-", "")
@@ -19732,6 +19951,18 @@ async def canvas_video(payload: CanvasVideoRequest):
             log_net_error(f"视频(土豆) 网络/TLS错误 model={requested_model}", exc)
             raise HTTPException(status_code=502, detail=f"请求土豆视频接口失败：{exc}") from exc
     is_veo31 = is_apimart and is_apimart_veo31_model(requested_model)
+    # 🚨 Grsai 视频**必须**在 is_agnes 之前拦截：`is_agnes_provider(provider, model)` 只看模型名，
+    #    会把 agnes-video-2.5 误判成「直连 Agnes」，从而走 /v1/videos —— Grsai 没有这个接口（404）。
+    if is_grsai_video_model(requested_model) and is_grsai_provider(provider):
+        try:
+            async with httpx.AsyncClient(timeout=VIDEO_POLL_TIMEOUT) as grsai_video_client:
+                return await generate_grsai_video(grsai_video_client, payload, provider, base_url, requested_model)
+        except httpx.HTTPStatusError as exc:
+            text = exc.response.text
+            raise HTTPException(status_code=exc.response.status_code, detail=f"Grsai 视频接口错误：{text}") from exc
+        except httpx.HTTPError as exc:
+            log_net_error(f"视频(Grsai) 网络/TLS错误 model={requested_model}", exc)
+            raise HTTPException(status_code=502, detail=f"请求 Grsai 视频接口失败：{exc}") from exc
     if is_agnes:
         try:
             async with httpx.AsyncClient(timeout=VIDEO_POLL_TIMEOUT) as agnes_client:
