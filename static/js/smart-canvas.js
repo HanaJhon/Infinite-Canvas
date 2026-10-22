@@ -87,6 +87,30 @@ const agentAttachRow = document.getElementById('agentAttachRow');
 const agentAttachBtn = document.getElementById('agentAttachBtn');
 const agentImageInput = document.getElementById('agentImageInput');
 const agentInput = document.getElementById('agentInput');
+// ============================================================================
+// Agent 输入框：contenteditable + .value/.disabled 兼容垫片
+// 🚨 为什么必须换成 contenteditable：老板要求附件「直接内嵌到文案中」，
+//    而 <textarea> 里塞不了 DOM，胶囊只能挂在输入框外面。
+// 🚨 垫片的意义：全项目有 20+ 处 `agentInput.value = x` / `=== ''` / `.disabled = y`，
+//    有了 getter/setter 就一处都不用改（改 20 处必漏，漏一处就是静默丢内容）。
+// ============================================================================
+(function installAgentInputShims(){
+    if(!agentInput || agentInput.dataset.shimmed === '1') return;
+    agentInput.dataset.shimmed = '1';
+    Object.defineProperty(agentInput, 'value', {
+        configurable: true,
+        get(){ return agentInputPlainText(); },
+        set(v){ agentInputSetText(v); }
+    });
+    Object.defineProperty(agentInput, 'disabled', {
+        configurable: true,
+        get(){ return agentInput.getAttribute('contenteditable') === 'false'; },
+        set(v){
+            agentInput.setAttribute('contenteditable', v ? 'false' : 'true');
+            agentInput.classList.toggle('is-disabled', Boolean(v));
+        }
+    });
+})();
 const agentSendBtn = document.getElementById('agentSendBtn');
 const promptPresetPanel = document.getElementById('promptPresetPanel');
 const promptPresetClose = document.getElementById('promptPresetClose');
@@ -2848,6 +2872,30 @@ function viewportCenter(){
         y:(shell.clientHeight / 2 - viewport.y) / viewport.scale
     };
 }
+// ---------------------------------------------------------------------------
+// 新增节点自动对焦（把节点中心挪到视口中心）
+// 🚨 用「节点 id 集合差异」判断新增，而不是在 18 处 nodes.push 各加一行 ——
+//    漏一处就有一个入口不对焦，而且创建菜单 / Agent 产物 / 分组 / 拆分走的路径完全不同。
+// 🚨 两种场景必须屏蔽，否则画面会乱跳：
+//    ① 撤销（performUndo）会把节点"重新加回来"，看起来也是新增；
+//    ② 载入画布时所有节点都是"新的"（在 loadCanvas 里把 baseline 清空即可）。
+// ---------------------------------------------------------------------------
+let focusNewNodeBaseline = null;
+function focusNodeInViewport(node){
+    if(!node || !shell || !shell.clientWidth) return;
+    const rect = nodeRect(node);
+    viewport.x = Math.round(shell.clientWidth / 2 - (rect.x + rect.width / 2) * viewport.scale);
+    viewport.y = Math.round(shell.clientHeight / 2 - (rect.y + rect.height / 2) * viewport.scale);
+    applyViewport();
+}
+function maybeFocusNewNode(){
+    const ids = new Set(nodes.map(n => n.id));
+    if(focusNewNodeBaseline && !undoSuppressed){
+        const added = nodes.filter(n => !focusNewNodeBaseline.has(n.id));
+        if(added.length) focusNodeInViewport(added[added.length - 1]);
+    }
+    focusNewNodeBaseline = ids;
+}
 function renderMinimap(){
     if(!minimapContent || !minimapViewport) return;
     const hasSelected = selectedNodeIds().length > 0;
@@ -3527,6 +3575,69 @@ function apiImageSize(ratioValue, resolutionValue, customRatioValue='', customSi
     const ratioKey = ratioValue && SIZE_MAP[ratioValue] ? ratioValue : 'square';
     return SIZE_MAP[ratioKey]?.[resolutionKey] || SIZE_MAP.square[resolutionKey] || SIZE_MAP.square['1k'];
 }
+/* gpt-image-2 家族的**官方尺寸表**（2026-10-21 老板提供文档截图）。
+   适用：gpt-image-2 / gpt-image-2-vip / gpt-image-2.5 / gpt-image-2.5-flare / gpt-image-2.5-sunburst。
+   🚨 关键事实：这家族的「4K」**不是 4096** —— 1:1 的 4K 就是 **2880×2880**（≈829 万像素，正好是它的上限）。
+      以前直接套通用 SIZE_MAP（1:1 4K = 4096×4096）再等比缩：结果虽然能出图，但
+      3:2 会算成 3520×2352（官方是 3504×2336）、2K 的 4:3 会算成 2048×1536（官方 2304×1728）——
+      尺寸不是官方值，等于让上游按规则外的东西去猜。所以要**直接查表**。
+   🚨 少数比例官方只给两档（1:3 / 3:1）→ 取 index 时 clamp 到最后一档。 */
+const GPT_IMAGE_FAMILY_SIZES = {
+    '1:1' : ['1024x1024', '2048x2048', '2880x2880'],
+    '16:9': ['1280x720',  '2048x1152', '3840x2160'],
+    '9:16': ['720x1280',  '1152x2048', '2160x3840'],
+    '4:3' : ['1152x864',  '2304x1728', '3264x2448'],
+    '3:4' : ['864x1152',  '1728x2304', '2448x3264'],
+    '3:2' : ['1536x1024', '2048x1360', '3504x2336'],
+    '2:3' : ['1024x1536', '1360x2048', '2336x3504'],
+    '5:4' : ['1120x896',  '2240x1792', '3200x2560'],
+    '4:5' : ['896x1120',  '1792x2240', '2560x3200'],
+    '21:9': ['1456x624',  '2912x1248', '3840x1648'],
+    '9:21': ['624x1456',  '1248x2912', '1648x3840'],
+    '1:3' : ['688x2048',  '1280x3840'],
+    '3:1' : ['2048x688',  '3840x1280'],
+    '2:1' : ['1536x768',  '3072x1536', '3840x1920'],
+    '1:2' : ['768x1536',  '1536x3072', '1920x3840']
+};
+/* 按「比例 key（SIZE_MAP 那套）+ 分辨率档」查官方尺寸；查不到返回空串，交回通用逻辑。 */
+function gptImageFamilySize(ratioKey, resolutionValue){
+    const res = String(resolutionValue || '1k').toLowerCase();
+    if(res === 'auto') return 'auto';
+    const ratio = API_RATIO_VALUES[ratioKey]
+        || (String(ratioKey || '').includes(':') ? String(ratioKey) : '');
+    const arr = ratio ? GPT_IMAGE_FAMILY_SIZES[ratio] : null;
+    if(!arr || !arr.length) return '';
+    const idx = {'1k':0, '2k':1, '4k':2}[res];
+    if(idx === undefined) return '';
+    return arr[Math.min(idx, arr.length - 1)];
+}
+/* 尺寸护栏（2026-10-21）：模型有硬性尺寸上限时，**在出图前就压到合规范围**，
+   别等上游报错再把红字甩给老板。
+   🚨 为什么必须前置：agent 默认 resolution='4k'，方图 1:1 + 4K = 4096×4096 = 1677 万像素，
+      GPT-Image-2 上限只有 829 万 ⇒ **必然失败**，而且失败后整条任务就断了。
+   🚨 后端 `normalize_gpt_image_2_size()` 早就有同样的算法，但只在「在线生图」的参数默认值里用过，
+      画布 agent 这条路一次都没调 —— 两边算法必须保持一致（16 对齐、等比缩、长边≤3840）。 */
+const GPT_IMAGE2_MAX_EDGE = 3840;
+const GPT_IMAGE2_MAX_PIXELS = 8294400;
+function agentGuardGenSize(size, model){
+    const raw = String(size || '').trim();
+    if(!raw || raw.toLowerCase() === 'auto') return {size:raw, note:''};
+    /* 只对「已知上限」的模型动手。别的模型（nano-banana 等）确实能吃 4K，
+       压了反而降质 —— 不许为了保险一刀切。 */
+    if(!isGptImageAutoSizeModel(model)) return {size:raw, note:''};
+    const m = raw.match(/^(\d+)\s*[xX*]\s*(\d+)$/);
+    if(!m) return {size:raw, note:''};
+    const w = Number(m[1]), h = Number(m[2]);
+    if(!w || !h) return {size:raw, note:''};
+    if(Math.max(w, h) <= GPT_IMAGE2_MAX_EDGE && w * h <= GPT_IMAGE2_MAX_PIXELS) return {size:raw, note:''};
+    const scale = Math.min(1, GPT_IMAGE2_MAX_EDGE / Math.max(w, h), Math.sqrt(GPT_IMAGE2_MAX_PIXELS / (w * h)));
+    const nw = Math.max(16, Math.floor(w * scale / 16) * 16);
+    const nh = Math.max(16, Math.floor(h * scale / 16) * 16);
+    return {
+        size:`${nw}x${nh}`,
+        note:`${raw} 超出 ${model} 的上限（长边≤${GPT_IMAGE2_MAX_EDGE}、≤${Math.round(GPT_IMAGE2_MAX_PIXELS / 10000)}万像素），已自动按 ${nw}×${nh} 生成`
+    };
+}
 function normalizeApiSizeSettings(prefix=''){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
     const resKey = prefix ? `${prefix}Resolution` : 'resolution';
@@ -4148,8 +4259,20 @@ function renderSizePickerControl(prefix='', includeSource=false){
             </div>
             ${scope === 'auto' ? `<div class="size-picker-pane size-picker-auto"><div class="size-picker-note"><strong>自动尺寸</strong><span>使用模型默认尺寸，或由支持自动尺寸的模型自行决定。</span></div></div>` : ''}
             ${scope === 'preset' ? `<div class="size-picker-pane size-picker-preset">
-                <div class="size-picker-list">
-                    ${ratios.map(([value, label, sub]) => `<button type="button" class="size-picker-option ${value === currentRatio ? 'active' : ''}" data-smart-param="${ratioKey}" data-smart-value="${escapeHtml(value)}"><span>${escapeHtml(label)}</span><small>${escapeHtml(sub)}</small></button>`).join('')}
+                <div class="size-picker-list size-picker-ratios">
+                    ${ratios.map(([value, label, sub]) => {
+                        /* 🚨 比例改成**圆角矩形卡片**（2026-10-22 老板：跟 agent 尺寸面板一致）。
+                           原来是一行文字「1:1  正方形」，现在图标按真实宽高比画出来，
+                           「正方形/竖图/横图」退到 title 里（鼠标悬停可见）。 */
+                        let _st = 'width:18px;height:18px';
+                        const _m = /^(\d+):(\d+)$/.exec(String(label));
+                        if(_m){
+                            const _w = Number(_m[1]), _h = Number(_m[2]);
+                            const _sh = Math.max(6, Math.round(18 * Math.min(_w, _h) / Math.max(_w, _h)));
+                            _st = _w >= _h ? `width:18px;height:${_sh}px` : `width:${_sh}px;height:18px`;
+                        }
+                        return `<button type="button" class="size-picker-option ${value === currentRatio ? 'active' : ''}" data-smart-param="${ratioKey}" data-smart-value="${escapeHtml(value)}" title="${escapeHtml(sub || label)}"><span class="size-picker-ratio-icon" style="${_st}"></span><span class="size-picker-ratio-label">${escapeHtml(label)}</span></button>`;
+                    }).join('')}
                 </div>
                 <div class="size-picker-list">
                     ${options.filter(v => v !== 'auto').map(value => `<button type="button" class="size-picker-option ${value === currentRes ? 'active' : ''}" data-smart-param="${resKey}" data-smart-value="${value}"><span>${value.toUpperCase()}</span><small>${currentRatio === 'auto' ? '' : escapeHtml(apiImageSize(currentRatio, value, currentCustomRatio, '') || '')}</small></button>`).join('')}
@@ -6968,6 +7091,8 @@ async function loadCanvas(){
         if(settings.comfy_workflow && !settings.comfyWorkflow) settings.comfyWorkflow = settings.comfy_workflow;
         if(settings.comfy_params && !settings.comfyParams) settings.comfyParams = settings.comfy_params;
         updateProviderModels();
+        // 载入画布时所有节点都是"新的"，先把对焦基线清空，避免一开画布就飘到最后一个节点
+        focusNewNodeBaseline = null;
         applyViewport();
         render();
         if(cleanedDetachedInputs || cleanedCompletedState || recoveredLoopOutputs || hiddenCompletedTimers) scheduleSave();
@@ -7216,6 +7341,20 @@ function cloneSmartNode(node, dx=0, dy=0){
     if(copy.type === 'smart-group') copy.title = copy.title || '智能分组';
     return copy;
 }
+// 复制节点 → 写进剪贴板的可读文本（也是「粘贴到小抽AI」时的识别依据）
+function agentNodeClipboardText(nodeList){
+    const list = Array.isArray(nodeList) ? nodeList : [];
+    if(!list.length) return '';
+    const lines = list.map(n => {
+        const type = n.type || 'smart-image';
+        const imgs = (n.images || []).filter(i => i?.url).length;
+        const bits = [`「${String(n.title || '').slice(0, 40) || '(未命名)'}」type=${type} 位置(${Math.round(n.x || 0)},${Math.round(n.y || 0)})`];
+        if(n.type === 'smart-prompt' && n.text) bits.push(`内容：${String(n.text).slice(0, 500)}`);
+        if(imgs) bits.push(`含 ${imgs} 张图`);
+        return `- ${bits.join(' ')}`;
+    });
+    return `${AGENT_NODE_CLIP_MARKER}\n${lines.join('\n')}`;
+}
 function copySelectedNodes(){
     if(!canvas || isEditableTarget(document.activeElement)) return;
     const ids = selectedNodeIds();
@@ -7227,8 +7366,27 @@ function copySelectedNodes(){
         nodes:JSON.parse(JSON.stringify(copiedNodes)),
         connections:JSON.parse(JSON.stringify(copiedConnections))
     };
+    // 兜底写一次（部分环境 navigator.clipboard 不可用，真正的写入由下面 document 的 copy 事件保证）
+    try { navigator.clipboard?.writeText?.(agentNodeClipboardText(copiedNodes)).catch(() => {}); } catch(e) {}
     toast(`已复制 ${copiedNodes.length} 个节点`);
 }
+// 🚨 用原生 copy 事件写剪贴板：同步、无权限要求。
+//    只靠 navigator.clipboard.writeText 在 WebView/无安全上下文时会静默失败，
+//    粘贴时拿不到 AGENT_NODE_CLIP_MARKER 就分不清「节点」和「普通文本」。
+document.addEventListener('copy', e => {
+    if(isEditableTarget(e.target)) return;          // 输入框里复制文字，不拦
+    // 用户框选了文字（比如提示词节点里的正文）→ 让他复制文字，别塞节点说明
+    const sel = window.getSelection?.();
+    if(sel && !sel.isCollapsed && String(sel).trim()) return;
+    const list = selectedNodeIds().map(id => nodes.find(n => n.id === id)).filter(Boolean);
+    if(!list.length) return;
+    const text = agentNodeClipboardText(list);
+    if(!text) return;
+    try {
+        e.clipboardData?.setData('text/plain', text);
+        e.preventDefault();
+    } catch(err) { /* 写不进就沿用 navigator.clipboard 的兜底 */ }
+});
 function pasteNodes(){
     if(!canvas || !nodeClipboard?.nodes?.length || isEditableTarget(document.activeElement)) return;
     lastNodePasteAt = Date.now();
@@ -11204,6 +11362,47 @@ function duplicateSmartNodeMediaToCanvas(node, imageIndex){
     scheduleSave();
     toast('已添加到画布');
 }
+/* 把一个画布节点「发送至 Agent」：图片/视频 → 参考图附件；文档/表格/压缩包/文本 → 文档附件。
+   2026-10-20 起这也是「复制节点 → 粘到输入框」的默认行为（老板要求：不再生成 [节点:xxx] 引用，
+   直接等同于点节点工具栏的「发送至 Agent」）。返回给用户看的提示语，空串表示不用提示。 */
+function agentSendNodeToAgent(node, index){
+    if(!agentState || !node) return '';
+    const idx = Number.isFinite(Number(index)) ? Number(index) : smartNodeToolbarImageIndex(node);
+    const raw = (node.images || [])[idx] || (node.images || []).find(im => im?.url);
+    const item = imageForDisplay(raw);
+    if(!item?.url) return '';
+    let kind = mediaKindForItem(item);
+    /* 老数据 / 手工构造的附件条目可能没有 kind 字段 ⇒ 会被当成图片塞进参考图（PDF 当参考图必然报错）。
+       只对**明确的文档扩展名**降级，不动那些无扩展名但其实是图片的 URL。 */
+    if(kind === 'image' && /\.(pdf|docx?|xlsx?|pptx?|zip|rar|7z|txt|md|csv|json|srt|vtt)(\?|$)/i.test(String(item.name || item.url || ''))){
+        kind = 'file';
+    }
+    if(kind !== 'image' && kind !== 'video'){
+        const docItem = (node.images || [])[idx] || item;
+        const added = agentAddDocumentRefs([{
+            url:docItem.url,
+            name:docItem.name || node.title || 'file',
+            kind:mediaKindForItem(docItem) === 'text' ? 'text' : 'file',
+            nodeId:node.id,
+            x:Number(node.x) || 0,
+            y:Number(node.y) || 0
+        }]);
+        if(added) return '已发送至 Agent';
+        return (agentState.documents || []).some(d => d.url === docItem.url) ? '附件已存在' : `最多携带 ${AGENT_DOC_MAX} 个附件`;
+    }
+    if(!Array.isArray(agentState.attachments)) agentState.attachments = [];
+    const genProv = agentGenProviders().some(p => p.id === agentState.genProvider) ? agentState.genProvider : (agentGenProviders()[0]?.id || '');
+    const refMax = genProv ? providerMaxReferenceImages(genProv) : AGENT_LLM_IMAGE_MAX;
+    if(agentState.attachments.some(a => a.url === item.url)) return '附件已存在';
+    if(agentState.attachments.length >= refMax){
+        const pName = apiProviderById(genProv)?.name || genProv;
+        return `当前生图平台 ${pName} 最多支持 ${refMax} 张参考图，已达上限`;
+    }
+    agentState.attachments.push({url:item.url, name:item.name || node.title || 'image', nodeId:node.id, x:Number(node.x) || 0, y:Number(node.y) || 0});
+    renderAgentAttachments();
+    saveAgentState();
+    return '已发送至 Agent';
+}
 function runSmartNodeToolbarAction(nodeId, action){
     const node = nodes.find(n => n.id === nodeId);
     if(!node) return;
@@ -11215,38 +11414,10 @@ function runSmartNodeToolbarAction(nodeId, action){
     selectedIds = [];
     selectedImage = {nodeId, index};
     if(action === 'sendToAgent'){
-        // 发送图片到 Agent 面板作为附件
+        // 发送图片/文件到 Agent 面板作为附件（与复制粘贴走同一套逻辑）
         if(!agentOpen) toggleAgentPanel(true);
-        if(agentState){
-            // 附件节点：非图片（文档 / 表格 / 压缩包 / 文本…）走「文档附件」，图片 / 视频仍走参考图附件
-            if(kind !== 'image' && kind !== 'video'){
-                const docItem = node.images?.[index] || item;
-                const added = agentAddDocumentRefs([{
-                    url:docItem.url,
-                    name:docItem.name || node.title || 'file',
-                    kind:mediaKindForItem(docItem) === 'text' ? 'text' : 'file',
-                    nodeId:node.id,
-                    x:Number(node.x) || 0,
-                    y:Number(node.y) || 0
-                }]);
-                toast(added ? '已发送至 Agent' : (agentState.documents.some(d => d.url === docItem.url) ? '附件已存在' : `最多携带 ${AGENT_DOC_MAX} 个附件`));
-                return;
-            }
-            if(!Array.isArray(agentState.attachments)) agentState.attachments = [];
-            const _genProv = agentGenProviders().some(p => p.id === agentState.genProvider) ? agentState.genProvider : (agentGenProviders()[0]?.id || '');
-            const _refMax = _genProv ? providerMaxReferenceImages(_genProv) : AGENT_LLM_IMAGE_MAX;
-            if(agentState.attachments.length < _refMax && !agentState.attachments.some(a => a.url === item.url)){
-                agentState.attachments.push({url:item.url, name:item.name || node.title || 'image', nodeId:node.id, x:Number(node.x) || 0, y:Number(node.y) || 0});
-                renderAgentAttachments();
-                saveAgentState();
-                toast('已发送至 Agent');
-            } else if(agentState.attachments.length >= _refMax){
-                const _pName = apiProviderById(_genProv)?.name || _genProv;
-                toast(`当前生图平台 ${_pName} 最多支持 ${_refMax} 张参考图，已达上限`);
-            } else {
-                toast('附件已存在');
-            }
-        }
+        const msg = agentSendNodeToAgent(node, index);
+        if(msg) toast(msg);
         return;
     }
     if(action === 'download'){
@@ -13692,6 +13863,7 @@ function render(){
     syncSmartSelectedImageResolution(world);
     measureSmartNodeImages();
     refreshRunTimerPills();
+    maybeFocusNewNode();
     return;
     world.innerHTML = '';
     if(composerEl) world.appendChild(composerEl);
@@ -15827,6 +15999,7 @@ function setImageEditMode(mode, userTouched=false){
     const prev = imageEditMode;
     if(mode !== 'brush') removeEditTextInlineEditor(true);
     imageEditMode = ['preview','crop','outpaint','mask','brush','resize','grid'].includes(mode) ? mode : 'preview';
+    hideBrushCursor();   // 切模式可能就不该有圆环了，先收掉，下次 pointermove 自会按新模式决定
     const cropCanvasEl = document.getElementById('cropCanvas');
     const previewStageEl = document.getElementById('previewStage');
     const editStageEl = document.getElementById('imageEditStage');
@@ -16722,6 +16895,54 @@ function editDrawPoint(event){
     const canvasEl = editDrawCanvas();
     const rect = canvasEl.getBoundingClientRect();
     return {x:(event.clientX - rect.left) * canvasEl.width / Math.max(1, rect.width), y:(event.clientY - rect.top) * canvasEl.height / Math.max(1, rect.height)};
+}
+/* ── 画笔圆环光标（2026-10-20 老板要求）────────────────────────────────────
+   涂遮罩时在画面上用圆环标出**实际笔触粗细**，不然只能凭手感猜，涂细节很容易糊过头。
+   🚨 圆环必须按**屏幕像素**算：画布内部坐标要乘 `rect.width / canvas.width`。
+      直接用 editBrushSize() 当 CSS 尺寸，图片一缩放圆环就和真实笔触对不上了。
+   🚨 双层描边（内深外浅）：遮罩是半透明白，浅色底图上白圈会看不见。 */
+function brushCursorActive(){
+    return imageEditMode === 'mask' || (imageEditMode === 'brush' && brushTool === 'free');
+}
+let lastBrushCursorPoint = null;
+function ensureBrushCursorEl(){
+    let el = document.getElementById('editBrushCursor');
+    if(el) return el;
+    el = document.createElement('div');
+    el.id = 'editBrushCursor';
+    el.setAttribute('aria-hidden', 'true');
+    el.style.cssText = 'position:fixed;left:0;top:0;z-index:9999;pointer-events:none;'
+        + 'border-radius:50%;display:none;box-sizing:border-box;'
+        + 'border:1px solid rgba(0,0,0,.8);box-shadow:0 0 0 1px rgba(255,255,255,.95),inset 0 0 0 1px rgba(255,255,255,.6);';
+    document.body.appendChild(el);
+    return el;
+}
+function syncBrushCursor(event){
+    const el = ensureBrushCursorEl();
+    if(!brushCursorActive()){ el.style.display = 'none'; return; }
+    const canvasEl = editDrawCanvas();
+    if(!canvasEl || !canvasEl.width){ el.style.display = 'none'; return; }
+    const rect = canvasEl.getBoundingClientRect();
+    if(!rect.width){ el.style.display = 'none'; return; }
+    const cx = Number(event.clientX ?? event.x) || 0;
+    const cy = Number(event.clientY ?? event.y) || 0;
+    const scale = rect.width / Math.max(1, canvasEl.width);
+    const d = Math.max(6, editBrushSize() * scale);
+    el.style.width = d + 'px';
+    el.style.height = d + 'px';
+    el.style.left = (cx - d / 2) + 'px';
+    el.style.top = (cy - d / 2) + 'px';
+    el.style.display = 'block';
+    // 记下来：拖滑块改粗细时鼠标没动，也能立刻按新值重画
+    lastBrushCursorPoint = {x:cx, y:cy};
+}
+function hideBrushCursor(){
+    const el = document.getElementById('editBrushCursor');
+    if(el) el.style.display = 'none';
+    lastBrushCursorPoint = null;
+}
+function refreshBrushCursorSize(){
+    if(lastBrushCursorPoint) syncBrushCursor(lastBrushCursorPoint);
 }
 function gridCustomLineHit(point){
     const canvasEl = editDrawCanvas();
@@ -17731,6 +17952,7 @@ function openImageEditor(nodeId, imageIndex=0){
 }
 function closeImageEditor(){
     cleanupSmartLogPreviewNode();
+    hideBrushCursor();   // 编辑器关掉时圆环要一起收走，否则会飘在画布上
     imageEditModal.classList.remove('open');
     document.querySelector('.image-edit-panel')?.classList.remove('video-preview-mode');
     const img = document.getElementById('cropImage');
@@ -17972,6 +18194,58 @@ function validNodeInpaint(node, imageIndex=null){
     // 原图被替换 / 删除 / 换序 → 遮罩已经对不上位置，直接视为失效
     if(!current?.url || current.url !== key) return null;
     return {...meta, index};
+}
+/* 重绘完成后把遮罩「迁到新图上」（2026-10-20 老板要求：别自动清掉遮罩痕迹）。
+   🚨 为什么不能只把 delete 删掉就算了：
+      agent 的局部重绘是**原地改**，结果会顶掉 node.images，
+      于是原图的 base_key 再也对不上 ⇒ validNodeInpaint 恒返回 null，
+      「不清」也等于清了（遮罩直接看不见）。
+   ⇒ 必须用**新图 + 原遮罩**重跑一次 image-mask-prepare，让遮罩落到新图上。
+      尺寸能对上：回贴保证输出 == 原图尺寸，mask 依然对齐。
+   失败就返回 null，调用方保留旧 inpaint 不动 —— 用户重涂即可，不会更糟。 */
+async function rebaseInpaintOnImage(node, index, maskUrl, feather){
+    if(!node || !maskUrl) return null;
+    const image = (node.images || [])[index];
+    if(!image?.url) return null;
+    try{
+        const baseUrl = await ensureLocalAssetUrl(image);
+        if(!baseUrl) return null;
+        const body = {image_url:baseUrl, mask_url:maskUrl};
+        if(Number(feather) > 0) body.feather = Math.round(Number(feather));
+        const res = await fetch('/api/image-mask-prepare', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(body)
+        });
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok || !data?.crop_url || !data?.crop_mask_url) return null;
+        return {
+            index,
+            base_url:data.base_url || '',
+            base_key:(node.images || [])[index]?.url || data.base_url || '',
+            base_name:data.base_name || '',
+            mask_url:data.mask_url || maskUrl,
+            crop_url:data.crop_url,
+            crop_mask_url:data.crop_mask_url,
+            overlay_url:data.overlay_url || '',
+            bbox:Array.isArray(data.bbox) ? data.bbox : [],
+            base_w:Number(data.base_w || 0),
+            base_h:Number(data.base_h || 0),
+            aspect_ratio:data.aspect_ratio || '',
+            size:data.size || '',
+            feather:Number(data.feather || 0),
+            created_at:Date.now()
+        };
+    }catch(e){
+        console.warn('[inpaint] 遮罩迁移到新图失败（保留原状态，用户可重涂）:', e);
+        return null;
+    }
+}
+// 原地重绘后调用：把遮罩接到新图上，而不是粗暴清掉
+async function keepInpaintAfterRun(node, prevMeta){
+    if(!node || !prevMeta) return;
+    const index = Number.isFinite(Number(prevMeta.index)) ? Math.max(0, Math.round(Number(prevMeta.index))) : 0;
+    const next = await rebaseInpaintOnImage(node, index, prevMeta.mask_url, prevMeta.feather);
+    if(next) node.inpaint = next;
 }
 /* 有有效遮罩时禁用 LLM 提示词扩写。
    🚨 为什么必须禁用：遮罩局部重绘送上游的是「裁切局部图 + 遮罩 + 用户自己选的其它参考图」，
@@ -21684,7 +21958,8 @@ async function runGeneration(){
             }
             if(!(pendingNode.images || []).length) throw new Error(tr('smart.errNoOutImages'));
             if(outpaintSize) delete node.outpaintSize;
-        if(inpaintMeta) delete node.inpaint;
+            /* 遮罩**不清**（2026-10-20 老板要求）：重绘结果落在新分支节点上，原节点连图带遮罩原样留着，
+               老板可以继续在同一块上反复改。只有手动点遮罩角标 ×、或明确要求 Agent 清除时才清。 */
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             addSmartGenerationLog({run:runLog, outputs:pendingNode.images || [], runMs:nowMs() - runLogStart});
             clearPromptInput({preserveDraft:true});
@@ -21694,7 +21969,7 @@ async function runGeneration(){
         }
         if(!outImages.length) throw new Error(tr('smart.errNoOutImages'));
         if(outpaintSize) delete node.outpaintSize;
-        if(inpaintMeta) delete node.inpaint;
+        // 遮罩不清：原节点保留图 + 遮罩，结果另起一个分支节点（同上）
         finalizePendingNode(pendingNode, outImages, pendingMeta);
         if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
         addSmartGenerationLog({run:runLog, outputs:outImages, runMs:nowMs() - runLogStart});
@@ -23403,6 +23678,52 @@ function applyAgentCanvasOps(ops){
                 deleteNode(target.id);
                 appliedCount++;
             }
+        } else if(action === 'focus_node'){
+            // 选中 + 把视口对到它（「看看这个节点」「把它挪到眼前」）
+            const target = findNodeByRef(op.id || op.target || op.title);
+            if(target){
+                selectedId = target.id;
+                selectedIds = [];
+                focusNodeInViewport(target);
+                appliedCount++;
+            }
+        } else if(action === 'group_nodes'){
+            // 把列出的节点收进一个新建智能分组（「这几个归一组」）
+            const list = (Array.isArray(op.nodes) ? op.nodes : []).map(findNodeByRef).filter(Boolean);
+            if(list.length){
+                const xs = list.map(n => Number(n.x) || 0);
+                const ys = list.map(n => Number(n.y) || 0);
+                const group = createSmartGroupNode(Math.min(...xs) - 40, Math.min(...ys) - 70, {skipUndo:true});
+                if(group){
+                    if(op.title && typeof op.title === 'string') group.title = op.title;
+                    list.forEach(n => addNodeToSmartGroup(group, n));
+                    arrangeSmartGroupMembers(group, {skipUndo:true});
+                    selectedId = group.id;
+                    appliedCount++;
+                }
+            }
+        } else if(action === 'ungroup_node'){
+            const target = findNodeByRef(op.id || op.target || op.title);
+            if(target && isSmartGroupNode(target) && ungroupNode(target.id)) appliedCount++;
+        } else if(action === 'arrange_nodes'){
+            // 按连线关系把节点排开（「整理一下」「理一理」）
+            // 🚨 没写 nodes 也不能只看当前选中：用户说「这几个图有点乱」时常常什么都没选，
+            //    那时退回**整张画布**才是他要的（整理全部），而不是静默什么都不做。
+            const list = (Array.isArray(op.nodes) ? op.nodes : []).map(findNodeByRef).filter(Boolean);
+            const seed = list.length ? list.map(n => n.id)
+                : (selectedNodeIds().length ? selectedNodeIds()
+                    : (nodes || []).filter(n => n.id !== SMART_LOG_PREVIEW_NODE_ID).map(n => n.id));
+            const ids = smartArrangeAtomicIds(seed);
+            if(ids.length >= 2 && arrangeSmartIdsByConnections(ids)) appliedCount++;
+        } else if(action === 'clear_mask' || action === 'remove_mask' || action === 'clear_inpaint'){
+            /* 老板**明确要求**清掉遮罩痕迹时才走这里（「把遮罩去掉」「清除涂抹」）。
+               🚨 平时绝不清：重绘完遮罩要留着，方便他在同一块上继续改（2026-10-20 老板要求）。
+               不写 id → 清掉所有带遮罩的节点；写了 id → 只清那个。
+               ⚠️ 这里用 delete 而不是 clearNodeInpaint()：后者会 toast + 逐个 pushUndo，
+                  一批清多个时会塞一堆撤销栈，外层已经 pushUndo 过了。 */
+            const onlyRef = op.id || op.target || op.title;
+            const targets = onlyRef ? [findNodeByRef(onlyRef)].filter(Boolean) : (nodes || []).filter(n => n && n.inpaint);
+            targets.forEach(n => { if(n && n.inpaint){ delete n.inpaint; appliedCount++; } });
         }
     });
 
@@ -24792,11 +25113,20 @@ assetPanel?.addEventListener('dragleave', e => { if(!assetPanel?.contains(e.rela
 assetPanel?.addEventListener('drop', handleAssetPanelDrop);
 // ==================== AI Agent 侧边面板 ====================
 const AGENT_STORAGE_PREFIX = 'smart_agent_v1:';
+// Skill 是**跨画布共享**的（老板要求「记忆不互通，但 SKILL 互通」）：
+// 对话/附件按 canvasId 各存各的，但挂载的 Skill 用这一把全局钥匙，切画布后照样在。
+const AGENT_SKILLS_GLOBAL_KEY = AGENT_STORAGE_PREFIX + '__skills__';
 const AGENT_SKILL_MAX_BYTES = 512 * 1024;
 const AGENT_HISTORY_MAX = 20;
 const AGENT_LLM_IMAGE_MAX = 8;
 // 附件节点：Agent 侧可携带的「非图片附件」上限（文档 / 表格 / 压缩包 / 任意格式）
 const AGENT_DOC_MAX = 8;
+// 画布节点引用上限（Ctrl+C 复制节点 → 粘贴进输入框）
+const AGENT_NODE_REF_MAX = 8;
+// 复制节点时写进系统剪贴板的文本前缀。
+// 🚨 这个前缀是「粘贴时该走节点引用还是普通文本」的唯一判据 ——
+//    只看 nodeClipboard 会误判：用户复制完节点又去别处复制了文字，粘贴就会插错东西。
+const AGENT_NODE_CLIP_MARKER = '【画布节点】';
 // 作为 Skill 载入的判定：文件名命中这几个模式（其余 .md/.txt 一律当普通附件）
 const AGENT_SKILL_FILE_RE = /^(skill|skills|skills?\.md|.*\.skill\.md)$/i;
 const AGENT_GEN_MAX_PER_MSG = 8;
@@ -24816,21 +25146,37 @@ const AGENT_FILES_INSTRUCTION = `
   {"op":"create_file_node", "url":"/output/agent/说明.md", "name":"说明.md"}
 ]`;
 const AGENT_FORMAT_INSTRUCTION = `You are an AI image-generation agent. Reply with raw JSON only (no markdown, no extra text):
-{"reply":"回复用户的话","options":[],"prompts":[],"generations":[{"prompt":"详细中文提示词","count":1,"use_last_outputs":false,"use_attachments":false}]}
+{"reply":"回复用户的话","options":[],"prompts":[],"generations":[{"prompt":"详细中文提示词","count":1,"ratio":"square","resolution":"4k","quality":"high","use_last_outputs":false,"use_attachments":false,"mask_hint":null}]}
 
 Fields: "reply"=对话回复; "options"=[{label,value}]按钮; "prompts"=待确认的中文提示词; "generations"=立即生成的图片(最多8项). "use_last_outputs":引用/修改上一轮图片时true; "use_attachments":引用/修改用户上传图时true.
 
-核心原则：能生成就生成，不要问。
-- 用户有明确主体+任何细节 → 扩写prompt并立即生成(generations)
-- 用户刚选了选项或回答了问题 → 立即生成，不要再确认
-- 请求模糊有多个方向 → 给2-4个选项(options)，用户选后立即生成
-- 关键信息缺失无法给选项 → 问1-3个短问题(reply)
-- 用户要多张不同图 → generations放多项
-- 所有prompt必须中文，包含主体/风格/构图/光线/色彩/细节/氛围
-- 文字规则：默认情况下prompt不要包含文字内容（标题、对白、台词、旁白、字幕），只描述画面视觉元素；以下情况可以包含文字：1.skill文档明确要求画面中有文字（如标题、批注、标语）；2.用户明确要求"加文字/标题/标语/配文"。当需要文字时用引号标注，如：画面顶部有文字"标题内容"
-- 用户上传角色参考图 → 后续生成保持角色一致性
-- 有skill文档时遵循其风格规则
-- 不要只问"确认要生成吗"而不给完整prompt
+"mask_hint"（局部重绘用，每条 prompt/generation 都能带）= {"target_node":"节点标题或id","bbox":[x,y,w,h]}。
+  bbox 是 0~1 归一化、相对原图左上角：x/y = 框左上角，w/h = 框宽高。
+  ★ 只在**指向画面里某个具体对象/区域**且你能指出它在哪时填（"把这只猫换成狗""去掉右下角水印"）。
+  ★ 整图改动（"改成赛博朋克风""调亮一点"）→ 不填（null）。拿不准位置 → 不填，别瞎猜。
+  🚨 该局部改却没填 mask_hint、节点又没涂遮罩 ⇒ 会退化成整图重画，画面全变。
+
+核心原则：**用户明确要求产出时才产出**。不要主动推销生成，也不要刻意引导用户去做图。
+- 什么才算「明确要求」：用户说了「画/生成/做一张/再来一张/改成/换成…」这类动作词，或者给出了明确的画面描述并要求实现。
+- 用户只是在提问、闲聊、咨询、让你分析图片、写文案 → **正常文字回答**，不要附带 generations，
+  也不要在结尾追问「需要我帮你生成一张吗」「要不要试试」。**禁止任何形式的产物推销。**
+- 需求含糊但用户确实要生成 → 先用 options 给 2-4 个方向确认，**不要直接开跑**。
+- 关键信息缺失 → 问 1-3 个短问题；用户明确说「你看着办/随便」才按默认参数直接生成。
+- 用户要多张不同图 → generations 放多项。
+- 不要为了「有产出」而编造用户没提过的画面内容。
+- 所有 prompt 必须中文，包含主体/风格/构图/光线/色彩/细节/氛围。
+- 文字规则：默认情况下 prompt 不要包含文字内容（标题、对白、台词、旁白、字幕），只描述画面视觉元素；以下情况可以包含文字：1.skill 文档明确要求画面中有文字（如标题、批注、标语）；2.用户明确要求「加文字/标题/标语/配文」。当需要文字时用引号标注，如：画面顶部有文字"标题内容"
+- 用户上传角色参考图 → 后续生成保持角色一致性。
+- 有 skill 文档时遵循其风格规则。
+
+【生成参数由你决定 / Generation Params】
+界面上不再有比例/分辨率/数量/质量的选项，全部由你结合用户意图判断，写进每条 generation：
+  {"prompt":"...","count":1,"ratio":"square|portrait|portrait43|landscape43|landscape|story|wide|ultrawide","resolution":"1k|2k|4k","quality":"high|medium|low"}
+- ratio：按用户说的画幅或画面构成判断（海报/封面偏竖 → portrait 或 story；风景/横版 → landscape 或 wide；未指明 → square）
+- resolution：默认 **4k**；用户提到「快一点/随便看看/草稿/缩略图」才降 2k 或 1k
+- count：默认 **1**；用户明确要多张/多版才 >1
+- quality：默认 **high**；只有用户要草稿、要速度时才降
+- **完全无法判断时**一律用默认值：高质量 · 4K · 1:1 · 1 张。不要为了「更稳妥」而反复追问参数。
 
 修改场景规则（非常重要）：
 当用户要求修改上一张图时，必须区分两种情况：
@@ -24868,7 +25214,7 @@ ${AGENT_FILES_INSTRUCTION}`;
 const AGENT_OFF_MODE_INSTRUCTION = `你是一个图像生成 Agent 的意图决策器。分析用户输入+上下文，决定下一步行动。仅返回原始 JSON，不要 markdown。
 
 【输出格式】
-{"intent":"...","reply":"...","prompts":[],"use_attachments":false,"attachment_roles":{},"use_last_outputs":false,"text_only":false,"analysis":"","options":[],"canvas_ops":[]}
+{"intent":"...","reply":"...","prompts":[],"use_attachments":false,"attachment_roles":{},"use_last_outputs":false,"text_only":false,"analysis":"","options":[],"canvas_ops":[],"generations":[{"prompt":"...","mask_hint":null}]}
 
 【intent 类型】
 - generate: 用户想生成新图（给了视觉描述或生图指令）
@@ -24890,10 +25236,36 @@ const AGENT_OFF_MODE_INSTRUCTION = `你是一个图像生成 Agent 的意图决�
 - text_only: true=纯文本回复，不生图
 - analysis: 分析/扩写结果（text_only=true 时填写）
 - options: clarify 时给用户的选项 [{"label":"...","value":"..."}]
+- mask_hint: 局部修改时**指出要改的位置**（在 generations 的每一项里填）。
+  格式 {"target_node":"节点的 id","bbox":[x,y,w,h]}
+  ★ target_node **写 id**（【画布现状】里 id= 后面那串）。只有画布上这个标题**只有一个**节点时，写标题也认。
+    🚨 画布上常有多个同名节点（比如 7 个「上传」）—— 写标题就对不上了，必须写 id。
+  bbox 用 0~1 归一化坐标，相对**原图**左上角：x/y 是框的左上角，w/h 是框的宽高。
+  例：猫占画面左半、垂直居中偏下 → {"target_node":"smart_4toaqg","bbox":[0.05,0.45,0.4,0.5]}
+
+【mask_hint 什么时候填 —— 这条决定「只改一块」还是「整张重画」，判错代价很大】
+✅ 要填：用户**指向画面里某个具体对象或区域**，且你能在图上指出它在哪。
+   例：「把这只猫改成狗」「去掉右下角的水印」「把左边那个人换成女孩」「这个杯子换个颜色」
+❌ 不要填（留 null）：整图性的改动。
+   例：「改成赛博朋克风」「调亮一点」「换成油画质感」「重新画一张」「背景虚化」
+❌ 不要填：你**看不出来位置**、或者画面里根本没有用户说的那个对象。宁可 null，让用户自己涂遮罩。
+   ★ 凭猜测填一个框，会把无关区域也重绘，比不填更糟。
+   🚨 但「不知道是哪个节点」**不是**不填的理由：多个同名节点时看【画布现状】里的 id 和位置，
+      结合用户说的内容（哪个节点里有他说的那个对象）挑一个，把它的 id 写进 target_node。
+★ 参考图是**消息附件**（用户直接贴在输入框里的图，不是画布节点）时，**照样能局部重绘**：
+  系统会先把附件图落成画布节点、再按你给的 mask_hint 自动造遮罩。
+  🚨 所以「把这张图里的人物换成男人」这类需求**必须给 mask_hint**，
+     不许因为「它不是画布节点、绑不了遮罩」就退化成整图重绘 ——
+     整图重绘会把脸、构图、光线全改掉，而用户要的只是换掉画面里的一个对象。
+★ mask_hint 非 null 时，这条本来就是「局部重绘」，不需要你再写 "inpaint":true。
+🚨 **绝对不要**「只标 inpaint:true 却不给 mask_hint」：那等于让系统去猜目标，会直接失败。
 
 【核心规则】
 1. ★ 不要改写用户的视觉描述。用户给了具体描述时 prompts=[]（用原文生图）。只有抽象指令（"按分析结果做""按上次风格"）时才生成 prompt。
 2. ★ 分析/反推/描述/识别/对比类 → intent=analyze, text_only=true。判断标准：用户要求"分析/描述/反推/识别/总结/提取/对比/看看/这是什么"且没有要求生图。
+   🚨 用户只是在**提问 / 让你看图**（"这是什么""能看出来吗""描述一下""像不像"）时：
+      **prompts 和 generations 都必须留空 []**。别把他这句问话当提示词塞进 prompts ——
+      那会弹出一个「提示词确认」窗口，而他要的只是答案。
 3. ★ 提示词扩写/优化/翻译 → intent=refine, text_only=true。
 4. 修改/编辑 → intent=edit, use_last_outputs=true, prompts只写修改指令。
 5. 意图不明（用户只发了图没说要干什么，或表述模糊无法判断）→ intent=clarify，在 reply 中提问，在 options 中给 2-4 个选项。
@@ -24934,19 +25306,81 @@ analysis 中写分析结果，同时在 options 中给出 2-4 个后续行动建
 {"intent":"clarify","reply":"你想让我对这张图做什么？","prompts":[],"text_only":true,"options":[{"label":"分析/反推提示词","value":"分析这张图"},{"label":"基于此图生成新图","value":"按这个风格生成"},{"label":"修改这张图","value":"修改这张图"}]}`;
 
 
-let agentOpen = false;
+// 🚨 底部悬浮输入框「始终固定显示」⇒ 默认就是打开态（2026-10-19 重构，原为 false）。
+//    收起的是「对话内容」抽屉，不是整个输入框 —— 输入框本身永远在。
+let agentOpen = true;
 let agentSending = false;
 let agentThinking = false;
+/* 重编辑历史消息（2026-10-20 老板要求「回退记忆 / 修改记忆」）：
+   · agentEditingMsgId —— 当前正在编辑的那条用户消息（渲染时决定显示气泡还是编辑框）
+   · agentResendCtx     —— 「保存并重新生成」时把内容直接交给 sendAgentMessage，
+                           绕开输入框（输入框里的胶囊顺序/附件会被它自己的同步逻辑清掉） */
+let agentEditingMsgId = '';
+let agentResendCtx = null;
 let agentBypassThinkingNext = false;
 let agentSaveTimer = null;
 let agentState = null;
 let agentMentionIdx = -1;
 function agentDefaultState(){
-    return {skills:[], attachments:[], documents:[], messages:[], conversations:[], activeConversationId:'', chatProvider:'', chatModel:'', genProvider:'', genModel:'', genRatio:'square', genResolution:'1k', genCount:1, genQuality:'', autoContext:true, inputHeight:0, devMode:false};
+    return {skills:[], attachments:[], documents:[], nodeRefs:[], messages:[], conversations:[], activeConversationId:'', chatProvider:'', chatModel:'', genProvider:'', genModel:'', genRatio:'square', genResolution:'4k', genCount:1, genQuality:'high', autoContext:true, devMode:true, thinkingMode:true, reasoningEffort:'auto'};
+}
+// 🚨 模型经常把 options 写成字符串数组（["方向1：温馨居家", …]）。渲染层要 opt.label/opt.value，
+//    字符串会渲染成一排**空白按钮**（点了还没值）。这里统一归一化成 {label,value}，去空、截 6 个。
+function normalizeAgentOptions(options){
+    if(!Array.isArray(options)) return [];
+    return options
+        .map(o => (typeof o === 'string' ? {label:o.trim(), value:o.trim()} : o))
+        .filter(o => o && String(o.label || '').trim())
+        .slice(0, 6)
+        .map(o => ({label:String(o.label).trim(), value:String(o.value ?? o.label).trim()}));
 }
 // 将 prompts 规范化为对象数组（兼容旧格式 string[]）
 // 每个 prompt 对象：{prompt, count, use_last_outputs, use_attachments, status}
 // status 取值：pending / current / confirmed / skipped / editing
+/* 从用户原话里解析显式比例。
+   🚨 模型经常不听话：实测用户说「3:2」，模型返回的 prompt 里 ratio 仍是 square，出图变 1:1。
+      ⇒ 显式比例必须由前端**确定性覆盖**，不能只靠模型自觉（模型只负责写提示词内容）。
+   支持 a:b 任意写法（按比例就近匹配白名单，偏差 >15% 就不硬塞，交回模型判断），
+   另认中文说法：横版/横图/横屏 → landscape，竖版/竖图/竖屏 → portrait，方形/正方形/方图 → square。 */
+const AGENT_RATIO_CN = [
+    [/(方形|正方形|方图)/, 'square'],
+    [/(竖版|竖图|竖屏|竖构图)/, 'portrait'],
+    [/(横版|横图|横屏|横构图)/, 'landscape'],
+];
+function parseExplicitRatio(text){
+    const s = String(text || '');
+    if(!s) return '';
+    const m = s.match(/(\d{1,2})\s*[:：]\s*(\d{1,2})/);
+    if(m){
+        const a = Number(m[1]), b = Number(m[2]);
+        if(a > 0 && b > 0){
+            const target = a / b;
+            let best = '', bestScore = Infinity;
+            Object.entries(API_RATIO_VALUES).forEach(([key, label]) => {
+                const [x, y] = String(label).split(':').map(Number);
+                if(!x || !y) return;
+                const score = Math.abs(Math.log(target / (x / y)));
+                if(score < bestScore){ bestScore = score; best = key; }
+            });
+            if(best && bestScore <= Math.log(1.15)) return best;
+        }
+    }
+    for(const [re, key] of AGENT_RATIO_CN){ if(re.test(s)) return key; }
+    return '';
+}
+// 把显式比例灌到每一条 prompt / generation 上（两者都要，走哪条路径都生效）
+function applyExplicitRatio(list, ratioKey){
+    if(!ratioKey || !Array.isArray(list)) return list;
+    list.forEach(item => {
+        if(!item || typeof item !== 'object') return;
+        /* 🚨 局部重绘这条不能被用户的「比例」覆盖（2026-10-20）：
+           它的尺寸/比例跟遮罩裁切区域走，塞一个 ratio 进去只会误导上游。
+           这个函数是在 generations.map **之后**跑的，会把上面刚 delete 掉的 ratio 又加回来。 */
+        if(item.inpaint) return;
+        item.ratio = ratioKey;
+    });
+    return list;
+}
 function normalizePrompts(prompts){
     if(!Array.isArray(prompts)) return [];
     return prompts.map(p => {
@@ -24954,14 +25388,52 @@ function normalizePrompts(prompts){
             const t = p.trim();
             return t ? {prompt:t, count:1, use_last_outputs:false, use_attachments:false, status:'pending'} : null;
         }
-        if(p && typeof p === 'object' && typeof p.prompt === 'string' && p.prompt.trim()){
+        // 🚨 模型偶尔把提示词字段写成 text / content（实测 GPT 系会这么干），只认 prompt 会得到空白卡片
+        const rawText = typeof p?.prompt === 'string' ? p.prompt
+            : (typeof p?.text === 'string' ? p.text : (typeof p?.content === 'string' ? p.content : ''));
+        if(p && typeof p === 'object' && rawText.trim()){
             const normalized = {
-                prompt:p.prompt.trim(),
+                prompt:rawText.trim(),
                 count:Math.max(1, Math.min(8, Number(p.count) || 1)),
                 use_last_outputs:!!p.use_last_outputs,
                 use_attachments:!!p.use_attachments,
                 status:p.status || 'pending'
             };
+            // 逐条生成参数：界面上已无参数选择器，由 LLM 在每条 generation 里自行判断。
+            // 只接受白名单值，非法值直接忽略（执行层会回落默认：高质量·4K·1:1）。
+            if(typeof p.ratio === 'string' && Object.prototype.hasOwnProperty.call(SIZE_MAP, p.ratio)) normalized.ratio = p.ratio;
+            if(typeof p.resolution === 'string' && ['1k','2k','4k'].includes(p.resolution)) normalized.resolution = p.resolution;
+            if(typeof p.quality === 'string' && ['high','medium','low'].includes(p.quality)) normalized.quality = p.quality;
+            // 局部重绘：只改遮罩内那点区域，target_node 指定改哪个节点（标题或 id）
+            if(p.inpaint === true || String(p.inpaint || '').toLowerCase() === 'true') normalized.inpaint = true;
+            if(typeof p.target_node === 'string' && p.target_node.trim()) normalized.target_node = p.target_node.trim().slice(0, 60);
+            // 自动遮罩：模型直接指出要改的位置（0~1 归一化 bbox）
+            if(p.mask_hint) agentApplyMaskHintInto(normalized, p.mask_hint);
+            // 逐条通道/模型：让模型真的能「为这条图挑一个更合适的模型」。
+            // 🚨 必须校验：模型会编型号名（尤其把官网命名和网关 ID 混着写）。
+            //    校验不过就**丢掉**，回落到界面选中的通道，绝不能把野名字发给上游。
+            {
+                const provId = typeof p.provider === 'string' ? p.provider.trim() : '';
+                const wantModel = typeof p.model === 'string' ? p.model.trim() : '';
+                const genProvs = agentGenProviders();
+                let prov = provId ? genProvs.find(x => x.id === provId) : null;
+                if(!prov && wantModel){
+                    prov = genProvs.find(x => (x.image_models || []).includes(wantModel)) || null;
+                }
+                if(prov){
+                    /* 🚨 同通道不换型号（2026-10-21 老板：界面选的 gpt-image-2.5-sunburst，实际却用了 flare）。
+                       模型会在【可用生图能力】里随手挑一个同族型号写进 prompt.model，校验又通得过（列表里真有），
+                       于是「用户在下拉里选的那个」被悄悄替换掉，连尺寸说明都跟着写成错的型号。
+                       规则：**只有换到另一个通道时**（能力驱动，比如要 nano-banana 的 4K）才接受 model；
+                       同通道里的 model 一律丢弃，回落界面选中。 */
+                    const _list = agentGenProviders();
+                    const _uiProv = _list.some(p => p.id === agentState?.genProvider) ? agentState.genProvider : '';
+                    normalized.provider = prov.id;
+                    if(wantModel && (prov.image_models || []).includes(wantModel) && prov.id !== _uiProv){
+                        normalized.model = wantModel;
+                    }
+                }
+            }
             // attachment_indices: 指定该 prompt 只使用哪些附件作为参考图（0-based 索引数组）
             // LLM 可用此字段实现"每条 prompt 只带特定参考图"的精细控制
             if(Array.isArray(p.attachment_indices)){
@@ -25008,6 +25480,17 @@ function loadAgentState(){
     }
     delete agentState.skill;
     if(!Array.isArray(agentState.skills)) agentState.skills = [];
+    // 挂载的 Skill 走全局：本画布存的那份只当兜底，全局有就以全局为准（跨画布互通）
+    try {
+        const rawGlobal = localStorage.getItem(AGENT_SKILLS_GLOBAL_KEY);
+        if(rawGlobal){
+            const globalSkills = JSON.parse(rawGlobal);
+            if(Array.isArray(globalSkills)) agentState.skills = globalSkills;
+        } else if(agentState.skills.length){
+            // 首次升级：把本画布已有的 Skill 提升成全局，避免老用户「突然没了」
+            localStorage.setItem(AGENT_SKILLS_GLOBAL_KEY, JSON.stringify(agentState.skills));
+        }
+    } catch(e) { /* 读到坏数据就沿用本画布那份 */ }
     if(!Array.isArray(agentState.attachments)) agentState.attachments = [];
     // 附件节点：Agent 侧的非图片附件（文档/表格/压缩包…）
     if(!Array.isArray(agentState.documents)) agentState.documents = [];
@@ -25025,6 +25508,16 @@ function loadAgentState(){
     // 加载当前对话的 messages
     const activeConv = agentState.conversations.find(c => c.id === agentState.activeConversationId);
     agentState.messages = activeConv ? (activeConv.messages || []).slice(-AGENT_MSG_MAX) : [];
+    // 对话抽屉默认态（2026-10-21 老板：「小抽AI 似乎被默认关闭了，没有被默认打开」）。
+    // 原来是「有历史就展开、一条都没有就收起」—— 新画布/刚清过上下文时打开只剩一颗胶囊，
+    // 老板以为功能被关掉了。改成**默认展开**。
+    // 🚨 必须做一次性迁移：他 localStorage 里很可能已经存着 `chatDrawerOpen:false`，
+    //    只改默认值救不了老数据（typeof 已经是 boolean，走不进这个分支）。
+    //    用 `_dockDefaultExpanded` 打标记，只强开一次 —— 之后他手动收起仍然记得住，不会每次刷新都对着干。
+    if(typeof agentState.chatDrawerOpen !== 'boolean' || !agentState._dockDefaultExpanded){
+        agentState.chatDrawerOpen = true;
+        agentState._dockDefaultExpanded = true;
+    }
     // 旧数据迁移：prompts string[] → object[]
     (agentState.messages || []).forEach(m => {
         if(m.role === 'assistant' && Array.isArray(m.prompts) && m.prompts.length > 0){
@@ -25185,9 +25678,246 @@ function saveAgentState(){
             }
             const data = {...agentState, messages:(agentState.messages || []).slice(-AGENT_MSG_MAX)};
             localStorage.setItem(agentStorageKey(), JSON.stringify(data));
+            // Skill 另存一份全局的 —— 换画布打开时从这把钥匙读回来
+            try {
+                localStorage.setItem(AGENT_SKILLS_GLOBAL_KEY, JSON.stringify(agentState.skills || []));
+            } catch(e) { /* 忽略 */ }
         } catch(e) { /* localStorage 写满时静默忽略 */ }
     }, 200);
 }
+/* ---------- 手动清空 / 压缩上下文（第 8 条） ----------
+   🚨 清空只清「对话」，**绝不动 skills**：Skill 是全局共享的资产（AGENT_SKILLS_GLOBAL_KEY），
+      清上下文不该把用户挂的 Skill 一起清掉，那是两码事。
+   🚨 附件（attachments / documents）也不清 —— 那是用户这一轮的素材，不是「记忆」。 */
+function clearAgentContext(){
+    if(!agentState) return;
+    const msgCount = (agentState.messages || []).length;
+    agentState.messages = [];
+    // 当前会话条目里也要清，否则切会话/刷新又从 conversations 里捞回来
+    if(Array.isArray(agentState.conversations)){
+        const conv = agentState.conversations.find(c => c.id === agentState.activeConversationId);
+        if(conv) conv.messages = [];
+    }
+    // 清掉可能残留的在途任务标记，避免恢复逻辑把空对话又补一条“恢复中”
+    delete agentState._pendingMessage;
+    delete agentState._pendingAttachments;
+    delete agentState._pendingDocuments;
+    delete agentState._pendingUserMsg;
+    delete agentState._pendingLlmTaskId;
+    delete agentState._pendingLlmTaskTs;
+    renderAgentMessages();
+    saveAgentState();
+    toast((tr('chat.slashClear') || '已清空当前画布的对话上下文') + (msgCount ? ` (${msgCount} 条)` : ''));
+}
+// 手动压缩：保留最近 N 条（默认 6），前面插一条占位说明，让模型知道「上文被压过」
+function compressAgentContext(keepCount){
+    if(!agentState) return;
+    const keep = Math.max(2, Math.min(50, Number(keepCount) || 6));
+    const msgs = agentState.messages || [];
+    if(msgs.length <= keep + 1){
+        toast(tr('chat.slashCompressNoop') || '当前历史消息较少，无需压缩');
+        return;
+    }
+    const dropped = msgs.length - keep;
+    agentState.messages = [
+        {id:uid('am'), role:'assistant', text:(tr('chat.slashAutoCompressed') || '上下文已压缩') + `（省略前面 ${dropped} 条，保留最近 ${keep} 条）`, ts:Date.now()},
+        ...msgs.slice(-keep)
+    ];
+    renderAgentMessages();
+    saveAgentState();
+    toast((tr('chat.slashCompress') || '压缩上下文') + ' ✓');
+}
+/* ---------- Agent 偏好设置（第 12 条） ----------
+   🚨 这些是**全局**记忆：存在后端 data/agent_profile.json，不按画布隔离、不被 /clear 清掉。
+      前端只做「没填过就弹窗 + 已填就给个入口改」，真正的注入在后端 agent_profile_block()。
+   🚨 每项都是「预设选项 + 自定义输入」：点 chip 只是把文字填进 input，最终以 input 值为准，
+      这样既能一键选，也能填「二次元手办代购」这种预设里没有的答案。
+   🚨 2026-10-19 从 6 项平铺拆成 4 组：一句话压成一个字段时模型看不出细节（"设计师"≠电商视觉）。
+   🚨 同日二次调整（老板要求）：删「常用工具」+ 整组删「常用资产」；
+      deliverable / directionScene / 审美偏好三项改**多选**（`multi:true`）。
+   🚨 多选的存储仍是**单个字符串**（多值用「、」连接），后端字段不用改成数组 ——
+      这样老数据、注入格式、截断逻辑全都不用动。
+   🚨 改字段必须三处同步：这里、后端 AGENT_PROFILE_GROUPS、AgentProfileRequest。
+      **老 key（nickname/occupation/industry/platform/category/audience）不能删**，老板已经填过了。 */
+const AGENT_PROFILE_GROUPS = [
+    {name:'基础信息', icon:'user-round', fields:[
+        {key:'nickname',  label:'称呼',     hint:'我该怎么叫你',      options:['Lochou','老板','哥','姐','老师','朋友']},
+        {key:'occupation',label:'职业角色', hint:'你在团队里干什么',  options:['品牌/视觉设计师','电商美工','电商店主','自媒体运营','市场投放','摄影师','产品经理','独立开发者','企业主']},
+        {key:'industry',  label:'行业领域', hint:'所处赛道',          options:['电商','服装','美妆个护','食品饮料','家居','3C数码','汽车用品','母婴宠物','教育','本地生活']}
+    ]},
+    {name:'业务概况', icon:'briefcase', fields:[
+        {key:'platform',  label:'主营平台', hint:'主要在哪卖 / 发',   options:['亚马逊','淘宝','抖音','小红书','拼多多','视频号','独立站','TikTok','线下门店']},
+        {key:'category',  label:'经营类目', hint:'具体做什么品类',    options:['汽车座套','女装','男装','鞋包','护肤','彩妆','零食','家居日用','数码配件','宠物用品']},
+        {key:'audience',  label:'服务群体', hint:'主要面向谁',        options:['个人消费者','中小商家','品牌方','同行从业者','企业客户']},
+        {key:'deliverable',label:'常见产出',hint:'常让我做什么东西',  multi:true, options:['商品主图','详情页','广告素材','社媒配图','品牌视觉','视频封面','活动海报']}
+    ]},
+    {name:'协作方式', icon:'handshake', fields:[
+        {key:'directionCount',label:'方案数量',      hint:'一次给几个方向',        options:['先给 2-3 个方向','先给 1 版最稳的','直接出 5 个以上','看情况']},
+        {key:'directionScene',label:'要多方向的场景',hint:'什么事必须先给多方案',  multi:true, options:['新品上架','大促活动','品牌改版','详情页长图','广告投放']},
+        {key:'detailLevel',   label:'说明详略',      hint:'回复要多细',            options:['只给结果','简要说明','详细讲思路','带参数和理由']},
+        {key:'startMode',     label:'执行前',        hint:'要不要先确认再动手',    options:['先说方案再执行','不用问直接做','拿不准就问一次']}
+    ]},
+    {name:'审美偏好', icon:'palette', fields:[
+        {key:'visualStyle', label:'画面风格', hint:'默认出什么样的图', multi:true, options:['生活场景图','情绪氛围图','白底产品图','极简留白','棚拍硬光','高级质感','实拍纪实']},
+        {key:'colorTone',   label:'色调',     hint:'默认什么调子',     multi:true, options:['低饱和','高对比','暖调','冷调','黑白灰','品牌色为主']},
+        {key:'composition', label:'构图',     hint:'画面怎么摆',       multi:true, options:['主体居中','三分法','大量留白','特写细节','平铺俯拍','多格排版']}
+    ]}
+];
+let agentProfileCache = null;
+let agentProfileModalBound = false;
+const AGENT_PROFILE_SKIP_KEY = 'smart_agent_profile_skip';
+// key → 字段定义（点 chip 时要知道这个字段是不是多选）
+const AGENT_PROFILE_FIELD_MAP = {};
+AGENT_PROFILE_GROUPS.forEach(g => g.fields.forEach(f => { AGENT_PROFILE_FIELD_MAP[f.key] = f; }));
+
+function agentProfileValue(key){
+    return String(agentProfileCache?.[key] || '');
+}
+/* 多选字段的值：用「、」拼在同一个字符串里。
+   🚨 后端字段仍是 str（不是数组）—— 老数据、注入格式、200 字截断全都不用改。
+   🚨 手填也可能用「,」「，」分隔，这里统一认。
+   🚨 **绝对不能把「/」当分隔符**：选项本身就带斜杠（如「品牌/视觉设计师」），
+      一拆就变成「品牌」「视觉设计师」两个值 ⇒ 那个 chip 永远不高亮、存回去还把值拆坏。 */
+function agentProfileValues(raw){
+    return String(raw || '').split(/[、,，]/).map(s => s.trim()).filter(Boolean);
+}
+function syncAgentProfileChips(body, key){
+    const input = body.querySelector(`.agent-profile-input[data-field="${key}"]`);
+    const picked = new Set(agentProfileValues(input ? input.value : ''));
+    body.querySelectorAll(`.agent-profile-chip[data-field="${key}"]`).forEach(n => {
+        n.classList.toggle('on', picked.has(n.getAttribute('data-val')));
+    });
+}
+function renderAgentProfileBody(){
+    const body = document.getElementById('agentProfileBody');
+    if(!body) return;
+    body.innerHTML = AGENT_PROFILE_GROUPS.map(g => {
+        const fields = g.fields.map(f => {
+            const picked = new Set(agentProfileValues(agentProfileValue(f.key)));
+            const chips = f.options.map(o =>
+                `<button type="button" class="agent-profile-chip${picked.has(o) ? ' on' : ''}" data-field="${f.key}" data-val="${escapeHtml(o)}">${escapeHtml(o)}</button>`
+            ).join('');
+            const hint = f.multi ? `${f.hint} · 可多选` : f.hint;
+            const placeholder = f.multi ? '可多选，也可以自己填，用「、」分隔…' : '也可以自己填…';
+            return `<div class="agent-profile-field">`
+                + `<div class="agent-profile-label">${escapeHtml(f.label)}<em>${escapeHtml(hint)}</em></div>`
+                + `<div class="agent-profile-chips">${chips}</div>`
+                + `<input class="agent-profile-input" data-field="${f.key}" type="text" maxlength="200" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(agentProfileValue(f.key))}">`
+                + `</div>`;
+        }).join('');
+        return `<div class="agent-profile-group">`
+            + `<div class="agent-profile-group-head"><i data-lucide="${g.icon}"></i><span>${escapeHtml(g.name)}</span></div>`
+            + fields
+            + `</div>`;
+    }).join('');
+    body.querySelectorAll('.agent-profile-chip').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const key = btn.getAttribute('data-field');
+            const input = body.querySelector(`.agent-profile-input[data-field="${key}"]`);
+            if(!input) return;
+            const v = btn.getAttribute('data-val') || '';
+            if(AGENT_PROFILE_FIELD_MAP[key]?.multi){
+                // 多选：点一下加、再点一下减（全减光就是留空 —— 审美偏好允许全空）
+                const vals = agentProfileValues(input.value);
+                const i = vals.indexOf(v);
+                if(i >= 0) vals.splice(i, 1); else vals.push(v);
+                input.value = vals.join('、');
+            } else {
+                input.value = v;   // 单选：直接覆盖
+            }
+            syncAgentProfileChips(body, key);
+        });
+    });
+    // 手填时同步 chip 高亮，避免「选的」和「填的」不一致（多选按分隔符拆开逐个比对）
+    body.querySelectorAll('.agent-profile-input').forEach(input => {
+        input.addEventListener('input', () => syncAgentProfileChips(body, input.getAttribute('data-field')));
+    });
+    if(window.lucide && window.lucide.createIcons) window.lucide.createIcons();
+}
+function openAgentProfileModal(){
+    const mask = document.getElementById('agentProfileModal');
+    if(!mask) return;
+    // 首次使用 vs 编辑态：文案和按钮要分开，别让老用户再看一遍「先花 30 秒认识一下你」
+    const editing = Boolean(agentProfileCache && agentProfileCache.completed);
+    const titleEl = document.getElementById('agentProfileTitle');
+    const subEl = document.getElementById('agentProfileSub');
+    const saveBtn = document.getElementById('agentProfileSave');
+    const skipBtn = document.getElementById('agentProfileSkip');
+    if(titleEl) titleEl.textContent = editing ? '偏好设置' : '先花 30 秒认识一下你';
+    if(subEl) subEl.innerHTML = editing
+        ? '改完保存即可，之后每次对话都会带上这些信息。想快速打开也可以在输入框打 <code>/pref</code>。'
+        : '这些信息只保存在本机，用来让我直接懂你的处境，不用每开一块画布就重讲一遍。以后想改，在输入框打 <code>/pref</code>，或点右上角「⋯ → 偏好设置」。';
+    if(saveBtn) saveBtn.textContent = editing ? '保存' : '保存并开始';
+    if(skipBtn) skipBtn.textContent = editing ? '取消' : '以后再说';
+    mask.hidden = false;
+    renderAgentProfileBody();
+    bindAgentProfileModalOnce();
+    setTimeout(() => {
+        const first = document.querySelector('#agentProfileBody .agent-profile-input');
+        if(first) first.focus();
+    }, 60);
+}
+function closeAgentProfileModal(){
+    const mask = document.getElementById('agentProfileModal');
+    if(mask) mask.hidden = true;
+}
+function collectAgentProfile(){
+    const data = {};
+    document.querySelectorAll('#agentProfileBody .agent-profile-input').forEach(input => {
+        data[input.getAttribute('data-field')] = String(input.value || '').trim();
+    });
+    return data;
+}
+async function saveAgentProfileFromModal(){
+    const data = collectAgentProfile();
+    try {
+        const res = await fetch('/api/agent/profile', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(data)
+        });
+        if(!res.ok) throw new Error(`HTTP ${res.status}`);
+        agentProfileCache = await res.json();
+        closeAgentProfileModal();
+        sessionStorage.removeItem(AGENT_PROFILE_SKIP_KEY);
+        toast('偏好已保存，之后每次对话都会记得你 ✓');
+    } catch(e) {
+        toast('偏好保存失败：' + (e.message || e));
+    }
+}
+function bindAgentProfileModalOnce(){
+    if(agentProfileModalBound) return;
+    agentProfileModalBound = true;
+    document.getElementById('agentProfileClose')?.addEventListener('click', () => {
+        sessionStorage.setItem(AGENT_PROFILE_SKIP_KEY, '1');
+        closeAgentProfileModal();
+    });
+    document.getElementById('agentProfileSkip')?.addEventListener('click', () => {
+        // 「以后再说」只在本会话生效，下次启动还会再问一次（老板要求：未设置就自动弹）
+        sessionStorage.setItem(AGENT_PROFILE_SKIP_KEY, '1');
+        closeAgentProfileModal();
+    });
+    document.getElementById('agentProfileSave')?.addEventListener('click', saveAgentProfileFromModal);
+    document.getElementById('agentProfileModal')?.addEventListener('click', (e) => {
+        if(e.target && e.target.id === 'agentProfileModal'){
+            sessionStorage.setItem(AGENT_PROFILE_SKIP_KEY, '1');
+            closeAgentProfileModal();
+        }
+    });
+}
+// 拉一次画像；没填过且本会话没点过「以后再说」→ 自动弹窗
+async function loadAgentProfile(autoPrompt = true){
+    try {
+        const res = await fetch('/api/agent/profile');
+        if(!res.ok) return;
+        agentProfileCache = await res.json();
+    } catch(e) { return; }
+    if(autoPrompt && agentProfileCache && !agentProfileCache.completed
+        && !sessionStorage.getItem(AGENT_PROFILE_SKIP_KEY)){
+        openAgentProfileModal();
+    }
+}
+
 function toggleAgentPanel(open=!agentOpen){
     if(!agentPanel || !agentToggle) return;
     agentOpen = !!open;
@@ -25197,8 +25927,234 @@ function toggleAgentPanel(open=!agentOpen){
     if(agentOpen){
         renderAgentModelSelectors();
         renderAgentMessages();
+        // 打开时至少渲染一次 dock 尺寸（对话抽屉高度 / 宽度可能随窗口变过）
+        applyAgentDockSize();
     }
 }
+/* ---------- 底部悬浮框：展开/收起对话 + 拖拽调高 ----------
+   🚨 三个尺寸只改 CSS 变量，不直接写宽高，方便深/浅主题与不同屏幕共用同一套规则：
+      --agent-chat-h 展开时对话区高度；--agent-dock-w 悬浮框宽度。
+   🚨 收起时**不销毁消息**，只是 display:none —— 再展开要能看到历史。 */
+const AGENT_CHAT_H_MIN = 140;
+const AGENT_CHAT_H_MAX = () => Math.max(AGENT_CHAT_H_MIN, Math.min(720, Math.round(window.innerHeight * 0.62)));
+function applyAgentDockSize(){
+    if(!agentPanel) return;
+    const h = Math.round(Number(agentState?.chatDrawerHeight) || 320);
+    const clamped = Math.max(AGENT_CHAT_H_MIN, Math.min(AGENT_CHAT_H_MAX(), h));
+    agentPanel.style.setProperty('--agent-chat-h', `${clamped}px`);
+    agentPanel.classList.toggle('chat-open', Boolean(agentState?.chatDrawerOpen));
+    /* 拖拽移动 / 缩放后的位置与宽度（2026-10-21 老板要求）。
+       🚨 **只在展开态应用**：收起后只剩一颗胶囊，必须回到「底部居中」。
+          否则用户拖过面板位置再收起，胶囊会留在半空中（老板截图里那颗跑到顶部的「小抽AI」）。
+          dockPos 仍然留着 —— 再展开时回到他拖过的位置。 */
+    const _dockOpen = Boolean(agentState?.chatDrawerOpen);
+    const pos = agentState?.dockPos;
+    if(_dockOpen && pos && Number.isFinite(Number(pos.x)) && Number.isFinite(Number(pos.y))){
+        agentPanel.classList.add('dragged');
+        agentPanel.style.left = `${Math.round(Number(pos.x))}px`;
+        agentPanel.style.top = `${Math.round(Number(pos.y))}px`;
+    } else {
+        agentPanel.classList.remove('dragged');
+        agentPanel.style.left = '';
+        agentPanel.style.top = '';
+    }
+    const w = Number(agentState?.dockW) || 0;
+    if(w > 0 && _dockOpen) agentPanel.style.setProperty('--agent-dock-w', `${Math.round(w)}px`);
+    /* 胶囊文案（2026-10-21 老板要求）：
+       收起态 = 名字「小抽AI」（这时面板只剩它一颗胶囊，得能认出来是什么）；
+       展开态 = 「收起对话」（动作）。文案走 i18n，`data-i18n` 同步改，切语言时 apply() 才不会改回旧值。 */
+    const label = document.getElementById('agentChatToggleLabel');
+    if(label){
+        const _key = agentState?.chatDrawerOpen ? 'smart.agentCollapseChat' : 'smart.agentPanel';
+        label.dataset.i18n = _key;
+        label.textContent = window.StudioI18n?.t(_key) || (agentState?.chatDrawerOpen ? '收起对话' : '小抽AI');
+    }
+    const icon = agentPanel.querySelector('.agent-chat-toggle i, .agent-chat-toggle svg');
+    if(icon){
+        icon.setAttribute('data-lucide', agentState?.chatDrawerOpen ? 'chevron-down' : 'chevron-up');
+        if(window.lucide) lucide.createIcons();
+    }
+}
+function toggleAgentChatDrawer(force){
+    if(!agentState) return;
+    agentState.chatDrawerOpen = force === undefined ? !agentState.chatDrawerOpen : Boolean(force);
+    applyAgentDockSize();
+    renderAgentMessages();
+    saveAgentState();
+}
+function bindAgentDockResize(){
+    const handle = document.getElementById('agentDockResize');
+    if(!handle || !agentPanel) return;
+    let dragging = false, startY = 0, startH = 0;
+    const onMove = e => {
+        if(!dragging) return;
+        // 向上拖 = 变高
+        const next = startH + (startY - (e.clientY ?? e.touches?.[0]?.clientY ?? startY));
+        const clamped = Math.max(AGENT_CHAT_H_MIN, Math.min(AGENT_CHAT_H_MAX(), Math.round(next)));
+        agentPanel.style.setProperty('--agent-chat-h', `${clamped}px`);
+        if(agentState) agentState.chatDrawerHeight = clamped;
+        e.preventDefault?.();
+    };
+    const onUp = () => {
+        if(!dragging) return;
+        dragging = false;
+        handle.classList.remove('dragging');
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        saveAgentState();
+    };
+    handle.addEventListener('pointerdown', e => {
+        if(!agentState?.chatDrawerOpen) return;
+        dragging = true;
+        startY = e.clientY;
+        startH = Math.round(Number(agentState?.chatDrawerHeight) || 320);
+        handle.classList.add('dragging');
+        // 🚨 阻止冒泡，否则画布会跟着平移（agent-panel 虽在排除选择器里，手柄是新增元素）
+        e.preventDefault();
+        e.stopPropagation();
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+    });
+}
+
+/* ---------- 拖拽移动 + 四角缩放（2026-10-21 老板要求） ----------
+   🚨 一旦拖过位置就转成 left/top 定位（`.dragged` 类）。不转的话 `left:50%` 的居中
+      会让 resize 时面板左右漂移 —— 拖右下角，面板往左跑，手感完全不对。
+   🚨 缩放宽度走 `--agent-dock-w`、高度走 `--agent-chat-h`（对话区高度），
+      **不要直接写 height**：面板高度是内容撑出来的，写死 height 会把输入区压扁。
+   🚨 位置和尺寸都存进 agentState，刷新后还原（applyAgentDockSize 负责应用）。 */
+const AGENT_DOCK_W_MIN = 420;
+/* 🚨 画布启用了 studio-scale（整页 zoom），面板也在 zoom 列表里。
+   指针事件给的是**屏幕坐标**，而 style.left / --agent-dock-w 用的是**缩放前坐标**，
+   两者差一个 zoom 系数。不除这个系数，拖 100px 面板会跑 110px，刷新后位置还会再漂一次。 */
+function agentUiZoom(){
+    try {
+        const z = parseFloat(getComputedStyle(agentPanel).zoom);
+        return Number.isFinite(z) && z > 0 ? z : 1;
+    } catch(e) { return 1; }
+}
+
+/* 🚨 把「底部居中」的当前视觉位置锁成绝对 left/top（2026-10-21）。
+   默认布局是 `left:50% + translate(-50%)`，offsetLeft 是**加 transform 之前**的值，
+   直接拿它当起点会横跳半个宽度。
+   公式 `offsetLeft - offsetWidth/2` 只是估算 —— 有 border / shell padding 时仍会差几 px，
+   所以**切完再量一次、把差值补回去**，做到像素级不跳。 */
+function agentFreezeDockPosition(){
+    if(!agentState || agentState.dockPos || !agentPanel) return;
+    const z = agentUiZoom();
+    const wantLeft = agentPanel.getBoundingClientRect().left;
+    const wantTop = agentPanel.getBoundingClientRect().top;
+    agentState.dockPos = {
+        x: Math.round(agentPanel.offsetLeft - agentPanel.offsetWidth / 2),
+        y: Math.round(agentPanel.offsetTop)
+    };
+    applyAgentDockSize();
+    /* 🚨 必须等过渡结束再量（2026-10-21）：`.agent-panel` 的 transform 有 .16s 过渡，
+       apply 之后**立刻**读 rect 拿到的是过渡起点（-380 而不是 0），校准会算反。
+       临时把 transition 关掉、量完再还原，才能拿到终值。 */
+    const prevTransition = agentPanel.style.transition;
+    agentPanel.style.transition = 'none';
+    applyAgentDockSize();
+    const r2 = agentPanel.getBoundingClientRect();
+    const dx = r2.left - wantLeft, dy = r2.top - wantTop;
+    if(Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5){
+        agentState.dockPos = {
+            x: Math.round(agentState.dockPos.x - dx / z),
+            y: Math.round(agentState.dockPos.y - dy / z)
+        };
+        applyAgentDockSize();
+    }
+    agentPanel.style.transition = prevTransition;
+}
+
+function bindAgentDockDrag(){
+    if(!agentPanel) return;
+    const head = agentPanel.querySelector('.agent-head');
+    if(!head) return;
+    head.addEventListener('pointerdown', e => {
+        if(!agentState?.chatDrawerOpen) return;
+        // 标题栏上的按钮/下拉不是拖拽区，点了要照常工作
+        if(e.target.closest('button, a, input, select, textarea, .agent-more-wrap, .agent-chat-list-panel')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const z = agentUiZoom();
+        const sx = e.clientX, sy = e.clientY;
+        const rect = agentPanel.getBoundingClientRect();
+        /* 🚨 第一次拖：先把「居中 + translate(-50%)」的视觉位置锁成绝对 left（见 agentFreezeDockPosition），
+           否则一按下去面板会先横跳半个宽度。 */
+        agentFreezeDockPosition();
+        // 切完之后 offsetLeft/Top 才是可信的 CSS 坐标起点
+        const sl = agentPanel.offsetLeft, st = agentPanel.offsetTop;
+        document.body.classList.add('agent-dock-dragging');
+        const onMove = ev => {
+            let x = sl + (ev.clientX - sx) / z;
+            let y = st + (ev.clientY - sy) / z;
+            // 至少留一角在视口里，别拖到找不回来
+            x = Math.max(-rect.width + 120, Math.min(window.innerWidth - 120, x));
+            y = Math.max(0, Math.min(window.innerHeight - 80, y));
+            agentState.dockPos = {x: Math.round(x), y: Math.round(y)};
+            applyAgentDockSize();
+            ev.preventDefault();
+        };
+        const onUp = () => {
+            document.body.classList.remove('agent-dock-dragging');
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            saveAgentState();
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+    });
+}
+
+function bindAgentResizeHandles(){
+    if(!agentPanel) return;
+    agentPanel.querySelectorAll('[data-agent-resize]').forEach(handle => {
+        handle.addEventListener('pointerdown', e => {
+            if(!agentState?.chatDrawerOpen) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const dir = handle.dataset.agentResize || 'se';
+            const z = agentUiZoom();
+            const rect = agentPanel.getBoundingClientRect();
+            /* 同上：第一次缩放也要先把「居中 + translate(-50%)」的视觉位置锁成绝对 left。 */
+            agentFreezeDockPosition();
+            const start = {
+                px: e.clientX, py: e.clientY,
+                // offsetWidth / chatDrawerHeight 都是缩放前的 CSS 像素，与 --agent-dock-w 同一坐标系
+                w: agentPanel.offsetWidth,
+                h: Math.round(Number(agentState?.chatDrawerHeight) || 320),
+                left: agentPanel.offsetLeft, top: agentPanel.offsetTop
+            };
+            const onMove = ev => {
+                // 指针位移要除 zoom，否则拖 90px 会变成 100px
+                const dx = (ev.clientX - start.px) / z, dy = (ev.clientY - start.py) / z;
+                let w = start.w, h = start.h;
+                let x = Number(agentState.dockPos?.x) || start.left;
+                let y = Number(agentState.dockPos?.y) || start.top;
+                if(dir.includes('e')) w = start.w + dx;
+                if(dir.includes('w')) { w = start.w - dx; x = start.left + dx; }
+                if(dir.includes('s')) h = start.h + dy;
+                if(dir.includes('n')) { h = start.h - dy; y = start.top + dy; }
+                w = Math.max(AGENT_DOCK_W_MIN, Math.min(window.innerWidth - 60, w));
+                h = Math.max(AGENT_CHAT_H_MIN, Math.min(AGENT_CHAT_H_MAX(), h));
+                agentState.dockW = Math.round(w);
+                agentState.chatDrawerHeight = Math.round(h);
+                agentState.dockPos = {x: Math.round(x), y: Math.round(y)};
+                applyAgentDockSize();
+                ev.preventDefault();
+            };
+            const onUp = () => {
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+                saveAgentState();
+            };
+            window.addEventListener('pointermove', onMove);
+            window.addEventListener('pointerup', onUp);
+        });
+    });
+}
+
 // ============ 灵感库（GitHub awesome-gpt-image-2 · GPT-Image2 提示词案例库） ============
 // 数据源：https://github.com/freestylefly/awesome-gpt-image-2 （541 个案例：图片 + 提示词 + 分类/风格/场景标签）
 const INSPIRE_REPO_URL = 'https://github.com/freestylefly/awesome-gpt-image-2';
@@ -25648,6 +26604,15 @@ function resolveFinalGenCount(text){
     const toolbar = Math.max(1, Math.min(8, Number(agentState?.genCount) || 1));
     return {count: toolbar, source:'toolbar'};
 }
+// 偏好记忆里是否要求「先给多个方向」。
+// 🚨 这是编排层能否真的给出多方向的前提：执行层原来无条件截成 1 条，记忆形同废纸。
+// 🚨 记忆还没加载完（cache 为 null）时返回 false —— 宁可截成 1 条，也不要突然冒出 3 条图。
+function agentWantsMultiDirection(){
+    const v = String(agentProfileCache?.directionCount || '').trim();
+    if(!v) return false;
+    if(/1\s*版|一版|最稳/.test(v)) return false;
+    return /2\s*[-~－—]\s*3|多|几[个条版]|\d+\s*个以上/.test(v);
+}
 // 判断输入是否"模糊"（缺风格维度），用于思维模式前端兜底
 // 判断标准：字数少 + 不含风格/艺术流派关键词
 // 返回 true 表示需要先走阶段一（返回 options 让用户选风格）
@@ -25684,21 +26649,107 @@ function looksLikeStyleSuggestions(options){
     const s = (Array.isArray(options) ? options : []).map(o => String(o?.label || '') + String(o?.value || '')).join(' ');
     return /油画|水墨|赛博|卡通|写实|插画|摄影|像素|水彩|素描|涂鸦|浮世绘|吉卜力|风格|画风|艺术流派/.test(s);
 }
-function isVagueImageRequest(text){
+/* 这句是不是「明确在要产物」？（2026-10-19 新增，替代原来的 isVagueImageRequest）
+   🚨 语义要分清：老函数判的是「像不像模糊生图需求」，用的是**字数 < 25 且没有风格词**
+      —— 结果「你好」「在吗」全被判成生图需求，于是模型被迫反问画风。
+      新函数判的是「有没有要」，只有出现画/生成/改图这类动作词才算。
+   只用于「模型没返回结构化结果时要不要用原文兜底一条提示词」，不参与任何追问决策。 */
+/* 🚨 纯提问识别（2026-10-21 老板截图踩中）：
+   他问「该版本是采用了遮罩局部重绘还是整张图的图生图？」—— 这句话里有「整**张图**的」，
+   被 looksLikeGenRequest 的关键词「张图」命中 ⇒ 被当成生图需求：
+   凭空冒出一张「生成失败·整图重绘」的红卡，还把**这句问话原样当提示词**发了出去，上游审核必然拒绝。
+   判定规则：有疑问结构 + **没有祈使动作** ⇒ 只回答，绝不出图。
+   🚨 反过来也不能太宽：带「帮我/给我/把…改成/来一张」的一律当需求
+      （「怎么把这张图改成蓝色？」是需求，不是提问）。 */
+/* 🚨 `用` 后面**必须跟图**才算动作：原来写 `用.{0,12}(重绘|…)`，
+   结果「采**用了遮罩局部重绘**」也命中 → 问句又被当成需求（2026-10-21 首轮测试踩中）。 */
+const AGENT_ASK_VERB_RE = /帮我|给我|替我|请你?|麻烦|来一?张|生成一?张|画一?张|把.{0,24}(改|换|变|调|重绘|重画|修|做|生成|合成|抠)|用(?:这|那|原|参考|此)张?图.{0,10}(重绘|重画|修|改)/;
+/* 🚨 2026-10-22 老板：模型仍会把「这张图能看出来吗」当成生图需求。
+   原因不是提示词不够，是**判定词表漏了口语说法**：
+   - 用户没打问号，`AGENT_ASK_MARK_RE` 里只有 `[？?]\s*$` ⇒ 「…吗」不命中；
+   - 「看出来」不在理解动词表里 ⇒ `isUnderstandOnly` 也不命中。
+   两处都补上（这层只是第一道；真正兜底在下面的「原话复读」硬规则）。 */
+const AGENT_ASK_MARK_RE = /[？?]\s*$|[吗呢]\s*$|还是|是否|是不是|有没有|能不能|可不可以|为什么|为何|怎么|如何|哪一?[个张种]|区别|差别|是什么|啥/;
+function isQuestionOnly(text){
     const t = String(text || '').trim();
     if(!t) return false;
-    // 修改请求不算模糊（有明确的修改方向）
-    if(/改成|换成|转换成|修改为|变成|转为|改为|转成|调整|重新画|重画/i.test(t)) return false;
-    // 画布/节点操作类请求：与生图风格无关，不能走「选风格」流程
-    if(isCanvasOpRequest(t)) return false;
-    // 提到节点/工作流/连线等画布结构概念的，也不是「模糊生图」请求
-    if(/节点|工作流|流程图|连线|连上|接线/.test(t)) return false;
-    // 风格/艺术流派关键词
-    const styleKeywords = ['风','风格','主义','流派','艺术','画法','画风','渲染','摄影','插画','海报','logo','标志','图标','3d','3D','写实','动漫','水墨','油画','水彩','素描','速写','像素','赛博','蒸汽波','极简','极繁','扁平','卡通','可爱','复古','复古风','霓虹','蒸汽','lowpoly','low poly','波普','波普艺术','印象派','抽象','超现实','涂鸦','手绘','国风','中国风','日式','和风','美式','欧式','赛博朋克','蒸汽朋克','未来主义','装饰艺术','artdeco','art deco','bauhaus','包豪斯','印象','点彩','浮世绘','赛璐珞','吉卜力','新海诚','皮克斯','迪士尼','漫威','dc','chibi','q版','q版','q版','q版','q版'];
-    const hasStyle = styleKeywords.some(k => t.toLowerCase().includes(k.toLowerCase()));
-    // 字数少且无风格 → 模糊
-    if(t.length < 25 && !hasStyle) return true;
-    return false;
+    if(AGENT_ASK_VERB_RE.test(t)) return false;
+    return AGENT_ASK_MARK_RE.test(t);
+}
+/* 🚨 纯理解 / 看图任务（2026-10-21 老板截图：「描述这张图」也弹了「提示词确认」窗口）。
+   病因跟「纯提问」一模一样：`looksLikeGenRequest` 的关键词里有 `张图`，
+   「描述这**张图**」直接命中 → 被判成生图需求 → 模型一边把图描述得很准，
+   一边又给了个 prompt = 用户原话 ⇒ 界面上多出一个「📝 提示词确认 · #1 描述这张图」。
+   🚨 判定 = **有理解动词 + 没有任何生图/编辑动作**。二者都有就不是纯理解：
+      「描述这张图，再按这个描述生成一张」含「生成」⇒ 要出图，放行。
+      ⚠️ 「反推提示词」是产品内置的提示词生成流程（`data-agent-quick="describe"`），
+         它**故意**需要 prompts，所以「反推」一律不判为纯理解。 */
+const AGENT_UNDERSTAND_RE = /描述|解读|解释|说明|分析|识别|判断|概括|总结|评价|点评|说说|讲讲|讲一下|说一下|说下|看一下|看下|看看|看出来|看得出|看出|认得|认得出|分辨|确认一下|能确认|这是什么|是什么|啥意思|什么意思|有什么/;
+const AGENT_GEN_ACT_RE = /生成|画成|画一|画个|画张|画幅|画一下|再画|把它画|照着画|绘制|作图|出图|出张|出个|做一张|做张|做一版|来一张|来张|再出一?张|改成|改一下|改下|换成|换一下|重绘|重画|修图|修一下|抠图|合成|做成|设计一|给我一?张|把.{0,24}(改|换|变|调|修|做)/;
+function isUnderstandOnly(text){
+    const t = String(text || '').trim();
+    if(!t) return false;
+    if(/反推/.test(t)) return false;      // 内置「反推提示词」流程需要 prompts，别拦
+    if(AGENT_GEN_ACT_RE.test(t)) return false;
+    return AGENT_UNDERSTAND_RE.test(t);
+}
+/* 🚨 硬规则第一层（2026-10-22 老板要求「别只靠提示词，要在机制上拦住」）：
+   **不判断意图**，只看两个客观事实 ——
+     ① 用户这句话里没有任何生图 / 编辑动作词；
+     ② 模型给的 prompt 就是用户原话（或原话的一部分，≥8 字）。
+   同时满足就一定是「把问话当提示词」，直接丢。这条不依赖意图分类准不准，
+   所以「这张图能看出来吗」这种词表覆盖不到的口语也能拦住。
+   ⚠️ 有动作词时不动（「画一只猫」的 prompt 就是原话，但那是真需求）。 */
+const AGENT_GEN_WORD_RE = /画|绘制|生成|出图|做成|改成|换成|重绘|重画|抠图|合成|修图|设计|来一张|来张|做一张|做张|给我一|帮我做|变一下|调一下/;
+/* 🚨 上下文指代兜底（2026-10-22 老板截图）：用户说「基于描述文案生成图片」，
+   模型却回「按参考图的汽车座套卖点图制作」—— 把「用上一轮那段文字」理解成「用附件图」。
+   这里只在用户**明确指代上一轮文字**时，才去取那条 assistant 的正文。 */
+const AGENT_REFER_TEXT_RE = /描述文案|上面的描述|刚才的描述|上一条|这段文字|这段描述|那段文字|那段话|刚才那段|根据上面的|按上面的|照刚才|上面那段/;
+function agentReferencedAssistantText(userText){
+    if(!AGENT_REFER_TEXT_RE.test(String(userText || ''))) return '';
+    const msgs = agentState?.messages || [];
+    for(let i = msgs.length - 1; i >= 0; i--){
+        const m = msgs[i];
+        if(m.role !== 'assistant') continue;
+        const txt = String(m.text || '').trim();
+        if(txt.length >= 20) return txt;
+    }
+    return '';
+}
+function agentUserHasGenAction(text){
+    const t = String(text || '');
+    return AGENT_GEN_ACT_RE.test(t) || AGENT_GEN_WORD_RE.test(t);
+}
+/* 🚨 分辨率 / 质量档位「以用户原话为准」（2026-10-22 老板：默认出了 1024x1024）。
+   病因：模型爱在 generation 里自作主张写 `resolution:'1k'`（它以为那是「安全默认」），
+   于是把老板定的「默认 4K」覆盖掉了 —— 界面早就不显示参数了，他连改都改不了。
+   规则跟 BH.7 的比例覆盖同一个思路：**用户没说，就别让模型替他决定**。
+   ⚠️ 只认明确说法（4K/2K/高清…），别把「大图」这种模糊词也算进来。 */
+function agentExplicitResolution(text){
+    const t = String(text || '');
+    if(/(^|[^0-9])8\s*k/i.test(t)) return '8k';
+    if(/(^|[^0-9])4\s*k/i.test(t)) return '4k';
+    if(/(^|[^0-9])2\s*k/i.test(t)) return '2k';
+    if(/(^|[^0-9])1\s*k/i.test(t)) return '1k';
+    if(/超高清|极高画质|最高画质/.test(t)) return '4k';
+    return '';
+}
+function agentExplicitQuality(text){
+    const t = String(text || '');
+    if(/最高画质|超高清|极致|best quality/i.test(t)) return 'high';
+    if(/高质量|高清|高画质|精细|high quality/i.test(t)) return 'high';
+    if(/中等画质|普通画质|medium/i.test(t)) return 'medium';
+    if(/低画质|草稿|快速出图|省钱|low quality/i.test(t)) return 'low';
+    return '';
+}
+function looksLikeGenRequest(text){
+    const t = String(text || '').trim();
+    if(!t) return false;
+    if(isCanvasOpRequest(t)) return false;                                        // 建节点不是出图
+    if(/^(你好|您好|hi|hello|在吗|在不在|谢谢|多谢|好的|收到|嗯+|ok|哈+)[!！。.~～\s]*$/i.test(t)) return false;  // 寒暄一律不产出
+    if(isQuestionOnly(t)) return false;                                           // 提问不是出图（"…还是整张图重绘？"）
+    if(isUnderstandOnly(t)) return false;                                         // 看图/描述/分析不是出图
+    return /画|绘制|生成|出图|张图|图片|图像|海报|头像|封面|插画|壁纸|logo|标志|设计一张|做一张|来一张|改图|修图|抠图|换成|合成|做成/.test(t);
 }
 // ★ 纯文字引导解析器：从用户输入中识别图N引用，判断拆分/组合模式
 // 返回 { mode, tasks } 或 null（无图引用时）
@@ -25820,28 +26871,79 @@ function hideImageRefConfirmPanel(result){
     if(panel) panel.hidden = true;
     if(_agentRefConfirmResolver){ _agentRefConfirmResolver(result); _agentRefConfirmResolver = null; }
 }
+/* 出图比例选项 —— **与节点参数面板同一套规则**（2026-10-22 老板：「直接用节点下的这套尺寸规则」）。
+   节点那边在 buildSmartSettings 里按模型过滤（auto / 9:21 / nano-banana-2 极端比例），
+   这里复刻同一份判断，保证「agent 能选的比例 = 节点能选的比例」。
+   🚨 任何一边改了比例表，另一边必须同步。 */
+function agentRatioOptions(model){
+    const m = String(model || '');
+    const auto = (typeof isNanoBananaAutoRatioModel === 'function') && isNanoBananaAutoRatioModel(m);
+    const nb2 = (typeof isNanoBanana2SeriesModel === 'function') && isNanoBanana2SeriesModel(m);
+    const list = [
+        ['square','1:1','正方形'], ['portrait','2:3','竖图'], ['landscape','3:2','横图'],
+        ['portrait43','3:4','竖图'], ['landscape43','4:3','横图'],
+        ['story','9:16','竖屏'], ['wide','16:9','宽屏'], ['ultrawide','21:9','超宽']
+    ];
+    // 9:21 不在 Grsai 支持列表（Apifox 文档）⇒ Grsai nano 系隐藏，与节点保持一致
+    if(!auto) list.push(['ultratall','9:21','超竖']);
+    if(nb2) list.push(['1:4','1:4','超竖'], ['4:1','4:1','超宽'], ['1:8','1:8','极竖'], ['8:1','8:1','极宽']);
+    if(auto) list.unshift(['auto','自动','自动适配']);
+    return list;
+}
 function agentRatioLabel(key){
-    const map = {square:'1:1', portrait:'2:3', portrait43:'3:4', landscape43:'4:3', landscape:'3:2', story:'9:16', wide:'16:9', ultrawide:'21:9', ultratall:'9:21'};
+    const map = {square:'1:1', portrait:'2:3', portrait43:'3:4', landscape43:'4:3', landscape:'3:2', story:'9:16', wide:'16:9', ultrawide:'21:9', ultratall:'9:21', auto:'自动'};
     return map[key] || key || '1:1';
 }
 function agentQualityLabel(q){
     const map = {'':'自动', high:'高', medium:'中', low:'低'};
     return map[q] || '自动';
 }
+/* 思考强度档位（2026-10-22 老板要求）。
+   auto = **不往上游传参**、跟随模型自己的默认档位（不少兼容网关不认这个字段，乱传会 400）；
+   其余透传 OpenAI 风格的 `reasoning_effort`。 */
+const AGENT_REASONING_LABELS = {auto:'自动', minimal:'最低', low:'低', medium:'中', high:'高'};
+
+/* 发给后端用的档位：auto → 空串（后端不传参，跟随模型默认），其余原样透传 */
+function agentReasoningEffortForLlm(){
+    const v = String(agentState?.reasoningEffort || 'auto').toLowerCase();
+    return (v !== 'auto' && AGENT_REASONING_LABELS[v]) ? v : '';
+}
+
 function agentUpdateToolbarLabels(){
     const modelLabel = document.getElementById('agentModelLabel');
+    const genModelLabel = document.getElementById('agentGenModelLabel');
     const paramsLabel = document.getElementById('agentParamsLabel');
+    /* 🚨 2026-10-22 老板：两个 pill 分别显示「理解模型」和「生图模型」，
+       以前只显示通道名（Aizzz-image），根本看不出当前跑的是哪个模型。
+       都以 agentState 里用户选中的值为准 —— 通道切换后由 renderAgentModelSelectors 兜底校正过。 */
     if(modelLabel && agentState){
-        const genProviders = agentGenProviders();
-        const provider = genProviders.find(p => p.id === agentState.genProvider);
-        modelLabel.textContent = provider ? (provider.name || provider.id) : '模型';
+        const name = String(agentState.chatModel || '').trim();
+        modelLabel.textContent = name || '理解模型';
+        modelLabel.title = name || '未选择理解模型';
+    }
+    if(genModelLabel && agentState){
+        const name = String(agentState.genModel || '').trim();
+        genModelLabel.textContent = name || '生图模型';
+        genModelLabel.title = name || '未选择生图模型';
+    }
+    // 思考强度 pill（2026-10-22）：auto 表示「跟随模型默认」，不往上游传参
+    const reasoningLabel = document.getElementById('agentReasoningLabel');
+    if(reasoningLabel && agentState){
+        const effort = String(agentState.reasoningEffort || 'auto').toLowerCase();
+        const text = AGENT_REASONING_LABELS[effort] || AGENT_REASONING_LABELS.auto;
+        reasoningLabel.textContent = text;
+        reasoningLabel.title = effort === 'auto'
+            ? '思考强度：跟随模型默认'
+            : `思考强度：${text}（reasoning_effort=${effort}）`;
     }
     if(paramsLabel && agentState){
         const ratio = agentRatioLabel(agentState.genRatio || 'square');
         const res = (agentState.genResolution || '1k').toUpperCase();
         const count = agentState.genCount || 1;
         const quality = agentState.genQuality || '';
-        const qLabel = quality ? ` · ${agentQualityLabel(quality)}` : '';
+        // 🚨 质量段永远显示（2026-10-22 老板截图：pill 只显示「1:1 · 4K · 1张」，少了质量像没更新）。
+        //    genQuality 为空 = 自动，也要写成「自动」，不能整段吞掉。
+        const qLabel = ` · ${agentQualityLabel(quality)}`;
         paramsLabel.textContent = `${ratio} · ${res} · ${count}张${qLabel}`;
     }
 }
@@ -25905,6 +27007,30 @@ function agentSyncParamsPanel(){
     const res = agentState.genResolution || '1k';
     const count = agentState.genCount || 1;
     const quality = agentState.genQuality || '';
+    /* 🚨 比例按钮按**当前生图模型**动态生成（2026-10-22 老板：「直接用节点下的这套尺寸规则」）：
+       换模型后可选比例会变 —— nano-banana 有「自动」、Grsai 系没有 9:21、nano-banana-2 多四个极端比例。
+       用 dataset.opts 记一份签名，只在列表真变了时才重建 DOM（避免每次同步都重绘、闪一下）。 */
+    const _grid = document.getElementById('agentRatioGrid');
+    if(_grid){
+        const opts = agentRatioOptions(agentState.genModel);
+        const want = opts.map(o => o[0]).join(',');
+        if(_grid.dataset.opts !== want){
+            _grid.dataset.opts = want;
+            _grid.innerHTML = opts.map(([k, label, hint]) => {
+                /* 🚨 比例要从 **label**（'3:2'）解析，不是 key（'landscape'）——
+                   第一版拿 key 去匹配 /^(\d+):(\d+)$/，永远不中，所有图标都退化成 20×20 方块，
+                   老板一眼看出「似乎还是旧的」。 */
+                let iconStyle = 'width:20px;height:20px';
+                const _m = /^(\d+):(\d+)$/.exec(String(label));
+                if(_m){
+                    const w = Number(_m[1]), h = Number(_m[2]);
+                    const short = Math.max(6, Math.round(20 * Math.min(w, h) / Math.max(w, h)));
+                    iconStyle = w >= h ? `width:20px;height:${short}px` : `width:${short}px;height:20px`;
+                }
+                return `<button class="agent-ratio-btn" type="button" data-ratio="${escapeHtml(k)}" title="${escapeHtml(hint)}"><span class="agent-ratio-icon" style="${iconStyle}"></span>${escapeHtml(label)}</button>`;
+            }).join('');
+        }
+    }
     // 同步比例网格
     document.querySelectorAll('.agent-ratio-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.ratio === ratio);
@@ -25943,17 +27069,11 @@ function setAgentSkillFile(file){
 function renderAgentAttachments(){
     if(!agentAttachRow || !agentState) return;
     const skills = Array.isArray(agentState.skills) ? agentState.skills : [];
-    const attachments = Array.isArray(agentState.attachments) ? agentState.attachments : [];
-    const documents = Array.isArray(agentState.documents) ? agentState.documents : [];
-    let html = '';
-    skills.forEach((skill, i) => {
-        html += `<div class="agent-attach-skill"><i data-lucide="file-text"></i><span class="agent-attach-skill-name">${escapeHtml(skill.name || 'skill.md')}</span><button type="button" data-agent-skill-remove="${i}"><i data-lucide="x"></i></button></div>`;
-    });
-    attachments.forEach((att, i) => {
-        html += `<div class="agent-attach-chip" draggable="${attachments.length > 1 ? 'true' : 'false'}" data-agent-att-index="${i}" title="${escapeHtml(att.name || 'image')}"><span class="agent-att-num">${agentLastResults().length + i + 1}</span><img src="${escapeHtml(att.url)}" alt=""><button type="button" data-agent-att-remove="${i}"><i data-lucide="x"></i></button></div>`;
-    });
-    documents.forEach((doc, i) => { html += agentDocChipHtml(doc, i); });
-    agentAttachRow.innerHTML = html;
+    // 🚨 图片/文档/节点引用不再是「输入框上方的卡片条」，而是**内嵌在句子里的胶囊**，
+    //    这里只负责技能标签，其余交给 syncAgentInlineChips() 与状态对账。
+    agentAttachRow.innerHTML = skills.map((skill, i) =>
+        `<div class="agent-attach-skill"><i data-lucide="file-text"></i><span class="agent-attach-skill-name">${escapeHtml(skill.name || 'skill.md')}</span><button type="button" data-agent-skill-remove="${i}"><i data-lucide="x"></i></button></div>`
+    ).join('');
     if(window.lucide) lucide.createIcons();
     agentAttachRow.querySelectorAll('[data-agent-skill-remove]').forEach(btn => {
         btn.onclick = e => {
@@ -25963,104 +27083,7 @@ function renderAgentAttachments(){
             saveAgentState();
         };
     });
-    agentAttachRow.querySelectorAll('[data-agent-att-remove]').forEach(btn => {
-        btn.onclick = e => {
-            e.stopPropagation();
-            agentState.attachments.splice(Number(btn.dataset.agentAttRemove) || 0, 1);
-            renderAgentAttachments();
-            saveAgentState();
-        };
-    });
-    // 文档附件：点卡片打开预览（PDF 内联 / 文本弹窗 / 其余下载），× 移除，✦ 载入为 Skill
-    agentAttachRow.querySelectorAll('[data-agent-doc-index]').forEach(el => {
-        el.onclick = e => {
-            const idx = Number(el.dataset.agentDocIndex);
-            if(e.target.closest('[data-agent-doc-remove]')){
-                e.stopPropagation();
-                agentState.documents.splice(idx, 1);
-                renderAgentAttachments();
-                saveAgentState();
-                return;
-            }
-            if(e.target.closest('[data-agent-doc-skill]')){
-                e.stopPropagation();
-                promoteAgentDocToSkill(idx);
-                return;
-            }
-            const doc = (agentState.documents || [])[idx];
-            if(doc?.url) openAttachmentItem(doc);
-        };
-    });
-    agentAttachRow.querySelectorAll('[data-agent-att-index]').forEach(el => {
-        el.onclick = e => {
-            if(e.target.closest('[data-agent-att-remove]')) return;
-            const att = agentState.attachments[Number(el.dataset.agentAttIndex)];
-            if(!att) return;
-            // 跳转到画布中图片位置
-            if(att.nodeId){
-                const node = (nodes || []).find(n => n.id === att.nodeId);
-                if(node){
-                    selectedId = node.id;
-                    selectedIds = [];
-                    agentCenterOnNode(node);
-                    render();
-                    return;
-                }
-            }
-            // 没有 nodeId 时用坐标跳转
-            if(att.x || att.y){
-                agentCenterOnPoint(Number(att.x) || 0, Number(att.y) || 0);
-            }
-        };
-        // 拖拽排序
-        el.addEventListener('dragstart', e => {
-            e.stopPropagation();
-            el.classList.add('dragging');
-            e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('text/plain', el.dataset.agentAttIndex);
-        });
-        el.addEventListener('dragend', e => {
-            e.stopPropagation();
-            el.classList.remove('dragging');
-            agentAttachRow.querySelectorAll('.agent-attach-chip').forEach(c => c.classList.remove('drop-before', 'drop-after'));
-        });
-        el.addEventListener('dragover', e => {
-            const fromIdx = Number(e.dataTransfer.getData('text/plain'));
-            const toIdx = Number(el.dataset.agentAttIndex);
-            if(!Number.isFinite(fromIdx) || fromIdx < 0 || fromIdx === toIdx) return;
-            e.preventDefault();
-            e.stopPropagation();
-            e.dataTransfer.dropEffect = 'move';
-            agentAttachRow.querySelectorAll('.agent-attach-chip').forEach(c => c.classList.remove('drop-before', 'drop-after'));
-            const rect = el.getBoundingClientRect();
-            const placement = e.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
-            el.classList.add(placement === 'before' ? 'drop-before' : 'drop-after');
-        });
-        el.addEventListener('dragleave', e => {
-            if(el.contains(e.relatedTarget)) return;
-            el.classList.remove('drop-before', 'drop-after');
-        });
-        el.addEventListener('drop', e => {
-            const fromIdx = Number(e.dataTransfer.getData('text/plain'));
-            const toIdx = Number(el.dataset.agentAttIndex);
-            if(!Number.isFinite(fromIdx) || fromIdx < 0 || fromIdx === toIdx) return;
-            e.preventDefault();
-            e.stopPropagation();
-            const rect = el.getBoundingClientRect();
-            const placement = e.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
-            agentAttachRow.querySelectorAll('.agent-attach-chip').forEach(c => c.classList.remove('drop-before', 'drop-after'));
-            // 重排 attachments 数组
-            const atts = agentState.attachments.slice();
-            const [moved] = atts.splice(fromIdx, 1);
-            let insertAt = toIdx;
-            if(placement === 'after') insertAt += 1;
-            if(fromIdx < insertAt) insertAt -= 1;
-            atts.splice(Math.max(0, Math.min(atts.length, insertAt)), 0, moved);
-            agentState.attachments = atts;
-            renderAgentAttachments();
-            saveAgentState();
-        });
-    });
+    syncAgentInlineChips();
 }
 // ---------------------------------------------------------------------------
 // 附件节点 → Agent：任意格式文件作为「文档附件」加入 Agent 输入区
@@ -26113,18 +27136,6 @@ async function agentAttachDocuments(files){
     } catch(e) {
         toast(String(e.message || e).slice(0, 120));
     }
-}
-// 文档附件小卡片（非图片 → 图标 + 文件名 + 扩展名 + 移除）
-function agentDocChipHtml(doc, i){
-    const label = attachmentExtLabel(doc);
-    const icon = isTextMediaItem(doc) ? 'file-text' : 'file';
-    return `<div class="agent-attach-doc" data-agent-doc-index="${i}" title="${escapeAttr(doc.name || 'file')}">`
-        + `<i data-lucide="${icon}"></i>`
-        + `<span class="agent-attach-doc-name">${escapeHtml(doc.name || 'file')}</span>`
-        + `<span class="agent-attach-doc-ext">${escapeHtml(label)}</span>`
-        + `<button type="button" class="agent-attach-doc-skill" data-agent-doc-skill="${i}" title="${escapeAttr(tr('smart.agentDocAsSkill') || '作为 Skill 载入')}"><i data-lucide="sparkles"></i></button>`
-        + `<button type="button" data-agent-doc-remove="${i}" title="${escapeAttr(tr('smart.agentDocRemove') || '移除')}"><i data-lucide="x"></i></button>`
-        + `</div>`;
 }
 // 把已上传的文档附件提升为 Skill（等价于载入 skill.md）
 async function promoteAgentDocToSkill(i){
@@ -26186,6 +27197,484 @@ async function agentAttachFiles(files){
         toast(String(e.message || e).slice(0, 120));
     }
 }
+// ---------------------------------------------------------------------------
+// 输入框内联引用：拖入 / 粘贴的文件、Ctrl+C 复制来的画布节点
+// 🚨 为什么要「内联 token」而不是只放附件条：老板要求「粘贴到语句的任意位置」，
+//    只有把引用写成文本 token 插在光标处，才能表达「用[图:xxx]的构图，但主体换成[节点:主图]」。
+// 🚨 token 里带**名称**而不是编号：附件编号会随增删漂移（编号还含上一轮出图），
+//    写编号必然对不上；名称稳定，且发送时会另附一段对照表给模型。
+// ---------------------------------------------------------------------------
+// ---- contenteditable 序列化：chip 还原成 token，<br>/<div> 还原成换行 ----
+function agentNodesToText(root){
+    let out = '';
+    const walk = node => {
+        node.childNodes.forEach(child => {
+            if(child.nodeType === 3){ out += child.nodeValue; return; }
+            if(child.nodeType !== 1) return;
+            const el = child;
+            if(el.dataset && el.dataset.chipToken){ out += el.dataset.chipToken; return; }
+            if(el.tagName === 'BR'){ out += '\n'; return; }
+            const block = el.tagName === 'DIV' || el.tagName === 'P';
+            if(block && out && !out.endsWith('\n')) out += '\n';
+            walk(el);
+            if(block && !out.endsWith('\n')) out += '\n';
+        });
+    };
+    if(root) walk(root);
+    return out;
+}
+function agentInputPlainText(){
+    if(!agentInput) return '';
+    return agentNodesToText(agentInput)
+        .replace(/\u00A0/g, ' ')
+        .replace(/\u200b/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .replace(/\n+$/, '');
+}
+function agentInputSetText(v){
+    if(!agentInput) return;
+    const s = String(v == null ? '' : v);
+    agentInput.textContent = '';
+    s.split('\n').forEach((line, i) => {
+        if(i) agentInput.appendChild(document.createElement('br'));
+        if(line) agentInput.appendChild(document.createTextNode(line));
+    });
+    agentSyncInputEmpty();
+}
+function agentSyncInputEmpty(){
+    if(!agentInput) return;
+    const hasChip = Boolean(agentInput.querySelector('.agent-inline-chip'));
+    agentInput.dataset.empty = (!hasChip && !agentInputPlainText().trim()) ? '1' : '0';
+}
+// 光标所在的 Range（不在输入框里就返回 null）
+function agentCaretRange(){
+    const sel = window.getSelection?.();
+    if(!sel || !sel.rangeCount || !agentInput) return null;
+    const range = sel.getRangeAt(0);
+    if(!agentInput.contains(range.startContainer)) return null;
+    return range;
+}
+function agentPlaceCaretAfter(node){
+    const sel = window.getSelection?.();
+    if(!sel || !node?.parentNode) return;
+    const range = document.createRange();
+    range.setStartAfter(node);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+}
+// 光标前的纯文本（给 @ 引用面板判断用，contenteditable 没有 selectionStart）
+function agentTextBeforeCaret(){
+    const range = agentCaretRange();
+    if(!range) return agentInputPlainText();
+    const pre = range.cloneRange();
+    pre.selectNodeContents(agentInput);
+    pre.setEnd(range.startContainer, range.startOffset);
+    return agentNodesToText(pre.cloneContents()).replace(/\u00A0/g, ' ');
+}
+// 删除光标前 n 个字符（同一个文本节点内，@ 过滤词都是刚打的，基本不会跨节点）
+function agentDeleteCharsBeforeCaret(n){
+    const range = agentCaretRange();
+    if(!range || n <= 0) return;
+    const node = range.startContainer;
+    if(node.nodeType !== 3) return;
+    const end = range.startOffset;
+    const start = Math.max(0, end - n);
+    node.deleteData(start, end - start);
+    const sel = window.getSelection();
+    const nr = document.createRange();
+    nr.setStart(node, start);
+    nr.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(nr);
+}
+function agentInsertTextAtCursor(text){
+    if(!agentInput || !text) return;
+    const range = agentCaretRange();
+    if(range){
+        range.deleteContents();
+        const node = document.createTextNode(text);
+        range.insertNode(node);
+        agentPlaceCaretAfter(node);
+    } else {
+        agentInput.appendChild(document.createTextNode(text));
+    }
+    agentInput.focus();
+    agentSyncInputEmpty();
+    agentInput.dispatchEvent(new Event('input', {bubbles:true}));
+}
+// ---- 内联胶囊 ----
+const AGENT_CHIP_TOKEN_PREFIX = { att:'图', doc:'文件', ref:'节点' };
+function agentChipKeyOf(kind, entry){
+    if(kind === 'ref') return `ref:${entry?.id || entry?.title || ''}`;
+    return `${kind}:${entry?.url || ''}`;
+}
+function agentChipNameOf(kind, entry){
+    if(kind === 'ref') return entry?.title || entry?.id || '节点';
+    return entry?.name || fileNameFromUrl(entry?.url) || 'file';
+}
+function agentChipNodeTypeLabel(ref){
+    if(ref.type === 'smart-prompt') return 'Prompt';
+    if(ref.type === 'smart-loop') return 'Loop';
+    if(ref.type === 'smart-minimax') return 'Video';
+    if(ref.type === 'smart-group') return '分组';
+    if(isSmart3DNode(ref) || String(ref.type || '').includes('3d')) return '3D';
+    return '节点';
+}
+/* opts：
+   · removable:false —— 对话记录里的胶囊不能删（那是历史，不是待发送的附件）
+   · pop:false       —— 找不到原始条目（老消息 / 状态已被裁掉）时不给悬停预览
+   · skill:false     —— 只有输入框里的文档胶囊才提供「作为 Skill 载入」 */
+function agentChipInnerHtml(kind, entry, opts){
+    opts = opts || {};
+    const name = agentChipNameOf(kind, entry);
+    const url = String(entry?.url || '');
+    const canPop = opts.pop !== false;
+    const removeBtn = opts.removable === false ? '' : `<span class="agent-inline-chip-x" data-chip-remove="1" title="移除">×</span>`;
+    if(kind === 'att'){
+        const isVideo = mediaKindForItem(entry) === 'video';
+        return `<i data-lucide="${isVideo ? 'video' : 'image'}"></i>`
+            + `<span class="agent-inline-chip-name">${escapeHtml(name)}</span>${removeBtn}`
+            + (canPop && url
+                ? `<span class="agent-attach-pop">`
+                    + (isVideo
+                        ? `<video src="${escapeAttr(url)}" muted playsinline preload="metadata"></video>`
+                        : `<img src="${escapeAttr(url)}" alt="">`)
+                    + `<span class="agent-attach-pop-name">${escapeHtml(name)}</span></span>`
+                : '');
+    }
+    if(kind === 'doc'){
+        const label = attachmentExtLabel(entry);
+        const icon = isTextMediaItem(entry) ? 'file-text' : 'file';
+        return `<i data-lucide="${icon}"></i>`
+            + `<span class="agent-inline-chip-name">${escapeHtml(name)}</span>${removeBtn}`
+            + (canPop
+                ? `<span class="agent-attach-pop">`
+                    + `<span class="agent-attach-pop-file"><i data-lucide="${icon}"></i>`
+                    + `<span class="agent-attach-pop-meta"><span class="agent-attach-pop-name">${escapeHtml(name)}</span>`
+                    + `<span class="agent-attach-pop-sub">${escapeHtml(label)} · 点击打开</span></span></span>`
+                    + (opts.skill === false ? '' : `<button type="button" class="agent-attach-pop-skill" data-chip-skill="1"><i data-lucide="sparkles"></i><span>作为 Skill 载入</span></button>`)
+                    + `</span>`
+                : '');
+    }
+    const thumb = (entry?.images || [])[0]?.url;
+    return `<i data-lucide="boxes"></i>`
+        + `<span class="agent-inline-chip-name">${escapeHtml(name)}</span>${removeBtn}`
+        + (canPop
+            ? `<span class="agent-attach-pop">`
+                + (thumb ? `<img src="${escapeAttr(thumb)}" alt="">` : '')
+                + `<span class="agent-attach-pop-name">${escapeHtml(name)}</span>`
+                + `<span class="agent-attach-pop-sub">${escapeHtml(entry?.type || '')} · 位置(${Math.round(entry?.x || 0)},${Math.round(entry?.y || 0)})</span>`
+                + (entry?.text ? `<span class="agent-attach-pop-text">${escapeHtml(String(entry.text).slice(0, 160))}</span>` : '')
+                + `</span>`
+            : '');
+}
+/* 对话记录 → 胶囊还原（2026-10-20）。
+   发送时 msg.text 里已经原样带着 `[图:名]`/`[文件:名]`/`[节点:标题]`（见 agentNodesToText
+   读 chip.dataset.chipToken），所以历史里**按 token 还原**就能做到位置/顺序/样式全部跟输入框一致。
+   🚨 别改成「按数组顺序重新拼一遍」：用户当时可能把胶囊插在句子中间，
+      数组里只有添加顺序，重拼就把语义位置丢了（「把 [图:A] 换成 [图:B] 的风格」会读不出来）。 */
+const AGENT_MSG_TOKEN_RE = /\[(图|文件|节点):([^\]\n]{1,160})\]/g;
+/* 把「用户原话」变成能给生图模型看的提示词（2026-10-21）：
+   原话里的 `[文件:图需-后排.xlsx]`、`[图:主图.jpg]`、`[节点:xxx]` 是**给人看的引用标记**，
+   直接当 prompt 发给生图模型毫无意义（老板截图里那 5 条 prompt 就带着这些标记）。
+   只在兜底路径用；模型自己给的 prompt 不动。 */
+function agentPromptFromUserText(text){
+    return String(text || '')
+        .replace(new RegExp(AGENT_MSG_TOKEN_RE.source, 'g'), ' ')
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/^[，。,.、\s]+|[，。,.、\s]+$/g, '')
+        .trim();
+}
+function agentMsgEntryMaps(msg){
+    const build = (arr, nameOf) => {
+        const m = new Map();
+        (arr || []).forEach(e => { if(e) m.set(nameOf(e), e); });
+        return m;
+    };
+    return {
+        att: build(msg?.images, e => e.name || fileNameFromUrl(e.url) || 'file'),
+        doc: build(msg?.documents, e => e.name || fileNameFromUrl(e.url) || 'file'),
+        ref: build(msg?.nodeRefs, e => e.title || e.id || '节点')
+    };
+}
+function agentMsgTextHtml(msg){
+    const raw = String(msg?.text || '');
+    const maps = agentMsgEntryMaps(msg);
+    const used = new Set();
+    let html = '', last = 0, m;
+    AGENT_MSG_TOKEN_RE.lastIndex = 0;
+    while((m = AGENT_MSG_TOKEN_RE.exec(raw))){
+        html += escapeHtml(raw.slice(last, m.index));
+        const kind = m[1] === '图' ? 'att' : (m[1] === '文件' ? 'doc' : 'ref');
+        const name = m[2];
+        const entry = maps[kind].get(name) || null;
+        if(entry) used.add(agentChipKeyOf(kind, entry));
+        html += `<span class="agent-inline-chip${entry ? '' : ' is-detached'}" contenteditable="false"`
+            + ` data-chip-kind="${kind}" data-chip-key="${escapeAttr(entry ? agentChipKeyOf(kind, entry) : '')}"`
+            + ` data-chip-msg="${escapeAttr(msg?.id || '')}"`
+            + ` data-chip-name="${escapeAttr(name)}">`
+            + agentChipInnerHtml(kind, entry || {name, title:name}, {removable:false, pop:Boolean(entry), skill:false})
+            + `</span>`;
+        last = m.index + m[0].length;
+    }
+    html += escapeHtml(raw.slice(last));
+    return {html, used};
+}
+/* 在光标处插入一个胶囊。没有光标（输入框没聚焦）时追加到末尾。
+   🚨 不要在这里无条件 focus：页面加载时 syncAgentInlineChips 会补胶囊，
+      无条件 focus 会把焦点从画布抢到输入框。 */
+function agentInsertChipAtCaret(kind, entry){
+    if(!agentInput || !entry) return null;
+    const key = agentChipKeyOf(kind, entry);
+    const exists = [...agentInput.querySelectorAll('.agent-inline-chip')].some(c => c.dataset.chipKey === key);
+    if(exists) return null;
+    const hadFocus = document.activeElement === agentInput;
+    const chip = document.createElement('span');
+    chip.className = 'agent-inline-chip';
+    chip.contentEditable = 'false';
+    chip.dataset.chipKind = kind;
+    chip.dataset.chipKey = key;
+    chip.dataset.chipToken = `[${AGENT_CHIP_TOKEN_PREFIX[kind] || '附件'}:${agentChipNameOf(kind, entry)}]`;
+    chip.innerHTML = agentChipInnerHtml(kind, entry);
+    const range = agentCaretRange();
+    if(range){
+        range.deleteContents();
+        range.insertNode(chip);
+        const space = document.createTextNode(' ');
+        chip.parentNode.insertBefore(space, chip.nextSibling);
+        agentPlaceCaretAfter(space);
+    } else {
+        agentInput.appendChild(chip);
+        agentInput.appendChild(document.createTextNode(' '));
+    }
+    if(hadFocus) agentInput.focus();
+    agentSyncInputEmpty();
+    if(window.lucide) lucide.createIcons();
+    return chip;
+}
+// 状态 → 胶囊 对账：状态里没了的删掉，状态里有的补上（页面加载 / 外部改状态后都靠它）
+function syncAgentInlineChips(){
+    if(!agentInput || !agentState) return;
+    const wanted = [];
+    (agentState.attachments || []).forEach(entry => wanted.push({kind:'att', entry}));
+    (agentState.documents || []).forEach(entry => wanted.push({kind:'doc', entry}));
+    (agentState.nodeRefs || []).forEach(entry => wanted.push({kind:'ref', entry}));
+    const wantedKeys = new Set(wanted.map(w => agentChipKeyOf(w.kind, w.entry)));
+    /* 状态变了，任何已经克隆出去的预览卡都过期了（可能对应的胶囊马上就被删掉） */
+    hideAgentChipPop();
+    [...agentInput.querySelectorAll('.agent-inline-chip')].forEach(chip => {
+        if(!wantedKeys.has(chip.dataset.chipKey)) chip.remove();
+    });
+    wanted.forEach(w => agentInsertChipAtCaret(w.kind, w.entry));
+    agentSyncInputEmpty();
+}
+function agentFindChipByKey(key){
+    if(!agentInput || !key) return null;
+    return [...agentInput.querySelectorAll('.agent-inline-chip')].find(c => c.dataset.chipKey === key) || null;
+}
+/* 悬停预览的浮层（2026-10-20）。
+   🚨 为什么不能直接用 CSS `.chip:hover .pop`：输入框 `.agent-input-rich` 是 `overflow-y:auto`，
+      绝对定位的子元素会被容器裁掉 —— 实测胶囊里能测到 158×167 的卡，**屏幕上一点都看不见**。
+   ⇒ 把卡克隆到 body 下的 fixed 层。cap 用 pointer-events:none，鼠标不会因为移进卡里而抖掉。 */
+let agentChipPopTimer = 0;
+// 当前正在显示预览的是哪个胶囊 —— 胶囊被删/列表重渲染后要靠它判断「卡已经过期了」
+let agentChipPopOwner = null;
+function agentChipPopLayer(){
+    let layer = document.getElementById('agentChipPopLayer');
+    if(!layer){
+        layer = document.createElement('div');
+        layer.id = 'agentChipPopLayer';
+        document.body.appendChild(layer);
+    }
+    return layer;
+}
+function hideAgentChipPop(){
+    clearTimeout(agentChipPopTimer);
+    agentChipPopOwner = null;
+    const layer = document.getElementById('agentChipPopLayer');
+    if(layer) layer.innerHTML = '';
+}
+function showAgentChipPop(chip){
+    const tpl = chip?.querySelector('.agent-attach-pop');
+    if(!tpl){ hideAgentChipPop(); return; }
+    clearTimeout(agentChipPopTimer);
+    agentChipPopOwner = chip;
+    const layer = agentChipPopLayer();
+    layer.innerHTML = '';
+    const card = tpl.cloneNode(true);
+    card.style.display = 'block';
+    layer.appendChild(card);
+    // 先量尺寸再摆位置：优先卡在胶囊上方，顶不下就翻到下方，左右都别出屏
+    const chipRect = chip.getBoundingClientRect();
+    const rect = card.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    let top = chipRect.top - rect.height - 6;
+    if(top < 8) top = Math.min(vh - rect.height - 8, chipRect.bottom + 6);
+    let left = chipRect.left;
+    if(left + rect.width > vw - 8) left = Math.max(8, vw - rect.width - 8);
+    layer.style.top = `${Math.round(Math.max(8, top))}px`;
+    layer.style.left = `${Math.round(left)}px`;
+    if(window.lucide) lucide.createIcons();
+}
+function bindAgentChipHover(){
+    if(document.documentElement.dataset.chipHover === '1') return;
+    document.documentElement.dataset.chipHover = '1';
+    // 输入框 + 对话记录都支持悬停预览（两处用的是同一套胶囊）
+    const inChipHost = el => Boolean(el?.closest?.('#agentInput, #agentMessages'));
+    document.addEventListener('mouseover', e => {
+        const chip = e.target.closest?.('.agent-inline-chip');
+        if(!chip || !inChipHost(chip)) return;
+        if(chip.contains(e.relatedTarget)) return;
+        showAgentChipPop(chip);
+    });
+    document.addEventListener('mouseout', e => {
+        const chip = e.target.closest?.('.agent-inline-chip');
+        if(!chip || !inChipHost(chip)) return;
+        if(chip.contains(e.relatedTarget)) return;
+        hideAgentChipPop();
+    });
+    /* 兜底：胶囊被删掉时 mouseout 不一定来得及派发（元素已经不在文档里），
+       所以每次鼠标移动都确认一下「持有预览卡的胶囊」还活着。早期返回，开销可忽略。 */
+    document.addEventListener('pointermove', () => {
+        if(agentChipPopOwner && !agentChipPopOwner.isConnected) hideAgentChipPop();
+    }, {passive:true});
+    agentInput?.addEventListener('scroll', hideAgentChipPop, {passive:true});
+    agentMessages?.addEventListener('scroll', hideAgentChipPop, {passive:true});
+}
+bindAgentChipHover();
+function agentRemoveChipByKey(key){
+    if(!agentState || !key) return;
+    const kind = String(key).split(':')[0];
+    const list = kind === 'att' ? agentState.attachments
+        : kind === 'doc' ? agentState.documents
+        : agentState.nodeRefs;
+    const idx = (list || []).findIndex(entry => agentChipKeyOf(kind, entry) === key);
+    if(idx >= 0) list.splice(idx, 1);
+    /* 🚨 先关悬停预览再删胶囊（2026-10-20 老板截图 bug）：
+       预览卡是**克隆到 body 的 #agentChipPopLayer** 里的，胶囊一删，
+       鼠标永远等不到 mouseout ⇒ 那张卡就永久挂在输入框上方（看着像幽灵附件）。
+       预览层是 pointer-events:none，用户根本点不到它，只能刷新页面。 */
+    hideAgentChipPop();
+    agentFindChipByKey(key)?.remove();
+    agentSyncInputEmpty();
+    saveAgentState();
+}
+/* 发送前按「胶囊在句子里的顺序」重排状态数组，并丢掉没有胶囊的条目。
+   🚨 为什么必须做：参考图顺序决定上游把哪张当基准图，现在用户能直接改句子顺序，
+      状态数组若还按添加顺序排，就和用户看到的顺序对不上了。 */
+function agentSyncStateOrderFromChips(){
+    if(!agentInput || !agentState) return;
+    const order = [...agentInput.querySelectorAll('.agent-inline-chip')]
+        .map(c => ({kind:c.dataset.chipKind, key:c.dataset.chipKey}));
+    const take = (arr, kind) => {
+        const byKey = new Map((arr || []).map(entry => [agentChipKeyOf(kind, entry), entry]));
+        const out = [];
+        order.forEach(o => {
+            if(o.kind !== kind) return;
+            const entry = byKey.get(o.key);
+            if(entry){ out.push(entry); byKey.delete(o.key); }
+        });
+        return out;
+    };
+    agentState.attachments = take(agentState.attachments, 'att');
+    agentState.documents = take(agentState.documents, 'doc');
+    agentState.nodeRefs = take(agentState.nodeRefs, 'ref');
+}
+// 文件 → 内联胶囊（按类型区分「图」和「文件」，模型一眼能分清能不能当参考图）
+async function agentAttachFilesInline(files){
+    if(!agentState) return;
+    const attBefore = (agentState.attachments || []).length;
+    const docBefore = (agentState.documents || []).length;
+    await agentAttachFiles(files);
+    const newAtt = (agentState.attachments || []).slice(attBefore);
+    const newDoc = (agentState.documents || []).slice(docBefore);
+    newAtt.forEach(entry => agentInsertChipAtCaret('att', entry));
+    newDoc.forEach(entry => agentInsertChipAtCaret('doc', entry));
+}
+// 画布节点 → 引用（保留 agent 做画布控制所需的全部可读信息）
+function agentNodeRefFromNode(node){
+    if(!node) return null;
+    const type = node.type || 'smart-image';
+    const ref = {
+        id:String(node.id || ''),
+        title:String(node.title || '').slice(0, 60),
+        type,
+        x:Number(node.x) || 0,
+        y:Number(node.y) || 0,
+    };
+    // 内容：提示词节点 / 循环节点有文本；图片节点有图；3D 节点有场景
+    if(type === 'smart-prompt') ref.text = String(node.text || '').slice(0, 3000);
+    else if(type === 'smart-loop') ref.text = String(node.variablePrompt || node.text || '').slice(0, 2000);
+    const imgs = (node.images || []).filter(i => i?.url);
+    if(imgs.length) ref.images = imgs.slice(0, 6).map(i => ({url:i.url, name:i.name || fileNameFromUrl(i.url) || 'image'}));
+    if(isSmart3DNode(node) || isHy3dNode(node)) ref.has3dScene = smart3DHasContent(node) || hy3dHasContent(node);
+    if(Number(node.pending) > 0) ref.pending = Number(node.pending);
+    return ref;
+}
+/* 🚨 2026-10-20 起**不再由复制粘贴调用**（老板要求：复制节点粘到输入框 = 直接「发送至 Agent」，
+   见 agentSendNodeToAgent）。保留它是为了将来做「显式引用节点」入口时不用重写；
+   老消息里的 [节点:xxx] 胶囊与 agentState.nodeRefs 仍然按老逻辑渲染。 */
+function agentAddNodeRefs(nodeList){
+    if(!agentState) return 0;
+    if(!Array.isArray(agentState.nodeRefs)) agentState.nodeRefs = [];
+    let added = 0;
+    (nodeList || []).forEach(node => {
+        if(!node) return;
+        if(agentState.nodeRefs.length >= AGENT_NODE_REF_MAX){
+            toast(`最多引用 ${AGENT_NODE_REF_MAX} 个画布节点`);
+            return;
+        }
+        // 同一个节点只引用一次（重复引用对模型没意义，只会撑上下文）
+        if(agentState.nodeRefs.some(r => r.id && r.id === node.id)) return;
+        const ref = agentNodeRefFromNode(node);
+        if(!ref) return;
+        agentState.nodeRefs.push(ref);
+        agentInsertChipAtCaret('ref', ref);
+        added++;
+    });
+    if(added){ saveAgentState(); }
+    return added;
+}
+// 发送时附在消息末尾的「引用对照表」—— 模型靠这段才知道 [节点:xxx] 到底是什么
+function agentNodeRefsContextBlock(){
+    const refs = Array.isArray(agentState?.nodeRefs) ? agentState.nodeRefs : [];
+    if(!refs.length) return '';
+    const lines = refs.map((r, i) => {
+        /* 🚨 必须给 id：引用块以前只有标题，而画布上常有多个同名「上传」
+           ⇒ 模型的 target_node 写标题永远对不上（2026-10-20 老板踩中）。 */
+        const head = `[节点${i + 1}]「${r.title || r.id}」 id=${r.id} type=${r.type} 位置(${Math.round(r.x)},${Math.round(r.y)})`;
+        const extra = [];
+        if(r.text) extra.push(`内容：${r.text}`);
+        if(Array.isArray(r.images) && r.images.length){
+            extra.push(`该节点有 ${r.images.length} 张图：${r.images.map(im => im.url).join('、')}`);
+        }
+        if(r.has3dScene) extra.push('该节点有 3D 场景内容');
+        if(r.pending) extra.push(`正在生成（${r.pending} 张）`);
+        return extra.length ? `${head}${AGENT_NL}  ${extra.join(`${AGENT_NL}  `)}` : head;
+    });
+    return `【用户引用的画布节点】（消息里的 [节点:xxx] 就指这些；**要用 id= 后面那串**，标题只在唯一时才可靠）
+${lines.join(AGENT_NL)}`;
+}
+/* 把 @引用节点的图也塞进理解模型的 images（2026-10-20）。
+   🚨 在这之前，引用节点只把「标题 + 图片 URL 文本」给了模型，**图本身没给**。
+      后果：模型从没见过那张图 ⇒ 判断不了「这只猫在哪」⇒ 给不出 mask_hint，
+      自动遮罩的前提直接断掉。生图侧早有 agentNodeRefImages 补了 reference_images，
+      但那条路是发给**生图接口**的，理解模型这边一直是瞎的。 */
+function agentAppendNodeRefImagesToContext(contextImages){
+    if(!Array.isArray(contextImages)) return contextImages;
+    const limit = Number(AGENT_LLM_IMAGE_MAX) || 6;
+    (agentState?.nodeRefs || []).forEach(ref => {
+        if(contextImages.length >= limit) return;
+        const live = (nodes || []).find(n => n.id === ref?.id) || ref;
+        if(!live || live.id === SMART_LOG_PREVIEW_NODE_ID) return;
+        const img = (live.images || []).find(im => im?.url);
+        if(!img?.url) return;
+        if(contextImages.some(i => i?.url === img.url)) return;
+        contextImages.push({url:img.url, name:img.name || String(live.title || 'node') + '.png'});
+    });
+    return contextImages;
+}
 function agentGenCardHtml(gen, numOffset){
     const status = gen.status || 'running';
     const statusText = status === 'done' ? tr('smart.agentGenDone') : status === 'error' ? tr('smart.agentGenFail') : tr('smart.agentGenerating');
@@ -26194,25 +27683,50 @@ function agentGenCardHtml(gen, numOffset){
     const attachIdxTag = (Array.isArray(gen.attachment_indices) && gen.attachment_indices.length > 0)
         ? `参考图#${gen.attachment_indices.map(i => i + 1).join(',')}` : '';
     const fullRefTags = [refTags, attachIdxTag].filter(Boolean).join(' · ');
+    /* 当次到底怎么做的，直接标在卡片上（老板要求「能回溯」）。
+       与输入框/历史胶囊同一原则：**记录事实，不靠状态反推**。 */
+    const _ex = gen.exec || null;
+    const _mode = _ex?.mode === 'inpaint' ? '遮罩局部重绘'
+        : _ex?.mode === 'full' ? '整图重绘'
+        : gen.inpaint ? '局部重绘' : '';
+    const methodTag = _mode ? (_ex?.target ? `${_mode} · ${_ex.target}` : _mode) : '';
     const thumbs = (gen.results || []).filter(r => r?.url).map((r, i) => `<span class="agent-gen-thumb-wrap"><span class="agent-gen-img-num">${(numOffset || 0) + i + 1}</span><img src="${escapeHtml(r.url)}" alt="" loading="lazy" title="图${(numOffset || 0) + i + 1} - 点击跳转" data-agent-gen-jump="${escapeHtml(r.nodeId || '')}" data-agent-gen-x="${r.nodeX || 0}" data-agent-gen-y="${r.nodeY || 0}" style="cursor:pointer"></span>`).join('');
     const promptText = escapeHtml(gen.prompt || '');
     const promptHtml = promptText ? `<div class="agent-gen-prompt agent-gen-prompt-collapsed" data-agent-gen-prompt="1">${promptText}<button class="agent-gen-prompt-toggle" type="button" data-agent-prompt-toggle="1">${escapeHtml(tr('smart.agentExpand') || '展开')}</button></div>` : '';
     // 生成完成后显示快捷操作栏
     const quickActions = status === 'done' && thumbs ? `<div class="agent-gen-quick-actions"><button class="agent-quick-btn" type="button" data-agent-quick="edit" title="修改"><i data-lucide="pencil"></i><span>修改</span></button><span class="agent-variant-wrap"><button class="agent-quick-btn" type="button" data-agent-quick="variant" title="变体"><i data-lucide="copy-plus"></i><span>变体</span></button><div class="agent-variant-pop"><button class="agent-variant-opt" type="button" data-agent-variant-count="1">×1</button><button class="agent-variant-opt" type="button" data-agent-variant-count="2">×2</button><button class="agent-variant-opt" type="button" data-agent-variant-count="3">×3</button><button class="agent-variant-opt" type="button" data-agent-variant-count="4">×4</button></div></span><button class="agent-quick-btn" type="button" data-agent-quick="describe" title="反推"><i data-lucide="scan-search"></i><span>反推</span></button></div>` : '';
-    return `<div class="agent-gen-card">${promptHtml}<div class="agent-gen-status ${status === 'error' ? 'error' : status === 'done' ? 'done' : ''}">${status === 'running' ? '<span class="agent-gen-spinner"></span>' : ''}<span>${escapeHtml(statusText)}${fullRefTags ? ' · ' + escapeHtml(fullRefTags) : ''}</span></div>${status === 'error' && gen.error ? `<div class="agent-gen-prompt">${escapeHtml(String(gen.error).slice(0, 160))}</div>` : ''}${thumbs ? `<div class="agent-msg-thumbs">${thumbs}</div>` : ''}${quickActions}</div>`;
+    /* 尺寸被护栏自动压过：必须写出来，别让老板以为「我说 4K 它给 2K」是 bug。
+       statusText 里已经可能有「参考上一批图 · 整图重绘」，所以单独一行小字。 */
+    const sizeNoteHtml = gen.sizeNote ? `<div class="agent-gen-note">${escapeHtml(String(gen.sizeNote))}</div>` : '';
+    /* 实际用的模型（2026-10-21 老板：界面选 sunburst，卡片与报错却写 flare —— 他根本没法核对）。
+       🚨 只显示 `gen.exec.model`：那是**真正发给上游**的值，不是「界面选的」也不是「模型想要的」。
+       exec 在发请求前就写好了，所以 running 阶段就有；确认卡片（还没执行）时没有 exec，不显示。 */
+    const modelNoteHtml = (_ex?.model && status !== 'pending')
+        ? `<div class="agent-gen-model">${escapeHtml(String(_ex.model))}</div>` : '';
+    /* 失败时不当死胡同（2026-10-21 老板要求）：给一个「让 Agent 想办法」的入口，
+       点一下就把失败原因 + 原始需求带回对话，让模型给 2-3 个可选方案（它会走 options 通道）。
+       🚨 不自动发：自动发等于每次失败都偷偷调一次 LLM，既慢又花钱。 */
+    const askFixHtml = status === 'error'
+        ? `<button class="agent-quick-btn agent-gen-askfix" type="button" data-agent-ask-fix="1" title="把失败原因带回对话，让 Agent 给可选方案"><i data-lucide="life-buoy"></i><span>让 Agent 想办法</span></button>`
+        : '';
+    return `<div class="agent-gen-card">${promptHtml}<div class="agent-gen-status ${status === 'error' ? 'error' : status === 'done' ? 'done' : ''}">${status === 'running' ? '<span class="agent-gen-spinner"></span>' : ''}<span>${escapeHtml(statusText)}${fullRefTags ? ' · ' + escapeHtml(fullRefTags) : ''}${methodTag ? ' · ' + escapeHtml(methodTag) : ''}</span></div>${modelNoteHtml}${sizeNoteHtml}${status === 'error' && gen.error ? `<div class="agent-gen-prompt agent-gen-error-text">${escapeHtml(String(gen.error).slice(0, 400))}</div>` : ''}${askFixHtml ? `<div class="agent-gen-quick-actions">${askFixHtml}</div>` : ''}${thumbs ? `<div class="agent-msg-thumbs">${thumbs}</div>` : ''}${quickActions}</div>`;
 }
 function agentMessageHtml(msg){
-    const imgs = (msg.images || []).filter(i => i?.url).map(i => `<img src="${escapeHtml(i.url)}" alt="" loading="lazy">`).join('');
-    // 附件节点：消息里的非图片附件（点击可预览 / 下载）
-    const docs = (Array.isArray(msg.documents) ? msg.documents : []).filter(d => d?.url).map((doc, i) => {
-        const icon = isTextMediaItem(doc) ? 'file-text' : 'file';
-        return `<div class="agent-msg-doc" data-agent-msg-doc="${escapeHtml(msg.id)}:${i}" title="${escapeAttr(doc.name || 'file')}">`
-            + `<i data-lucide="${icon}"></i>`
-            + `<span class="agent-msg-doc-name">${escapeHtml(doc.name || 'file')}</span>`
-            + `<span class="agent-msg-doc-ext">${escapeHtml(attachmentExtLabel(doc))}</span>`
-            + `</div>`;
-    }).join('');
-    const docsWrap = docs ? `<div class="agent-msg-docs">${docs}</div>` : '';
+    /* 附件形态与输入框一致（2026-10-20 老板要求）：
+       用户消息正文里的 `[图:x]`/`[文件:x]`/`[节点:x]` token 还原成同样的胶囊，
+       位置和顺序就是当时输入框里的样子 —— 否则事后翻记录根本看不出当时挂了什么。 */
+    const _rich = msg.role === 'user' ? agentMsgTextHtml(msg) : {html: escapeHtml(msg.text || ''), used: new Set()};
+    const _msgChip = (kind, entry) => `<span class="agent-inline-chip" contenteditable="false"`
+        + ` data-chip-kind="${kind}" data-chip-key="${escapeAttr(agentChipKeyOf(kind, entry))}"`
+        + ` data-chip-msg="${escapeAttr(msg.id || '')}">`
+        + agentChipInnerHtml(kind, entry, {removable:false, skill:false}) + `</span>`;
+    // 老消息没有 token（或条目在状态里已被裁掉）→ 剩下的补在气泡下面，别让记录缺块
+    const _leftChips = [
+        ...(msg.images || []).filter(e => e?.url && !_rich.used.has(agentChipKeyOf('att', e))).map(e => _msgChip('att', e)),
+        ...(Array.isArray(msg.documents) ? msg.documents : []).filter(e => e?.url && !_rich.used.has(agentChipKeyOf('doc', e))).map(e => _msgChip('doc', e)),
+        ...(Array.isArray(msg.nodeRefs) ? msg.nodeRefs : []).filter(e => !_rich.used.has(agentChipKeyOf('ref', e))).map(e => _msgChip('ref', e))
+    ];
+    const docsWrap = _leftChips.length ? `<div class="agent-msg-chips">${_leftChips.join('')}</div>` : '';
     let _genNumOffset = 0;
     const gens = (msg.generations || []).map(g => { const html = agentGenCardHtml(g, _genNumOffset); _genNumOffset += (g.results || []).filter(r => r?.url).length; return html; }).join('');
     // 本机工具调用记录：可折叠卡片（默认收起，点开看参数与输出）
@@ -26232,7 +27746,19 @@ function agentMessageHtml(msg){
             + `</div></details>`;
     }).join('');
     const toolWrap = toolCards ? `<div class="agent-tool-calls">${toolCards}</div>` : '';
-    const actions = msg.text ? `<div class="agent-msg-actions"><button class="agent-msg-action-btn" type="button" data-agent-copy="${escapeHtml(msg.id)}" title="复制"><i data-lucide="copy"></i></button>${msg.role === 'assistant' ? `<button class="agent-msg-action-btn" type="button" data-agent-retry="${escapeHtml(msg.id)}" title="重试"><i data-lucide="refresh-cw"></i></button>` : ''}</div>` : '';
+    /* 用户消息可重编辑（2026-10-20）：编辑时气泡换成 textarea，正文里的 [图:x]/[文件:x]/[节点:x]
+       token 原样显示 —— 用户删掉某个 token 就等于把那个附件/引用从这次重发里去掉。 */
+    const _editing = msg.role === 'user' && msg.id === agentEditingMsgId;
+    const actions = msg.text ? `<div class="agent-msg-actions">${msg.role === 'user' ? `<button class="agent-msg-action-btn" type="button" data-agent-edit="${escapeHtml(msg.id)}" title="编辑这条消息（回退/修改记忆）"><i data-lucide="pencil"></i></button>` : ''}<button class="agent-msg-action-btn" type="button" data-agent-copy="${escapeHtml(msg.id)}" title="复制"><i data-lucide="copy"></i></button>${msg.role === 'assistant' ? `<button class="agent-msg-action-btn" type="button" data-agent-retry="${escapeHtml(msg.id)}" title="重试"><i data-lucide="refresh-cw"></i></button>` : ''}</div>` : '';
+    const editHtml = _editing ? `<div class="agent-msg-edit">`
+        + `<textarea class="agent-msg-edit-area" data-agent-edit-area="${escapeHtml(msg.id)}" rows="3">${escapeHtml(msg.text || '')}</textarea>`
+        + `<div class="agent-msg-edit-actions">`
+        + `<button class="agent-prompt-btn primary" type="button" data-agent-edit-resend="${escapeHtml(msg.id)}">保存并重新生成</button>`
+        + `<button class="agent-prompt-btn" type="button" data-agent-edit-save="${escapeHtml(msg.id)}">仅保存</button>`
+        + `<button class="agent-prompt-btn" type="button" data-agent-edit-cancel="${escapeHtml(msg.id)}">取消</button>`
+        + `</div>`
+        + `<div class="agent-msg-edit-hint">「保存并重新生成」= 回退到这条消息，它后面的对话全部丢弃后重发；「仅保存」= 只改这句话，不重新执行。</div>`
+        + `</div>` : '';
     // 结构化 options 字段（仅 assistant 消息，且 generations 为空时显示）
     const hasGenerations = Array.isArray(msg.generations) && msg.generations.length > 0;
     const options = (!hasGenerations && Array.isArray(msg.options)) ? msg.options : [];
@@ -26288,11 +27814,35 @@ function agentMessageHtml(msg){
     } else if(msg.role === 'assistant' && msg.cardType === 'prompt_suggestion' && msg.text){
         cardHtml = `<div class="agent-prompt-suggest-card"><div class="agent-prompt-suggest-body">${escapeHtml(msg.text)}</div><div class="agent-analysis-actions"><button class="agent-quick-btn primary" type="button" data-agent-card-gen="1"><i data-lucide="palette"></i><span>直接生图</span></button><button class="agent-quick-btn" type="button" data-agent-copy="${escapeHtml(msg.id)}"><i data-lucide="copy"></i><span>复制</span></button></div></div>`;
     }
-    const bubbleHtml = (msg.text && !cardHtml) ? `<div class="agent-msg-bubble">${escapeHtml(msg.text)}</div>` : '';
-    return `<div class="agent-msg ${msg.role === 'user' ? 'user' : 'assistant'}${toolWrap ? ' has-tools' : ''}">${bubbleHtml}${cardHtml}${imgs ? `<div class="agent-msg-thumbs">${imgs}</div>` : ''}${docsWrap}${toolWrap}${gens}${promptCardHtml}${optionsHtml}${actions}</div>`;
+    const bubbleHtml = (msg.text && !cardHtml && !_editing) ? `<div class="agent-msg-bubble">${_rich.html}</div>` : '';
+    // 执行计划：让用户先看到「打算怎么做」，再看到结果。单步不展示（跟正文重复）。
+    const _plan = (msg.role === 'assistant' && Array.isArray(msg.plan)) ? msg.plan.filter(Boolean).slice(0, 8) : [];
+    const planHtml = _plan.length > 1
+        ? `<div class="agent-plan">${_plan.map((s, i) => `<div class="agent-plan-step"><span class="agent-plan-num">${i + 1}</span><span class="agent-plan-text">${escapeHtml(s)}</span></div>`).join('')}</div>`
+        : '';
+    return `<div class="agent-msg ${msg.role === 'user' ? 'user' : 'assistant'}${toolWrap ? ' has-tools' : ''}${_editing ? ' is-editing' : ''}">${bubbleHtml}${editHtml}${cardHtml}${planHtml}${docsWrap}${toolWrap}${gens}${promptCardHtml}${optionsHtml}${actions}</div>`;
 }
 function renderAgentMessages(){
     if(!agentMessages || !agentState) return;
+    /* 🚨 有正在运行的对话就自动展开（2026-10-21 老板要求）。
+       收起态只剩一颗胶囊：消息已经发出去了、图正在生成，用户却看不到任何进度和产出，
+       等于把「正在发生的事」藏起来了。所以只要在跑就展开。
+       🚨 判定不能只看 agentSending —— 刷新页面恢复的图生任务、以及从快捷操作触发的变体，
+          agentSending 可能是 false，但 generations 里仍有 status==='running'。
+       ⚠️ 只在**跑起来时**展开，跑完不自动收起：结果还留在那儿，收起是用户自己的决定。
+       ⚠️ 放在这里（而不是 5 处 `agentSending = true` 各写一遍）是因为渲染是它们的公共必经之路；
+          applyAgentDockSize 不会再回调 renderAgentMessages，不会递归。 */
+    if(!agentState.chatDrawerOpen){
+        const _running = agentSending || agentThinking
+            || (agentState.messages || []).some(m => (m.generations || []).some(g => g && g.status === 'running'));
+        if(_running){
+            agentState.chatDrawerOpen = true;
+            applyAgentDockSize();
+            saveAgentState();   // 只在「收起→展开」这一刻写一次，saveAgentState 内部有 200ms 防抖
+        }
+    }
+    /* 整个列表要重建 ⇒ 悬停预览卡（克隆在 body 上）必须一起清，否则会挂着一张旧卡的幽灵 */
+    hideAgentChipPop();
     const msgs = agentState.messages || [];
     // 确保 prompts 状态一致（兼容旧数据、恢复 current 指针）
     msgs.forEach(m => {
@@ -26311,7 +27861,14 @@ function renderAgentMessages(){
     requestAnimationFrame(() => {
         if(agentMessages) agentMessages.scrollTop = agentMessages.scrollHeight;
     });
-    if(agentSendBtn) agentSendBtn.disabled = agentSending;
+    /* 🚨 并发对话（2026-10-22 老板）：**只有「当前这个对话正在跑」才锁输入区**。
+       以前一律 `= agentSending`，于是 A 对话在思考时切到 B，B 的输入框也是灰的、
+       连「新建对话」都点不了 —— 并发就无从谈起。
+       新建 / 对话列表两个按钮**永远可用**（切对话是并发的前提）；
+       「更多」里有清空等危险操作，跑的时候仍然锁住。 */
+    const _curConvRunning = agentSending
+        && String(agentState?._runningConvId || '') === String(agentState?.activeConversationId || '');
+    if(agentSendBtn) agentSendBtn.disabled = _curConvRunning;
     // 绑定消息操作按钮
     agentMessages.querySelectorAll('[data-agent-copy]').forEach(btn => {
         btn.onclick = e => {
@@ -26330,6 +27887,80 @@ function renderAgentMessages(){
         btn.onclick = e => {
             e.stopPropagation();
             if(!agentSending) agentRetryMessage(btn.dataset.agentRetry);
+        };
+    });
+    /* 重编辑历史消息（2026-10-20）：三个按钮语义必须分清 ——
+       · 保存并重新生成 = 回退记忆：截断这条之后的全部对话，按改后的内容重跑
+       · 仅保存       = 修改记忆：只改这一条，后面的对话保留（不会再触发执行）
+       · 取消         = 放弃编辑 */
+    agentMessages.querySelectorAll('[data-agent-edit]').forEach(btn => {
+        btn.disabled = agentSending;
+        btn.onclick = e => {
+            e.stopPropagation();
+            if(!agentSending) agentBeginEditMessage(btn.dataset.agentEdit);
+        };
+    });
+    agentMessages.querySelectorAll('[data-agent-edit-cancel]').forEach(btn => {
+        btn.onclick = e => {
+            e.stopPropagation();
+            agentCancelEditMessage();
+        };
+    });
+    agentMessages.querySelectorAll('[data-agent-edit-save]').forEach(btn => {
+        btn.onclick = e => {
+            e.stopPropagation();
+            const id = btn.dataset.agentEditSave;
+            const msg = (agentState?.messages || []).find(m => m.id === id);
+            if(!msg) return;
+            const t = agentReadEditArea(id);
+            if(!t){ toast('内容不能为空'); return; }
+            /* 只改正文，不动后面的对话。附件按 token 增删同步（删掉 [图:xx] 就把那张图摘掉）。 */
+            const kept = agentEntriesAfterEdit(msg, t);
+            msg.text = t;
+            msg.images = kept.images;
+            msg.documents = kept.documents;
+            msg.nodeRefs = kept.nodeRefs;
+            agentEditingMsgId = '';
+            renderAgentMessages();
+            saveAgentState();
+            toast('已保存（后面的对话保留）');
+        };
+    });
+    agentMessages.querySelectorAll('[data-agent-edit-resend]').forEach(btn => {
+        btn.disabled = agentSending;
+        btn.onclick = e => {
+            e.stopPropagation();
+            if(agentSending) return;
+            const id = btn.dataset.agentEditResend;
+            const msg = (agentState?.messages || []).find(m => m.id === id);
+            if(!msg) return;
+            const t = agentReadEditArea(id);
+            if(!t){ toast('内容不能为空'); return; }
+            agentResendMessage(msg, t);
+        };
+    });
+    /* 失败不当死胡同（2026-10-21）：把失败原因 + 原始需求带回对话，让模型给可选方案。
+       🚨 只填输入框、**不自动发** —— 自动发等于每次失败都偷偷烧一次 LLM。
+          老板点一次，Agent 才开始帮他想办法，方案由它输出（可走 options 通道让老板点选）。 */
+    agentMessages.querySelectorAll('[data-agent-ask-fix]').forEach(btn => {
+        btn.onclick = e => {
+            e.stopPropagation();
+            if(agentSending || !agentInput) return;
+            const card = btn.closest('.agent-gen-card') || btn.closest('.agent-msg');
+            if(!card) return;
+            const err = (card.querySelector('.agent-gen-error-text')?.textContent || '').trim();
+            const prompt = (card.querySelector('[data-agent-gen-prompt]')?.textContent || '')
+                .replace(/(展开|收起)\s*$/, '').trim();
+            agentInput.value = [
+                '刚才这张图没生成出来。',
+                err ? `失败原因：${err}` : '',
+                prompt ? `我原本要的是：${prompt.slice(0, 300)}` : '',
+                '先别直接原样重来 —— 告诉我该怎么改才能出图，给两三个可选方案（换参数 / 换模型 / 改需求），我选一个你再执行。'
+            ].filter(Boolean).join('\n');
+            toggleAgentPanel(true);
+            agentInput.focus();
+            if(typeof agentSyncInputEmpty === 'function') agentSyncInputEmpty();
+            toast('已把失败原因带回对话，确认后发送');
         };
     });
     // 快捷操作栏事件（修改/变体/反推）
@@ -26395,12 +28026,13 @@ function renderAgentMessages(){
         };
     });
     // 运行过程中锁定输入框和顶部按钮
-    if(agentInput) agentInput.disabled = agentSending;
+    // 🚨 同上：只在「当前对话正在跑」时锁输入框；新建/切换对话一律可用（并发对话的前提）
+    if(agentInput) agentInput.disabled = _curConvRunning;
     const newChatBtn = document.getElementById('agentNewChatBtn');
     const chatListBtn = document.getElementById('agentChatListBtn');
     const moreBtn = document.getElementById('agentMoreBtn');
-    if(newChatBtn) newChatBtn.disabled = agentSending;
-    if(chatListBtn) chatListBtn.disabled = agentSending;
+    if(newChatBtn) newChatBtn.disabled = false;
+    if(chatListBtn) chatListBtn.disabled = false;
     if(moreBtn) moreBtn.disabled = agentSending;
     // 绑定选项按钮事件
     agentMessages.querySelectorAll('[data-agent-option]').forEach(btn => {
@@ -26432,6 +28064,14 @@ function renderAgentMessages(){
                                 status:'running'
                             };
                             if(Array.isArray(p.attachment_indices)) g.attachment_indices = p.attachment_indices;
+                            // 逐条参数同样要带过去（重试路径），否则重试会退回默认值
+                            if(p.ratio) g.ratio = p.ratio;
+                            if(p.resolution) g.resolution = p.resolution;
+                            if(p.quality) g.quality = p.quality;
+                            if(p.provider) g.provider = p.provider;
+                            if(p.model) g.model = p.model;
+                            if(p.inpaint) g.inpaint = true;
+                            if(p.target_node) g.target_node = p.target_node;
                             return g;
                         });
                     }
@@ -26549,17 +28189,22 @@ function renderAgentMessages(){
             if(btn) btn.click();
         };
     });
-    // 附件节点：消息里的非图片附件 → 点击预览/下载
-    agentMessages.querySelectorAll('[data-agent-msg-doc]').forEach(el => {
+    // 对话记录里的胶囊：文档点开预览/下载，节点引用点一下跳到画布上那个节点
+    agentMessages.querySelectorAll('.agent-msg .agent-inline-chip').forEach(el => {
         el.onclick = e => {
+            const kind = el.dataset.chipKind || '';
+            const key = el.dataset.chipKey || '';
+            if(!kind || !key) return;
+            const msg = (agentState?.messages || []).find(m => m.id === el.dataset.chipMsg);
+            const list = kind === 'att' ? msg?.images : kind === 'doc' ? msg?.documents : msg?.nodeRefs;
+            const entry = (list || []).find(x => agentChipKeyOf(kind, x) === key);
+            if(!entry) return;
             e.stopPropagation();
-            const raw = String(el.dataset.agentMsgDoc || '');
-            const sep = raw.lastIndexOf(':');
-            const msgId = raw.slice(0, sep);
-            const idx = Number(raw.slice(sep + 1)) || 0;
-            const msg = (agentState?.messages || []).find(m => m.id === msgId);
-            const doc = (msg?.documents || [])[idx];
-            if(doc?.url) openAttachmentItem(doc);
+            if(kind === 'doc'){ if(entry.url) openAttachmentItem(entry); return; }
+            if(kind === 'ref'){
+                const node = entry.id ? (nodes || []).find(n => n.id === entry.id) : null;
+                if(node){ selectedId = node.id; focusNodeInViewport(node); render(); }
+            }
         };
     });
 }
@@ -26588,6 +28233,31 @@ function agentCurrentImageMap(){
     attachments.forEach((a, i) => map.push({num: offset + i + 1, url: a.url, name: a.name || `图${offset + i + 1}`, source: 'att'}));
     return map;
 }
+/* 🚨 并发对话：结果必须写回**发起时那个对话**（2026-10-22 老板：「允许 agent 并发」）。
+   场景：A 对话还在跑，用户点「新建对话」去 B 说话。
+   如果结果直接 push 到 agentState.messages（此时已指向 B），A 的回答就会串进 B。
+   这里按发起时记下的 convId 找目标；找不到才回落到当前对话。
+   ⚠️ 依赖 agentState._runningConvId（发请求前由 agentSendMessage 设置）。 */
+function agentPushAssistant(msg){
+    if(!agentState || !msg) return;
+    const targetId = String(msg._convId || agentState._runningConvId || agentState.activeConversationId || '');
+    const activeId = String(agentState.activeConversationId || '');
+    if(targetId && targetId !== activeId){
+        const conv = (agentState.conversations || []).find(c => c.id === targetId);
+        if(conv){
+            conv.messages = Array.isArray(conv.messages) ? conv.messages : [];
+            conv.messages.push(msg);
+            if(conv.messages.length > AGENT_MSG_MAX) conv.messages = conv.messages.slice(-AGENT_MSG_MAX);
+            saveAgentState();
+            // 不刷新当前 UI（用户正看着另一个对话），只给个轻提示
+            try { toast('另一个对话有新回复'); } catch(e) {}
+            return;
+        }
+    }
+    agentState.messages = Array.isArray(agentState.messages) ? agentState.messages : [];
+    agentState.messages.push(msg);
+    if(agentState.messages.length > AGENT_MSG_MAX) agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
+}
 function agentNewChat(){
     if(!agentState) return;
     // 保存当前对话
@@ -26595,8 +28265,8 @@ function agentNewChat(){
         const conv = agentState.conversations.find(c => c.id === agentState.activeConversationId);
         if(conv) conv.messages = (agentState.messages || []).slice(-AGENT_MSG_MAX);
     }
-    // 创建新对话
-    const newConv = {id:uid('ac'), title:'新对话', messages:[], ts:Date.now()};
+    // 创建新对话（title 留空 = 用首条消息自动生成标题；用户改名后才有值）
+    const newConv = {id:uid('ac'), title:'', messages:[], ts:Date.now()};
     if(!Array.isArray(agentState.conversations)) agentState.conversations = [];
     agentState.conversations.unshift(newConv);
     agentState.activeConversationId = newConv.id;
@@ -26646,16 +28316,46 @@ function renderAgentChatList(){
     panel.innerHTML = convs.map(conv => {
         const isActive = conv.id === agentState.activeConversationId;
         const firstMsg = (conv.messages || []).find(m => m.role === 'user' && m.text);
-        const title = firstMsg ? String(firstMsg.text).slice(0, 30) : (conv.title || '对话');
+        const autoTitle = firstMsg ? String(firstMsg.text).slice(0, 30) : '对话';
+        /* 🚨 用户改过的标题要**优先**（2026-10-22 老板要求重命名）：
+           以前是 `firstMsg ? 首条消息 : conv.title`，conv.title 只在没有消息时才生效 ——
+           等于存了也白存，改完刷新又变回首条消息。
+           `'新对话'` 是旧版新建时的占位（那时写死了），对老数据当成「没起过名」，
+           让它继续跟随首条消息，不然那批对话会永远显示「新对话」。 */
+        const rawTitle = String(conv.title || '').trim();
+        const customTitle = (rawTitle && rawTitle !== '新对话') ? rawTitle : '';
+        const title = customTitle || autoTitle;
         const time = conv.ts ? new Date(conv.ts).toLocaleDateString('zh-CN', {month:'numeric', day:'numeric'}) : '';
-        return `<button class="agent-chat-item${isActive ? ' active' : ''}" type="button" data-chat-id="${escapeHtml(conv.id)}"><span class="agent-chat-item-title">${escapeHtml(title)}</span><span class="agent-chat-item-time">${escapeHtml(time)}</span><button class="agent-chat-item-delete" type="button" data-chat-delete="${escapeHtml(conv.id)}"><i data-lucide="x"></i></button></button>`;
+        /* 🚨 用 div 而不是 button（2026-10-22）：里面要嵌「重命名输入框」和「删除/改名按钮」，
+           `<button>` 里套 `<input>`/`<button>` 是非法 HTML，浏览器会改写 DOM。
+           🚨 重命名用**铅笔按钮**而不是双击（同日改）：单击项就会切走对话并关掉列表，
+           双击根本来不及 —— 老板实测「没办法双击到标题」。 */
+        return `<div class="agent-chat-item${isActive ? ' active' : ''}" role="button" tabindex="0" data-chat-id="${escapeHtml(conv.id)}"><span class="agent-chat-item-title" data-chat-title>${escapeHtml(title)}</span><span class="agent-chat-item-time">${escapeHtml(time)}</span><button class="agent-chat-item-rename" type="button" data-chat-rename-btn="${escapeHtml(conv.id)}" title="重命名"><i data-lucide="pencil"></i></button><button class="agent-chat-item-delete" type="button" data-chat-delete="${escapeHtml(conv.id)}" title="删除"><i data-lucide="x"></i></button></div>`;
     }).join('');
     if(window.lucide) lucide.createIcons();
-    panel.querySelectorAll('[data-chat-id]').forEach(btn => {
-        btn.onclick = e => {
-            if(e.target.closest('[data-chat-delete]')) return;
-            agentSwitchChat(btn.dataset.chatId);
+    panel.querySelectorAll('[data-chat-id]').forEach(item => {
+        item.onclick = e => {
+            if(e.target.closest('[data-chat-delete]') || e.target.closest('[data-chat-rename]')
+                || e.target.closest('[data-chat-rename-btn]')) return;
+            agentSwitchChat(item.dataset.chatId);
             panel.hidden = true;
+        };
+        item.onkeydown = e => {
+            if(e.key === 'Enter' || e.key === ' '){
+                if(e.target.closest('[data-chat-rename]')) return;
+                e.preventDefault();
+                agentSwitchChat(item.dataset.chatId);
+                panel.hidden = true;
+            }
+        };
+    });
+    // 铅笔按钮 → 就地改名（不会切走对话）
+    panel.querySelectorAll('[data-chat-rename-btn]').forEach(btn => {
+        btn.onclick = e => {
+            e.stopPropagation();
+            e.preventDefault();
+            const item = btn.closest('[data-chat-id]');
+            startAgentChatRename(item, btn.dataset.chatRenameBtn);
         };
     });
     panel.querySelectorAll('[data-chat-delete]').forEach(btn => {
@@ -26671,6 +28371,46 @@ function renderAgentChatList(){
         };
     });
 }
+/* 对话标题就地重命名（2026-10-22 老板要求）。
+   🚨 保存的是 conv.title，而 renderAgentChatList 现在**优先用它**（以前只认首条消息，
+      改完刷新就回去了）。清空输入 = 恢复自动标题。 */
+function startAgentChatRename(itemEl, chatId){
+    if(!itemEl || !agentState) return;
+    const conv = (agentState.conversations || []).find(c => c.id === chatId);
+    if(!conv) return;
+    if(itemEl.querySelector('[data-chat-rename]')) return;   // 已经在改名了
+    const titleEl = itemEl.querySelector('[data-chat-title]');
+    if(!titleEl) return;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'agent-chat-rename';
+    input.setAttribute('data-chat-rename', '1');
+    input.maxLength = 60;
+    // 预填「当前看到的那行字」（可能来自自定义标题，也可能是首条消息的自动标题），方便微调
+    const rawTitle = String(conv.title || '').trim();
+    input.value = (rawTitle && rawTitle !== '新对话') ? rawTitle : String(titleEl.textContent || '').trim();
+    titleEl.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const commit = save => {
+        if(done) return;
+        done = true;   // Enter 之后还会触发 blur，不加这个会存两次 / 闪一下
+        if(save){
+            conv.title = String(input.value || '').trim();   // 空串 = 恢复自动标题
+            saveAgentState();
+        }
+        renderAgentChatList();
+    };
+    input.addEventListener('keydown', e => {
+        e.stopPropagation();
+        if(e.key === 'Enter'){ e.preventDefault(); commit(true); }
+        else if(e.key === 'Escape'){ e.preventDefault(); commit(false); }
+    });
+    input.addEventListener('blur', () => commit(true));
+    // 输入框里的点击/拖选不能冒泡去切换对话
+    ['click', 'dblclick', 'pointerdown'].forEach(t => input.addEventListener(t, e => e.stopPropagation()));
+}
 function agentCopyMessage(text){
     if(!text) return;
     navigator.clipboard?.writeText(text).then(() => toast('已复制')).catch(() => {
@@ -26683,6 +28423,85 @@ function agentCopyMessage(text){
         toast('已复制');
     });
 }
+/* ── 重编辑历史消息（2026-10-20 老板要求）────────────────────────────────────
+   两种语义，正好对应老板说的两个词：
+   · 「保存并重新生成」= **回退记忆**：截断到这条消息之前，用它重新跑一遍，后面的对话作废
+   · 「仅保存」        = **修改记忆**：只改这条的文本/附件，后面的对话原样保留
+   🚨 附件跟正文 token 绑定：正文里删掉 `[图:x]`，这次就不带那张图（不然改了文本图还在，很迷惑）。
+   🚨 老消息正文里没有 token（胶囊挂在气泡下面那种）→ 一律保留，别把附件吞掉。 */
+function agentTokenNamesIn(text){
+    const out = {att:new Set(), doc:new Set(), ref:new Set()};
+    const re = new RegExp(AGENT_MSG_TOKEN_RE.source, 'g');
+    let m;
+    while((m = re.exec(String(text || '')))){
+        const kind = m[1] === '图' ? 'att' : (m[1] === '文件' ? 'doc' : 'ref');
+        out[kind].add(m[2]);
+    }
+    return out;
+}
+function agentEntriesAfterEdit(msg, text){
+    const before = agentTokenNamesIn(msg?.text || '');
+    const after = agentTokenNamesIn(text);
+    const keep = (kind, entry) => {
+        const name = agentChipNameOf(kind, entry);
+        return before[kind].has(name) ? after[kind].has(name) : true;
+    };
+    return {
+        images:(msg?.images || []).filter(e => keep('att', e)),
+        documents:(Array.isArray(msg?.documents) ? msg.documents : []).filter(e => keep('doc', e)),
+        nodeRefs:(Array.isArray(msg?.nodeRefs) ? msg.nodeRefs : []).filter(e => keep('ref', e))
+    };
+}
+function agentBeginEditMessage(id){
+    if(agentSending) return;
+    agentEditingMsgId = String(id || '');
+    renderAgentMessages();
+    requestAnimationFrame(() => {
+        const ta = agentMessages?.querySelector('.agent-msg-edit-area');
+        if(ta){ ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    });
+}
+function agentCancelEditMessage(){
+    agentEditingMsgId = '';
+    renderAgentMessages();
+}
+function agentReadEditArea(id){
+    const ta = agentMessages?.querySelector(`[data-agent-edit-area="${CSS.escape(String(id))}"]`);
+    return ta ? String(ta.value || '').trim() : '';
+}
+/* 回退 + 重发：内容直接交给 sendAgentMessage（走 agentResendCtx），不经过输入框 */
+async function agentResendMessage(msg, newText){
+    if(!agentState || agentSending || !msg) return;
+    const msgs = agentState.messages || [];
+    const idx = msgs.findIndex(m => m.id === msg.id);
+    if(idx < 0) return;
+    const kept = agentEntriesAfterEdit(msg, newText);
+    const dropped = msgs.length - idx;
+    agentState.messages = msgs.slice(0, idx);
+    agentState.attachments = kept.images.slice();
+    agentState.documents = kept.documents.slice();
+    agentState.nodeRefs = kept.nodeRefs.slice();
+    agentEditingMsgId = '';
+    agentResendCtx = {
+        text:newText,
+        attachments:agentState.attachments.slice(),
+        documents:agentState.documents.slice(),
+        nodeRefs:agentState.nodeRefs.slice()
+    };
+    /* 🚨 顺序不能反：renderAgentAttachments() 内部会调 syncAgentInlineChips()，
+       按 agentState 把附件胶囊**补回输入框**（还带一个尾随空格）。先写 input 再渲染，
+       胶囊会把 [图:xxx] 又插回来 —— 看起来像 token 没被清掉（2026-10-20 实测）。
+       所以先渲染、后覆盖输入框正文。 */
+    renderAgentAttachments();
+    if(agentInput){
+        agentInput.value = String(newText).replace(new RegExp(AGENT_MSG_TOKEN_RE.source, 'g'), ' ')
+            .replace(/[ \t]{2,}/g, ' ').trim();
+    }
+    renderAgentMessages();
+    saveAgentState();
+    if(dropped > 1) toast(`已回退 ${dropped - 1} 条后续对话，正在按修改后的内容重新生成`);
+    await sendAgentMessage();
+}
 function agentRetryMessage(msgId){
     if(!agentState || agentSending) return;
     const msgs = agentState.messages || [];
@@ -26694,11 +28513,148 @@ function agentRetryMessage(msgId){
         if(msgs[i].role === 'user'){ userMsg = msgs[i]; break; }
     }
     if(!userMsg) return;
-    // 删除该 assistant 消息及之后的所有消息
-    agentState.messages = msgs.slice(0, idx);
-    // 重新发送
-    if(agentInput) agentInput.value = userMsg.text || '';
-    sendAgentMessage();
+    /* 走统一的「回退 + 重发」，顺带把原来的附件/引用一起带回去
+       （老实现只塞了 text，附件被 agentSyncStateOrderFromChips 清空 → 重试丢了参考图）。 */
+    agentResendMessage(userMsg, userMsg.text || '');
+}
+/* 编排上下文：把「模型做决策所需的事实」一次性摊给它。
+   🚨 之前只给了规则、没给事实 —— 模型不知道画布上有什么节点、有哪些生图通道和模型、
+      画布动作有哪些，于是只能退化成「写提示词」。
+   🚨 这三个块是**编排的地基**：判需求 → 选能力 → 定落点，全靠它们。
+   事实类内容（节点清单/模型清单）每轮都会变，所以每次调用都现算，不做缓存。 */
+function agentOrchestrationContext(){
+    const blocks = [];
+    // ---- 1. 可用生图能力 ----
+    const providers = agentGenProviders();
+    if(providers.length){
+        const lines = providers.slice(0, 8).map(p => {
+            const models = (p.image_models || []).slice(0, 12);
+            /* 🚨 把「硬限制」当事实摊给模型（2026-10-21）：只给规则不给事实 = 它只能瞎猜。
+               以前这里只说「有的不支持 4K」，模型于是照 4K 出，4096×4096 必然被上游拒。
+               现在逐个模型标上限，它才有可能自己先选 2K。 */
+            const modelText = models.length
+                ? models.map(m => isGptImageAutoSizeModel(m)
+                    ? `${m}（总像素≈${Math.round(GPT_IMAGE2_MAX_PIXELS / 10000)}万封顶；4K 档 1:1=2880×2880、16:9=3840×2160 —— **直接填 resolution="4k" 就行**，别自己换算成 4096）`
+                    : m).join(' / ')
+                : '（无模型）';
+            return `- ${p.name || p.id}（provider="${p.id}"）：${modelText}`;
+        });
+        blocks.push(`【可用生图能力】\n${lines.join('\n')}\n`
+            + `- **界面当前选中**：通道 provider="${agentState?.genProvider || ''}"，模型 "${agentState?.genModel || ''}"。\n`
+            + `- 🚨 **默认不要写 model**。用户在下拉里选的模型就是他的意图，**同一个通道里写别的型号会被系统直接忽略**\n`
+            + `  （想「顺手换个同族型号」是不行的，只会让卡片显示和实际不符）。\n`
+            + `- 只有「当前模型确实做不到」（例如它出不了你要的 4K、或必须用带遮罩的编辑能力）时，才值得换 —— \n`
+            + `  这时写**另一个通道**的 provider + model（值必须来自上面清单，不许自己编型号名），并在 plan 里说明为什么换。\n`
+            + `- 不同模型能力不同（见上面每个模型后面的上限标注）。**要出「大图/4K」先看模型吃不吃得下**：\n`
+            + `  比如 gpt-image-2 的方图 4K 是 4096×4096，超它上限 —— 这种时候就填 resolution="2k" 或改用能出 4K 的模型，\n`
+            + `  别硬填 4k 等着失败。（系统会把超限尺寸等比压到上限并告知用户，但那是兜底，不是让你不用想。）`);
+    } else {
+        blocks.push(`【可用生图能力】当前没有配置任何生图通道 —— 这轮**不要返回 prompts / generations**，只能文字回答、操作画布或产出文档。`);
+    }
+    // ---- 2. 画布现状 ----
+    const live = (nodes || []).filter(n => n.id !== SMART_LOG_PREVIEW_NODE_ID);
+    if(live.length){
+        const brief = live.slice(-24).map(n => {
+            const type = n.type || 'smart-image';
+            const state = (n.images || []).length ? `有${n.images.length}张图`
+                : (Number(n.pending) > 0 ? '生成中' : '空');
+            const sel = isNodeSelected(n.id) ? '，**当前选中**' : '';
+            const title = String(n.title || '(未命名)').slice(0, 24);
+            // 遮罩是「只改这块」的指令，模型必须知道它存在，否则会当成整图重画
+            const mask = validNodeInpaint(n) ? '，**已涂遮罩（可局部重绘）**' : '';
+            /* 🚨 id 必须给（2026-10-20 老板踩中）：画布上常有多个同名「上传」，
+               只给标题 ⇒ 模型的 target_node 永远对不上 ⇒ 局部重绘直接失败。 */
+            return `- 「${title}」 id=${n.id} type=${type}，${state}${sel}${mask}，位置(${Math.round(n.x || 0)},${Math.round(n.y || 0)})`;
+        });
+        const maskedCount = live.filter(n => validNodeInpaint(n)).length;
+        blocks.push(`【画布现状】共 ${live.length} 个节点${live.length > 24 ? '（只列最近 24 个）' : ''}：\n${brief.join('\n')}`
+            + (maskedCount ? `\n🚨 有 ${maskedCount} 个节点已涂遮罩：用户说「用遮罩改 / 只改这里 / 局部重绘」时，走 inpaint 而不是整图重画。` : '')
+            + `\n★ 没涂遮罩的节点**也能局部改**：用户指向某个具体对象时，你给 mask_hint（0~1 归一化 bbox），系统会自动造遮罩。别再让用户先去涂。`
+            /* 🚨 2026-10-21 老板截图：他贴的是输入框附件（不在【画布现状】里），
+               模型于是判定「绑不了遮罩」→ 退化成整图重绘，人脸/构图/光线全变了。
+               这里明说：附件图也会被落成节点，照样能给 mask_hint。 */
+            + `\n★ **用户贴在输入框里的图（消息附件）不在上面这份清单里，但它照样能局部重绘** ——`
+            + `\n  系统会先把它落成画布节点再按你的 mask_hint 造遮罩。所以别再说「附件图无法绑定遮罩」。`
+            + `\n🚨 mask_hint 的 target_node **必须写上面那个 id=**（同名节点很多，写标题对不上）。`);
+    } else {
+        blocks.push(`【画布现状】画布是空的。`);
+    }
+    // ---- 3. 可用画布动作 ----
+    blocks.push(`【可用画布动作 · canvas_ops】
+- {"op":"create_node","type":"image|prompt|loop|minimax|3d|hy3d|group","position":"center|left|right|top|bottom" 或 [x,y],"title":"节点名","text":"仅 prompt 节点用"}
+- {"op":"connect","from":"节点标题或 id","to":"节点标题或 id"}
+- {"op":"update_node","id":"节点标题或 id","title":"新标题","text":"新内容（写进提示词节点）","x":0,"y":0}
+- {"op":"remove_node","id":"节点标题或 id"}
+- {"op":"focus_node","id":"节点标题或 id"}　← 选中并把视口对到它
+- {"op":"group_nodes","nodes":["标题A","标题B"],"title":"分组名"}
+- {"op":"ungroup_node","id":"分组标题或 id"}
+- {"op":"arrange_nodes","nodes":["标题A","标题B"]}　← 按连线关系排开；不写 nodes 就整理当前选中
+- {"op":"clear_mask","id":"节点标题或 id"}　← 清掉遮罩痕迹；不写 id 就清画布上所有遮罩
+- {"op":"create_file_node","url":"/output/agent/xxx.pdf","name":"xxx.pdf","title":"节点名","position":"..."}
+只能引用【画布现状】里真实存在的节点，**别虚构 id 或标题**。`);
+    // ---- 3.5 能力总览：让他按「意图」而不是「功能名」路由 ----
+    blocks.push(`【画布能力总览 · 这些你都要会用】
+判断依据是**用户想达成什么**，不要等他打出功能名（他说「这里不太对」「再改改」也要能判断）：
+- 「把这块改掉 / 只改这里 / 这里不太对」 → **局部重绘**：节点已有遮罩就 "inpaint":true；
+  没有但你能指出位置 → 给 mask_hint，系统自动造遮罩
+  🚨 **参考图是用户贴在输入框里的图（消息附件、不在【画布现状】里）也一样能做局部重绘**：
+  系统会先把它落成画布节点、再按你的 mask_hint 造遮罩。
+  所以「把这张图里的人物换成男人」这类需求**必须给 mask_hint** ——
+  不许说「它是附件、绑不了遮罩」然后整图重绘，那会把脸/构图/光线全改掉，而用户只要求换一个对象。
+- 「把遮罩去掉 / 清除涂抹 / 不要这个遮罩了」 → **canvas_ops**：「{"op":"clear_mask","id":"..."}」
+  ★ 遮罩在重绘成功后**会一直留着**（方便连续改同一块）。**不要**主动去清它，
+    除非用户明确说不想要这个遮罩了。
+- 「改一下 / 换个风格 / 再出一版 / 按这张来」 → **edit**：prompt + use_last_outputs
+- 「做几张 / 给我几个方向 / 挑一个」 → **多条 prompt**
+- 「做文档 / 表格 / PPT / 报告」 → **附件产物协议**
+- 「建节点 / 连起来 / 归一组 / 整理 / 看看那个节点 / 挪到我眼前」 → **canvas_ops**
+  （create_node / connect / group_nodes / arrange_nodes / focus_node / update_node）
+- 「分层 / 拆开这几张图」 → 拆分图层（🖐 只能引导：选中节点 → 顶部工具栏「拆分图层」）
+- 「切成九宫格 / 切图」 → 宫格切分（🖐 顶部工具栏「宫格切分」）
+- 「裁剪 / 旋转 / 翻转 / 加字 / 画笔」 → 图片编辑器（🖐 双击节点进入）
+- 「放大 / 超分」 → 即梦放大（🖐 节点工具栏）
+- 「下载 / 导出 / 存到素材库」 → 🖐 顶部工具栏「下载」/ 节点工具栏
+🖐 = 你**只能引导，绝不能假装已经做了**。引导时说清「点哪里」，一句话说完，别列一堆。`);
+    // ---- 4. 能力边界（诚实约束：编排的前提是知道自己做不到什么）----
+    blocks.push(`【能力边界 · 别承诺做不到的】
+- 图片：能直接出（走上面列出的生图通道）。
+- 视频 / 3D：**不能直接出片**。只能建对应节点（type=minimax / 3d / hy3d）交给用户继续操作。
+  回复要说清「已建好节点，需要你点生成」，**不许谎称已经生成**。
+- 文档 / 表格 / PPT / PDF：按【附件产物协议】写文件，再 create_file_node 落成节点。`);
+    /* ---- 5. 上下文指代（2026-10-22 老板截图：说「基于描述文案生成图片」，
+       模型却回「按参考图的汽车座套卖点图制作」，把「用上一轮那段文字」理解成「用附件图」）---- */
+    blocks.push(`【上下文指代 · 用户说的是哪一份内容】
+- 「基于描述文案 / 按上面的描述 / 用刚才那段文字 / 根据你刚才说的 / 就按这个描述 / 把上面那段话」
+  → 指 **上一条 assistant 回复的正文**（就在对话历史里），**不是**参考图、也不是用户这句话本身。
+  🚨 这时你要**把那段文字改写成一条完整的生图提示词**，而不是原样复述：
+     画面内容（背景/场景/氛围）取自那段文字，但主体、构图、镜头、光线、质感由你补充判断，
+     再跟本轮的其他要求（张数 / 构图方向 / 比例）融合。**不要**改写成「按参考图制作」。
+     那段文字里明显不适合画面的部分（纯分析、评价、推测）直接舍弃。
+- 「基于这张图 / 按参考图 / 照这个风格」 → 才是用附件图 / 画布节点图。
+- 🚨 两种情况都出现时（既有附件、又提到「描述文案」）→ 以**文字**为主，附件图只作视觉参考，
+  reply 里要说清「按你刚才那段描述来画」。`);
+    return blocks.join(AGENT_NL + AGENT_NL);
+}
+/* 🚨 上下文指代：把「用户指的那段上一轮文字」作为**上下文**交给模型（2026-10-22）。
+   老板原话：「不是完全贴合该输入文案才执行，而是需要加入 agent 的理解和判断」。
+   ⇒ 不做机械拼接（那只是复述，上一轮那段是「看图说话」的产物，缺主体/构图/风格，照搬反而更差），
+     而是让模型在**生成时**就看见这段文字，自己判断用哪些、补什么、怎么和本轮要求融合。
+   只在用户**明确指代**时才注入；平时 system_prompt 一个字都不多。 */
+function agentSystemPromptWithReference(basePrompt, userText){
+    const ref = agentReferencedAssistantText(userText);
+    if(!ref) return basePrompt;
+    return `${basePrompt}
+
+【上下文指代 · 用户指的是这段文字】
+用户这句「${String(userText || '').trim()}」指的是**你上一条回复里的这段话**：
+"""
+${ref}
+"""
+怎么用由你判断（不是照抄）：
+- 画面内容（背景 / 场景 / 氛围）要来自这段文字，但**请改写成生图提示词** ——
+  该补的主体、构图、镜头、光线、质感由你决定，再和本轮的其他要求（张数 / 构图方向 / 比例）融合成一条完整指令。
+- 不要原样复述整段；也不要改写成「按参考图制作」—— 用户要的是「把这段描述画出来」。
+- 这段文字里明显不适合画面的部分（纯分析、评价、推测、免责说明）直接舍弃。`;
 }
 function agentSystemPrompt(bypassThinking, finalCount){
     const parts = [];
@@ -26725,20 +28681,52 @@ When a skill document is provided, every prompt you generate MUST fully and verb
     // 思维模式和非思维模式使用不同的基础指令，避免冲突
     const thinkingModeOn = agentState?.thinkingMode && !bypassThinking;
     if(thinkingModeOn){
-        // 思维模式：只注入格式要求，不注入"能生成就生成"指令
-        parts.push(`You are an AI image-generation agent in Thinking Mode (progressive dimension collection mode).
-Reply with raw JSON only (no markdown, no extra text):
-{"reply":"回复用户的话","options":[{"label":"选项名","value":"选项值"}],"collected":{},"next_dimension":"","remaining_dimensions":[],"prompts":[],"generations":[]}
+        // 只注入「输出格式」，不注入任何身份设定 —— 身份与行为契约见下面【身份】段。
+        // 🚨 这里原来写的是 "You are an AI image-generation agent (progressive dimension collection mode)"，
+        //    模型读到就把每句话都当生图需求去追问风格，是「你好 → 请先选择风格」的根源之一。
+        parts.push(`【输出格式 / Output Format】只返回一个原始 JSON 对象（不要 markdown 代码块，不要 JSON 之外的任何文字）：
+{"reply":"给用户看的话","intent":"chat","plan":[],"options":[{"label":"选项名","value":"选项值"}],"prompts":[],"generations":[],"canvas_ops":[]}
 
-Fields: "reply"=对话回复; "options"=[{label,value}]按钮选项; "collected"=已确认的维度字典; "next_dimension"=下一轮维度; "remaining_dimensions"=剩余维度数组; "prompts"=待确认的中文提示词（仅最终轮返回）; "generations"=立即生成的图片（思维模式下始终为空）.
-
-所有prompt必须中文，包含主体/风格/构图/光线/色彩/细节/氛围
-文字规则：默认情况下prompt不要包含文字内容（标题、对白、台词、旁白、字幕），只描述画面视觉元素`);
+- "reply"：**唯一会被用户看到的文字**，正常说话就行，不要复述 JSON、不要报字段名。
+- "intent"：这轮到底在干什么，只能填这些之一 ——
+  chat（聊天/答疑/分析）｜generate（新出图）｜edit（改已有图）｜video（生视频）｜
+  document（文档/表格/PPT）｜canvas（只操作画布节点）｜mixed（既要出图又要动画布）。
+- "plan"：**执行计划**，给用户看的短句数组，如 ["在画布右侧建一个提示词节点","生成 3 个方向的主图"]。
+  只有真的要动手（≥2 步）时才写，纯聊天写 []。
+- "options"：给用户的快捷按钮。**只在真的需要用户从几个方向里选一个时**才给，否则写 []。
+- "prompts"：待用户确认后再执行的中文生图提示词，不出图就写 []。
+  ★ 要**局部改某个具体对象**、且节点上没涂遮罩时，这一项写成对象并带 mask_hint：
+    [{"prompt":"把画面中的女人换成男人，保持姿势/服装/背景/光线不变","mask_hint":{"target_node":"smart_4toaqg","bbox":[0.05,0.45,0.4,0.5]}}]
+    bbox = [x,y,w,h]，0~1 归一化、相对原图左上角；x/y 是框左上角，w/h 是框宽高。
+    🚨 target_node **写【画布现状】里 id= 后面那串**，不要写标题 —— 画布上常有多个同名节点，
+      写标题系统就对不上，会直接失败（老板就是这么失败的）。
+    🚨 不写 mask_hint 就会被当成整图重画（画面全变了）。拿不准位置就留 null，让用户自己涂。
+    🚨 也**绝对不要**只标 "inpaint":true 却不给 mask_hint —— 系统找不到目标，这条会直接失败。
+  ★ 整图性改动（"改成赛博朋克风""调亮一点"）**不要**写 mask_hint。
+- "generations"：立即生成的图（本模式始终写 []）。
+- "canvas_ops"：画布节点操作，没有就写 []。
+- "mask_hint"：顶层不用写，**写在 prompts 的每一项里**。`);
+        // 事实先行：先让模型知道「有什么可用」，再告诉它「怎么决策」
+        parts.push(agentOrchestrationContext());
     } else {
         parts.push(AGENT_FORMAT_INSTRUCTION);
+        // 直接模式也给它同样的事实（画布现状 / 可用模型 / 画布动作），
+        // 否则它只能凭想象猜节点名和通道 —— 编排能力不该因为开关状态而消失。
+        parts.push(agentOrchestrationContext());
     }
     // 附件产物协议：两套模式都要注入（生成文档/表格/PPT 不受「画布控制」开关限制）
     parts.push(AGENT_FILES_INSTRUCTION);
+    /* 执行记录（2026-10-20 老板提问）：
+       「你是怎么做的 / 是不是用遮罩局部重绘的」这类追问，模型原来只能看画布现状去猜，
+       于是答「无法确认」。历史里每条生成的后面现在都带 [执行记录]，必须让它以那份为准。 */
+    parts.push(`【执行记录 / Execution Log —— 回答「你是怎么做的」时只能靠它】
+历史里每条你生成过的图后面，都有一行 \`[执行记录 #N]\`，写明当次**实际**怎么做的：
+遮罩局部重绘 / 整图重绘、目标节点、遮罩框、输出尺寸、用的模型、成功几张或失败原因。
+- ✅ 用户问「是不是用遮罩局部重绘的」「刚才那张怎么做的」「改的是哪个节点」→ **照 [执行记录] 直答**。
+- 🚨 **不要拿画布现状去反推做法**：画布上「某个节点现在有没有遮罩」是**当前状态**，
+  遮罩可能在生成后被清掉、迁移到新图、或者用户自己重涂了 —— 它证明不了你当时是怎么做的。
+- 🚨 也别因为「看不出来」就回答「无法确认」：没写 [执行记录] 的老记录，
+  就说「这条记录里没留下做法信息」，然后给出你能确认的部分（用的是哪个节点、出了几张）。`);
     // 注入开发模式指令：当开启开发模式时，强化画布节点操作规则
     if(agentState?.devMode){
         parts.push(`【开发模式 / Dev Mode 已开启】
@@ -26758,111 +28746,166 @@ Fields: "reply"=对话回复; "options"=[{label,value}]按钮选项; "collected"
    返回：{"reply":"已为您在画布左侧创建上传节点。","options":[],"prompts":[],"generations":[],"canvas_ops":[{"op":"create_node","type":"image","position":"left"}]}`);
     }
     // 注入最终出图数量（前端已决策：输入框显式要求 > 工具栏设置）
-    // LLM 无需自行判断数量，只需按此数量返回对应条数
+    // 🚨 必须写成「要是这轮出图的话」——原来那句「prompts 数组只返回恰好 1 条」会被模型理解成
+    //    「每轮都必须返回一条 prompt」，于是连「你好」都在憋提示词。
     const _finalCount = Math.max(1, Math.min(8, Number(finalCount) || Number(agentState?.genCount) || 1));
-    if(_finalCount > 1){
-        parts.push(`【出图数量 / Output Count】系统要求生成 ${_finalCount} 张图。每张是独立的图片，在主题/品牌方向/变体方向上必须有明显差异（不能只是换个颜色或微调）。数量已由系统决定（综合工具栏设置和输入框显式要求），你无需自行判断，只需返回恰好 ${_finalCount} 条。`);
-    } else {
-        parts.push(`【出图数量 / Output Count】系统只要求生成 1 张图。prompts 数组只返回恰好 1 条，不要返回多条。`);
-    }
+    // 🚨 「张数」和「prompt 条数」是两件事，原来混成一句 `prompts 只返回 1 条`，
+    //    结果把用户画像里「先给 2-3 个方向」彻底压死了（实测：记忆块明写着要多方向，模型照样只回 1 条）。
+    //    张数 = 每个方向出几张（count）；条数 = 给几个方向。
+    parts.push(`【出图数量 / Output Count】**只有这一轮确实要出图时**才相关：
+- 每条 prompt 的 "count" = ${_finalCount}（同一方向出几张），不要靠堆多条 prompt 来凑张数${_finalCount > 1 ? `；同方向的 ${_finalCount} 张必须在主题、品牌方向、变体方向上有明显差异（不能只换个颜色或微调）` : ""}。
+- prompts 的**条数** = 方向数：用户没提方向时 1 条就够；**用户记忆或本轮明确要多个方向时，每个方向各写 1 条**（要 2-3 个方向就写 2-3 条 prompt）。
+- 🚨 **用户本轮说了数量就以用户为准**：「一张」「两张」「给我 3 个方向」这类明确数字，
+  一律压过偏好记忆里的「先给 2-3 个方向」—— 记忆是默认值，不是硬规矩。
+- 不出图的轮次直接把 prompts 留空 —— 不要为了凑数量硬造提示词。`);
+    /* 🚨 需求文档 / Brief 必须当「逐条执行清单」（2026-10-21 老板：「结果与图需排版和风格不一致」）：
+       他给的是 A+ 模块 Brief（模块｜文案｜画面建议表达方式｜不建议出现），每张图都有指定的
+       主/副标题与版式。旧提示词对「附件」零约束，模型只把它当背景资料 →
+       出来一批泛泛的产品图，文字和版式全丢，于是「排版和风格都不一致」。
+       🚨 关键事实：生图模型**不会自己编文案** —— prompt 里没写主标题，成品就一个字都没有。 */
+    parts.push(`【需求文档 / Brief 执行】只要用户附了需求表（列名常是：模块｜页面目标｜文案｜画面建议表达方式｜不建议出现）：
+- 它是**逐条执行清单**，不是背景资料。**一条 prompt = 一个模块**（主图 / 副图1 / 副图2…），
+  条数 = 模块数。🚨 这一条**压过**上面「条数 = 方向数」的默认规则；每条的 count 填 1（一个模块先出一张）。
+- 该模块的**主标题、副标题、小标题必须原样写进 prompt**（用「」包住，保留原文大小写与断行）。
+  🚨 生图模型不会自己编文案：prompt 里没写，成品就一个字都没有 —— 这是「排版对不上」最常见的原因。
+- 该模块的版式硬约束（主体占比、图标数量、背景颜色、拍摄角度、留白、成图尺寸）逐条写进 prompt。
+- 「不建议出现」那列是**禁止项**，写成反向约束（例如「不要出现车内一片黑、看不清细节」）。
+- 🚨 不许把多个模块合并成一条「综合产品图」，也不许为了「风格统一」丢掉各模块自己的文案与版式。
+  要统一的是**产品与影调**，不是把六张图压成一张。`);
     // P1-9: 系统提示词动态化 —— 根据思维模式开关追加不同指令（thinkingModeOn 已在上方计算）
     if(thinkingModeOn){
-        parts.push(`★★★ 前置判断：先分清任务类型（最高优先级）★★★
-如果用户的请求与「生成图片」无关，例如：
-- 在画布中创建 / 连接 / 修改 / 删除 / 重命名节点，或调整工作流结构（→ intent="canvas_op"，返回 canvas_ops）
-- 询问信息、让你分析画布或工作流、让你解释某功能
-那么：绝对不要进入下面的「风格 / 场景 / 构图」多轮追问流程，也不要给出「水墨风 / 油画风 / 赛博朋克 / Q版卡通」这类画风选项。
-options 只允许给与「用户当前任务」直接相关的建议（画布操作就给节点类型、连线方式、位置等选项）。
-只有当用户确实要生成图片、且视觉描述不足时，才允许追问风格等维度。
+        parts.push(`【身份 / Identity】
+你是「小抽AI」—— 用户画布里的**执行搭档**，不是「生图提示词收集器」。
+你的工作不是把每句话翻译成提示词，而是：**先理解他到底想达成什么，再决定这件事该怎么落地**。
 
-当前为思维模式（渐进式多维采集模式）。核心原则：通过多轮提问逐步收集用户需求，所有维度确认后生成详细提示词。
+★★★ 编排四步（每轮都按顺序想一遍，但不要把思考过程写进 reply）★★★
 
-【流程规则 / Process Rules】
+🚨 **不要等用户说出功能名**：他不需要知道「局部重绘」「拆分图层」「attachment_indices」这些词。
+他说「这里不太对」「再改改」「帮我理一理」「这两张并一下」，你要自己判断该用哪个能力、该给什么参数。
+反过来说，他就算点了一个功能名，也要先确认这个功能在当前情况下是否适用 —— 意图永远优先于字面。
 
-总体流程：逐轮提问维度 → 用户选择 → 下一轮提问下一个维度 → ... → 所有维度确认 → 生成最终提示词
+**第一步 · 判需求**（决定 intent）
+- 打招呼、闲聊、提问、让你解释或分析、让你给建议 → chat。reply 说清楚就行，
+  options / prompts / generations / canvas_ops 全部留空 []。**不要顺手附上生图建议。**
+- 要新图 → generate；要改已有的图 → edit；要视频 → video；
+  要文档/表格/PPT → document；只动节点不产出 → canvas；既要产出又要动节点 → mixed。
+- 判断标准是「用户有没有要」，不是「你能不能做」。能做的事很多，不请自来地推销就是骚扰。
 
-★★★ 最高优先级规则 ★★★
-当返回 options 时（即 options 数组非空），prompts 和 generations 必须为空数组 []。
-绝对不允许在同一轮中同时返回 options 和 prompts。
-如果 options 非空，prompts 必须为 []，generations 必须为 []。
-违反此规则会导致流程被跳过，用户体验严重受损。
+**第二步 · 定能力**（用不用图像模型、用哪个、什么参数）
+- 需要出图 → 才用图像模型。写提示词之前先定好：这条图**用哪个通道/模型更合适**（看【可用生图能力】），
+  以及 ratio / resolution / quality / count 各填什么。参数要**为用途服务**：
+  商品主图→白底方图，详情页→竖长图，海报封面→竖版，场景大图→横版。别一律给 1:1。
+- 🚨 **发出去之前自检三件事，任一条不过就当场换参数，别硬发**：
+  ① 尺寸吃不吃得下 —— 按【可用生图能力】里标的官方档位填。**gpt-image-2 系列的 4K 就是 2880×2880（1:1）**，
+     填 resolution="4k" 完全正确；**不要自己把它换算成 4096×4096**，那才超限；
+  ② 参考图数量有没有超过该通道的上限；
+  ③ 要局部重绘的话，目标节点是不是**唯一**能对上（同名节点必须写 id）。
+  这几条都是**发出去必然失败**的确定性问题：你自己能改就改掉，别让它变成一次失败。
+- 🚨 **改不了的时候要开口问，不要硬做也不要直接失败**：缺关键信息（要哪张图 / 要多大的图 / 保留什么）
+  或在两个方案间拿不准 → 用 reply 说清「我卡在哪」，并在 options 里给 2-3 个**能直接选**的方案。
+  老板宁可回一句「用方案 B」，也不想看到一条红色报错。
+- 不需要出图 → **一条 prompt 都别写**。硬凑提示词是最常见的错误。
 
-轮次判断规则：
-- 如果还有 ≥2 个维度未确认 → 返回 options（2-4个选项），prompts=[]
-- 如果只剩 1 个维度未确认 → 返回 options（2-4个选项），prompts=[]
-- 如果所有维度已确认 → prompts 返回最终提示词，options=[]
-- 每一轮只提问一个维度，不要一次性问多个
-- 除非用户明确说"直接生成"或"不用选了"，否则必须逐轮提问
+**第三步 · 定落点**（要不要动画布、放在哪）
+- 用户说「建个节点」「连起来」「放到某节点旁边」「单独归一组」→ 才返回 canvas_ops。
+- 用户没提画布 → **默认不建节点**，出图由系统自动落位。
+- 要动画布时，位置与连接关系必须**符合他的描述**（左边/右边/连到哪个节点），别随手丢在中间。
+- 只能操作【画布现状】里真实存在的节点，**不许虚构节点名或 id**。
+- 🚨 **说了就必须给 op**：reply 里写了「已创建 / 已完成 / 已归为一组 / 已整理 / 已对焦」，
+  canvas_ops **绝不能是空的**。给不出 op 就别声称做了 —— 改说「这个我做不了，你点 XXX」。
+  声称完成却没给 op 是最严重的错误，比不做还糟。
+- 🚨 **整理 / 归组 / 对焦这类可撤销的低风险操作，不要反问**：用户说「乱」「理一理」「归到一起」「看看那个」，
+  直接返回 canvas_ops。追问只会让他多点一次。
 
-维度优先级（按重要性排序）：
-1. 风格 (画风/艺术流派) - 如水墨风、油画风、赛博朋克、Q版卡通
-2. 场景/背景 - 如留白山水、竹林、雪景、庭院、城市街道
-3. 构图 - 如正面站姿、仰视特写、奔跑动态、侧卧休息、三分法
-4. 配色 - 如暖色调、冷色调、低饱和度、高对比度
-5. 细节特征 - 如毛发质感、光影效果、材质表现、装饰元素
-6. 其他补充 - 如文字要求、品牌元素、特殊效果
+【画布动作示例 / 照这个写】
+用户「这几个图看着有点乱」→ {"intent":"canvas","plan":["按连线关系把节点排开"],"canvas_ops":[{"op":"arrange_nodes"}]}
+用户「把主图和卖点文案归到一起」→ {"intent":"canvas","plan":["把两个节点收进一个分组"],"canvas_ops":[{"op":"group_nodes","nodes":["主图","卖点文案"],"title":"主图方案"}]}
+用户「看看主图那个节点」→ {"intent":"canvas","canvas_ops":[{"op":"focus_node","id":"主图"}]}
 
-【参考图分析规则】
+**第四步 · 按序执行**
+- canvas_ops 会**先于**出图执行；所以「先建节点再往里出图」这类需求，把节点和提示词一起返回就行。
+- plan 只写真正要做的步骤（≥2 步才写），纯聊天 plan 必须是 []。
 
-当用户上传了参考图时，第一轮或第二轮必须先分析参考图并提问：
-- 返回 reply 说明参考图的共同特征（风格、配色、构图、光影等）
-- 选项必须包含用户对参考图特征的选择（全部保留/部分保留/不保留）
-- 示例：{"reply":"我看到了7张参考图，它们有共同的特征：低饱和度配色、极简构图、柔和光影。你希望产品图保留哪些特征？","options":[{"label":"全部保留","value":"保留参考图的所有视觉特征：低饱和度配色、极简构图、柔和光影"},{"label":"只保留配色","value":"只保留参考图的低饱和度配色"},{"label":"只保留构图","value":"只保留参考图的极简构图"},{"label":"自定义输入","value":"CUSTOM_INPUT"}],"collected":{"参考图特征":"已分析"}}
+【禁止事项 / Never do】
+- 禁止把简短输入自动当成「生图需求」去追问风格。
+- 禁止给出「水墨风 / 油画风 / 赛博朋克 / Q版卡通」这类画风选项让用户挑。
+- 禁止在回答末尾追加「要不要我帮你画一张？」「需要我生成吗？」这类引导。
+- 禁止为了让回复显得丰富而附带 options —— options 为空是完全正常的结果。
+- 禁止无视【画布现状】去猜节点名、猜有没有配通道。
 
-【选项规则】
+【什么情况才允许追问】（只有这两种，且最多一轮）
+① 用户明确要生成，但连「主体 / 用途」都没说（例如只说「帮我画一下」）；
+② 用户的要求互相矛盾，不问清楚一定会做错。
+追问就给 2-4 个具体选项；用户选完立刻产出，**不许再开第二轮**。
+用户说「你看着办 / 随便 / 直接出」→ 立刻按你的判断产出，一个字都不要多问。
 
-- 每轮返回 2-4 个选项（推荐数量为3）
-- 每个选项必须是简洁明确的值，不是长句子
-- 每轮 options 末尾必须追加一个 {"label":"自定义输入","value":"CUSTOM_INPUT"} 选项
-- 选项示例：[水墨风, 油画风, 赛博朋克, 自定义输入]
+【素材不全怎么办】
+风格、场景、构图、光线、配色、细节、氛围这些，**由你自己按题材补合理默认值**并写进 prompt，
+**不要把这张清单转成问题抛回给用户**。
 
-【返回字段】
+【prompts 规则】（只在确实要出图时用）
+- 每条都是完整、可直接生图的中文提示词，包含：主体、风格、场景、构图、光线、色彩、细节、氛围。
+- 默认不在 prompt 里写文字内容（标题、对白、台词、旁白、字幕），只描述画面视觉元素；用户明确要文字时才写。
+- 多张图之间必须是主题 / 方向上的真实差异，不能只换颜色。
 
-每轮必须返回以下字段：
-{
-  "reply": "简短的问题描述（如'请选择风格方向：'）",
-  "options": [{"label":"选项1","value":"选项1值"}, {"label":"选项2","value":"选项2值"}, {"label":"自定义输入","value":"CUSTOM_INPUT"}],
-  "collected": {"维度1":"已确认值1", "维度2":"已确认值2", ...},  // 累积已确认的维度
-  "next_dimension": "场景",  // 下一轮要问的维度
-  "remaining_dimensions": ["场景", "构图", "配色"],  // 剩余未确认的维度
-  "prompts": [],  // 问答阶段始终为空
-  "generations": []  // 问答阶段始终为空
-}
-
-【最终轮规则】
-
-当所有维度确认后（remaining_dimensions 为空或用户明确要求）：
-- 返回 prompts 数组，每条是完整可直接生图的中文提示词
-- 提示词要综合所有 collected 维度的信息
-- 系统要求生成N张图时（见上方"出图数量"），prompts 数组返回恰好N条
-- 每条 prompt 目标长度：200-500 字，尽可能详细丰富
-- 每条必须包含：主体、风格、场景、构图、光线、色彩、细节、氛围
+【比例 / ratio】每条 prompt 都要带 "ratio"，只能从这 9 个值里选（写成 key，不是 "3:2" 这种写法）：
+square=1:1｜landscape=3:2｜portrait=2:3｜landscape43=4:3｜portrait43=3:4｜wide=16:9｜story=9:16｜ultrawide=21:9｜ultratall=9:21
+- 用户说了比例（"3:2""竖版""方图"）→ 换算成对应 key 写进去。**用户说的比例优先于你的审美判断。**
+- 用户没说 → 按题材自己判断（商品主图多为 square，海报/封面多为 portrait，场景大图为 landscape）。
 
 【参考图选择规则 / attachment_indices】
+用户上传多张参考图、且要出多张图时，每条 prompt 可带 attachment_indices（0-based 整数数组），指定该条只用哪几张：
+- 不写 = 用全部参考图；整体风格参考就不用写。
+- 示例（7 张版式参考 + 1 张产品图，索引 0-7）：{"prompt":"产品图，版式A的描述...","count":1,"use_attachments":true,"attachment_indices":[0,7]}
 
-当用户上传了多张参考图，且需要生成多张图（每张参考不同的参考图风格/版式）时：
-- 每条 prompt 可以指定 attachment_indices 字段（0-based 整数数组），精确控制该条 prompt 只使用哪些参考图
-- 不指定 attachment_indices 时，默认使用全部参考图
-- 示例：用户上传了8张图（7张版式参考+1张产品图，索引0-7），要求按7种版式各出1张产品图：
-  {"prompts":[
-    {"prompt":"产品图，版式A的描述...", "count":1, "use_attachments":true, "attachment_indices":[0, 7]},
-    {"prompt":"产品图，版式B的描述...", "count":1, "use_attachments":true, "attachment_indices":[1, 7]},
-    {"prompt":"产品图，版式C的描述...", "count":1, "use_attachments":true, "attachment_indices":[2, 7]},
-    ...
-  ]}
-- 这样每条 prompt 只带2张参考图（1张版式+1张产品），避免生图模型混淆多张参考图
-- 如果参考图是整体风格参考（不需要区分），则不需要指定 attachment_indices
+【输入里的引用写法 / Inline refs】
+用户会把引用写成内联 token 插在句子的任意位置（拖入文件、粘贴文件、Ctrl+C 复制画布节点都会产生）：
+- [图:文件名] → 随消息附带的参考图，按顺序对应 images 数组
+- [文件:文件名] → 附件（docx/xlsx/pdf… 正文由系统注入）
+- [节点:标题] → 画布节点，完整信息见消息末尾的【用户引用的画布节点】
+🚨 这些 token 就是**用户指代的具体对象**，要按位置理解他的意思，别当成噪声删掉：
+  「用[图:a]的构图，把[节点:主图]改成竖版」= 拿 a 的构图去改那个节点。
+🚨 引用了 [节点:xxx] 又要动画布时，canvas_ops 里的 id 直接用该节点的标题。
 
 【修改请求规则】
+用户说「换成…」「改成…」：返回 prompts 且 use_last_outputs=true；
+prompt 只描述要改的部分，并说明其余保持不变。
 
-当用户说"换成...""改成..."等修改指令时：
-- 返回 prompts，use_last_outputs 设为 true
-- prompt 应简洁聚焦，只描述要修改的内容+保持原图其他部分不变
+【指代消解 · 别问已经能看出来的事】
+用户说「这张图」「这个」「它」「这里」「那件衣服」——先按下面的顺序自己找，**找到就直接做，不要反问**：
+1. 【画布现状】里**当前选中**的节点 → 就是它；
+2. 只有一个节点有图 → 就是它；
+3. 最近生成的 / 最近改过的那个；
+4. 带了内联 token（[图:x] / [节点:x]）→ 按 token 指的那个。
+🚨 只有「有 2 个以上节点都有图，且他说的『这张』真的指不明白」才允许问一句，并给 2-4 个具体节点名当选项。
+反例（禁止）：「要把哪一张图里的衣服换成蓝色？」—— 画布上只有一张有图的节点时，这句话纯属多余。
 
-${hasSkills ? '【Skill 规则】\n当有 Skill 文档时，最终提示词必须完整包含 Skill 的所有描述，只在主题/变体上做差异化。Skill 描述单张图样式，不决定出图数量。' : ''}`);
+【局部重绘 / 遮罩】
+用户说「只改这块 / 只改这个 / 局部重绘 / 把这只猫换成…」→ **走局部重绘，不要整图重画**：
+- 优先用画布现状里标了「已涂遮罩」的节点，prompt 里加 "inpaint": true，"target_node": "那个节点的 id"
+  （id 就是【画布现状】里 id= 后面那串；标题只在画布上唯一时可用）
+- prompt **只写「这块要变成什么」**（例："露出红色的安全带"），
+  不要写构图 / 光线 / 整体氛围 —— 遮罩外的像素本来就不重画，写了反而把模型带偏
+- 不要写 ratio / count：尺寸和比例跟遮罩裁切区域走，写了会被忽略
+- 用户没说要在遮罩里改什么，就先问一句「遮罩这块要改成什么」，别自己编
+
+★★ 没涂遮罩也能做（2026-10-20 起）★★
+用户**没涂遮罩**、但明确指向画面里某个具体对象 / 区域时，**不要再让他去涂遮罩**，
+你自己把位置说出来，系统会自动帮你造遮罩：
+  {"prompt":"把这只猫换成一只柴犬，姿势和位置不变","mask_hint":{"target_node":"smart_4toaqg","bbox":[0.05,0.45,0.4,0.5]}}
+- bbox 是 0~1 归一化，相对**原图**：x/y = 框左上角，w/h = 框宽高
+- 框要**包住那一整块要改的东西**，宁可略大一点，不要刚好卡边
+- 🚨 **画布上有多个同名节点时**（比如 7 个「上传」）：靠 id= + 位置 + 用户的描述挑出**唯一那个**，
+  把它的 id 写进 target_node。**不要**因为「分不清」就退回让用户涂 —— 那是系统最不想看到的。
+- ⚠️ 真的**看不见图**（系统没给你图）或画面里根本没有他说的对象 → 才让用户涂遮罩，并说清是哪个节点（用 id）
+  ★ 编一个框的后果是把无关区域一起重绘，比不做更糟
+★ 整图性的改动（"改成赛博朋克风""调亮一点""换成油画质感"）→ **不要** mask_hint，走整图重绘
+🚨 **绝对不要**只写 "inpaint":true 却不给 mask_hint —— 系统找不到目标节点，这条会直接失败（老板踩过）。
+
+${hasSkills ? '【Skill 规则】有 Skill 文档时，提示词必须完整包含 Skill 的所有描述，只在主题 / 变体上做差异化。Skill 描述单张图样式，不决定出图数量。' : ''}`);
     } else {
-        // 直接模式已废弃（思维模式 OFF 时前端跳过 LLM），此处保留兼容性
-        parts.push(`当前为直接模式。能生成就生成，返回 generations 数组。`);
+        // 直接模式已废弃（思维模式 OFF 时前端跳过 LLM），保留兼容性
+        parts.push(`当前为直接模式。用户明确要求产出时才返回 generations 数组，其它情况正常文字回答。`);
     }
     // 3. 末尾再强调 skill（近因效应），确保所有 provider 都不会遗漏
     if(hasSkills){
@@ -26870,14 +28913,73 @@ ${hasSkills ? '【Skill 规则】\n当有 Skill 文档时，最终提示词必�
     }
     return parts.join(AGENT_NL + AGENT_NL);
 }
+/* 画布动作也要记在自己身上（2026-10-20）。
+   否则用户问「刚才那个遮罩是你清的吗 / 你新建了哪个节点」还是答不出来 ——
+   跟「用没用遮罩重绘」是同一类问题：**做法只存在于当次执行里，画布现状反推不出来**。 */
+function agentRecordCanvasOps(msg, ops, applied){
+    if(!msg || !Array.isArray(ops) || !ops.length) return;
+    const desc = ops.slice(0, 10).map(op => {
+        const a = String(op?.op || op?.action || '').trim();
+        if(!a) return '';
+        const ref = op?.id || op?.target || op?.title || op?.type || '';
+        return ref ? `${a}(${ref})` : a;
+    }).filter(Boolean);
+    if(!desc.length) return;
+    msg.ops = desc;
+    if(Number.isFinite(Number(applied))) msg.opsApplied = Number(applied);
+}
+/* 把 gen 上记的执行信息压成一行，喂给模型（也用于历史回溯）。
+   🚨 只描述**当次真实做法**，不描述画布现状 —— 两件事必须分开。 */
+function agentExecRecordLine(gen, idx){
+    const ex = gen?.exec || null;
+    const n = (gen?.results || []).length;
+    const mode = ex?.mode === 'inpaint' ? '遮罩局部重绘'
+        : ex?.mode === 'full' ? '整图重绘（占满整张图）'
+        : gen?.inpaint ? '局部重绘' : '';
+    const parts = [];
+    if(mode) parts.push(mode);
+    /* 老记录没有 exec：尽量从 gen 自身把「改的哪个节点」捞回来，别只留一句「生成了 N 张」 */
+    let target = ex?.target || '';
+    if(!target){
+        const ref = String(gen?.target_node || gen?._inpaintNodeId || '');
+        if(ref){
+            const live = (nodes || []).find(nd => nd.id === ref || nd.title === ref);
+            target = String(live?.title || ref);
+        }
+    }
+    if(target) parts.push(`目标节点「${target}」`);
+    if(Array.isArray(ex?.mask_bbox)) parts.push(`遮罩框 x${ex.mask_bbox[0]},y${ex.mask_bbox[1]},w${ex.mask_bbox[2]},h${ex.mask_bbox[3]}`);
+    else if(Array.isArray(gen?.mask_hint?.bbox)) parts.push(`遮罩框(归一化) ${gen.mask_hint.bbox.join(',')}`);
+    if(ex?.size) parts.push(`输出尺寸 ${ex.size}`);
+    if(ex?.model) parts.push(`模型 ${ex.model}`);
+    parts.push(n ? `成功出图 ${n} 张` : (gen?.status === 'error' ? `失败：${String(gen.error || '').slice(0, 80)}` : '未出图'));
+    return `[执行记录 #${(idx || 0) + 1}] ${parts.join(' · ')}`;
+}
 function agentHistoryMessages(){
     return (agentState.messages || []).slice(-AGENT_HISTORY_MAX).map(m => {
-        if(m.role === 'user') return {role:'user', content:m.text || '(images only)'};
+        if(m.role === 'user'){
+            let c = m.text || '(images only)';
+            /* 🚨 把「附件原名 → 落盘路径」写进历史（2026-10-21 老板：「无法读取上一轮的 Excel」）。
+               原来只传 m.text，模型只知道「用户发过一个 图需-后排.xlsx」，**不知道它在磁盘哪里**，
+               于是自己猜路径 → run_shell exit=1，最后只能说「我读不了上一轮的 Excel」。
+               而且上传时文件被重命名成 ai_ref_<hex>.xlsx，光有原名根本对不上，必须显式给出映射。 */
+            const _docs = Array.isArray(m.documents) ? m.documents : [];
+            if(_docs.length){
+                c += _docs.map(d => `${AGENT_NL}[附件:${d?.name || 'file'} → ${d?.url || ''}]`).join('');
+            }
+            return {role:'user', content:c};
+        }
         let content = m.text || '';
-        (m.generations || []).forEach(g => {
+        (m.generations || []).forEach((g, i) => {
             const n = (g.results || []).length;
             if(n) content += `${AGENT_NL}[generated ${n} image(s) with prompt: ${g.prompt || ''}]`;
+            /* 🚨 光说「生成了 N 张」是不够的（老板截图里模型就因为缺这条而答不出来）：
+               「是不是用遮罩局部重绘的」只有执行记录知道，画布现状反推不出来。 */
+            if(g.exec || g.inpaint || g.status === 'error') content += `${AGENT_NL}${agentExecRecordLine(g, i)}`;
         });
+        if(Array.isArray(m.ops) && m.ops.length){
+            content += `${AGENT_NL}[画布动作] ${m.ops.join('、')}${Number(m.opsApplied) ? `（生效 ${m.opsApplied} 条）` : ''}`;
+        }
         return {role:'assistant', content:content || '(no text)'};
     });
 }
@@ -27141,6 +29243,8 @@ function parseAgentResponse(raw, lastUserText){
     }
     // 先解析所有可成功的 JSON 候选，再按优先级选择最合适的一个
     const parsedCandidates = [];
+    // 用户原话里说了比例就以用户为准（模型给的 ratio 一律让位）
+    const explicitRatio = parseExplicitRatio(lastUserText);
     for(const candidate of candidates){
         // 先尝试直接解析，失败后尝试修复再解析
         let data = null;
@@ -27161,20 +29265,47 @@ function parseAgentResponse(raw, lastUserText){
                 const numbered = extractNumberedOptions(reply);
                 if(numbered) options = numbered.options;
             }
-            const prompts = normalizePrompts(data.prompts).slice(0, AGENT_GEN_MAX_PER_MSG);
-            const generations = (Array.isArray(data.generations) ? data.generations : [])
+            const prompts = applyExplicitRatio(normalizePrompts(data.prompts).slice(0, AGENT_GEN_MAX_PER_MSG), explicitRatio);
+            const generations = applyExplicitRatio((Array.isArray(data.generations) ? data.generations : [])
                 .filter(g => g && typeof g.prompt === 'string' && g.prompt.trim())
                 .slice(0, AGENT_GEN_MAX_PER_MSG)
                 .map(g => {
                     const gen = {prompt:g.prompt.trim(), count:Math.max(1, Math.min(8, Number(g.count) || 1)), use_last_outputs:!!g.use_last_outputs, use_attachments:!!g.use_attachments, results:[], status:'running'};
                     if(Array.isArray(g.attachment_indices)) gen.attachment_indices = g.attachment_indices.filter(i => Number.isFinite(Number(i)) && Number(i) >= 0).map(i => Math.floor(Number(i)));
+                    if(typeof g.ratio === 'string' && Object.prototype.hasOwnProperty.call(SIZE_MAP, g.ratio)) gen.ratio = g.ratio;
+                    if(typeof g.resolution === 'string' && ['1k','2k','4k'].includes(g.resolution)) gen.resolution = g.resolution;
+                    if(typeof g.quality === 'string' && ['high','medium','low'].includes(g.quality)) gen.quality = g.quality;
+                    /* 🚨 局部重绘字段（2026-10-20）：这里才是模型 JSON → 内部结构的主通道。
+                       少搬这两个字段 = 模型说的「用遮罩改这块」被丢掉 ⇒ 无论涂没涂遮罩都整图重画。
+                       ⚠️ 上一轮只补了「思维模式 generations→prompts」那条支路，漏了这条主路，
+                       所以测试 A 仍是 anyInpaint:false —— 两条都得补。 */
+                    if(g.inpaint === true) gen.inpaint = true;
+                    if(typeof g.target_node === 'string' && g.target_node.trim()) gen.target_node = g.target_node.trim();
+                    if(g.inpaint === true) { delete gen.ratio; delete gen.count; gen.count = 1; }
+                    /* 自动遮罩（2026-10-20）：模型指出了「要改这块」→ 这条就是局部重绘，
+                       稍后由 agentAutoMaskGenerations 自己造遮罩。 */
+                    if(g.mask_hint) agentApplyMaskHintInto(gen, g.mask_hint);
                     return gen;
-                });
+                }), explicitRatio);
             const collected = (data.collected && typeof data.collected === 'object') ? data.collected : {};
             const nextDimension = typeof data.next_dimension === 'string' ? data.next_dimension : '';
             const remainingDimensions = Array.isArray(data.remaining_dimensions) ? data.remaining_dimensions : [];
             const canvas_ops = Array.isArray(data.canvas_ops) ? data.canvas_ops.filter(o => o && typeof o === 'object') : [];
-            parsedCandidates.push({reply, options, prompts, generations, collected, next_dimension: nextDimension, remainingDimensions, canvas_ops});
+            // 编排结果：intent 决定这轮是什么任务，plan 是给用户看的执行计划
+            const intent = typeof data.intent === 'string' ? data.intent.trim().toLowerCase() : '';
+            const plan = (Array.isArray(data.plan) ? data.plan : [])
+                .map(s => (typeof s === 'string' ? s.trim() : String(s?.step || s?.title || '').trim()))
+                .filter(Boolean)
+                .slice(0, 8);
+            /* 🚨 mask_hint 兜底（2026-10-20）：schema 里它写在**每条 prompt** 上，
+               但模型经常把它放到**顶层**。这里给没写的补上，别让它白丢
+               —— 丢了就是「找不到要局部重绘的节点」直接失败（老板截图踩中）。 */
+            if(data.mask_hint){
+                [...generations, ...prompts].forEach(item => {
+                    if(item && typeof item === 'object' && !item.mask_hint) agentApplyMaskHintInto(item, data.mask_hint);
+                });
+            }
+            parsedCandidates.push({reply, intent, plan, options, prompts, generations, collected, next_dimension: nextDimension, remainingDimensions, canvas_ops});
         } catch(e) { /* 尝试下一个候选 */ }
     }
     // 如果有多个解析成功的候选，按优先级选择：
@@ -27233,19 +29364,370 @@ function parseAgentResponse(raw, lastUserText){
     }
     return {reply:text, options:[], prompts:[], generations:[], collected:{}, next_dimension:'', remaining_dimensions:[], canvas_ops:[]};
 }
+/* 从模型**已经表态的意图**反推画布动作（2026-10-20）。
+   🚨 起因（实测原样）：用户「这几个图看着有点乱」→ 模型返回
+      intent="canvas"、plan=["按连线关系整理画布节点"]、reply="我会按连线关系把画布节点整理开"，
+      但 canvas_ops 是 **[]**。它听懂了，只是没把话落到结构化字段上。
+      纯提示词约束治不了「漏给字段」——这类错误模型自己看不见，必须由代码把意图补成 op。
+   只补**安全、可撤销、无歧义**的三种动作（整理 / 归组 / 对焦）；
+   建节点、改标题这种要具体参数的**一律不猜**，猜错比不做更烦。 */
+function deriveCanvasOpsFromIntent(text, reply, intent, plan){
+    const planText = Array.isArray(plan) ? plan.join(' ') : '';
+    const said = `${text || ''} ${reply || ''} ${planText}`;
+    // 只在模型自己认了「这是画布活」时才派生 —— 聊天里说「有点乱」不关画布的事
+    if(!/canvas|mixed/i.test(String(intent || '')) && !/整理|排开|归到一|归为一组|分组|对焦/.test(planText)) return null;
+    const live = (nodes || []).filter(n => n.id !== SMART_LOG_PREVIEW_NODE_ID);
+    if(live.length < 2) return null;   // 一个节点谈不上整理/归组
+    // ① 归组：必须能解析出 ≥2 个**真实存在的节点标题**，否则宁可不动（建个空分组更糟）
+    if(/归到一起|归一组|归为一组|归到一组|放一起|放到一起|收进|组合起来|分成一组/.test(said)){
+        const picked = live.filter(n => n.title && String(text || '').includes(String(n.title)));
+        if(picked.length >= 2) return [{op:'group_nodes', nodes:picked.map(n => n.title)}];
+    }
+    // ② 整理：没指名就整理当前选中（applyAgentCanvasOps 里没有选中时退回全画布）
+    if(/有点乱|太乱|很乱|整理|理一理|捋一捋|排一下|排开|对齐|摆正|布局/.test(said)){
+        const picked = live.filter(n => n.title && String(text || '').includes(String(n.title)));
+        return [picked.length >= 2 ? {op:'arrange_nodes', nodes:picked.map(n => n.title)} : {op:'arrange_nodes'}];
+    }
+    // ③ 对焦：「看看那个 / 挪到眼前」——必须点得出具体节点才做
+    const focusTarget = live.find(n => n.title && String(text || '').includes(String(n.title)));
+    if(focusTarget && /看看|看一下|对焦|挪到|眼前|定位|跳到/i.test(String(text || ''))){
+        return [{op:'focus_node', id:focusTarget.title}];
+    }
+    return null;
+}
+// 「这轮要改的是哪个节点」的唯一判定入口（2026-10-20）。
+// 🚨 为什么必须收敛成一个函数：画布上同标题节点很常见（老板就有 3 个「上传」），
+//    `title` 匹配会随便挑一个，`validNodeInpaint` 又会因为挑错而判「没遮罩」。
+// 优先级：
+//   ① 本轮引用（userMsg.nodeRefs）里带遮罩的那个 —— 用户亲手指的，最可信；
+//   ② 当前选中的节点带遮罩；
+//   ③ 画布上**恰好只有一个**带遮罩的节点；
+//   ④ 有多个、但用户原话里点名了某个标题（且该标题唯一命中）→ 用它。
+// 多遮罩又没指名 → 返回 null（**不乱猜**，宁可让上层问一句，也别改错图）。
+// 🚨 必须放在顶层：写进 processAgentLlmResult 体内会让外面调不到（agentResolveInpaintTarget 等都在顶层）。
+function agentPickInpaintTarget(userMsg){
+    const live = (nodes || []).filter(n => n.id !== SMART_LOG_PREVIEW_NODE_ID);
+    const maskedIds = new Set(live.filter(n => validNodeInpaint(n)).map(n => n.id));
+    if(!maskedIds.size) return null;
+    const byId = id => live.find(n => n.id === id && maskedIds.has(n.id)) || null;
+    // ① 引用里的遮罩节点
+    for(const ref of (userMsg?.nodeRefs || [])){
+        const hit = ref?.id ? byId(ref.id) : null;
+        if(hit) return hit;
+    }
+    // ② 当前选中
+    const sel = selectedNodeIds().map(byId).filter(Boolean);
+    if(sel.length) return sel[sel.length - 1];
+    // ③ 唯一遮罩
+    if(maskedIds.size === 1) return byId([...maskedIds][0]);
+    // ④ 原话点名（标题精确匹配且只命中一个遮罩节点）
+    const said = String(userMsg?.text || '');
+    const named = [...maskedIds].map(byId).filter(n => n && n.title && said.includes(String(n.title)));
+    if(named.length === 1) return named[0];
+    return null;
+}
+/* 模型写 target_node 的花样很多：`#smart_x` / `id=smart_x` / 「smart_x」 / 带引号。
+   统一剥干净，否则「id 明明给对了却匹配不上」（2026-10-20）。 */
+function agentCleanNodeRef(v){
+    let s = String(v == null ? '' : v).trim();
+    s = s.replace(/^[「『"'`]+|[」』"'`]+$/g, '').trim();
+    s = s.replace(/^(id|节点|node)\s*[=:：]\s*/i, '').trim();
+    s = s.replace(/^#/, '').trim();
+    return s;
+}
+/* 自动遮罩（2026-10-20 老板要的）：用户没涂遮罩，但理解模型能在图上指出「要改这块」，
+   就用它给的 bbox 自动造一张遮罩，之后完全复用「算框 → 裁切 → 羽化 → 回贴」那条现成链路。
+   🚨 这里只做**严格校验**，校验不过一律 null：
+      猜错的框会把无关区域也重绘，比不自动遮罩更糟 —— 宁可退回「请手动涂抹」。
+   🚨 只认 0~1 归一化（prompt 里明确要求过）。给了像素值一类的，直接判无效，不猜。 */
+function agentNormalizeMaskHint(raw){
+    if(!raw || typeof raw !== 'object') return null;
+    const nums = Array.isArray(raw.bbox) ? raw.bbox.map(v => Number(v)) : [];
+    if(nums.length !== 4 || nums.some(v => !Number.isFinite(v))) return null;
+    let [x, y, w, h] = nums;
+    /* 容错：模型偶尔给 0~100 的百分比。
+       🚨 判据必须要求**四个值全都 ≥1**：只判「有值 >1」会把 [1.5,0.2,0.3,0.3] 这种
+          越界的归一化值误当百分比（1.5/100=0.015 反而合法了）—— 那就是猜错的框。 */
+    if(nums.every(v => v >= 1 && v <= 100)){ x /= 100; y /= 100; w /= 100; h /= 100; }
+    if([x, y, w, h].some(v => v < 0 || v > 1)) return null;
+    if(w <= 0.002 || h <= 0.002) return null;
+    x = Math.min(x, 0.999); y = Math.min(y, 0.999);
+    w = Math.min(w, 1 - x);  h = Math.min(h, 1 - y);
+    if(w <= 0.002 || h <= 0.002) return null;
+    const out = {bbox:[x, y, w, h]};
+    const _tn = agentCleanNodeRef(raw.target_node);
+    if(_tn) out.target_node = _tn.slice(0, 60);
+    if(typeof raw.reason === 'string' && raw.reason.trim()) out.reason = raw.reason.trim().slice(0, 200);
+    return out;
+}
+/* 把 mask_hint 搬进 gen，并顺带把它当成「这条是局部重绘」。
+   🚨 为什么不要求模型同时写 inpaint:true：多一个必填字段就多一处漏搬（上一轮就被这个坑过两次）。
+      只要 mask_hint 有效，语义上等价于 inpaint。 */
+function agentApplyMaskHintInto(target, raw){
+    if(!target || typeof target !== 'object') return;
+    const hint = agentNormalizeMaskHint(raw);
+    if(!hint) return;
+    target.mask_hint = hint;
+    target.inpaint = true;
+    if(!target.target_node && hint.target_node) target.target_node = hint.target_node;
+    // 尺寸/比例跟遮罩裁切走，别带 ratio/count 去误导上游
+    delete target.ratio;
+    target.count = 1;
+}
+/* ── 自动遮罩：把模型的归一化 bbox 变成一张真遮罩 PNG ────────────────────────
+   链路完全复用人工涂抹那条：造 mask PNG → /api/image-mask-prepare 算框裁切羽化
+   → 写 node.inpaint → 生成 → 后端回贴。**后端一行没改。**            */
+
+// 加载原图元素（要 drawImage，光有尺寸不够）
+function loadAgentMaskImage(url){
+    const src = displayMediaUrl({url:smartOriginalMediaUrl(url)});
+    if(!src) return Promise.resolve(null);
+    return new Promise(resolve => {
+        const img = new Image();
+        img.onload = () => resolve(img.naturalWidth && img.naturalHeight ? img : null);
+        img.onerror = () => resolve(null);
+        img.src = src;
+    });
+}
+/* 归一化 bbox → 遮罩 PNG Blob。
+   🚨 遮罩语义（后端 inpaint_mask_bbox 定的）：**白（>=128）= 要改**，黑 = 不动。
+   🚨 这里画**硬边**矩形：边缘柔化交给后端 feather 做。在 mask 里就糊会让白像素
+      外溢、bbox 被撑大，回贴范围跟着变大 —— 那就不是「只改这块」了。 */
+async function agentBuildMaskBlob(baseUrl, hint){
+    const img = await loadAgentMaskImage(baseUrl);
+    if(!img) return null;
+    const W = img.naturalWidth, H = img.naturalHeight;
+    const [nx, ny, nw, nh] = hint.bbox;
+    const x = Math.max(0, Math.round(nx * W));
+    const y = Math.max(0, Math.round(ny * H));
+    const w = Math.min(Math.round(nw * W), W - x);
+    const h = Math.min(Math.round(nh * H), H - y);
+    if(w < 2 || h < 2) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(x, y, w, h);
+    return new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+}
+/* 自动遮罩改哪张图：① id 精确命中 → ② 标题命中 ∩ 用户引用 → ③ 引用节点 → ④ 当前选中 → ⑤ 唯一图片节点。
+   🚨 只认**唯一**命中：画布上常年多个同名「上传」节点，随便挑一个就是改错图。
+   🚨 但「标题对上 7 个」不等于没办法：用户 @ 引用了哪个，就用哪个（老板画布上正是 7 个同名）。 */
+function agentPickAutoMaskNode(gen, userMsg){
+    const live = (nodes || []).filter(n => n.id !== SMART_LOG_PREVIEW_NODE_ID && (n.images || []).some(im => im?.url));
+    if(!live.length) return null;
+    const want = agentCleanNodeRef(gen?.mask_hint?.target_node || gen?.target_node || '');
+    const refIds = (userMsg?.nodeRefs || []).map(r => r?.id).filter(Boolean);
+    const refHit = refIds.map(id => live.find(n => n.id === id)).filter(Boolean);
+    if(want){
+        const byId = live.find(n => n.id === want);
+        if(byId) return byId;
+        const exact = live.filter(n => String(n.title || '') === want);
+        if(exact.length === 1) return exact[0];
+        // 标题对上多个 → 优先「既是这个标题、又是用户引用的那个」
+        if(exact.length > 1){
+            const inter = exact.filter(n => refIds.includes(n.id));
+            if(inter.length === 1) return inter[0];
+        }
+        const partial = live.filter(n => String(n.title || '').includes(want));
+        if(partial.length === 1) return partial[0];
+        if(partial.length > 1){
+            const inter = partial.filter(n => refIds.includes(n.id));
+            if(inter.length === 1) return inter[0];
+        }
+    }
+    if(refHit.length === 1) return refHit[0];
+    const sel = selectedNodeIds().map(id => live.find(n => n.id === id)).filter(Boolean);
+    if(sel.length) return sel[sel.length - 1];
+    if(live.length === 1) return live[0];
+    return null;
+}
+/* 🚨 附件图也能做局部重绘（2026-10-21 老板截图）：
+   他把图贴在输入框里（消息附件），模型看到「这不是画布节点」就判定「无法绑定局部遮罩」，
+   直接改成整图重绘 —— 结果脸、构图、光线全变，等于没按「只换人物」的要求做。
+   其实完全可以先把附件图落成一个画布节点，再走「造遮罩 → inpaint → 回贴」那条完整链路。
+   ⚠️ 只有 gen.inpaint === true 时才会走到这里；「参考这张画一张新的」不受影响。 */
+function agentEnsureAttachmentNodeForMask(userMsg){
+    const imgs = (userMsg?.images || []).filter(i => i?.url);
+    if(!imgs.length) return null;
+    // 画布上已经有同一张图（url 相同）就直接用，别重复落节点
+    const hit = (nodes || []).find(n => (n.images || []).some(im => im?.url === imgs[0].url));
+    if(hit) return hit;
+    const node = createImageNodeAt(agentFindEmptyPosition(1), []);
+    if(!node) return null;
+    node.images = [{url: imgs[0].url, name: imgs[0].name || 'attachment.png'}];
+    node.title = String(imgs[0].name || '附件图').replace(/\.[^.]+$/, '') || '附件图';
+    render();
+    scheduleSave();
+    return node;
+}
+/* 给一条 generation 造好遮罩并写进 node.inpaint。成功返回 true。 */
+async function agentApplyAutoMask(gen, userMsg){
+    const hint = agentNormalizeMaskHint(gen?.mask_hint);
+    if(!hint) return false;
+    // 先找画布上已有的目标节点；找不到但用户带了附件图 → 把附件落成节点再涂
+    let node = agentPickAutoMaskNode(gen, userMsg);
+    if(!node) node = agentEnsureAttachmentNodeForMask(userMsg);
+    if(!node) return false;
+    const index = 0;                                  // 主图
+    const image = (node.images || [])[index];
+    if(!image?.url) return false;
+    const baseUrl = await ensureLocalAssetUrl(image);  // 远程图先落成本地 asset，后端才读得到
+    if(!baseUrl) return false;
+    const blob = await agentBuildMaskBlob(baseUrl, hint);
+    if(!blob) return false;
+    const base = (image.name || 'image').replace(/\.[^.]+$/, '');
+    const file = await uploadCroppedBlob(blob, `${base}_automask.png`);
+    if(!file?.url) return false;
+    const res = await fetch('/api/image-mask-prepare', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({image_url:baseUrl, mask_url:file.url})
+    });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok || !data?.crop_url || !data?.crop_mask_url) return false;
+    pushUndo();
+    node.inpaint = {
+        index,
+        base_url:data.base_url || '',
+        // base_key 必须是「节点里存的原图 URL」：base_url 可能是本地缓存副本，
+        // 拿它比对会让 validNodeInpaint 误判失效（跟人工涂抹那条保持一致）。
+        base_key:(node.images || [])[index]?.url || data.base_url || '',
+        base_name:data.base_name || '',
+        mask_url:data.mask_url || file.url,
+        crop_url:data.crop_url,
+        crop_mask_url:data.crop_mask_url,
+        overlay_url:data.overlay_url || '',
+        bbox:Array.isArray(data.bbox) ? data.bbox : [],
+        base_w:Number(data.base_w || 0),
+        base_h:Number(data.base_h || 0),
+        aspect_ratio:data.aspect_ratio || '',
+        size:data.size || '',
+        feather:Number(data.feather || 0),
+        auto:true,                                     // 标记来源：模型自动框的，不是人手涂的
+        created_at:Date.now()
+    };
+    /* 🚨 必须回写 target_node = 节点 id：后面 agentResolveInpaintTarget 靠它唯一命中。
+       画布上若有别的节点也带遮罩，不回写就可能挑错那张。 */
+    gen.target_node = node.id;
+    render(); scheduleSave();
+    return true;
+}
+/* 批量入口：给「标了 inpaint 但此刻没有遮罩」的 generation 自动造遮罩。
+   🚨 造不出来就**这条直接失败**，绝不退回整图重画 ——
+      老板要的是「只有遮罩区变」，静默整图重画正是上一轮的老毛病。 */
+async function agentAutoMaskGenerations(gens, userMsg){
+    const todo = (gens || []).filter(g => g?.inpaint && !agentResolveInpaintTarget(g) && agentNormalizeMaskHint(g?.mask_hint));
+    if(!todo.length) return;
+    for(const gen of todo){
+        let ok = false;
+        try{
+            ok = await agentApplyAutoMask(gen, userMsg);
+        }catch(e){
+            console.warn('[agent] 自动遮罩失败:', e);
+            ok = false;
+        }
+        if(!ok){
+            /* 🚨 别删 gen.inpaint（2026-10-20）：删了以后任何重试都会变成**整图重画**，
+               那正是这条链路最怕的。留着 inpaint，重跑时仍然按「局部重绘」判定。 */
+            gen.status = 'error';
+            gen.error = agentExplainInpaintMiss(gen, userMsg)
+                || '没定位到要改的区域，请在目标图上涂抹遮罩再试（不自动整图重画，避免改到无关部分）';
+            delete gen.mask_hint;
+        }
+    }
+}
 // 处理 LLM 返回结果：解析、兜底、创建 assistant 消息、运行生图
 // 提取为独立函数，以便刷新恢复时复用
 async function processAgentLlmResult(result, text, attachments, userMsg){
+/* 🚨 空回复 = 失败，不是「模型的回答」（2026-10-21 老板截图踩中）：
+   后端没有正文时会填一句占位「接口返回了空回复。」。旧逻辑把它当正常 reply 继续往下走，
+   于是「模型没给结构化结果 + looksLikeGenRequest 判定为生图」的兜底启动 →
+   拿用户原话（还带着 `[文件:…]`、`[图:…]` 标记）当提示词；又因为用户说了「5张」，
+   被「补齐到 N 条」逻辑扩成 5 条带「变体2/3/4/5」的变体 → **5 张垃圾图真的发出去了**。
+   这里早退：只说清「为什么空、该怎么办」，**不产生任何生成任务**。
+   （后端 run_agent_llm_task 现已把空回复直接判 failed；这里是第二道保险。） */
+{
+    const _raw = String(result?.text || '').trim();
+    if(!_raw || _raw === '接口返回了空回复。'){
+        const _why = String(result?.empty_reason || '').trim();
+        agentState.messages.push({
+            id: uid('am'),
+            role: 'assistant',
+            intent: 'error',
+            text: `⚠️ 这次模型返回了空回复${_why ? `：${_why}` : ''}。\n`
+                + '我没有为此生成任何图片 —— 空回复不代表「随便画一张」，拿它出图只会浪费额度并污染画布。\n'
+                + '常见原因：把「思考型」模型当 Agent 用、单轮上下文太长（附件/历史堆太多）、通道模型名写错。\n'
+                + '建议：换一个非思考型的对话模型，或把附件与任务拆小一点再发。',
+            options: [], prompts: [], generations: [], ts: Date.now()
+        });
+        agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
+        agentThinking = false;
+        renderAgentMessages();
+        saveAgentState();
+        return;
+    }
+}
 const parsed = parseAgentResponse(result.text || '', text);
 // 防御性检查：确保 options/prompts/generations 始终是数组
 if(!Array.isArray(parsed.options)) parsed.options = [];
 if(!Array.isArray(parsed.prompts)) parsed.prompts = [];
 if(!Array.isArray(parsed.generations)) parsed.generations = [];
 if(!Array.isArray(parsed.canvas_ops)) parsed.canvas_ops = [];
+// 🚨 模型经常把 options 写成字符串数组（["方向1：温馨居家", …]）。渲染层要 opt.label/opt.value，
+//    字符串会渲染成一排**空白按钮**（点下去还没值）。这里统一归一化成 {label,value}，顺便截到 6 个。
+parsed.options = normalizeAgentOptions(parsed.options);
+/* 🚨 「该做却反问」的确定性兜底（2026-10-20 实测，两种问法都踩过）。
+   ① 画布上只有一张有图的节点，用户说「这张图里那件衣服换成蓝色」→
+      模型回「要把哪一张图里的衣服换成蓝色？」+ 空 prompts。用户根本没得选。
+   ② 改成「请选择要修改的图片：」但 options 是 **[]** —— 比 ① 更糟：
+      嘴上让他选，界面上一颗按钮都没有，等于逼他把整句话重打一遍。
+   ⇒ ① 有图节点去重后只有 1 个 → 没有歧义，直接把追问变成 edit。
+      ② 确实有多个 → 至少把真实候选补成选项（点一下就能继续）。 */
+{
+    const _imgNodes = (nodes || []).filter(n => n.id !== SMART_LOG_PREVIEW_NODE_ID && (n.images || []).length);
+    const _distinct = new Set(_imgNodes.map(n => n.images[0]?.url || n.id));
+    const _noStructured = parsed.prompts.length === 0 && parsed.generations.length === 0 && parsed.canvas_ops.length === 0;
+    const _asksWhich = /哪一?[张个]|哪个节点|指哪|请选择.{0,12}(图片|图片?节点|节点)/.test(String(parsed.reply || ''));
+    if(_asksWhich && _noStructured){
+        if(_distinct.size <= 1){
+            parsed.prompts = [{
+                prompt: String(text || '').trim(),
+                count: 1,
+                use_last_outputs: true,
+                use_attachments: false,
+                status: 'current'
+            }];
+            parsed.intent = 'edit';
+            parsed.options = [];
+            parsed.reply = _distinct.size === 1 ? '好，按这张图改。' : '好的，我来改。';
+        } else if(parsed.options.length === 0){
+            // 真有多张：把候选节点摆成按钮，别只留一句「请选择」吊着用户
+            parsed.options = _imgNodes.slice(0, 6).map(n => ({
+                label: String(n.title || '未命名').slice(0, 12),
+                value: `把「${String(n.title || '').slice(0, 20)}」这张图改成：${String(text || '').trim()}`
+            }));
+            parsed.intent = 'clarify';
+        }
+    }
+}
+/* 时态校正：只要有 op 要执行，reply 就不能停在「我会… / 我这就…」——
+   用户看到的文案和画布上发生的事必须对得上（实测：模型给了 op，reply 却写「我会按连线关系整理」）。 */
+if(parsed.canvas_ops.length){
+    const _willDo = /^我?(会|这就|马上|来|将)(把|按|为|帮)/;
+    if(_willDo.test(String(parsed.reply || '').trim())){
+        parsed.reply = String(parsed.reply).trim().replace(_willDo, '已');
+    }
+}
 // 画布/节点操作类任务标记：这类任务不参与任何「生图风格追问 / 默认生图」兜底
 const _canvasOpTask = (parsed.canvas_ops.length > 0) || isCanvasOpRequest(text);
-// 画布操作类请求：绝不能给「生图风格」类建议，纠正为与当前任务相关的选项
-if(isCanvasOpRequest(text) && parsed.canvas_ops.length === 0){
+// 模型已经给出了结构化结果（prompts / generations / canvas_ops）就**以模型为准**。
+// 🚨 这里原来是「只要用户提到节点/画布 + 动词」就覆盖 options 和 reply ——
+//    那是「等关键词才处理」的老思路，会把模型正确的编排结果冲掉。
+//    现在只做纯兜底：模型什么都没给、用户又在说画布操作时，才提示他该怎么办。
+const _modelAnswered = parsed.prompts.length > 0 || parsed.generations.length > 0 || parsed.canvas_ops.length > 0;
+if(!_modelAnswered && isCanvasOpRequest(text)){
     if(parsed.options.length === 0 || looksLikeStyleSuggestions(parsed.options)){
         parsed.options = agentCanvasOpSuggestions();
     }
@@ -27253,6 +29735,25 @@ if(isCanvasOpRequest(text) && parsed.canvas_ops.length === 0){
         parsed.reply = '看起来你想让我操作画布节点。请先点开输入框下方的「画布控制」开关，开启后我就能直接在当前画布上创建、连接或修改节点。';
     } else if(!parsed.reply){
         parsed.reply = '请选择要执行的操作：';
+    }
+}
+// 🚨 谎称完成 / 光说不做 的兜底（实测过两种写法，都是空的 canvas_ops）：
+//    ① 已完成时态：「已将主图和卖点文案归为一组」
+//    ② 将来时：「我会按连线关系把画布节点整理开」← 模型只给了 plan/reply，字段漏了
+//    第 ② 种先用「意图派生」把 op 补上（能补就真做），补不出来才把话收回，别让它留在界面上。
+if(!parsed.canvas_ops.length && parsed.prompts.length === 0 && parsed.generations.length === 0){
+    const _derived = deriveCanvasOpsFromIntent(text, parsed.reply, parsed.intent, parsed.plan);
+    if(_derived && _derived.length){
+        parsed.canvas_ops = _derived;
+        parsed.reply = String(parsed.reply || '').replace(/^我?会/, '已');
+        if(!parsed.intent) parsed.intent = 'canvas';
+    } else {
+        // 「已将「主图」和「卖点文案」归为一组」这类中间夹着宾语，所以动词前允许最多 12 个字
+        const _doneClaim = /已(为|经)?(将|把).{0,12}(创建|新建|建好|连接|连好|归为|归到|归到一组|整理|排开|对焦|选中|删除|改名|更新|放到)|已(为|经)?(创建|新建|建好|连接|连好|归为|归到|整理好|对焦|选中|删除|改名|更新|放到)|我(会|这就|马上|来)(把|按|为|帮).{0,24}(整理|排开|归|对焦|创建|新建|连)/;
+        const _replyText = String(parsed.reply || '');
+        if(_doneClaim.test(_replyText)){
+            parsed.reply = `${_replyText.replace(/[。！!]?\s*$/, '')}（这一步我没能真正执行，请再说一次，或直接在画布上操作）`;
+        }
     }
 }
 // 提前计算思维模式状态，使兜底逻辑能感知
@@ -27311,12 +29812,20 @@ if(isCanvasOpRequest(text) && parsed.canvas_ops.length === 0){
                 const hasGenInProgress = !thinkingModeOn && genInProgressRe.test(replyText);
                 const hasUserGenIntent = noOptions && userGenIntentRe.test(userText);
                 const hasMeaninglessConfirm = noOptions && meaninglessConfirmRe.test(replyText);
-                const hasAnyIntent = hasGenInProgress || hasUserGenIntent || isModifyScenario || hasMeaninglessConfirm;
+                // 🚨 纯提问 / 纯理解一律不进兜底（2026-10-21）：模型有时会在回答问题时写「要为您生成…吗？」，
+                //    旧逻辑会把它当生图需求 → 假失败卡或「提示词确认」窗口。提问就是提问，描述就是描述。
+                const hasAnyIntent = (hasGenInProgress || hasUserGenIntent || isModifyScenario || hasMeaninglessConfirm)
+                    && !isQuestionOnly(userText) && !isUnderstandOnly(userText);
                 // 修改场景（风格修改+主体更换）都使用 use_last_outputs: true 引用原图
                 // 区别在于 prompt 写法：风格修改→描述风格变化；主体更换→明确指示替换主体+保留场景
                 const fallbackUseLastOutputs = isModifyScenario;
                 if(hasAnyIntent && !_canvasOpTask){
-                        const finalPrompt = genPrompt || userText;
+                        // 🚨 兜底 prompt 必须去掉 [文件:…]/[图:…]/[节点:…] 引用标记（那是给人看的）
+                        const finalPrompt = genPrompt || agentPromptFromUserText(userText);
+                        if(!finalPrompt){
+                            // 清干净之后什么都不剩 ⇒ 说明用户这句本来就不是提示词，别硬造一条
+                            parsed.reply = String(parsed.reply || '') || '我没能确认要画什么，请把需求说具体一点。';
+                        } else {
                         parsed.generations = [{
                             prompt: finalPrompt,
                             count: 1,
@@ -27325,6 +29834,7 @@ if(isCanvasOpRequest(text) && parsed.canvas_ops.length === 0){
                             results: [],
                             status: 'running'
                         }];
+                        }
                         // 不覆盖 parsed.reply，保留 LLM 原始回复
                         // generation card 会独立显示状态和 prompt
                     }
@@ -27392,6 +29902,19 @@ if(isCanvasOpRequest(text) && parsed.canvas_ops.length === 0){
                         status:'pending'
                     };
                     if(Array.isArray(g.attachment_indices)) p.attachment_indices = g.attachment_indices;
+                    // 🚨 生成参数必须一起搬过来，否则 generations→prompts 这一转就把
+                    //    用户明确要的比例/分辨率/通道全丢了（确认后按界面默认出图）。
+                    if(g.ratio) p.ratio = g.ratio;
+                    if(g.resolution) p.resolution = g.resolution;
+                    if(g.quality) p.quality = g.quality;
+                    if(g.provider) p.provider = g.provider;
+                    if(g.model) p.model = g.model;
+                    // 🚨 局部重绘字段也必须一起搬！这一转漏掉 inpaint，思维模式下**永远走整图重画**：
+                    //    用户在遮罩里改一个扣子，结果整张图被重绘，人物/场景全变。
+                    if(g.inpaint) p.inpaint = true;
+                    if(g.target_node) p.target_node = g.target_node;
+                    // 自动遮罩的 bbox 也要一起搬，否则思维模式下「模型指出的位置」被丢掉
+                    if(g.mask_hint) agentApplyMaskHintInto(p, g.mask_hint);
                     convertedPrompts.push(p);
                 }
             });
@@ -27399,60 +29922,36 @@ if(isCanvasOpRequest(text) && parsed.canvas_ops.length === 0){
             parsed.prompts = convertedPrompts.concat(parsed.prompts);
             parsed.generations = [];
         }
-        // 1.5 前端兜底：思维模式下，如果输入模糊（缺风格）但 LLM 返回了 prompts（没走阶段一），强制走 options
-        // 这样即使 LLM 没按系统提示词执行阶段一，前端也能保证"先选风格再扩写"的流程
-        if(!_canvasOpTask && !isModifyRequest && parsed.prompts.length > 0 && parsed.options.length === 0 && isVagueImageRequest(text)){
-            parsed.prompts = [];
-            parsed.options = [
-                {label:'水墨风', value:'水墨风'},
-                {label:'油画风', value:'油画风'},
-                {label:'赛博朋克', value:'赛博朋克'},
-                {label:'Q版卡通', value:'Q版卡通'}
-            ];
-            parsed.reply = '你的输入比较简略，请先选择一个风格方向，我再为你扩写完整提示词：';
-        }
-        // 2. 如果 prompts 仍为空，创建默认 prompt
+        // 1.5 兜底（2026-10-19 重写）：**不再把「短输入」当成生图需求**。
+        //   原来这里会把 parse 结果强行改成 4 个画风选项并覆盖 reply（"请先选择一个风格方向"），
+        //   于是用户说「你好」也会被反问风格 —— 违反「不主动推销产物、不引导用户出图」的原则。
+        //   现在的规则：
+        //   · 模型没给 prompts / generations / options ⇒ 就是一次普通对话，reply 原样展示；
+        //   · 只有「用户这句确实在要图」且模型没给结构化结果时，才用原文兜底一条待确认提示词。
         if(!_canvasOpTask && parsed.prompts.length === 0 && parsed.options.length === 0 && parsed.generations.length === 0){
-            // 检查 reply 是否包含 JSON 标记（说明解析失败了，但 LLM 确实返回了结构化数据）
             const replyLooksLikeJson = parsed.reply && (parsed.reply.includes('"reply"') || parsed.reply.includes('"options"') || parsed.reply.trim().startsWith('{'));
             if(replyLooksLikeJson){
-                // 解析失败但 LLM 返回了 JSON：尝试从 reply 文本中提取有用信息
-                console.warn('[thinkingMode] LLM 返回了 JSON 但 JSON.parse 和正则提取均失败，尝试最后兜底，reply:', parsed.reply?.slice(0, 200));
-                // 尝试从 raw reply 中提取 reply 字段的值
+                // 解析失败但确实是 JSON：尽量把 reply 抽出来，别把原始 JSON 甩给用户
+                console.warn('[thinkingMode] LLM 返回了 JSON 但解析失败，尝试提取 reply:', parsed.reply?.slice(0, 200));
                 const replyValMatch = parsed.reply.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/);
                 if(replyValMatch){
                     try { parsed.reply = JSON.parse('"' + replyValMatch[1] + '"'); } catch(e){ parsed.reply = replyValMatch[1]; }
-                    // 提取到了 reply，继续走正常流程创建 prompt
-                    parsed.prompts = [{prompt:text, count:1, use_last_outputs:isModifyRequest, use_attachments:false, status:'pending'}];
+                } else if(isCanvasOpRequest(text) || /节点|工作流|流程图|连线/.test(text)){
+                    parsed.reply = '抱歉，AI 回复格式异常。请重新描述你要在画布上做的操作：';
+                    parsed.options = agentCanvasOpSuggestions();
                 } else {
-                    // 彻底无法提取：给用户友好的提示 + 与当前任务相关的选项（不要一味的生图风格建议）
-                    if(isCanvasOpRequest(text) || /节点|工作流|流程图|连线/.test(text)){
-                        parsed.reply = '抱歉，AI 回复格式异常。请重新描述你要在画布上做的操作：';
-                        parsed.options = agentCanvasOpSuggestions();
-                    } else {
-                        parsed.reply = '抱歉，AI 回复格式异常。请重新描述你的需求，或者选择一个风格方向开始：';
-                        parsed.options = [
-                            {label:'水墨风', value:'水墨风'},
-                            {label:'油画风', value:'油画风'},
-                            {label:'赛博朋克', value:'赛博朋克'},
-                            {label:'Q版卡通', value:'Q版卡通'},
-                            {label:'自定义输入', value:'CUSTOM_INPUT'}
-                        ];
-                    }
+                    parsed.reply = '抱歉，AI 回复格式异常。请再描述一次你的需求。';
                 }
-            } else if(isVagueImageRequest(text) && !isModifyRequest){
-                // 模糊请求：强制走维度选择
-                parsed.options = [
-                    {label:'水墨风', value:'水墨风'},
-                    {label:'油画风', value:'油画风'},
-                    {label:'赛博朋克', value:'赛博朋克'},
-                    {label:'Q版卡通', value:'Q版卡通'}
-                ];
-                parsed.reply = '你的输入比较简略，请先选择一个风格方向，我再为你逐步完善：';
-            } else {
-                parsed.prompts = [{prompt:text, count:1, use_last_outputs:isModifyRequest, use_attachments:false, status:'pending'}];
-                if(!parsed.reply) parsed.reply = '请确认以下提示词：';
+            } else if(looksLikeGenRequest(text) && !isModifyRequest){
+                // 用户确实在要图、模型却没给结构化结果 → 用原文兜底一条待确认提示词
+                // 🚨 兜底前先洗掉 [文件:…]/[图:…]/[节点:…] 引用标记，洗空了就不造
+                const _fallbackPrompt = agentPromptFromUserText(text);
+                if(_fallbackPrompt){
+                    parsed.prompts = [{prompt:_fallbackPrompt, count:1, use_last_outputs:false, use_attachments:false, status:'pending'}];
+                    if(!parsed.reply) parsed.reply = '请确认以下提示词：';
+                }
             }
+            // 其它情况（纯聊天 / 提问 / 打招呼）：什么都不做，reply 原样展示
         }
         // 3. 数量校准：如果用户设置了 genCount>1 或文本请求了N张
         // 3a. 少于请求数量 → 补充（加入差异化方向，避免生成的图几乎一样）
@@ -27480,9 +29979,19 @@ if(isCanvasOpRequest(text) && parsed.canvas_ops.length === 0){
         if(requestedCount > 1 && parsed.prompts.length > requestedCount){
             parsed.prompts = parsed.prompts.slice(0, requestedCount);
         }
-        // 3c. 用户未要求多张（genCount=1）→ 强制只保留1条，防止LLM返回多条
-        if(requestedCount === 0 && parsed.prompts.length > 1){
-            parsed.prompts = parsed.prompts.slice(0, 1);
+        // 3c. 多方向截断规则（2026-10-20 改）：原来只要「用户没要多张」就硬截成 1 条，
+        //     把偏好记忆里的「先给 2-3 个方向」也一起砍了 —— 编排层想给多方向根本落不了地。
+        //     现在分三档：
+        //       ① 用户本轮说了数字（"一张""3个"）→ 以用户为准，按数字截；
+        //       ② 用户没说，但偏好记忆要多方向 → 保留模型给的多方向；
+        //       ③ 用户没说、记忆也不要多方向 → 才截成 1 条。
+        if(parsed.prompts.length > 1){
+            const _explicitN = chatRequestedImageCount(text);
+            if(_explicitN > 0){
+                parsed.prompts = parsed.prompts.slice(0, Math.min(8, _explicitN));
+            } else if(requestedCount === 0 && !agentWantsMultiDirection()){
+                parsed.prompts = parsed.prompts.slice(0, 1);
+            }
         }
     }
     // 直接模式数量校准：如果非思维模式，校准 generations 条数到 requestedCount
@@ -27515,10 +30024,128 @@ if(isCanvasOpRequest(text) && parsed.canvas_ops.length === 0){
 if(!thinkingModeOn && parsed.generations.length > 0){
     parsed.generations.forEach(g => { g.count = 1; });
 }
+/* 兜底：用户明说要「用遮罩改 / 只改这里」→ 直接走局部重绘。
+   🚨 不能只靠模型自觉：漏判的代价是**整图重画**（原图被覆盖、分辨率也跟着变），比多判一次严重得多。
+   🚨 老实现要求 `_masked.length === 1`（画布上只能有一个遮罩节点）——
+      老板画布上常年有 **3 个同名「上传」节点、3 个遮罩**，这个条件永远不成立，
+      于是「涂了遮罩也照样整图重画」。现在改成按**这一轮指向的那个节点**判定。 */
+{
+    const _maskRe = /遮罩|涂抹|局部重绘|局部修改|局部改|只改这|只修这|重绘这|被遮挡|这块改|这块换/i;
+    const _hasGen = (parsed.prompts || []).length > 0 || (parsed.generations || []).length > 0;
+    if(_hasGen && _maskRe.test(String(text || ''))){
+        const target = agentPickInpaintTarget(userMsg);
+        if(target){
+            const _mark = list => (list || []).forEach(p => {
+                if(!p || typeof p !== 'object' || p.inpaint) return;
+                p.inpaint = true;
+                if(!p.target_node) p.target_node = target.id;   // 用 id，别用标题：标题会重名
+                delete p.ratio;   // 尺寸/比例跟遮罩裁切走，留着会误导
+                delete p.count;
+            });
+            _mark(parsed.prompts);
+            _mark(parsed.generations);
+        }
+    }
+}
+/* 🚨 「要局部重绘，但画布上根本没有遮罩」→ **不许出图**（2026-10-20 老板截图踩中）。
+   原样现象：用户说「我想将图片中的安全带扣露出来，使用局部重绘的方式」，节点没涂遮罩，
+   模型 reply 明明写着「请先涂抹遮罩」，下面却照样冒出一张**整图重画**的结果，
+   画面和原图毫无关系。
+   ⇒ 宁可这轮什么都不生成，也不能用整图重画冒充局部重绘。
+      遮罩失效（原图被换过）比「没遮罩」更危险：会拿整图当局部图回贴，糊成一片。 */
+{
+    const _wantsInpaint = /遮罩|涂抹|局部重绘|局部修改|局部改|只改这|只修这|重绘这|这块改|这块换/i;
+    const _hasGen = (parsed.prompts || []).length > 0 || (parsed.generations || []).length > 0;
+    /* 🚨 不能再放行「已经标了 inpaint 的」：模型会**自己瞎标** inpaint:true（画布上根本没遮罩），
+       老条件 `!_alreadyMarked` 于是直接跳闸放行 → 又变成整图重画（2026-10-20 测试 C 踩中）。
+       真正该判的是「有没有可用的遮罩」，不是「有没有标记」：
+       `!_maskedNow.length` 已经排除掉正常路径，不需要再靠标记做白名单。 */
+    if(_hasGen && _wantsInpaint.test(String(text || ''))){
+        const _live = (nodes || []).filter(n => n.id !== SMART_LOG_PREVIEW_NODE_ID && (n.images || []).length);
+        const _maskedNow = _live.filter(n => validNodeInpaint(n));
+        /* 自动遮罩的口子（2026-10-20 老板要的「没涂遮罩也能自动」）：
+           模型已经指出要改的位置（mask_hint 有效）→ 不拦，等 agentAutoMaskGenerations 自己造遮罩。
+           🚨 判据必须是**校验过的** mask_hint，不能是「模型说它有」：
+              模型瞎填一个越界 bbox 时，这里放行 + 后面造不出遮罩 = 又变成整图重画。 */
+        const _autoMaskReady = (parsed.generations || []).some(g => agentNormalizeMaskHint(g?.mask_hint));
+        // 🚨 有遮罩但点不出「改哪个」时不拦（那是多图歧义，该让他选，不是让他重涂）。
+        //    真正要拦的是「一个遮罩都没有」。
+        if(!_maskedNow.length && !_autoMaskReady){
+            // 指名了节点但那个节点没涂遮罩 → 说清是哪个节点
+            const refTitles = (userMsg?.nodeRefs || []).map(r => String(r.title || '')).filter(Boolean);
+            const named = refTitles.find(t => _live.some(n => String(n.title || '') === t));
+            const which = named || (_live.length === 1 ? String(_live[0].title || '这个节点') : '目标');
+            parsed.prompts = [];
+            parsed.generations = [];
+            parsed.options = [];
+            parsed.intent = 'canvas';
+            parsed.reply = `「${which}」节点上还没有遮罩，我先不出图。\n`
+                + `请双击这个节点进入编辑，用涂抹工具把**要改的那块**涂上（例如安全带扣的位置），`
+                + `退出后再让我重绘 —— 否则我只能整张重画，画面就会和原图对不上了。`;
+        }
+    }
+}
+/* 🚨 硬规则第一层（2026-10-22 老板要求「别只靠提示词，要在机制上拦住」）：
+   **不判断意图**，只看两个客观事实 ——
+     ① 用户这句话里没有任何生图 / 编辑动作词；
+     ② 模型给的 prompt 就是用户原话（或原话的一部分，≥8 字）。
+   同时满足就一定是「把问话当提示词」，直接丢。这条不依赖意图分类准不准，
+   所以「这张图能看出来吗」这种词表覆盖不到的口语也能拦住。
+   ⚠️ 有动作词时不动（「画一只猫」的 prompt 就是原话，但那是真需求）。 */
+if((parsed.prompts.length || parsed.generations.length) && !agentUserHasGenAction(text)){
+    const _norm = s => String(s || '').replace(/[\s，。！？、,.!?~～:：;；"'“”‘’]/g, '');
+    const _cut = _norm(text);
+    if(_cut){
+        const _isEcho = s => { const n = _norm(s); return !!n && (n === _cut || (_cut.includes(n) && n.length >= 8)); };
+        const _beforeP = parsed.prompts.length, _beforeG = parsed.generations.length;
+        parsed.prompts = parsed.prompts.filter(p => !_isEcho(p.prompt));
+        parsed.generations = parsed.generations.filter(g => !_isEcho(g.prompt));
+        if((_beforeP || _beforeG) && !parsed.prompts.length && !parsed.generations.length){
+            console.warn('[agent] 已拦下「把问话当生图提示词」（无动作词 + 原话复读）：', text);
+        }
+    }
+}
+/* 纯提问的兜底第二层（2026-10-21）：模型自己也可能在回答问题时吐 generations
+   （实测过：它一边正确解释「这是整图重绘」，一边又给了个 prompt = 用户原话的 generation）。
+   特征就是 **prompt ≈ 用户这句问话**。把问话当生图提示词发出去，既白烧一次调用、
+   又必然被上游审核拒，最后在界面上留一张红卡。只丢这一种，模型改写过的 prompt 不动。 */
+if(isQuestionOnly(text) && (parsed.prompts.length || parsed.generations.length)){
+    const _norm = s => String(s || '').replace(/[\s，。！？、,.!?~～:：;；"'“”‘’]/g, '');
+    const _cut = _norm(text);
+    if(_cut){
+        const _isEcho = s => { const n = _norm(s); return !!n && (n === _cut || (_cut.includes(n) && n.length >= 8)); };
+        const _beforeP = parsed.prompts.length, _beforeG = parsed.generations.length;
+        parsed.prompts = parsed.prompts.filter(p => !_isEcho(p.prompt));
+        parsed.generations = parsed.generations.filter(g => !_isEcho(g.prompt));
+        if((_beforeP || _beforeG) && !parsed.prompts.length && !parsed.generations.length){
+            console.warn('[agent] 已拦下「把问话当生图提示词」：', text);
+        }
+    }
+}
+/* 🚨 纯理解任务的强拦（2026-10-21 老板截图）：模型很爱「顺手续一句」——
+   把图描述得完全正确，偏偏又塞一个 prompt = 用户原话，前端就渲染出「📝 提示词确认」。
+   🚨 这层比上面的回声过滤更硬：纯理解任务里 **任何** prompt 都是多余的（连改写过的也丢），
+      因为用户要的是「告诉我这是什么」，不是「画点什么」。
+      「描述这张图，再按这个描述生成一张」这种含生成动作的，isUnderstandOnly 判 false，不受影响。 */
+if(isUnderstandOnly(text) && (parsed.prompts.length || parsed.generations.length)){
+    console.warn('[agent] 纯理解任务，已丢弃生图任务：', text,
+        parsed.prompts.map(p => p.prompt).concat(parsed.generations.map(g => g.prompt)).slice(0, 3));
+    parsed.prompts = [];
+    parsed.generations = [];
+}
+/* 🚨 2026-10-22 老板：「不是完全贴合该输入文案才执行，而是需要加入 agent 的理解和判断」。
+   原来这里会把上一轮那段描述**原样拼**进 prompt —— 那是机械复述，不是理解：
+   上一轮的文字是「看图说话」的产物（缺主体/构图/风格指令），照搬过来反而更差。
+   现在改成**在发请求时**把那段文字作为上下文注入 system_prompt
+   （见 agentSystemPromptWithReference），让模型自己决定怎么改写、怎么和本轮要求融合。 */
 const assistantMsg = {
+    _convId: agentState._runningConvId || agentState.activeConversationId,   // 并发对话归属
     id:uid('am'), 
     role:'assistant', 
     text:parsed.reply, 
+    // 编排结果：intent 用于调试与后续路由，plan 直接展示给用户看「我打算怎么做」
+    intent:parsed.intent || '',
+    plan:Array.isArray(parsed.plan) ? parsed.plan : [],
     options:parsed.options || [], 
     prompts:parsed.prompts || [], 
     generations:parsed.generations, 
@@ -27538,13 +30165,15 @@ const assistantMsg = {
             assistantMsg.prompts[0].status = 'current';
         }
     }
-    agentState.messages.push(assistantMsg);
-    agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
+    agentPushAssistant(assistantMsg);
     agentThinking = false;
     renderAgentMessages();
     saveAgentState();
     if(parsed.canvas_ops && parsed.canvas_ops.length > 0){
-        applyAgentCanvasOps(parsed.canvas_ops);
+        const _applied = applyAgentCanvasOps(parsed.canvas_ops);
+        // 记下这次到底动过画布什么，供下一轮回溯「你刚才干了啥」
+        agentRecordCanvasOps(assistantMsg, parsed.canvas_ops, _applied);
+        saveAgentState();
     }
     if(assistantMsg.generations.length && assistantMsg.prompts.length === 0) await runAgentGenerations(assistantMsg, userMsg);
 }
@@ -27572,8 +30201,7 @@ async function agentVariantGenerate(sourceGen, count, sourceMsg){
         });
     }
     const assistantMsg = {id:uid('am'), role:'assistant', text:`正在生成 ${count} 张变体...`, options:[], prompts:[], generations:gens, ts:Date.now()};
-    agentState.messages.push(assistantMsg);
-    agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
+    agentPushAssistant(assistantMsg);
     renderAgentMessages();
     saveAgentState();
     // 找到对应的 userMsg
@@ -27587,6 +30215,11 @@ async function agentVariantGenerate(sourceGen, count, sourceMsg){
 }
 async function sendAgentMessage(){
     if(agentSending || !agentState) return;
+    /* 重编辑重发（2026-10-20）：内容来自 agentResendCtx（历史消息），不读输入框。
+       🚨 必须绕开输入框：`agentSyncStateOrderFromChips()` 会按「输入框里现有的胶囊」
+          重建附件数组，而重发时输入框里没有胶囊 ⇒ 附件被清空。 */
+    const _rs = agentResendCtx;
+    agentResendCtx = null;
     // P2-14: 确认中发送新消息拦截 —— 检测有未完成的 prompts 时弹 toast
     {
         const lastAssistant = [...(agentState.messages || [])].reverse().find(m => m.role === 'assistant');
@@ -27604,34 +30237,34 @@ async function sendAgentMessage(){
             }
         }
     }
-    const text = String(agentInput?.value || '').trim();
-    const attachments = (Array.isArray(agentState.attachments) ? agentState.attachments : []).slice();
+    // 胶囊在句子里的顺序 = 参考图的真实顺序（用户能直接改句子顺序）
+    if(!_rs) agentSyncStateOrderFromChips();
+    const text = _rs ? String(_rs.text || '').trim() : String(agentInput?.value || '').trim();
+    const attachments = _rs ? (_rs.attachments || []).slice() : (Array.isArray(agentState.attachments) ? agentState.attachments : []).slice();
     // 附件节点：非图片附件（文档/表格/压缩包…）
-    const documents = (Array.isArray(agentState.documents) ? agentState.documents : []).slice();
-    if(!text && !attachments.length && !documents.length) return;
+    const documents = _rs ? (_rs.documents || []).slice() : (Array.isArray(agentState.documents) ? agentState.documents : []).slice();
+    const nodeRefCount = _rs ? (_rs.nodeRefs || []).length : (Array.isArray(agentState.nodeRefs) ? agentState.nodeRefs : []).length;
+    if(!text && !attachments.length && !documents.length && !nodeRefCount) return;
 
     // ============ Slash 指令拦截 ============
-    if(text.startsWith('/compress')){
+    if(text.startsWith('/clear') || text.startsWith('/清空')){
         if(agentInput) agentInput.value = '';
         closeAgentSlashPalette();
-        const msgs = agentState.messages || [];
-        if(msgs.length > 6){
-            const keep = msgs.slice(-6);
-            agentState.messages = [
-                {
-                    id: uid('am'),
-                    role: 'assistant',
-                    text: tr('chat.slashAutoCompressed') || '上下文已压缩（保留最近 6 条对话记录）',
-                    ts: Date.now()
-                },
-                ...keep
-            ];
-            renderAgentMessages();
-            saveAgentState();
-            toast((tr('chat.slashCompress') || '压缩上下文') + ' ✓');
-        } else {
-            toast('当前历史消息较少，无需压缩');
-        }
+        clearAgentContext();
+        return;
+    }
+    if(text.startsWith('/compress') || text.startsWith('/压缩')){
+        if(agentInput) agentInput.value = '';
+        closeAgentSlashPalette();
+        // 支持 /compress 10 指定保留条数
+        const m = text.match(/(\d+)/);
+        compressAgentContext(m ? Number(m[1]) : 6);
+        return;
+    }
+    if(text.startsWith('/pref') || text.startsWith('/偏好') || text.startsWith('/设置')){
+        if(agentInput) agentInput.value = '';
+        closeAgentSlashPalette();
+        openAgentProfileModal();
         return;
     }
     if(text.startsWith('/skill')){
@@ -27665,6 +30298,10 @@ async function sendAgentMessage(){
 
         // 创建user消息（所有路径共用）
         const userMsg = {id:uid('am'), role:'user', text, images:attachments, documents:documents.slice(), ts:Date.now()};
+        /* 🚨 并发对话：记下这条请求属于哪个对话（2026-10-22 老板要求）。
+           用户可能在结果回来前就切到别的对话，结果必须写回这里记的这个。 */
+        userMsg._convId = agentState.activeConversationId;
+        agentState._runningConvId = agentState.activeConversationId;
         agentState.messages.push(userMsg);
         agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
         agentState.attachments = [];
@@ -27689,8 +30326,7 @@ async function sendAgentMessage(){
             // 直接用原文生图，零延迟
             const gens = [{prompt:text, count:1, use_last_outputs:false, use_attachments:false, results:[], status:'running'}];
             const assistantMsg = {id:uid('am'), role:'assistant', text:'', options:[], prompts:[], generations:gens, ts:Date.now()};
-            agentState.messages.push(assistantMsg);
-            agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
+            agentPushAssistant(assistantMsg);
             saveAgentState();
             renderAgentMessages();
             agentSending = false;
@@ -27707,8 +30343,7 @@ async function sendAgentMessage(){
         if(isEditFastPath){
             const gens = [{prompt:text, count:1, use_last_outputs:true, use_attachments:false, results:[], status:'running'}];
             const assistantMsg = {id:uid('am'), role:'assistant', text:'', options:[], prompts:[], generations:gens, ts:Date.now()};
-            agentState.messages.push(assistantMsg);
-            agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
+            agentPushAssistant(assistantMsg);
             saveAgentState();
             renderAgentMessages();
             agentSending = false;
@@ -27733,6 +30368,8 @@ async function sendAgentMessage(){
                 if(item?.url && contextImages.length < AGENT_LLM_IMAGE_MAX && !contextImages.some(i => i.url === item.url)) contextImages.push(item);
             });
         }
+        // @引用节点的图也进模型视野（否则模型看不到图，给不出 mask_hint）
+        agentAppendNodeRefImagesToContext(contextImages);
 
         // 图片编号映射
         const imageMap = agentCurrentImageMap();
@@ -27780,7 +30417,8 @@ async function sendAgentMessage(){
             model: chatModel,
             provider: chatProvider,
             ms_model: chatProvider === 'modelscope' ? chatModel : '',
-            system_prompt: offSystemPrompt
+            system_prompt: agentSystemPromptWithReference(offSystemPrompt, messageText),
+            reasoning_effort: agentReasoningEffortForLlm()
         };
 
         agentThinking = true;
@@ -27834,6 +30472,7 @@ async function sendAgentMessage(){
             if(routed.intent === 'canvas_op' || (agentState?.devMode && hasCanvasOps)){
                 // 画布节点操作意图
                 const assistantMsg = {
+    _convId: agentState._runningConvId || agentState.activeConversationId,   // 并发对话归属
                     id: uid('am'),
                     role: 'assistant',
                     text: routed.reply || (hasCanvasOps ? '已在画布中执行操作。' : '好的。'),
@@ -27842,40 +30481,41 @@ async function sendAgentMessage(){
                     generations: [],
                     ts: Date.now()
                 };
-                agentState.messages.push(assistantMsg);
-                agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
+                agentPushAssistant(assistantMsg);
                 saveAgentState();
                 renderAgentMessages();
                 if(hasCanvasOps){
-                    await applyAgentCanvasOps(routed.canvas_ops);
+                    const _applied = await applyAgentCanvasOps(routed.canvas_ops);
+                    agentRecordCanvasOps(assistantMsg, routed.canvas_ops, _applied);
+                    saveAgentState();
                 }
             } else if(routed.intent === 'cancel'){
                 // 取消
                 const assistantMsg = {id:uid('am'), role:'assistant', text:routed.reply || '好的，已取消。', options:[], prompts:[], generations:[], ts:Date.now()};
-                agentState.messages.push(assistantMsg);
-                agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
+                agentPushAssistant(assistantMsg);
                 saveAgentState(); renderAgentMessages();
             } else if(routed.intent === 'clarify'){
                 // 意图不明，问用户
                 const assistantMsg = {id:uid('am'), role:'assistant', text:routed.reply || '你想让我做什么？', options:routed.options || [], prompts:[], generations:[], ts:Date.now()};
-                agentState.messages.push(assistantMsg);
-                agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
+                agentPushAssistant(assistantMsg);
                 saveAgentState(); renderAgentMessages();
             } else if(routed.text_only){
                 // 纯文本回复（分析/反推/提示词扩写/meta）
+                let _opsApplied = 0;
                 if(hasCanvasOps){
-                    await applyAgentCanvasOps(routed.canvas_ops);
+                    _opsApplied = await applyAgentCanvasOps(routed.canvas_ops);
                 }
                 const analysisText = routed.analysis || routed.reply || llmResult.text || '';
                 const cardType = routed.intent === 'refine' ? 'prompt_suggestion' : routed.intent === 'meta' ? '' : 'analysis';
                 const assistantMsg = {id:uid('am'), role:'assistant', text:analysisText, options:routed.options || [], prompts:[], generations:[], ts:Date.now(), cardType:cardType || undefined};
-                agentState.messages.push(assistantMsg);
-                agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
+                if(hasCanvasOps) agentRecordCanvasOps(assistantMsg, routed.canvas_ops, _opsApplied);
+                agentPushAssistant(assistantMsg);
                 saveAgentState(); renderAgentMessages();
             } else {
                 // 生图类意图（generate/edit/composite/reference_generate）
+                let _opsApplied = 0;
                 if(hasCanvasOps){
-                    await applyAgentCanvasOps(routed.canvas_ops);
+                    _opsApplied = await applyAgentCanvasOps(routed.canvas_ops);
                 }
                 const prompts = (Array.isArray(routed.prompts) && routed.prompts.length > 0) ? routed.prompts : [text];
                 const gens = prompts.map(p => ({
@@ -27887,8 +30527,9 @@ async function sendAgentMessage(){
                     status: 'running'
                 }));
                 const assistantMsg = {id:uid('am'), role:'assistant', text:routed.reply || '', options:[], prompts:[], generations:gens, ts:Date.now()};
-                agentState.messages.push(assistantMsg);
-                agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
+                /* 生图同时附带画布动作也要留痕（否则「你刚才动了画布什么」照样答不出）。 */
+                if(hasCanvasOps) agentRecordCanvasOps(assistantMsg, routed.canvas_ops, _opsApplied);
+                agentPushAssistant(assistantMsg);
                 saveAgentState();
                 renderAgentMessages();
                 await runAgentGenerations(assistantMsg, userMsg);
@@ -27899,8 +30540,7 @@ async function sendAgentMessage(){
             console.warn('[OFF mode] LLM intent route failed, fallback:', e.message);
             const fallbackGens = [{prompt:text, count:1, use_last_outputs:hasLastOutputs && modifyRe.test(text), use_attachments:attachments.length > 0, results:[], status:'running'}];
             const assistantMsg = {id:uid('am'), role:'assistant', text:'', options:[], prompts:[], generations:fallbackGens, ts:Date.now()};
-            agentState.messages.push(assistantMsg);
-            agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
+            agentPushAssistant(assistantMsg);
             saveAgentState();
             renderAgentMessages();
             try { await runAgentGenerations(assistantMsg, userMsg); } catch(e2) {
@@ -27924,13 +30564,22 @@ async function sendAgentMessage(){
     agentState.chatProvider = provider;
     agentState.chatModel = model;
     const userMsg = {id:uid('am'), role:'user', text, images:attachments, documents:documents.slice(), ts:Date.now()};
+    // 节点引用要在清空 agentState 之前先取出来（引用对照表随本轮消息发一次，不留在状态里）
+    const _nodeRefsBlock = agentNodeRefsContextBlock();
+    const _nodeRefsSnapshot = Array.isArray(agentState.nodeRefs) ? agentState.nodeRefs.slice() : [];
+    if(_nodeRefsSnapshot.length) userMsg.nodeRefs = _nodeRefsSnapshot;
     const bypassThinking = agentBypassThinkingNext;
     agentBypassThinkingNext = false;
     userMsg.bypassThinking = bypassThinking;
+    /* 🚨 并发对话：记下这条请求属于哪个对话（2026-10-22 老板要求）。
+       用户可能在结果回来前就切到别的对话，结果必须写回这里记的这个。 */
+    userMsg._convId = agentState.activeConversationId;
+    agentState._runningConvId = agentState.activeConversationId;
     agentState.messages.push(userMsg);
     agentState.messages = agentState.messages.slice(-AGENT_MSG_MAX);
     agentState.attachments = [];
     agentState.documents = [];
+    agentState.nodeRefs = [];
     if(agentInput) agentInput.value = '';
     renderAgentAttachments();
     agentSending = true;
@@ -27947,12 +30596,16 @@ async function sendAgentMessage(){
             if(item?.url && contextImages.length < AGENT_LLM_IMAGE_MAX && !contextImages.some(i => i.url === item.url)) contextImages.push(item);
         });
     }
+    // @引用节点的图也进模型视野（否则模型看不到图，给不出 mask_hint）
+    agentAppendNodeRefImagesToContext(contextImages);
     // 通用保障：当有 skill 时，在 user message 末尾注入 skill 强制提醒
     // 原因：不同 LLM provider 对 system_prompt 的处理方式不同：
     //   - OpenAI 兼容 API（agnes/魔搭等）：system_prompt 作为 system role，高优先级 ✓
     //   - gemini-cli（agy）：system_prompt 被拼成普通文本"系统要求：..."，优先级低，易忽略 ✗
     // 在 user message 里追加提醒，确保所有 provider 都能看到 skill 要求
     let messageText = text || '(please help me edit these images)';
+    // 节点引用对照表：让模型知道 [节点:xxx] 具体是哪个节点、里面有什么
+    if(_nodeRefsBlock) messageText += `${AGENT_NL}${AGENT_NL}${_nodeRefsBlock}`;
     // 多轮对话：注入已确认的维度信息
     const lastAssistant = [...(agentState.messages || [])].reverse().find(m => m.role === 'assistant');
     const prevCollected = lastAssistant?.collected || {};
@@ -27988,7 +30641,8 @@ async function sendAgentMessage(){
         model,
         provider,
         ms_model:provider === 'modelscope' ? model : '',
-        system_prompt:agentSystemPrompt(bypassThinking, _finalCount.count)
+        system_prompt: agentSystemPromptWithReference(agentSystemPrompt(bypassThinking, _finalCount.count), messageText),
+        reasoning_effort: agentReasoningEffortForLlm()
     };
     try {
         // 创建后端 LLM 任务（流式输出）
@@ -28037,11 +30691,13 @@ async function sendAgentMessage(){
     }
 }
 function agentCenterOnPoint(x, y){
-    // 考虑 Agent 面板宽度，使用可视区域中心
-    const agentPanelWidth = agentOpen ? 382 : 0;
-    const visibleCenterX = (shell.clientWidth - agentPanelWidth) / 2;
-    viewport.x = visibleCenterX - x * viewport.scale;
-    viewport.y = shell.clientHeight / 2 - y * viewport.scale;
+    // 🚨 面板已改为底部居中悬浮（2026-10-19）⇒ 不再占用横向空间，
+    //    居中就是纯可视区中心。旧代码按右侧面板 382px 扣减，会让生成物整体偏左。
+    //    顶部要给悬浮框留出空间，所以纵向中心略微上移。
+    const dockH = agentPanel ? agentPanel.getBoundingClientRect().height : 0;
+    const reservedBottom = agentOpen ? Math.min(dockH + 24, shell.clientHeight * 0.42) : 0;
+    viewport.x = shell.clientWidth / 2 - x * viewport.scale;
+    viewport.y = (shell.clientHeight - reservedBottom) / 2 - y * viewport.scale;
     applyViewport();
     scheduleSave();
 }
@@ -28126,6 +30782,24 @@ async function _triggerGenerationsIfAllDone(assistantMsg){
             status:'running'
         };
         if(Array.isArray(cp.attachment_indices)) g.attachment_indices = cp.attachment_indices;
+        /* 🚨 这里是「提示词确认 · 已确认」那条路的**唯一**出口（2026-10-20 老板截图踩中）。
+           原来只搬 attachment_indices，`inpaint` / `target_node` / 尺寸参数全部丢失 ⇒
+           确认后按整图重画：新开节点出 1024×1024 的图，原图（4659×3106）根本没被回贴。
+           ⇒ 局部重绘的三个要素（inpaint、target_node、不带 ratio/count）必须一条不落搬过来。 */
+        if(cp.inpaint){
+            g.inpaint = true;
+            if(cp.target_node) g.target_node = cp.target_node;
+            // 尺寸/比例跟遮罩裁切走，别带 ratio/count 去误导
+            g.count = 1;
+            // 自动遮罩的 bbox：确认路径同样必须搬，否则「点确认」后位置信息就没了
+            if(cp.mask_hint) agentApplyMaskHintInto(g, cp.mask_hint);
+        } else {
+            if(cp.ratio) g.ratio = cp.ratio;
+            if(cp.resolution) g.resolution = cp.resolution;
+            if(cp.quality) g.quality = cp.quality;
+        }
+        if(cp.provider) g.provider = cp.provider;
+        if(cp.model) g.model = cp.model;
         return g;
     });
     // 统一生图（所有 confirmed prompts 一次性传入，整齐排列）
@@ -28275,7 +30949,8 @@ async function regenerateAgentPrompts(assistantMsg){
         model,
         provider,
         ms_model: provider === 'modelscope' ? model : '',
-        system_prompt: agentSystemPrompt(false)
+        system_prompt: agentSystemPromptWithReference(agentSystemPrompt(false), regenMessage),
+        reasoning_effort: agentReasoningEffortForLlm()
     };
     try {
         const taskRes = await fetch('/api/agent-llm-task', {
@@ -28323,6 +30998,126 @@ async function regenerateAgentPrompts(assistantMsg){
         saveAgentState();
     }
 }
+/* 局部重绘目标：gen.inpaint 为真时，找出「要重绘的那张图」所在的节点。
+   🚨 遮罩不是「参考图」，是「只改这块」的指令。agent 以前请求里**根本没有 inpaint 字段**，
+      用户涂了遮罩让它改，实际走的是整图重画 —— 原图 1600×1600 被重画成 1024×1024 就是这么来的。
+   🚨 目标节点必须**有有效遮罩**（validNodeInpaint 会校验原图有没有被换掉/换序）；
+      遮罩失效时不能硬走 inpaint，否则会把整图当局部图回贴，糊成一片。 */
+function agentResolveInpaintTarget(gen){
+    if(!gen?.inpaint) return null;
+    const want = agentCleanNodeRef(gen.target_node || '');
+    const masked = (nodes || []).filter(n => validNodeInpaint(n));
+    if(!masked.length) return null;
+    // 🚨 只接受**唯一**匹配，别用 includes 随便挑一个：
+    //    画布上常有多个同名「上传」节点，随便挑就是改错图。
+    let target = null;
+    if(want){
+        target = masked.find(n => n.id === want) || null;                       // id 最可靠
+        if(!target){
+            const exact = masked.filter(n => String(n.title || '') === want);
+            if(exact.length === 1) target = exact[0];                            // 标题唯一命中才用
+        }
+        if(!target){
+            const partial = masked.filter(n => String(n.title || '').includes(want));
+            if(partial.length === 1) target = partial[0];
+        }
+    }
+    // 没指定 / 指定的对不上 → 只在「画布上恰好一个遮罩节点」时才兜底
+    if(!target && masked.length === 1) target = masked[0];
+    if(!target) return null;
+    const meta = validNodeInpaint(target);
+    return meta ? {node:target, meta} : null;
+}
+// 局部重绘请求体（字段与 runApiGeneration 的 inpaint 分支保持一致）
+function agentInpaintPayload(meta, refs, providerId, basePayload){
+    const refMax = providerMaxReferenceImages(providerId);
+    const payload = {
+        ...basePayload,
+        size:meta.size || basePayload.size,
+        aspect_ratio:meta.aspect_ratio || '',
+        reference_images:inpaintReferenceImages(meta, refs, refMax),
+        operation:'inpaint',
+        inpaint:{
+            base_url:meta.base_url,
+            base_name:meta.base_name || '',
+            mask_url:meta.mask_url || '',
+            crop_url:meta.crop_url,
+            crop_mask_url:meta.crop_mask_url,
+            bbox:(meta.bbox || []).slice(0, 4).map(v => Math.round(Number(v) || 0)),
+            base_w:Math.round(Number(meta.base_w) || 0),
+            base_h:Math.round(Number(meta.base_h) || 0),
+            aspect_ratio:meta.aspect_ratio || '',
+            size:meta.size || '',
+            feather:Math.round(Number(meta.feather) || 0)
+        }
+    };
+    return payload;
+}
+/* 用户引用的画布节点里的图，转成参考图（2026-10-20）。
+   🚨 这是「生成的图和上传文件毫无关系」的根因：
+      `[节点:上传]` 只进了 prompt 文本和【用户引用的画布节点】说明，
+      真正发往生图接口的 reference_images **一张都没有节点的图**。
+      上游于是完全凭文字自由发挥 —— 换车、换座椅、换背景都是这么来的。
+   🚨 必须用「当前画布」的最新图，不能只信 userMsg.nodeRefs 的快照：
+      快照是发送那一刻存的，图片可能刚重绘完 / 刚被替换。 */
+function agentNodeRefImages(userMsg){
+    const refs = Array.isArray(userMsg?.nodeRefs) ? userMsg.nodeRefs : [];
+    if(!refs.length) return [];
+    const out = [];
+    const seen = new Set();
+    refs.forEach(ref => {
+        const live = (nodes || []).find(n => n.id === ref.id) || ref;
+        const imgs = (live.images || []).filter(im => im?.url);
+        // 只当「引用的就是这张图」用：多图节点取第一张（用户说「这个节点」通常指主图）
+        const url = imgs[0]?.url;
+        if(!url || seen.has(url)) return;
+        seen.add(url);
+        out.push({url, name:imgs[0].name || String(live.title || 'node') + '.png'});
+    });
+    return out;
+}
+/* 「标了局部重绘，但定位不到目标节点」→ 给一句**能照做**的话（2026-10-20 老板截图踩中）。
+   🚨 老文案「找不到要局部重绘的节点（遮罩可能已失效或对不上）」是废话：
+      既没说为什么（有几个同名节点？），也没说怎么办（@ 引用 / 涂遮罩）。
+   🚨 老板画布上 7 个节点全叫「上传」—— 模型写 target_node:"上传" 必然对不上，
+      这才是「为什么失败」的真正答案，所以要把重复次数直接说出来。 */
+function agentExplainInpaintMiss(gen, userMsg){
+    const live = (nodes || []).filter(n => n.id !== SMART_LOG_PREVIEW_NODE_ID && (n.images || []).some(im => im?.url));
+    const want = agentCleanNodeRef(gen?.mask_hint?.target_node || gen?.target_node || '');
+    const selectNode = (node, why) => {
+        if(!node) return why;
+        selectedId = node.id;
+        try { focusNodeInViewport(node); } catch(e) {}
+        render();
+        return why;
+    };
+    if(!live.length) return '画布上没有能改的图片节点 —— 先上传或生成一张图。';
+    if(want){
+        const byId = live.find(n => n.id === want);
+        const same = byId ? [byId] : live.filter(n => String(n.title || '') === want || String(n.title || '').includes(want));
+        if(same.length > 1){
+            const refIds = (userMsg?.nodeRefs || []).map(r => r?.id).filter(Boolean);
+            const pick = same.find(n => refIds.includes(n.id));
+            if(pick){
+                return selectNode(pick, `画布上有 ${same.length} 个「${want}」，我按你引用的那个选中了它，`
+                    + `但上面还没有遮罩、也没给出要改的区域。\n请在它上面涂抹要改的那块，再发一次。`);
+            }
+            return `画布上有 ${same.length} 个节点都叫「${want}」，我没法确定要改哪一个 —— 这条没有出图。\n`
+                + `办法二选一：① 在消息里 @ 引用那一张（输入框打 @ 选节点）；`
+                + `② 直接在那张图上涂抹遮罩再发一次。`;
+        }
+        if(same.length === 1){
+            return selectNode(same[0], `「${same[0].title || same[0].id}」上没有遮罩，模型也没给出要改的区域。\n`
+                + `我已经把它选中了：双击进入编辑，用涂抹工具把要改的那块涂上，退出后再发一次。`);
+        }
+        return `没找到「${want}」这个节点（可能已删除或改名）。请在消息里 @ 引用目标图片后再试。`;
+    }
+    if(live.length === 1){
+        return selectNode(live[0], `这条要局部重绘，但没说要改哪块。\n已选中画布上唯一的图「${live[0].title || live[0].id}」：`
+            + `涂抹要改的区域后再发一次；或者直接说「把 X 换成 Y」，我来自动框。`);
+    }
+    return `这条要局部重绘，但没说改哪张图。\n请在消息里 @ 引用目标节点（输入框打 @），或在图上涂抹遮罩后再发一次。`;
+}
 async function runAgentGenerations(assistantMsg, userMsg){
     const gens = assistantMsg.generations || [];
     if(!gens.length) return;
@@ -28343,11 +31138,46 @@ async function runAgentGenerations(assistantMsg, userMsg){
     const lastResults = agentLastResults();
     const currentAttach = (userMsg?.images || []).filter(i => i?.url);
     const attachRefs = currentAttach.length ? currentAttach : agentLastUserAttachments();
+    // 🚨 用户引用的画布节点图（[节点:上传] 里的那张）。不带上它，上游只能凭文字瞎画。
+    const nodeRefRefs = agentNodeRefImages(userMsg);
+    /* 自动遮罩（2026-10-20）：模型给了 bbox 但画布上没遮罩 → 这里先把遮罩造出来，
+       必须在下面建占位节点**之前**完成 —— 那一步要靠 agentResolveInpaintTarget 找到遮罩，
+       否则就变成「标了 inpaint 却找不到目标」直接报错。 */
+    await agentAutoMaskGenerations(gens, userMsg);
     // 第一步：串行创建所有占位节点（确保位置不重叠、顶部对齐）
     const pendingGens = gens.filter(gen => !(gen.results && gen.results.length) && gen.status !== 'done' && gen.status !== 'error');
     const placeholders = [];
     for(const gen of pendingGens){
         gen.status = 'running';
+        /* 🚨 2026-10-21 老板：局部重绘的结果**不要替换原图**，要落成一个新节点。
+           原节点只负责「提供遮罩和裁切基准」，保持原样（连遮罩都留着，方便接着改同一块）。
+           以前是把结果回贴进原节点 —— 用户想对比「改前 / 改后」就没办法了。 */
+        const ipTarget = agentResolveInpaintTarget(gen);
+        if(ipTarget){
+            gen.count = 1;
+            gen._inpaintNodeId = ipTarget.node.id;   // payload 还要靠它取遮罩 / 裁切基准
+            const pos = agentFindEmptyPosition(1);
+            const placeholderNode = createImageNodeAt(pos, []);
+            if(placeholderNode){
+                placeholderNode.title = '局部重绘';
+                placeholderNode.pending = 1;
+                placeholderNode.runStartedAt = nowMs();
+                placeholderNode.runTimerHidden = false;
+                gen.placeholderNodeId = placeholderNode.id;
+            }
+            render();
+            placeholders.push({gen, placeholderNode});
+            continue;
+        }
+        /* 🚨 标了 inpaint 却找不到目标节点 → **绝对不能往下走整图重画**（2026-10-20 修的静默降级）。
+           老板原样现象：遮罩明明涂好了（3 个节点都有），但因为同标题节点歧义 / 目标对不上，
+           这里 return null，代码继续建新节点做整图重画 —— 于是「涂了遮罩还是出了张无关的图」。
+           ⇒ 这条 generation 直接失败并说清原因，比悄悄画一张错的强一百倍。 */
+        if(gen.inpaint){
+            gen.status = 'error';
+            gen.error = agentExplainInpaintMiss(gen, userMsg);
+            continue;
+        }
         const pos = agentFindEmptyPosition(gen.count);
         const placeholderNode = createImageNodeAt(pos, []);
         if(placeholderNode){
@@ -28402,7 +31232,25 @@ async function runAgentGenerations(assistantMsg, userMsg){
                     }
                 }
             }
-            const _agentRefMax = providerMaxReferenceImages(providerId);
+            /* 🚨 引用节点当底图（2026-10-20）：
+               「把 [节点:X] 里的…改成…」这类需求，X 的图**必须**发给上游。
+               顺序放在最前 —— 上游把第一张当基准图，改图场景基准图就是被改的那张。
+               局部重绘时除外：那时候基准图是遮罩裁切图，整图塞进去反而让上游分不清。 */
+            if(nodeRefRefs.length && !gen.inpaint){
+                const nowUrls = new Set(imageRefsOnly(refs).map(r => r?.url).filter(Boolean));
+                const extra = nodeRefRefs.filter(r => !nowUrls.has(r.url));
+                if(extra.length) refs = extra.concat(refs);
+            }
+            // 逐条通道/模型：模型编排时可以给这条图单独指定通道（已在 normalizePrompts 校验过存在性）。
+            // 没指定就回落到界面选中的通道；指定的通道里没有那个模型时，退到该通道的默认模型。
+            const genProviderId = (gen.provider && genProviders.some(p => p.id === gen.provider)) ? gen.provider : providerId;
+            const genModels = providerImageModels(genProviderId);
+            /* 🚨 同通道一律以界面选中的模型为准（2026-10-21 老板：选了 sunburst 却用 flare）。
+               `gen.model` 只有**换到另一个通道**时才认 —— 否则模型随手写一个同族型号就能顶掉用户的选择。 */
+            const genModel = (genProviderId !== providerId && gen.model && genModels.includes(gen.model))
+                ? gen.model
+                : (genModels.includes(agentState.genModel) ? agentState.genModel : (genModels[0] || ''));
+            const _agentRefMax = providerMaxReferenceImages(genProviderId);
             const _allImageRefs = imageRefsOnly(refs);
             if(_allImageRefs.length > _agentRefMax){ toast(`参考图超出上限（最多${_agentRefMax}张），已截取前${_agentRefMax}张`); }
             refs = _allImageRefs.slice(0, _agentRefMax).map(r => ({url:r.url, name:r.name || 'ref'}));
@@ -28428,7 +31276,65 @@ async function runAgentGenerations(assistantMsg, userMsg){
                     _finalPrompt = `[参考图顺序：${_roleDescs.join('、')}，与下方参考图数组一一对应]\n${_finalPrompt}`;
                 }
             }
-            const payload = {prompt:_finalPrompt, provider_id:providerId, model:genModel, size, quality:agentState.genQuality || 'auto', n:1, reference_images:refs};
+            // 参数优先级：**用户原话明确要求的** > agentState 默认（高质量·4K·1:1）
+            // 🚨 模型的 gen.resolution / gen.quality **不再参与**（2026-10-22）：它会自作主张写 '1k'，
+            //    把老板定的默认 4K 覆盖掉，而界面上根本没有参数选择器让他改回来。
+            const _userText = String(userMsg?.text || '');
+            const _genRatio = gen.ratio || agentState.genRatio || 'square';
+            const _genRes = agentExplicitResolution(_userText) || agentState.genResolution || '4k';
+            /* 🚨 gpt-image-2 家族**先查官方尺寸表**（2026-10-21）：
+               它们的 4K 规格是 2880×2880 而不是通用的 4096×4096，3:2/4:3 的 2K、4K 取值也和通用表不同。
+               查得到就用官方值；查不到（普通模型）再走通用表 + 护栏。 */
+            const _famSize = isGptImageAutoSizeModel(genModel) ? gptImageFamilySize(_genRatio, _genRes) : '';
+            let genSize = _famSize || apiImageSize(_genRatio, _genRes) || size;
+            /* 出图前先过尺寸护栏：模型吃不下这个尺寸就直接压到合规，别等上游 400。
+               压过就记 gen.sizeNote，卡片上会写清楚「已自动改成多少」——
+               🚨 不许静默改：老板要能看见「为什么最终出的图比我说的小」。 */
+            const _sizeGuard = agentGuardGenSize(genSize, genModel);
+            if(_sizeGuard.size && _sizeGuard.size !== genSize){
+                genSize = _sizeGuard.size;
+                gen.sizeNote = _sizeGuard.note;
+            } else if(gen.sizeNote && !_sizeGuard.note){
+                delete gen.sizeNote;
+            }
+            /* 「我选了 4K，为什么出 2880？」—— 这家族的 4K 按**总像素约 829 万**封顶，
+               1:1 / 4:3 / 3:2 的 4K 长边都到不了 3840。这种反直觉的情况必须解释一次，
+               否则老板会以为是系统偷偷降了画质（2026-10-21 老板就是为这个来问的）。 */
+            if(!gen.sizeNote && _famSize && _famSize !== 'auto' && String(_genRes).toLowerCase() === '4k'){
+                const _fp = _famSize.split('x').map(Number);
+                if(_fp[0] && _fp[1] && Math.max(_fp[0], _fp[1]) < GPT_IMAGE2_MAX_EDGE){
+                    gen.sizeNote = `${genModel} 的 4K 规格就是 ${_fp[0]}×${_fp[1]}（该系列按总像素约 ${Math.round(GPT_IMAGE2_MAX_PIXELS / 10000)} 万封顶），已经是它能给的最大档`;
+                }
+            }
+            const genQuality = agentExplicitQuality(_userText) || agentState.genQuality || 'high';
+            let payload = {prompt:_finalPrompt, provider_id:genProviderId, model:genModel, size:genSize, quality:genQuality, n:1, reference_images:refs};
+            // 局部重绘：请求体换成「裁切局部图 + 对齐遮罩」，尺寸/比例跟裁切走，结果由后端回贴成整图
+            const _ipNode = gen._inpaintNodeId ? (nodes.find(n => n.id === gen._inpaintNodeId) || null) : null;
+            const _ipMeta = _ipNode ? validNodeInpaint(_ipNode) : null;
+            if(_ipMeta){
+                payload = agentInpaintPayload(_ipMeta, refs, genProviderId, payload);
+                gen.count = 1;
+            } else if(gen.inpaint){
+                /* 🚨 标了 inpaint 但此刻取不到遮罩元数据（排队/确认期间被清掉或失效）
+                   → **绝不能拿整图请求顶上**：那会新开一个 1024×1024 节点，
+                   原图原尺寸不被回贴，正是老板截图里「结果和原图不贴」的样子。 */
+                throw new Error('遮罩已失效（可能已重绘或原图被替换），请重新涂抹后再试');
+            }
+            /* 执行记录（2026-10-20）：**当次到底怎么做的**必须自己留一份。
+               🚨 为什么不能靠画布现状反推：老板截图里问「是通过遮罩局部重绘实现的吗」，
+                  模型只能看到「某个节点现在有没有遮罩」，而遮罩可能在生成后被迁移/清掉，
+                  画布现状 ≠ 当时的做法。⇒ 记在 gen.exec 上，随消息进历史、进模型上下文。 */
+            gen.exec = {
+                mode: _ipMeta ? 'inpaint' : 'full',
+                target: _ipMeta ? String(_ipNode?.title || _ipNode?.id || '') : '',
+                target_id: _ipMeta ? String(gen._inpaintNodeId || '') : '',
+                mask_bbox: _ipMeta && Array.isArray(_ipMeta.bbox) && _ipMeta.bbox.length === 4
+                    ? _ipMeta.bbox.map(v => Math.round(Number(v) || 0)) : null,
+                size: String(payload.size || ''),
+                refs: Array.isArray(payload.reference_images) ? payload.reference_images.length : 0,
+                model: String(genModel || ''),
+                ts: Date.now()
+            };
             const tasks = await Promise.all(Array.from({length:gen.count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}).then(async r => {
                 if(!r.ok) throw new Error(await responseErrorMessage(r, tr('smart.agentGenFail')));
                 return r.json();
@@ -28447,7 +31353,13 @@ async function runAgentGenerations(assistantMsg, userMsg){
                 return {url, name:(typeof item === 'object' && item?.name) || `agent-${Date.now()}-${i + 1}.png`, kind:'image'};
             }).filter(i => i.url && !_refUrlSet.has(i.url)).slice(0, _maxCount);
             gen.results = urls;
-            gen.status = 'done';
+            // 🚨 没拿到图就不能标 done —— 否则卡片显示「已完成」但一张图都没有，用户完全不知道发生了什么
+            if(!urls.length){
+                gen.status = 'error';
+                gen.error = gen.error || tr('smart.errNoOutImages') || '没有拿到生成结果，请重试';
+            } else {
+                gen.status = 'done';
+            }
             // 关键：通过 ID 从当前 nodes 数组重新查找节点引用
             // nodes 可能在异步等待期间被重新赋值（如 saveCanvas 409 合并、applyMergedServerCanvas），
             // 导致之前捕获的 placeholderNode 变成悬空引用
@@ -28456,13 +31368,17 @@ async function runAgentGenerations(assistantMsg, userMsg){
                 undoSuppressed = true;
                 liveNode.images = urls.map(u => ({...u}));
                 liveNode.pending = 0;
-                liveNode.title = urls.length > 1 ? 'Group' : 'Image';
+                // 现在局部重绘也落新节点了，所以标题统一按「新节点」处理
+                liveNode.title = gen._inpaintNodeId ? '局部重绘' : (urls.length > 1 ? 'Group' : 'Image');
                 liveNode.runFinishedAt = nowMs();
                 liveNode.scale = mediaNodeDefaultScale(liveNode);
                 delete liveNode.w;
                 delete liveNode.h;
                 selectedId = liveNode.id;
                 undoSuppressed = false;
+                /* 🚨 不再把遮罩迁到结果上（2026-10-21）：结果落在**新节点**，
+                   原图连同遮罩一起保持原样 —— 用户还能在原节点上继续改同一块，
+                   也能直接对比「改前 / 改后」。以前回贴才需要 keepInpaintAfterRun（换图后 base_key 会失配）。 */
                 gen.results = gen.results.map((r, i) => ({...r, nodeId: liveNode.id, nodeX: Number(liveNode.x) || 0, nodeY: Number(liveNode.y) || 0}));
             } else if(urls.length && !liveNode){
                 // 占位节点已不在 nodes 中（可能被用户删除或被合并操作移除）
@@ -28481,6 +31397,8 @@ async function runAgentGenerations(assistantMsg, userMsg){
             gen.error = String(e.message || e).slice(0, 200);
             const liveNode = placeholderId ? nodes.find(n => n.id === placeholderId) : null;
             if(liveNode){
+                /* 🚨 失败时占位节点**可以删**（2026-10-21）：局部重绘现在不再拿用户的原节点当占位，
+                   失败留下的空节点没有任何意义。原图压根没被碰过，不需要保护。 */
                 undoSuppressed = true;
                 nodes = nodes.filter(n => n.id !== placeholderId);
                 undoSuppressed = false;
@@ -28522,7 +31440,7 @@ async function recoverAgentGenerations(){
                     undoSuppressed = true;
                     placeholderNode.images = urls.map(u => ({...u}));
                     placeholderNode.pending = 0;
-                    placeholderNode.title = urls.length > 1 ? 'Group' : 'Image';
+                    placeholderNode.title = gen._inpaintNodeId ? '局部重绘' : (urls.length > 1 ? 'Group' : 'Image');
                     placeholderNode.runFinishedAt = nowMs();
                     // 修复：删除占位尺寸，让节点根据实际图片自然尺寸重新计算
                     placeholderNode.scale = mediaNodeDefaultScale(placeholderNode);
@@ -28536,6 +31454,7 @@ async function recoverAgentGenerations(){
                 gen.status = 'error';
                 gen.error = String(e.message || e).slice(0, 200);
                 if(placeholderNode){
+                    /* 同上：局部重绘的占位现在是我们自己建的，失败就删掉（原图没被碰过） */
                     undoSuppressed = true;
                     nodes = nodes.filter(n => n.id !== placeholderNode.id);
                     undoSuppressed = false;
@@ -28598,25 +31517,31 @@ function hideAgentMention(){
 }
 function insertAgentMention(url, name, nodeId, x, y, kind){
     if(!agentState || !url) return;
+    // 先删掉光标前那个「@ + 过滤词」，再在原位置插胶囊 —— 顺序反了胶囊会被一起删掉
+    {
+        const range = agentCaretRange();
+        if(range && range.startContainer.nodeType === 3){
+            const typed = String(range.startContainer.nodeValue || '').slice(0, range.startOffset);
+            const at = typed.lastIndexOf('@');
+            if(at >= 0) agentDeleteCharsBeforeCaret(typed.length - at);
+        }
+    }
     // 附件节点：非图片/视频素材进「文档附件」，图片/视频仍进参考图附件
     const k = String(kind || 'image');
     if(k !== 'image' && k !== 'video'){
+        const before = (agentState.documents || []).length;
         const added = agentAddDocumentRefs([{url, name: name || 'canvas-file', kind:(k === 'text' ? 'text' : 'file'), nodeId:nodeId || '', x:Number(x) || 0, y:Number(y) || 0}]);
         if(!added) toast(agentState.documents.some(d => d.url === url) ? '附件已存在' : `最多携带 ${AGENT_DOC_MAX} 个附件`);
+        else agentInsertChipAtCaret('doc', agentState.documents[before]);
     } else {
         if(!Array.isArray(agentState.attachments)) agentState.attachments = [];
         if(agentState.attachments.length < AGENT_LLM_IMAGE_MAX && !agentState.attachments.some(a => a.url === url)){
-            agentState.attachments.push({url, name: name || 'canvas-image', nodeId: nodeId || '', x: Number(x) || 0, y: Number(y) || 0});
+            const entry = {url, name: name || 'canvas-image', nodeId: nodeId || '', x: Number(x) || 0, y: Number(y) || 0};
+            agentState.attachments.push(entry);
+            agentInsertChipAtCaret('att', entry);
         }
     }
-    if(agentInput){
-        const val = agentInput.value;
-        const atIdx = val.lastIndexOf('@');
-        if(atIdx >= 0) agentInput.value = val.slice(0, atIdx);
-        agentInput.focus();
-    }
     hideAgentMention();
-    renderAgentAttachments();
     saveAgentState();
 }
 function agentMentionKeydown(e){
@@ -28675,6 +31600,28 @@ async function renderAgentSlashPalette(queryRaw){
             title: tr('chat.slashCompress'),
             desc: tr('chat.slashCompressDesc'),
             icon: 'minimize-2'
+        });
+    }
+    // 清空上下文（第 8 条：用户可以手动清空或压缩）
+    const wantClear = !q || q.indexOf('clear') >= 0 || q.indexOf('清') >= 0 || q.indexOf('空') >= 0;
+    if(wantClear){
+        items.push({
+            type: 'clear',
+            id: 'clear',
+            title: tr('chat.slashClearTitle'),
+            desc: tr('chat.slashClearDesc'),
+            icon: 'eraser'
+        });
+    }
+    // 偏好设置（第 12 条）：重新打开六项基础信息弹窗
+    const wantPref = !q || q.indexOf('pref') >= 0 || q.indexOf('偏好') >= 0 || q.indexOf('设置') >= 0 || q.indexOf('画像') >= 0;
+    if(wantPref){
+        items.push({
+            type: 'pref',
+            id: 'pref',
+            title: tr('chat.slashPref'),
+            desc: tr('chat.slashPrefDesc'),
+            icon: 'user-round-cog'
         });
     }
     (skills || []).forEach(s => {
@@ -28775,6 +31722,10 @@ function chooseAgentSlash(){
     }
     if(it.type === 'compress'){
         input.value = '/compress';
+    } else if(it.type === 'clear'){
+        input.value = '/clear';
+    } else if(it.type === 'pref'){
+        input.value = '/pref';
     } else {
         input.value = '/skill ' + it.id;
     }
@@ -28804,64 +31755,52 @@ function agentSlashKeydown(e){
     }
     return false;
 }
+/* 输入框高度：**只随文字自动增长**，不再支持拖拽缩放（2026-10-19 老板要求）。
+   🚨 不要恢复 agentState.inputHeight —— 老用户 localStorage 里可能存着 300px 这种手动高度，
+      恢复出来就是一个「拉不高也缩不回」的死盒子；这里一律从 auto 重新量。
+   🚨 2026-10-21：`#agentInput` 是 **contenteditable 不是 textarea**。面板隐藏/内容为空时
+      `scrollHeight` 读出来是 **0** → `height:0px`，而它是 `box-sizing:border-box` + 上下 padding，
+      内容被压成 0 → **占位文案只剩一半、输入的文字也看不见**（截图里那行被裁掉的「输入需求，@ 引用画布图片…」）。
+      所以必须给一个「一行」的下限，不能直接把 scrollHeight 当高度。 */
+const AGENT_INPUT_MIN_H = 32;   // padding(6+8) + line-height(1.5×11.5≈17) + 余量
 function agentAutoResizeInput(){
     const textarea = document.getElementById('agentInput');
     if(!textarea) return;
     textarea.style.height = 'auto';
-    const maxH = 500;
-    const newH = Math.min(textarea.scrollHeight, maxH);
-    textarea.style.height = newH + 'px';
-    if(agentState){
-        agentState.inputHeight = newH;
-        saveAgentState();
-    }
+    const h = Math.max(Number(textarea.scrollHeight) || 0, AGENT_INPUT_MIN_H);
+    textarea.style.height = Math.min(h, 260) + 'px';
 }
-function initAgentInputResize(){
-    const handle = document.getElementById('agentInputResize');
+function initAgentInputAutoGrow(){
     const textarea = document.getElementById('agentInput');
-    if(!handle || !textarea) return;
-    if(agentState?.inputHeight > 0) textarea.style.height = agentState.inputHeight + 'px';
-    // 根据文字自动拉高
+    if(!textarea) return;
+    textarea.style.height = 'auto';
+    agentAutoResizeInput();
     textarea.addEventListener('input', agentAutoResizeInput);
-    let startY = 0, startH = 0;
-    handle.addEventListener('mousedown', e => {
-        e.preventDefault();
-        startY = e.clientY;
-        startH = textarea.offsetHeight;
-        handle.classList.add('dragging');
-        const onMove = ev => {
-            const delta = startY - ev.clientY;
-            const newH = Math.max(60, Math.min(startH + delta, 500));
-            textarea.style.height = newH + 'px';
-        };
-        const onUp = () => {
-            handle.classList.remove('dragging');
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onUp);
-            if(agentState){
-                agentState.inputHeight = textarea.offsetHeight;
-                saveAgentState();
-            }
-        };
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
-    });
 }
 function initAgentPanel(){
     if(!agentPanel) return;
     // 提前绑定发送按钮事件，确保即使后续初始化出错发送按钮也能用
     agentSendBtn?.addEventListener('click', () => sendAgentMessage());
     loadAgentState();
+    // 🚨 状态加载后立刻强制常开，再渲染 dock 尺寸（否则老用户存着 false 会被渲染成关闭态）
+    enforceAgentAlwaysOn();
+    applyAgentDockSize();
+    // 底部悬浮框常驻：初始化后直接进入打开态（对话抽屉是否展开由 chatDrawerOpen 单独控制）
+    agentPanel.classList.add('open');
+    agentToggle?.classList.add('active');
     // 如果没有恢复中的任务，确保 agentSending 重置为 false
     if(!_agentRecoveryInProgress) agentSending = false;
     agentMoveSelectsToDropdown();
     renderAgentModelSelectors();
     renderAgentAttachments();
     renderAgentMessages();
-    initAgentInputResize();
+    initAgentInputAutoGrow();
+    // 偏好设置：没填过就自动弹窗（第 12 条）。不 await，不阻塞面板初始化。
+    loadAgentProfile(true);
     // 下拉面板交互
     const modelBtn = document.getElementById('agentModelBtn');
     const modelPanel = document.getElementById('agentModelPanel');
+    // 参数面板（2026-10-22 加回）：结构/事件绑定/同步逻辑一直都在，只是 10-19 把 HTML 删了、这里置成了 null
     const paramsBtn = document.getElementById('agentParamsBtn');
     const paramsPanel = document.getElementById('agentParamsPanel');
     function closeAllDropdowns(){
@@ -28869,6 +31808,8 @@ function initAgentPanel(){
         if(paramsPanel) paramsPanel.hidden = true;
         const chatModelPanel = document.getElementById('agentChatModelPanel');
         if(chatModelPanel) chatModelPanel.hidden = true;
+        const reasoningPanelEl = document.getElementById('agentReasoningPanel');
+        if(reasoningPanelEl) reasoningPanelEl.hidden = true;
     }
     function showDropdown(btn, panel, opts){
         if(!btn || !panel) return;
@@ -28912,6 +31853,32 @@ function initAgentPanel(){
         const wasHidden = modelPanel?.hidden;
         closeAllDropdowns();
         if(wasHidden) showDropdown(modelBtn, modelPanel);
+    });
+    /* 生图模型 pill 打开同一个下拉面板（里面本来就分「理解」「生图」两组）——
+       2026-10-22 老板要两个 pill 分开显示，但切换还是同一处，别做两套面板。 */
+    document.getElementById('agentGenModelBtn')?.addEventListener('click', e => {
+        e.stopPropagation();
+        const wasHidden = modelPanel?.hidden;
+        closeAllDropdowns();
+        if(wasHidden) showDropdown(e.currentTarget, modelPanel);
+    });
+    /* 思考强度（2026-10-22）：独立小面板，选中即生效并写进 agentState */
+    const reasoningBtn = document.getElementById('agentReasoningBtn');
+    const reasoningPanel = document.getElementById('agentReasoningPanel');
+    reasoningBtn?.addEventListener('click', e => {
+        e.stopPropagation();
+        const wasHidden = reasoningPanel?.hidden;
+        closeAllDropdowns();
+        if(wasHidden) showDropdown(reasoningBtn, reasoningPanel);
+    });
+    reasoningPanel?.querySelectorAll('[data-reasoning]').forEach(item => {
+        item.addEventListener('click', e => {
+            e.stopPropagation();
+            if(agentState) agentState.reasoningEffort = item.dataset.reasoning || 'auto';
+            agentUpdateToolbarLabels();
+            if(reasoningPanel) reasoningPanel.hidden = true;
+            saveAgentState();
+        });
     });
     paramsBtn?.addEventListener('click', e => {
         e.stopPropagation();
@@ -28963,6 +31930,13 @@ window.addEventListener('message', e => {
     agentCloseBtn?.addEventListener('click', () => toggleAgentPanel(false));
     document.getElementById('agentNewChatBtn')?.addEventListener('click', () => agentNewChat());
     document.getElementById('agentDeleteChatBtn')?.addEventListener('click', () => agentDeleteChat());
+    // 偏好设置：常驻入口（⋯ 菜单），不再只靠 /pref 斜杠命令
+    document.getElementById('agentPrefBtn')?.addEventListener('click', async () => {
+        const panel = document.getElementById('agentMorePanel');
+        if(panel) panel.hidden = true;
+        await loadAgentProfile(false);   // 先拉最新，别拿上一次的缓存当现状
+        openAgentProfileModal();
+    });
     document.getElementById('agentChatListBtn')?.addEventListener('click', e => {
         e.stopPropagation();
         const panel = document.getElementById('agentChatListPanel');
@@ -28995,14 +31969,22 @@ window.addEventListener('message', e => {
         renderAgentModelSelectors();
         saveAgentState();
     });
-    agentChatModel?.addEventListener('change', () => { agentState.chatModel = agentChatModel.value; saveAgentState(); });
+    agentChatModel?.addEventListener('change', () => { agentState.chatModel = agentChatModel.value; agentUpdateToolbarLabels(); saveAgentState(); });
     agentGenProvider?.addEventListener('change', () => {
         agentState.genProvider = agentGenProvider.value;
         agentState.genModel = '';
         renderAgentModelSelectors();
         saveAgentState();
     });
-    agentGenModel?.addEventListener('change', () => { agentState.genModel = agentGenModel.value; agentUpdateToolbarLabels(); saveAgentState(); });
+    /* 🚨 换生图模型必须**重建比例列表**（2026-10-22 老板：「缺少 nano-banana 独有的自动比例」）。
+       病因：这里原来只调 agentUpdateToolbarLabels()，比例按钮还是上一个模型的 ——
+       切到 nano-banana 后「自动」根本不出现，因为 agentSyncParamsPanel() 没被调用。 */
+    agentGenModel?.addEventListener('change', () => {
+        agentState.genModel = agentGenModel.value;
+        agentSyncParamsPanel();
+        agentUpdateToolbarLabels();
+        saveAgentState();
+    });
     // 参数面板交互
     document.getElementById('agentRatioGrid')?.addEventListener('click', e => {
         const btn = e.target.closest('.agent-ratio-btn');
@@ -29037,8 +32019,46 @@ window.addEventListener('message', e => {
         saveAgentState();
     });
     agentAttachBtn?.addEventListener('click', () => agentImageInput?.click());
+// 内联胶囊的交互：× 移除、✦ 载入 Skill、点主体打开/跳转
+// 🚨 必须 mousedown 就 preventDefault，否则浏览器会先把光标塞进 chip，selection 被破坏
+agentInput?.addEventListener('mousedown', e => {
+    if(e.target.closest?.('[data-chip-remove]') || e.target.closest?.('[data-chip-skill]')) e.preventDefault();
+});
+agentInput?.addEventListener('click', e => {
+    const chip = e.target.closest?.('.agent-inline-chip');
+    if(!chip || !agentState) return;
+    const key = chip.dataset.chipKey || '';
+    const kind = chip.dataset.chipKind || '';
+    if(e.target.closest('[data-chip-remove]')){
+        e.preventDefault();
+        e.stopPropagation();
+        agentRemoveChipByKey(key);
+        return;
+    }
+    if(e.target.closest('[data-chip-skill]')){
+        e.preventDefault();
+        e.stopPropagation();
+        const idx = (agentState.documents || []).findIndex(d => agentChipKeyOf('doc', d) === key);
+        if(idx >= 0) promoteAgentDocToSkill(idx);
+        return;
+    }
+    if(kind === 'doc'){
+        const doc = (agentState.documents || []).find(d => agentChipKeyOf('doc', d) === key);
+        if(doc?.url) openAttachmentItem(doc);
+        return;
+    }
+    if(kind === 'ref'){
+        const ref = (agentState.nodeRefs || []).find(r => agentChipKeyOf('ref', r) === key);
+        const node = ref?.id ? nodes.find(n => n.id === ref.id) : null;
+        if(node){
+            selectedId = node.id;
+            focusNodeInViewport(node);
+            render();
+        }
+    }
+});
 agentImageInput?.addEventListener('change', () => {
-agentAttachFiles(agentImageInput.files);
+agentAttachFilesInline(agentImageInput.files);
 agentImageInput.value = '';
 });
 // ★ 确认面板按钮事件
@@ -29047,41 +32067,34 @@ document.getElementById('agentRefConfirmNo')?.addEventListener('click', () => hi
 document.getElementById('agentRefConfirmCancel')?.addEventListener('click', () => hideImageRefConfirmPanel(false));
 
 // ==================== Skill 市场 ====================
-// 入口按钮 #agentSkillMarketBtn 带 data-skill-market-open，由 static/js/skill-market.js
-// 自动绑定；浮层 DOM / 渲染 / 安装卸载全在那份共享模块里（gpt-chat 页用同一份）。
-// 这里不再保留任何市场代码 —— 原来那份 asm* 实现（约 220 行）已迁出。
-// 思维模式开关按钮
-const agentThinkingBtn = document.getElementById('agentThinkingBtn');
-function syncAgentThinkingBtn(){
-    if(agentThinkingBtn){
-        agentThinkingBtn.classList.toggle('active', !!agentState?.thinkingMode);
-    }
-}
-syncAgentThinkingBtn();
-agentThinkingBtn?.addEventListener('click', () => {
-    if(!agentState) return;
-    agentState.thinkingMode = !agentState.thinkingMode;
-    syncAgentThinkingBtn();
-    saveAgentState();
-    toast(agentState.thinkingMode ? '思考 ON：AI 会多轮追问补充细节，适合灵感探索' : '思考 OFF：直接执行，适合明确需求');
-});
+// 入口按钮已移除（2026-10-19）：Skill 改为随包内置能力，用户无需在界面上挑选。
+// static/js/skill-market.js 仍保留供其它页面使用，画布侧不再挂入口。
 
-// 开发模式开关按钮：支持直接在画布中创建、连接或修改节点
-const agentDevModeBtn = document.getElementById('agentDevModeBtn');
-function syncAgentDevModeBtn(){
-    if(agentDevModeBtn){
-        agentDevModeBtn.classList.toggle('active', !!agentState?.devMode);
-    }
-}
-syncAgentDevModeBtn();
-agentDevModeBtn?.addEventListener('click', () => {
+// ==================== 思考 / 画布控制：常开，不再暴露开关 ====================
+// 老板要求：思考与画布控制默认开启，用户无需（也不能）关闭，所以界面上不出现按钮。
+// 🚨 这两个值必须在这里**强制写回**，不能只靠 agentDefaultState —— 老用户的
+//    localStorage 里可能存着 devMode:false / thinkingMode:false，只改默认值对他们无效。
+function enforceAgentAlwaysOn(){
     if(!agentState) return;
-    agentState.devMode = !agentState.devMode;
-    syncAgentDevModeBtn();
-    saveAgentState();
-    toast(agentState.devMode ? '画布控制 ON：AI 可直接在画布中创建/连接/修改节点' : '画布控制 OFF：已关闭画布节点操作');
+    if(agentState.thinkingMode !== true) agentState.thinkingMode = true;
+    if(agentState.devMode !== true) agentState.devMode = true;
+}
+enforceAgentAlwaysOn();
+
+// 对话抽屉：展开/收起 + 顶部拖拽调高
+document.getElementById('agentChatToggleBtn')?.addEventListener('click', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleAgentChatDrawer();
 });
+bindAgentDockResize();
+// 拖标题栏移动窗口 + 拉四个角缩放（2026-10-21 老板要求）
+bindAgentDockDrag();
+bindAgentResizeHandles();
+window.addEventListener('resize', () => { applyAgentDockSize(); });
+
     agentInput?.addEventListener('input', () => {
+        agentSyncInputEmpty();
         const val = agentInput.value;
         if(val.startsWith('/')){
             renderAgentSlashPalette(val.slice(1));
@@ -29089,8 +32102,8 @@ agentDevModeBtn?.addEventListener('click', () => {
             return;
         }
         if(agentSlashOpen) closeAgentSlashPalette();
-        const cursorPos = agentInput.selectionStart || 0;
-        const beforeCursor = val.slice(0, cursorPos);
+        // contenteditable 没有 selectionStart，用 Range 反推光标前的文本
+        const beforeCursor = agentTextBeforeCaret();
         const atIdx = beforeCursor.lastIndexOf('@');
         if(atIdx >= 0 && (atIdx === 0 || beforeCursor[atIdx - 1] === ' ' || beforeCursor[atIdx - 1] === '\n')){
             const filter = beforeCursor.slice(atIdx + 1);
@@ -29119,13 +32132,42 @@ agentDevModeBtn?.addEventListener('click', () => {
             closeAgentSlashPalette();
         }
     }, true);
+    // 粘贴：文件 > 复制的画布节点（= 发送至 Agent）> 纯文本（交给 textarea 原生插到光标处）
+    // 🚨 原来只认 image/*，粘 PDF / 视频 / xlsx 一点反应都没有；而且 e.stopPropagation()
+    //    是为了挡住 window 上「粘贴文件就建画布节点」的逻辑，这里必须保留。
     agentInput?.addEventListener('paste', e => {
         e.stopPropagation();
-        const files = [...(e.clipboardData?.files || [])].filter(f => String(f.type || '').startsWith('image/'));
+        if(!agentState) return;
+        const dt = e.clipboardData;
+        // ① 剪贴板里有文件（图片 / 视频 / 文档 / 任意格式）
+        const files = extractClipboardFiles(dt);
         if(files.length){
             e.preventDefault();
-            agentAttachFiles(files);
+            agentAttachFilesInline(files);
+            return;
         }
+        // ② Ctrl+C 复制过画布节点 → **等同于点节点工具栏的「发送至 Agent」**（2026-10-20 老板要求）。
+        //    🚨 以前这里是把节点插成 `[节点:标题]` 引用胶囊；老板明确要取消这个行为，
+        //       改成直接把节点的图/文件作为附件送进来（跟「发送至 Agent」按钮完全一致）。
+        const text = String(dt?.getData?.('text/plain') || '');
+        const looksLikeNodeClip = text.startsWith(AGENT_NODE_CLIP_MARKER);
+        if((looksLikeNodeClip || !text) && nodeClipboard?.nodes?.length){
+            e.preventDefault();
+            if(!agentOpen) toggleAgentPanel(true);
+            const msgs = nodeClipboard.nodes.map(n => agentSendNodeToAgent(n)).filter(Boolean);
+            const uniq = [...new Set(msgs)];
+            if(!msgs.length) toast('这些节点里没有可发送的图片或文件');
+            else if(uniq.length === 1) toast(uniq[0]);
+            else if(uniq.length > 1) toast(`已发送 ${nodeClipboard.nodes.length} 个节点到 Agent（部分已达上限）`);
+            return;
+        }
+        // ②' 有节点标记但内部剪贴板已空（刷新过页面 / 复制的是上一次会话）→ 别把「【画布节点】」当正文插进去
+        if(looksLikeNodeClip){
+            e.preventDefault();
+            toast('节点剪贴板已失效，请回画布重新复制该节点');
+            return;
+        }
+        // ③ 其余情况：不拦截，让 textarea 正常把文本插到光标处
     });
     ['dragenter', 'dragover'].forEach(evt => agentPanel.addEventListener(evt, e => {
         e.preventDefault();
@@ -29139,8 +32181,33 @@ agentDevModeBtn?.addEventListener('click', () => {
         e.preventDefault();
         e.stopPropagation();
         agentPanel.classList.remove('drag-over-input');
+        // 拖入的若是画布内的素材（x-smart-asset），不当作附件，交回画布逻辑
+        const assetRaw = e.dataTransfer?.getData?.('application/x-smart-asset');
+        if(assetRaw){
+            try {
+                const asset = JSON.parse(assetRaw);
+                if(asset?.url){
+                    const kind = String(asset.kind || 'image');
+                    if(kind === 'image' || kind === 'video'){
+                        if(!Array.isArray(agentState.attachments)) agentState.attachments = [];
+                        if(agentState.attachments.length < AGENT_LLM_IMAGE_MAX && !agentState.attachments.some(a => a.url === asset.url)){
+                            const entry = {url:asset.url, name:asset.name || fileNameFromUrl(asset.url) || 'canvas-asset'};
+                            agentState.attachments.push(entry);
+                            agentInsertChipAtCaret('att', entry);
+                            saveAgentState();
+                        }
+                    } else {
+                        const before = (agentState.documents || []).length;
+                        agentAddDocumentRefs([{url:asset.url, name:asset.name || fileNameFromUrl(asset.url), kind}]);
+                        if((agentState.documents || []).length > before) agentInsertChipAtCaret('doc', agentState.documents[before]);
+                    }
+                    return;
+                }
+            } catch(e) { /* 解析失败就走文件分支 */ }
+        }
+        // 文件 → 附件 + 在光标处插入 token（支持拖到句子中间）
         const files = [...(e.dataTransfer?.files || [])];
-        if(files.length) agentAttachFiles(files);
+        if(files.length) agentAttachFilesInline(files);
     });
 }
 createMenu?.addEventListener('mousedown', event => event.stopPropagation());
@@ -29374,6 +32441,9 @@ document.getElementById('previewCompareHandle').addEventListener('pointercancel'
 });
 document.getElementById('editDrawCanvas').addEventListener('pointerdown', beginEditDraw);
 document.getElementById('editDrawCanvas').addEventListener('pointermove', moveEditDraw);
+// 画笔圆环：单独一个 move 监听（moveEditDraw 不按下时会 early-return，靠它带不出来）
+document.getElementById('editDrawCanvas').addEventListener('pointermove', syncBrushCursor);
+document.getElementById('editDrawCanvas').addEventListener('pointerleave', hideBrushCursor);
 document.getElementById('editDrawCanvas').addEventListener('pointerup', endEditDraw);
 document.getElementById('editDrawCanvas').addEventListener('pointercancel', endEditDraw);
 document.getElementById('editDrawCanvas').addEventListener('pointerleave', endEditDraw);
@@ -29401,6 +32471,10 @@ document.getElementById('editTextCanvas')?.addEventListener('dblclick', event =>
     if(!control) return;
     control.addEventListener('input', syncSelectedEditTextStyleFromBrush);
     control.addEventListener('change', () => { editTextDirty = false; });
+});
+// 拖笔刷粗细滑块时鼠标没动，也要让圆环立刻跟上新尺寸
+['maskBrushSize','paintBrushSize'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', refreshBrushCursorSize);
 });
 ['gridHorizontalLines','gridVerticalLines','gridGapSize'].forEach(id => {
     document.getElementById(id).addEventListener('input', () => {

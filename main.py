@@ -3565,6 +3565,32 @@ class AgentToolsRequest(BaseModel):
     level: str = ""
     max_rounds: Optional[int] = None
 
+class AgentProfileRequest(BaseModel):
+    """Agent 基础记忆（4 组 14 项）。全部选填，空串视为未填。
+
+    🚨 新增/改字段时三处同步：本模型、AGENT_PROFILE_GROUPS、前端 AGENT_PROFILE_GROUPS。
+    ⚠️ deliverable / directionScene / visualStyle / colorTone / composition 是**多选**，
+       但存储仍是单个字符串（多值用「、」连接），所以这里就是普通 str，不用 list。
+    """
+    # 基础信息
+    nickname: Optional[str] = None          # 称呼
+    occupation: Optional[str] = None        # 职业角色
+    industry: Optional[str] = None          # 行业领域
+    # 业务概况
+    platform: Optional[str] = None          # 主营平台
+    category: Optional[str] = None          # 经营类目
+    audience: Optional[str] = None          # 服务群体
+    deliverable: Optional[str] = None       # 常见产出（可多选）
+    # 协作方式
+    directionCount: Optional[str] = None    # 方案数量（单选）
+    directionScene: Optional[str] = None    # 要多方向的场景（可多选）
+    detailLevel: Optional[str] = None       # 说明详略（单选）
+    startMode: Optional[str] = None         # 执行前（单选）
+    # 审美偏好（三项均可多选，也允许全空）
+    visualStyle: Optional[str] = None       # 画面风格
+    colorTone: Optional[str] = None         # 色调
+    composition: Optional[str] = None       # 构图
+
 class AgentSkillRequest(BaseModel):
     """Skill 市场的安装 / 卸载请求。
 
@@ -3691,6 +3717,9 @@ class CanvasLLMRequest(BaseModel):
     videos: List[str] = []   # 可以是 /output/*.mp4、/assets/*.mp4 本地路径 或 http(s) URL 或 data URL
     # 附件节点：非图片附件（docx/xlsx/pptx/pdf/txt/md/csv/zip…），每项 {url,name,kind}
     files: List[Dict[str, Any]] = []
+    # 思考强度（2026-10-22 老板要求）：'' / 'auto' = 跟随模型默认，不传；
+    # 'minimal' / 'low' / 'medium' / 'high' = 透传给上游的 reasoning_effort
+    reasoning_effort: str = ""
 
 class ConversationCreateRequest(BaseModel):
     title: str = "新对话"
@@ -4785,6 +4814,30 @@ def unwrap_apimart_response(raw):
         return raw["data"]
     return raw
 
+EMPTY_LLM_REPLY = "接口返回了空回复。"
+
+def describe_empty_llm_output(finish_reason: str = "", saw_reasoning: bool = False) -> str:
+    """空回复的病因（2026-10-21）：能说清是哪一种，用户才知道下一步该换模型还是拆任务。"""
+    reason = str(finish_reason or "").strip().lower()
+    if reason == "length":
+        return "模型把 token 预算全花在思考上，正文被截断（finish_reason=length）"
+    if reason in {"content_filter", "safety"}:
+        return "上游内容审核拦掉了正文（finish_reason=%s）" % reason
+    if saw_reasoning:
+        return "模型只回了思考过程（reasoning_content），正文是空的"
+    return "上游返回 200，但 choices 里的正文是空的"
+
+def friendly_empty_llm_error(reason: str = "", model: str = "") -> str:
+    name = str(model or "").strip() or "当前对话模型"
+    why = str(reason or "").strip() or "上游返回 200，但正文是空的"
+    return (
+        f"{name} 返回了空回复：{why}。\n"
+        "这不是画布、遮罩或提示词的问题，原样重发大概率还是一样 —— "
+        "常见于把「思考型」模型当 Agent 用，或单轮上下文太长（附件/历史堆得太多）。\n"
+        "建议：① 换一个非思考型的对话模型再发；② 少塞点附件/历史，把任务拆小；"
+        "③ 确认该通道的模型名没写错（写错时上游常常也是回 200 + 空正文）。"
+    )
+
 def text_from_chat_response(data):
     data = unwrap_apimart_response(data)
     choices = data.get("choices") or []
@@ -5843,15 +5896,479 @@ AGENT_TOOL_SPECS = [
 ]
 AGENT_TOOL_NAMES = [spec["name"] for spec in AGENT_TOOL_SPECS]
 
+# ===================== 联网能力：搜索 / 读网页（第 11 条，借鉴 Agent-Reach 的通道思路）=====================
+# 🚨 与「本机工具」不同，这两个是**只读联网**，不碰本机文件、不执行命令 ——
+#    所以它们**不跟随 agent_tools.enabled 开关**，默认永远可用（否则搜不了等于没接）。
+# 🚨 后端挑选原则：全部免 API key、免装 CLI。
+# 🚨 搜索引擎**必应 + DuckDuckGo 并行合并**（老板点名要 Bing）：
+#    · Bing 对中文长尾查询（"小红书标题怎么写"）明显更准，国内可直连；
+#      但品牌类查询（"小米 15 ultra 售价"）它只吐官网首页，单用会掉质量。
+#    · DDG 品牌查询反而给到报价页，但境外服务、国内不一定通。
+#    ⇒ 谁都不做唯一，两边都跑、按 URL 去重后轮转合并，单个挂了不影响整体。
+AGENT_WEB_TIMEOUT = 25
+AGENT_WEB_ENGINE_TIMEOUT = 20     # 单个引擎请求超时（正常网络 1~2s，只在被限速时才吃到这个上限）
+AGENT_WEB_SEARCH_WAIT = 15        # 整体等待上限：到点就用手上已有的结果合并，不等慢的那家
+AGENT_WEB_CACHE_TTL = 90          # 同 query 结果缓存秒数：Agent 常会重复搜同一个词，别反复打人家
+AGENT_WEB_CACHE_MAX = 40
+AGENT_WEB_RESULT_LIMIT = 8
+# 搜索结果短缓存：{cache_key: {"ts": epoch, "data": result}}，只在本进程内、只活 TTL 秒
+_AGENT_WEB_CACHE = {}
+# 视频合片的上限：定义必须放在工具规格之前，因为 make_video 的 description 里会引用它们
+AGENT_VIDEO_SIZE_DEFAULT = "720x1280"
+AGENT_VIDEO_SEGMENT_MAX = 12
+AGENT_VIDEO_SEGMENT_SECONDS_MAX = 15
+AGENT_VIDEO_TOTAL_SECONDS_MAX = 120
+AGENT_VIDEO_FFMPEG_HINT = (
+    "本机没有找到 ffmpeg，无法合成视频。请先安装：\n"
+    "· Windows 推荐 `winget install Gyan.FFmpeg`，或从 https://www.gyan.dev/ffmpeg/builds/ 下载后把 bin 目录加进 PATH；\n"
+    "· 装完重开本程序（或重启服务）再试。"
+)
+AGENT_WEB_READ_CHARS = 6000
+AGENT_WEB_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
+)
+# 🚨 必应必须给**完整浏览器指纹头 + SRCHHPGUSR Cookie**，否则它会对"非浏览器"请求
+#    返回一堆错配结果（实测：搜「小红书标题怎么写」给你微软 Teams 文档）。
+# 🚨 但这套头**只发给必应**：给 DDG 一起发会让请求明显变慢（实测 5.5s → 27.5s），没必要。
+AGENT_WEB_HEADERS_BASE = {
+    "User-Agent": AGENT_WEB_UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Accept-Encoding": "identity",
+}
+AGENT_BING_EXTRA_HEADERS = {
+    "sec-ch-ua": '"Microsoft Edge";v="141", "Chromium";v="141", "Not?A_Brand";v="24"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "Cookie": (
+        "SRCHHPGUSR=SRCHLANG=zh-Hans&BRW=W&BRH=S&CW=1512&CH=765&DPR=2&UTC=480&PV=1; "
+        "_EDGE_S=mkt=zh-cn&ui=zh-cn"
+    ),
+}
+
+AGENT_WEB_TOOL_SPECS = [
+    {
+        "name": "web_search",
+        "label": "联网搜索",
+        "desc": (
+            "在互联网上搜索，返回标题 + 链接 + 摘要。用于查询实时信息、"
+            "产品/模型的最新动态、行业资料、他人评价等你自己不知道或可能过时的内容。"
+            "默认走必应（Bing），结果不理想时可用 engine 参数换搜索引擎重搜。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索关键词，尽量具体（中文或英文都行）"},
+                "limit": {"type": "integer", "description": f"返回条数，默认 6，最大 {AGENT_WEB_RESULT_LIMIT + 2}"},
+                "engine": {
+                    "type": "string",
+                    "enum": ["", "bing", "ddg"],
+                    "description": "搜索引擎：留空=自动（Bing 优先、DuckDuckGo 兜底）；bing 强制必应；ddg 强制 DuckDuckGo",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "web_read",
+        "label": "读取网页",
+        "desc": "抓取一个网页并转成纯文本/Markdown 返回，用于读完搜索结果里的正文。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "完整网址（http/https）"},
+                "max_chars": {"type": "integer", "description": f"最多返回多少字符，默认 {AGENT_WEB_READ_CHARS}"},
+            },
+            "required": ["url"],
+        },
+    },
+]
+AGENT_WEB_TOOL_NAMES = [spec["name"] for spec in AGENT_WEB_TOOL_SPECS]
+
+# 常驻工具（不跟「本机工具」开关）：联网两个 + 合片一个。
+# make_video 也放这里，因为它只做 ffmpeg CPU 编码，不跑模型、不碰本机任意路径。
+AGENT_VIDEO_TOOL_SPECS = [
+    {
+        "name": "make_video",
+        "label": "合成短视频",
+        "desc": (
+            "把「分段文案 + 画面 + 配音」合成一条 mp4 成片（本地 ffmpeg 编码，不跑模型）。"
+            "画面用项目里已生成的产物地址（/output/... 或 /assets/...），可先用生图 / 生视频通道出素材。"
+            f"最多 {AGENT_VIDEO_SEGMENT_MAX} 段、总长 {AGENT_VIDEO_TOTAL_SECONDS_MAX} 秒；"
+            "段落带 text 时自动生成 .srt 并尽量烧入字幕。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "成片标题，同时作默认文件名"},
+                "size": {"type": "string", "description": f"画幅 宽x高，默认 {AGENT_VIDEO_SIZE_DEFAULT}（竖屏）；横屏用 1280x720"},
+                "subtitle": {"type": "boolean", "description": "是否生成 / 烧入字幕，默认 true"},
+                "audio_url": {"type": "string", "description": "整段配音或 BGM 地址（可选）"},
+                "segments": {
+                    "type": "array",
+                    "description": "分镜段落，按数组顺序拼接",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "text": {"type": "string", "description": "这一段的口播 / 字幕文案"},
+                            "image_url": {"type": "string", "description": "静帧画面地址（会加轻微推镜）"},
+                            "video_url": {"type": "string", "description": "视频片段地址（与 image_url 同时给时优先）"},
+                            "duration": {"type": "number", "description": "本段时长秒，默认 4，最大 15"},
+                        },
+                        "required": ["text"],
+                    },
+                },
+            },
+            "required": ["segments"],
+        },
+    },
+]
+AGENT_ALWAYS_ON_TOOL_SPECS = AGENT_WEB_TOOL_SPECS + AGENT_VIDEO_TOOL_SPECS
+AGENT_ALWAYS_ON_TOOL_NAMES = [spec["name"] for spec in AGENT_ALWAYS_ON_TOOL_SPECS]
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+# DuckDuckGo lite（备用后端）
+_DDG_ROW_RE = re.compile(r"<tr([^>]*)>(.*?)(?=<tr|</table)", re.S)
+_DDG_LINK_RE = re.compile(r"""href="(//duckduckgo\.com/l/\?uddg=[^"]+)"[^>]*class='result-link'>(.*?)</a>""", re.S)
+_DDG_SNIPPET_RE = re.compile(r"class='result-snippet'>(.*?)</td>", re.S)
+# Bing（主力后端）：结果是 <li class="b_algo">…<h2><a href>…</h2><div class="b_caption">
+_BING_BLOCK_RE = re.compile(r'<li class="b_algo".*?(?=<li class="b_algo"|</ol>)', re.S)
+_BING_TITLE_RE = re.compile(r'<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S)
+_BING_CAPTION_RE = re.compile(r'<div class="b_caption"[^>]*>(.*?)</div>', re.S)
+
+# 搜索后端：每个引擎一个主入口，主入口失败才在**同一线程内**换备用入口。
+# 🚨 不要同时打 cn.bing 和 www.bing —— 并发请求同一家会触发限流，请求一起挂死。
+AGENT_WEB_SEARCH_BACKENDS = (
+    ("bing", ("https://cn.bing.com/search?q={q}&form=QBLH",
+              "https://www.bing.com/search?q={q}&form=QBLH")),
+    ("ddg", ("https://lite.duckduckgo.com/lite/?q={q}",
+             "https://html.duckduckgo.com/html/?q={q}")),
+)
+
+
+def _html_unescape(text):
+    import html as _html
+    return _html.unescape(_HTML_TAG_RE.sub("", str(text or ""))).strip()
+
+
+def _url_unescape(href):
+    import html as _html
+    return _html.unescape(str(href or "")).strip()
+
+
+def _ddg_real_url(href):
+    """把 DDG 的跳转链接还原成真实网址。"""
+    from urllib.parse import unquote, urlparse, parse_qs
+    raw = str(href or "")
+    if raw.startswith("//"):
+        raw = "https:" + raw
+    try:
+        qs = parse_qs(urlparse(raw).query)
+        target = (qs.get("uddg") or [""])[0]
+        if target:
+            return unquote(target)
+    except Exception:
+        pass
+    return raw
+
+
+def _parse_ddg_lite(page):
+    """解析 DDG lite 的结果页。跳过 sponsored 行，标题行入栈、紧随的 snippet 行挂到最近一条。"""
+    results = []
+    for attrs, body in _DDG_ROW_RE.findall(page):
+        if "result-sponsored" in (attrs or ""):
+            continue
+        link = _DDG_LINK_RE.search(body)
+        if link:
+            title = _html_unescape(link.group(2))
+            url = _ddg_real_url(link.group(1))
+            if title and url and not any(r["url"] == url for r in results):
+                results.append({"title": title, "url": url, "snippet": ""})
+            continue
+        snip = _DDG_SNIPPET_RE.search(body)
+        if snip and results and not results[-1]["snippet"]:
+            results[-1]["snippet"] = _html_unescape(snip.group(1))
+    return results
+
+
+def _parse_bing(page):
+    """解析 Bing 结果页。结果块是 <li class="b_algo">，标题在 h2>a，摘要在 .b_caption。
+
+    🚨 不看广告位：Bing 的广告在 .b_ad / li.b_ad 里，和 b_algo 是不同 class，天然被排除。
+    🚨 有些块只有标题没摘要，允许 snippet 为空 —— 别因为没摘要就丢掉结果。
+    """
+    results = []
+    for block in _BING_BLOCK_RE.findall(page):
+        title_m = _BING_TITLE_RE.search(block)
+        if not title_m:
+            continue
+        url = _url_unescape(title_m.group(1))
+        title = _html_unescape(title_m.group(2))
+        if not url.startswith("http") or not title:
+            continue
+        if any(r["url"] == url for r in results):
+            continue
+        cap_m = _BING_CAPTION_RE.search(block)
+        results.append({
+            "title": title,
+            "url": url,
+            "snippet": _html_unescape(cap_m.group(1)) if cap_m else "",
+        })
+    return results
+
+
+def _query_tokens(query):
+    """查询词 → 特征集合：英文/数字按词，中文按二元字组（不引分词库）。"""
+    toks = set()
+    text = str(query or "")
+    for m in re.finditer(r"[A-Za-z0-9]{2,}", text):
+        toks.add(m.group(0).lower())
+    for m in re.finditer(r"[\u4e00-\u9fff]{2,}", text):
+        seg = m.group(0)
+        for i in range(len(seg) - 1):
+            toks.add(seg[i:i + 2])
+    return toks
+
+
+def _result_overlap(item, tokens):
+    text = (str(item.get("title") or "") + " " + str(item.get("snippet") or "")).lower()
+    return sum(1 for tok in tokens if tok in text)
+
+
+def _filter_relevant(items, tokens):
+    """🚨 必应被限流 / 判定为非浏览器时，会返回**只命中查询里一个词**的泛结果
+    （实测：搜 `nano banana 2 release date` → 「nano – Text editor」「nano编辑器教程」，
+    整整 10 条只匹配了 nano，banana 全丢）。垃圾结果比没有结果更害人 —— 模型会当真去读。
+    ⇒ 只判"有没有交集"不够，得按**命中比例**设门槛：
+         ≤2 个特征词 → 命中 1 个即可；
+          多个特征词 → 至少要命中 2 个，且不少于 1/3（长查询逐步加严）。
+    整批都没过门槛说明这个引擎这次不可用，返回空让上层换引擎，而不是把垃圾交出去。"""
+    if not tokens or not items:
+        return items
+    need = 1 if len(tokens) <= 2 else max(2, len(tokens) // 3)
+    kept = [item for item in items if _result_overlap(item, tokens) >= need]
+    return kept
+
+
+def _web_get(url, timeout=AGENT_WEB_TIMEOUT, headers=None):
+    """同步 GET（在线程里跑）。urllib 而非 httpx：这里只需最简单的 GET，且要能绕过全局代理。"""
+    merged = dict(AGENT_WEB_HEADERS_BASE)
+    if headers:
+        merged.update(headers)
+    req = urllib.request.Request(url, headers=merged)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def _search_one_backend(kind, templates, query):
+    """跑一个引擎：按备用入口顺序试，第一个能解析出结果的直接用。"""
+    from urllib.parse import quote
+    last = ""
+    for tpl in templates:
+        try:
+            page = _web_get(
+                tpl.format(q=quote(query)),
+                timeout=AGENT_WEB_ENGINE_TIMEOUT,
+                headers=AGENT_BING_EXTRA_HEADERS if kind == "bing" else None,
+            )
+        except Exception as exc:
+            last = f"{type(exc).__name__}: {exc}"
+            continue
+        parser = _parse_bing if kind == "bing" else _parse_ddg_lite
+        items = _filter_relevant(parser(page.decode("utf-8", "ignore")), _query_tokens(query))
+        if items:
+            return items
+        last = "解析不到结果"
+    raise RuntimeError(last or "无结果")
+
+
+def web_search_sync(query, limit=6, engine=""):
+    """多引擎搜索：Bing + DuckDuckGo 并行跑，按 URL 去重后轮转合并。
+
+    engine 传 "bing" / "ddg" 可只跑某一个（结果不理想时给模型一个换引擎重搜的入口）。
+    """
+    import concurrent.futures
+    q = str(query or "").strip()
+    if not q:
+        return {"ok": False, "summary": "缺少 query", "output": "", "results": []}
+    try:
+        limit = max(1, min(int(limit or 6), AGENT_WEB_RESULT_LIMIT + 2))
+    except (TypeError, ValueError):
+        limit = 6
+    want = str(engine or "").strip().lower()
+    cache_key = f"{want}|{limit}|{q}"
+    cached = _AGENT_WEB_CACHE.get(cache_key)
+    if cached and time.time() - cached["ts"] < AGENT_WEB_CACHE_TTL:
+        return cached["data"]
+    backends = [item for item in AGENT_WEB_SEARCH_BACKENDS if not want or item[0] == want]
+    if not backends:
+        backends = list(AGENT_WEB_SEARCH_BACKENDS)
+    order = [kind for kind, _ in backends]
+    per_engine = {kind: [] for kind in order}
+    errors = []
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=len(backends))
+    try:
+        futures = {pool.submit(_search_one_backend, kind, tpls, q): kind for kind, tpls in backends}
+        pending = set(futures)
+        deadline = time.time() + AGENT_WEB_SEARCH_WAIT
+        # 已有引擎够量之后的"宽限截止时间"：不让慢的那家把快的那家拖着一起等
+        grace_until = None
+        while pending:
+            now = time.time()
+            stop_at = deadline if grace_until is None else min(deadline, grace_until)
+            if now >= stop_at:
+                errors.append("部分引擎超时")
+                break
+            done, pending = concurrent.futures.wait(pending, timeout=min(0.5, max(0.05, stop_at - now)))
+            for future in done:
+                kind = futures[future]
+                try:
+                    per_engine[kind] = future.result() or []
+                except Exception as exc:
+                    errors.append(f"{kind}:{str(exc)[:60]}")
+            if grace_until is None:
+                have = sum(len(v) for v in per_engine.values())
+                if have >= limit:
+                    grace_until = time.time() + 3
+    finally:
+        # 不等慢的那家；未完成的线程自行结束即可
+        pool.shutdown(wait=False, cancel_futures=True)
+    # 轮转合并：bing#1 / ddg#1 / bing#2 … 让两个引擎都有代表
+    results, seen = [], set()
+    index = 0
+    while len(results) < limit:
+        progressed = False
+        for kind in order:
+            bucket = per_engine.get(kind) or []
+            if index < len(bucket):
+                progressed = True
+                item = bucket[index]
+                if item["url"] not in seen:
+                    seen.add(item["url"])
+                    results.append(dict(item, engine=kind))
+                    if len(results) >= limit:
+                        break
+        if not progressed:
+            break
+        index += 1
+    if not results:
+        detail = "；".join(errors) if errors else "解析不到结果（可能被限流或改版）"
+        # 失败时给模型一条明确的下一步：换引擎重搜一次就够，别再硬刚，也别编答案
+        hint = ("；可换 engine 再搜一次" if not want
+                else ("；可改用 engine:\"ddg\" 再搜一次" if want == "bing"
+                      else "；可改用 engine:\"bing\" 再搜一次"))
+        return {"ok": False, "summary": f"搜索失败：{detail}{hint}",
+                "output": "", "results": []}
+    lines = []
+    for i, item in enumerate(results, 1):
+        lines.append(f"{i}. {item['title']}\n   {item['url']}"
+                     + (f"\n   {item['snippet']}" if item["snippet"] else ""))
+    used = "/".join(kind for kind in order if per_engine.get(kind))
+    data = {
+        "ok": True,
+        "summary": f"{len(results)} 条结果（{used}）",
+        "output": agent_truncate("\n".join(lines)),
+        "results": results,
+        "engine": used,
+    }
+    _AGENT_WEB_CACHE[cache_key] = {"ts": time.time(), "data": data}
+    if len(_AGENT_WEB_CACHE) > AGENT_WEB_CACHE_MAX:
+        for key in sorted(_AGENT_WEB_CACHE, key=lambda k: _AGENT_WEB_CACHE[k]["ts"])[:10]:
+            _AGENT_WEB_CACHE.pop(key, None)
+    return data
+
+
+def web_read_sync(url, max_chars=AGENT_WEB_READ_CHARS):
+    raw = str(url or "").strip()
+    if not re.match(r"^https?://", raw, re.I):
+        return {"ok": False, "summary": "只支持 http/https 网址", "output": ""}
+    try:
+        max_chars = max(500, min(int(max_chars or AGENT_WEB_READ_CHARS), 20000))
+    except (TypeError, ValueError):
+        max_chars = AGENT_WEB_READ_CHARS
+    # 首选 r.jina.ai：直接给干净 markdown，省掉自己清洗正文
+    try:
+        text = _web_get("https://r.jina.ai/" + raw).decode("utf-8", "ignore")
+        if text.strip():
+            return {"ok": True, "summary": f"{len(text)} 字符", "output": text[:max_chars], "url": raw}
+    except Exception as exc:
+        print(f"[web_read] jina 失败，回落直连：{exc}")
+    # 兜底：直连 + 粗暴去标签
+    try:
+        page = _web_get(raw).decode("utf-8", "ignore")
+        text = _html_unescape(re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", page))
+        return {"ok": True, "summary": f"{len(text)} 字符（直连解析）", "output": text[:max_chars], "url": raw}
+    except Exception as exc:
+        return {"ok": False, "summary": f"读取失败：{type(exc).__name__}: {exc}", "output": ""}
+
+
+async def agent_tool_web_search(args):
+    return await asyncio.to_thread(
+        web_search_sync, args.get("query"), args.get("limit") or 6, args.get("engine") or ""
+    )
+
+
+async def agent_tool_web_read(args):
+    return await asyncio.to_thread(web_read_sync, args.get("url"), args.get("max_chars"))
+
+
+def agent_always_on_tool_schemas():
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": spec["name"],
+                "description": spec["desc"],
+                "parameters": spec["parameters"],
+            },
+        }
+        for spec in AGENT_ALWAYS_ON_TOOL_SPECS
+    ]
+
+
 AGENT_TOOLS_SYSTEM_HINT = (
     "\n\n你可以调用本机工具来完成任务：run_shell（执行 Windows 命令）、read_file、write_file、list_dir。"
     "需要了解文件内容或执行命令时直接调用工具，不要凭空猜测；工具返回失败时说明原因并给出替代方案。"
     "不要调用与用户请求无关的工具，也不要在回复里伪造工具输出。"
+    # 🚨 2026-10-21 老板：「无法读取 Excel」。模型以前对 xlsx 的反应是「我读不了」或去拼 python，
+    #    而 PATH 里的 python 没有 openpyxl ⇒ exit=1。read_file 现在直接解析，必须明说，否则它不会用。
+    "\n**读 Excel / Word / PPT / PDF 一律用 read_file，不要自己解二进制、也不要先拼 python**："
+    "read_file 对 .xlsx/.xlsm/.docx/.pptx/.pdf 会直接返回解析后的文本（表格按「工作表 → 行」展开，"
+    "单元格内的换行已压成「 / 」）。文件在哪不确定时，先用 list_dir 找，再 read_file。"
+    "\n⚠️ .xls/.doc/.ppt 是 Office 97-2003 老格式，解析不了 —— 遇到就明确告诉用户「请另存为 .xlsx/.docx/.pptx」。"
     "\n生成文件类产物（xlsx/docx/pptx/pdf/csv/md/txt/zip…）时："
     f"必须把文件写到项目根目录下的 output/agent/ 子目录（绝对路径 {AGENT_FILES_DIR}）；"
     "纯文本用 write_file 直接写，xlsx / docx / pptx / pdf 用 run_shell 调 python（openpyxl / python-docx / python-pptx / fpdf2）生成，不要手写二进制。"
     "文件写好后，在返回 JSON 的 canvas_ops 里为每个文件加一条 create_file_node"
     "（url = /output/agent/<文件名>，name 带正确扩展名），产物就会直接显示为画布上的附件节点。"
+)
+
+# 联网能力说明单独一段：本机工具关掉时也要注入（否则模型不知道自己能搜）
+AGENT_WEB_SYSTEM_HINT = (
+    "\n\n你还能联网：web_search（搜索，返回标题+链接+摘要）、web_read（把网页正文读成文本）。"
+    "\n- 涉及**实时信息**（最新模型/产品/价格/政策/新闻）、需要外部资料、或你不确定的事实 → 先 web_search，"
+    "需要细节再用 web_read 打开结果里的链接，**不要凭训练数据硬答**。"
+    "\n- 搜索默认走必应；若结果明显不对题（全是官网首页、百科这类泛结果），"
+    "可以用 `engine: \"ddg\"` 换个搜索引擎重搜一次，换一次就够，别反复试。"
+    "\n- 搜索结果只是素材：读完自己判断、提炼、给出结论；**不要把链接列表原样倒给用户**，也不要编造没搜到的内容。"
+    "\n- 与需求无关的闲聊、纯创作、纯分析没必要联网，别为了显得勤奋而乱搜。"
+)
+
+# 视频成片能力：用户提视频需求时才用，且必须有真实画面素材才合
+AGENT_VIDEO_SYSTEM_HINT = (
+    "\n\n你还能合成短视频（工具 make_video，本地 ffmpeg 编码，不跑模型）。用户明确要「做条视频 / 短片 / 口播片 / 混剪」时："
+    "\n1. 先把需求拆成 3~8 个分镜，每段一两句话的口播文案；"
+    "\n2. 画面**必须先用项目里的生图 / 生视频通道真实产出**，再把返回的 /output/... 地址填进 segments；"
+    "\n3. 没有真实素材就调用 make_video，只会得到一张空白告警 —— **不要跳过第 2 步凭空编地址**；"
+    f"\n4. 竖屏用 {AGENT_VIDEO_SIZE_DEFAULT}，横屏用 1280x720；单段 3~8 秒，总长别超过 {AGENT_VIDEO_TOTAL_SECONDS_MAX} 秒；"
+    "\n5. 工具返回的 url 要在 canvas_ops 里加一条 create_file_node，让成片直接出现在画布上。"
+    "\n工具报「未找到 ffmpeg」时，把里头给的安装指引原样告诉用户，不要自己瞎猜别的办法。"
 )
 
 def agent_decode_bytes(data):
@@ -5887,6 +6404,18 @@ AGENT_FILE_TEXT_EXTS = {
 }
 AGENT_FILE_INLINE_CHARS = 20_000     # 单个附件内联正文上限
 AGENT_FILES_TOTAL_CHARS = 60_000     # 全部附件合计上限
+# read_file 能直接「解析」而不是「按字节读」的格式（2026-10-21 老板：「无法读取 Excel」）。
+# 🚨 xlsx/docx/pptx/pdf 是二进制容器：按字节 decode 出来是乱码，模型看到就放弃了，
+#    然后它会去拼 run_shell + python，PATH 里的 python 又没有 openpyxl ⇒ exit=1。
+#    所以 read_file 遇到这些扩展名必须直接走 extract_attachment_text。
+AGENT_DOC_EXTRACT_EXTS = {
+    ".xlsx", ".xlsm", ".xltx", ".xls",
+    ".docx", ".doc",
+    ".pptx", ".ppt",
+    ".pdf",
+}
+AGENT_LEGACY_OFFICE_EXTS = {".xls", ".doc", ".ppt"}   # 老格式解析不了，要提示另存
+AGENT_TOOL_READ_DOC_CHARS = 40_000   # 单次解析出的正文字符上限（最终仍受 AGENT_TOOL_OUTPUT_LIMIT 约束）
 
 
 def agent_file_display_name(item, path=""):
@@ -5939,6 +6468,13 @@ def extract_docx_text(path, limit):
         return None
 
 
+# 表格抽取的扫描行上限（2026-10-21）：原来写死 80，把 102 行的需求 Brief 直接截掉了后两行模块。
+# 行数放宽到 400，真正的长度保护交给 AGENT_FILE_INLINE_CHARS / AGENT_FILES_TOTAL_CHARS。
+AGENT_SHEET_SCAN_ROWS = 400
+# WPS/Excel 的浮动图片单元格 = `=DISPIMG("ID_...",1)`，对模型只是一串哈希，换成可读标记。
+AGENT_SHEET_DISPIMG_RE = re.compile(r'=DISPIMG\(\s*"[^"]*"\s*(?:,\s*\d+\s*)?\)', re.IGNORECASE)
+
+
 def extract_xlsx_text(path, limit):
     try:
         import openpyxl
@@ -5949,13 +6485,42 @@ def extract_xlsx_text(path, limit):
         lines = []
         for sheet in workbook.worksheets:
             lines.append(f"[工作表] {sheet.title}")
+            # 🚨 空列压缩 + 行数放宽（2026-10-21 老板：「结果与图需排版和风格不一致」）。
+            #    根因在抽取这一层，不在模型：
+            #    ① 那份「视觉需求 Brief」是 A1:Z102 —— 26 列宽，真正有值的列只有十来个，
+            #       原样 `模块 |  |  |  | 文案 |  | 画面建议` 输出后，模型**很容易错列**，
+            #       「文案」和「画面建议」对不上，生成结果自然和需求不符；
+            #    ② 硬上限 80 行把副图4、副图5 直接截掉了，模型只看到前三个模块。
+            #    改成：先扫一遍记住「哪些列真的有值」，只输出这些列；单元格内换行压成 " / "，
+            #    让「主标题 / 副标题 / 小标题」在同一个格子里也读得出层级。
+            rows = []
+            used_cols = set()
+            truncated = False
             for index, row in enumerate(sheet.iter_rows(values_only=True)):
-                if index >= 80:
-                    lines.append("…（仅显示前 80 行）")
+                if index >= AGENT_SHEET_SCAN_ROWS:
+                    truncated = True
                     break
-                cells = ["" if c is None else str(c) for c in row]
-                if any(c.strip() for c in cells):
-                    lines.append(" | ".join(cells))
+                cells = ["" if c is None else str(c).replace("\r\n", "\n") for c in row]
+                if not any(c.strip() for c in cells):
+                    continue
+                for i, c in enumerate(cells):
+                    if c.strip():
+                        used_cols.add(i)
+                rows.append(cells)
+            keep = sorted(used_cols)
+            for cells in rows:
+                picked = []
+                for i in keep:
+                    val = cells[i] if i < len(cells) else ""
+                    # `=DISPIMG("ID_xxx",1)` 是 WPS 的浮动图片引用，对模型是纯噪音（一串哈希），
+                    # 换成可读标记，让它知道「这列是参考图，不是文字需求」。
+                    val = AGENT_SHEET_DISPIMG_RE.sub("[参考图]", val)
+                    val = re.sub(r"[ \t]*\n[ \t]*", " / ", val).strip()
+                    val = re.sub(r"(?:\s*/\s*){2,}", " / ", val).strip()
+                    picked.append(val)
+                lines.append(" | ".join(picked))
+            if truncated:
+                lines.append(f"…（仅显示前 {AGENT_SHEET_SCAN_ROWS} 行）")
         try:
             workbook.close()
         except Exception:
@@ -6043,18 +6608,27 @@ def agent_files_context_block(files):
         if budget <= 0:
             blocks.append(f"【附件：{name}】格式 .{ext}（{size} 字节）\n本机绝对路径：{abs_path}\n（附件总长度已达上限，请用 read_file 自行读取）")
             continue
-        text = extract_attachment_text(path, min(AGENT_FILE_INLINE_CHARS, budget))
+        _inline_limit = min(AGENT_FILE_INLINE_CHARS, budget)
+        text = extract_attachment_text(path, _inline_limit)
         if text is None:
             blocks.append(
                 f"【附件：{name}】格式 .{ext}（{size} 字节），未能直接解析为文本。"
                 f"\n本机绝对路径：{abs_path}"
-                f"\n如需内容，请用 read_file / run_shell（例如用 python 读取该文件）自行查看。"
+                f"\n如需内容，请用 read_file 直接读（它能解析 xlsx/docx/pptx/pdf）。"
             )
         else:
             budget -= len(text)
             tail = "" if budget > 0 else "\n（附件总长度已达上限，后续附件只给路径）"
+            # 🚨 说清「读完没有」（2026-10-21）：只给正文时，模型会把「表格最后一行」当成「被截断」，
+            #    反过来向用户要「完整版」。这里把事实写在**标题行**上（末尾它容易忽略）。
+            if len(text) >= _inline_limit:
+                completeness = f"⚠️ 已截断，只给前 {_inline_limit} 字符"
+                tail += f"\n（剩余部分用 read_file 分段读。）"
+            else:
+                completeness = f"✅ 完整 {text.count(chr(10)) + 1} 行"
+                tail += f"\n（✅ 以上是该附件的全部文本，共 {len(text)} 字符，未截断。不要向用户索要「完整版」。）"
             blocks.append(
-                f"【附件：{name}】格式 .{ext}（{size} 字节）\n```\n{text}\n```"
+                f"【附件：{name}】格式 .{ext}（{size} 字节）· {completeness}\n```\n{text}\n```"
                 f"\n本机绝对路径：{abs_path}{tail}"
             )
     if not blocks:
@@ -6092,6 +6666,125 @@ def save_agent_tools_settings(enabled=None, max_rounds=None):
     with open(AGENT_TOOLS_FILE, "w", encoding="utf-8") as f:
         json.dump(settings, f, ensure_ascii=False, indent=2)
     return settings
+
+# ===================== Agent 用户画像（偏好设置，第 12 条） =====================
+# 基础记忆，**全局共用**（不按画布隔离、不随对话清空），每一轮都排进 system prompt 前置记忆。
+# 老板的要求：无论开多少画布、多少新对话，这些信息始终保留在 agent 前置记忆中。
+#
+# 🚨 2026-10-19 从 6 项平铺拆成 4 组：原来「身份角色」这种一句话被压成一个字段，
+#    模型读到的信息太粗（"设计师"三个字看不出是电商视觉、也看不出常做详情页）。
+#    分组后一句话能拆成 3~4 个可选项，既好选、也便于逐项覆盖。
+# 🚨 同日二次调整（老板要求）：删掉「常用工具」，整组删掉「常用资产」；
+#    deliverable / directionScene / 审美偏好三项改为**可多选**（存储仍是单个字符串，多值用「、」连接）。
+# ⚠️ 旧的 6 个 key（nickname/occupation/industry/platform/category/audience）**必须保留**，
+#    老板已经填过，改 key 等于清空他的资料。toolset 已废弃，老数据里的值下次保存会被丢掉。
+AGENT_PROFILE_FILE = os.path.join(DATA_DIR, "agent_profile.json")
+AGENT_PROFILE_GROUPS = (
+    ("基础信息", (
+        ("nickname", "称呼"),
+        ("occupation", "职业角色"),
+        ("industry", "行业领域"),
+    )),
+    ("业务概况", (
+        ("platform", "主营平台"),
+        ("category", "经营类目"),
+        ("audience", "服务群体"),
+        ("deliverable", "常见产出"),
+    )),
+    ("协作方式", (
+        ("directionCount", "方案数量"),
+        ("directionScene", "要多方向的场景"),
+        ("detailLevel", "说明详略"),
+        ("startMode", "执行前"),
+    )),
+    ("审美偏好", (
+        ("visualStyle", "画面风格"),
+        ("colorTone", "色调"),
+        ("composition", "构图"),
+    )),
+)
+# 由分组派生出的平铺字段表（存盘 / 校验 / 注入都用这一份，改分组就自动同步）
+AGENT_PROFILE_FIELDS = tuple(
+    field for _, fields in AGENT_PROFILE_GROUPS for field in fields
+)
+AGENT_PROFILE_VALUE_MAX = 200
+
+
+def load_agent_profile():
+    profile = {key: "" for key, _ in AGENT_PROFILE_FIELDS}
+    profile["updated_at"] = 0
+    try:
+        if os.path.exists(AGENT_PROFILE_FILE):
+            with open(AGENT_PROFILE_FILE, "r", encoding="utf-8-sig") as f:
+                raw = json.load(f) or {}
+            if isinstance(raw, dict):
+                for key, _ in AGENT_PROFILE_FIELDS:
+                    val = raw.get(key)
+                    if isinstance(val, str):
+                        profile[key] = val.strip()[:AGENT_PROFILE_VALUE_MAX]
+                ts = raw.get("updated_at")
+                if isinstance(ts, (int, float)):
+                    profile["updated_at"] = int(ts)
+    except Exception as exc:
+        print(f"加载 Agent 用户画像失败: {exc}")
+    profile["completed"] = any(profile[key] for key, _ in AGENT_PROFILE_FIELDS)
+    return profile
+
+
+def save_agent_profile(data):
+    """整份覆盖写入；只接受白名单字段，超长截断（不报错，弹窗里输入多长都不该 500）。"""
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="用户画像需要是对象")
+    profile = load_agent_profile()
+    for key, _ in AGENT_PROFILE_FIELDS:
+        if key in data:
+            val = data.get(key)
+            profile[key] = val.strip()[:AGENT_PROFILE_VALUE_MAX] if isinstance(val, str) else ""
+    profile["updated_at"] = int(time.time() * 1000)
+    stored = {key: profile[key] for key, _ in AGENT_PROFILE_FIELDS}
+    stored["updated_at"] = profile["updated_at"]
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(AGENT_PROFILE_FILE, "w", encoding="utf-8") as f:
+        json.dump(stored, f, ensure_ascii=False, indent=2)
+    profile["completed"] = any(profile[key] for key, _ in AGENT_PROFILE_FIELDS)
+    return profile
+
+
+def agent_profile_block():
+    """用户画像 → system prompt 前置记忆块；一项都没填就返回空串（不占上下文）。
+    🚨 按「基础信息 / 业务概况 / 协作方式 / 审美偏好」分组输出，
+       让模型分得清「他是谁」和「他要我怎么配合」——平铺成一堆键值对时，后者最容易被忽略。
+    🚨 「协作方式」不能只写成一行记忆，要翻成**可执行的动作句**。实测：只写「方案数量：先给 2-3 个方向」，
+       模型照样只给一版图；写成「一次给多个方向就真的返回多条 prompt，别只给一版」才会照做。"""
+    profile = load_agent_profile()
+    groups = []
+    for group_name, fields in AGENT_PROFILE_GROUPS:
+        lines = [f"- {label}：{profile[key]}" for key, label in fields if profile.get(key)]
+        if lines:
+            groups.append(f"【{group_name}】\n" + "\n".join(lines))
+    if not groups:
+        return ""
+    rules = []
+    if profile.get("directionCount"):
+        rules.append(f"出图默认按「{profile['directionCount']}」执行 —— 要多个方向就**真的返回多条 prompt**，不要只给一版。")
+    if profile.get("directionScene"):
+        rules.append(f"遇到「{profile['directionScene']}」这类场景，必须先给多个方向再动手。")
+    if profile.get("detailLevel"):
+        rules.append(f"回复详略按「{profile['detailLevel']}」。")
+    if profile.get("startMode"):
+        rules.append(f"动手前按「{profile['startMode']}」——说好先给方案就先给方案，说好直接做就别再确认。")
+    if any(profile.get(k) for k in ("visualStyle", "colorTone", "composition")):
+        rules.append("出图的风格 / 色调 / 构图直接用「审美偏好」里的值，不要再反问用户。")
+    if profile.get("deliverable"):
+        rules.append(f"常做的产物是「{profile['deliverable']}」，默认往这个方向理解需求。")
+    return (
+        "\n\n【用户基础记忆 · 长期有效】\n"
+        "以下是用户在偏好设置里留下的固定信息，**每一轮对话都有效**，不要再问一遍：\n"
+        + "\n".join(groups)
+        + ("\n\n【按这些记忆执行】\n" + "\n".join(f"- {r}" for r in rules) if rules else "")
+        + "\n若用户本轮明确说了不同情况，以用户本轮说法为准。"
+    )
+
 
 def agent_allowed_roots():
     """按当前权限档位返回允许访问的根目录；返回 None 表示不限制。"""
@@ -6162,10 +6855,23 @@ async def agent_tool_run_shell(args):
         timeout = AGENT_TOOL_SHELL_TIMEOUT
     timeout = max(1, min(timeout, AGENT_TOOL_SHELL_TIMEOUT_LIMIT))
     started = time.time()
+    # 🚨 PATH 前置「随包 python」（2026-10-21 老板截图 exit=1）：服务本身跑在 `./python/python.exe` 上，
+    #    它装了 openpyxl / python-docx / python-pptx / pypdf；而系统 PATH 里的 python 通常一个都没装，
+    #    模型写 `python -c "import openpyxl"` 必然 ModuleNotFoundError。
+    #    把随包解释器目录排到 PATH 最前，命令里的 `python` 就指向它。
+    _shell_env = os.environ.copy()
+    try:
+        _py_dir = os.path.dirname(os.path.abspath(sys.executable))
+        if _py_dir and os.path.isdir(_py_dir):
+            _shell_env["PATH"] = _py_dir + os.pathsep + _shell_env.get("PATH", "")
+            _shell_env.setdefault("PYTHONIOENCODING", "utf-8")
+    except Exception:
+        _shell_env = None
     try:
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=cwd,
+            env=_shell_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -6202,11 +6908,52 @@ async def agent_tool_run_shell(args):
     }
 
 def agent_tool_read_file(args, roots):
+    # 🚨 允许直接传附件 url（2026-10-21）：模型从历史里看到的附件是 `/assets/input/ai_ref_xxx.xlsx`
+    #    这种 url 形态，而不是本机绝对路径。不认它，模型就只能猜路径 → exit=1。
+    _raw = str(args.get("path") or "").strip()
+    if _raw.startswith(("/assets/", "/output/", "/api/storage-files/")):
+        _mapped = output_file_from_url(_raw)
+        if _mapped:
+            args = {**args, "path": _mapped}
     path = agent_resolve_path(args.get("path"), roots)
     if not os.path.exists(path):
         return {"ok": False, "summary": "文件不存在", "output": path}
     if os.path.isdir(path):
         return {"ok": False, "summary": "这是一个目录，请改用 list_dir", "output": path}
+    # 🚨 二进制 Office / PDF 必须先抽文本（2026-10-21 老板：「无法读取 Excel」）。
+    #    原来这里直接 open(path,'rb') 再 decode —— xlsx 读出来是乱码，模型只会说「读不了」，
+    #    接着去拼 run_shell + python，又撞上 PATH 里的 python 没 openpyxl ⇒ exit=1。
+    ext = os.path.splitext(path)[1].lower()
+    if ext in AGENT_DOC_EXTRACT_EXTS:
+        text = extract_attachment_text(path, AGENT_TOOL_READ_DOC_CHARS)
+        if text is None:
+            if ext in AGENT_LEGACY_OFFICE_EXTS:
+                hint = f"{ext} 是 Office 97-2003 老格式，当前解析库只支持 .xlsx / .docx / .pptx。请先另存为新格式。"
+            else:
+                hint = "本机缺少对应的解析库（openpyxl / python-docx / python-pptx / pypdf），可以用 run_shell 调 python 自行处理。"
+            return {"ok": False, "summary": f"无法解析 {ext} 文件", "output": f"{path}\n{hint}", "path": path}
+        if not text.strip():
+            return {"ok": False, "summary": f"{ext} 里没有可读文本（可能是纯图片/空表）", "output": path, "path": path}
+        # 🚨 明确告诉模型「读完了没有」（2026-10-21 实测踩中两次）：
+        #    只说「已解析 4444 字符」时，模型看到表格最后一行是「模块6」就自己臆测
+        #    「模块五下面被截断了」，反过来要求用户「把 A+ 部分单独截图发来」——
+        #    明明已经完整读到（实测模块五的「Scratch Resistant / Long Lasting」都在）。
+        #    所以把「完整/截断」写在**正文最前面**（末尾那行它容易忽略）。
+        _lines = text.count("\n") + 1
+        _truncated = len(text) > AGENT_TOOL_OUTPUT_LIMIT
+        if _truncated:
+            _head = (f"[⚠️ 已截断：原文共 {len(text)} 字符，下面只显示前 {AGENT_TOOL_OUTPUT_LIMIT} 字符。"
+                     f"要剩余部分请用 run_shell 调 python 分段读]\n")
+            _tail = ""
+        else:
+            _head = f"[✅ 完整读取：共 {_lines} 行 / {len(text)} 字符，没有任何截断，后面不会再有内容]\n"
+            _tail = "\n（以上为该文件全部内容。不要向用户索要「完整版」，也不要假设后面还有内容。）"
+        return {
+            "ok": True,
+            "summary": f"已解析 {ext}（{len(text)} 字符{'，已截断' if _truncated else '，完整'}）",
+            "output": agent_truncate(_head + text + _tail),
+            "path": path,
+        }
     try:
         limit = int(args.get("max_bytes") or AGENT_TOOL_READ_BYTES)
     except (TypeError, ValueError):
@@ -6286,10 +7033,20 @@ def agent_tool_list_dir(args, roots):
 async def run_agent_tool(name, args):
     """执行一次工具调用；任何异常都转成 ok=False 的结果，避免打断整轮对话。"""
     tool_name = str(name or "").strip()
-    if tool_name not in AGENT_TOOL_NAMES:
-        return {"ok": False, "summary": f"未知工具：{tool_name}", "output": ""}
     if not isinstance(args, dict):
         args = {}
+    # 常驻工具单独放行：不受「本机工具」开关与权限档位约束（只读联网 / 只做 ffmpeg 编码）
+    if tool_name in AGENT_ALWAYS_ON_TOOL_NAMES:
+        try:
+            if tool_name == "web_search":
+                return await agent_tool_web_search(args)
+            if tool_name == "web_read":
+                return await agent_tool_web_read(args)
+            return await asyncio.to_thread(agent_video_compose_sync, args)
+        except Exception as exc:
+            return {"ok": False, "summary": f"{tool_name} 执行异常：{exc}", "output": ""}
+    if tool_name not in AGENT_TOOL_NAMES:
+        return {"ok": False, "summary": f"未知工具：{tool_name}", "output": ""}
     roots = agent_allowed_roots()
     try:
         if tool_name == "run_shell":
@@ -6385,6 +7142,10 @@ AGENT_SKILLS_INDEX = os.path.join(AGENT_SKILLS_DIR, "index.json")
 # 因为 data/ 是用户数据目录、打包时被黑名单整目录排除 —— 内置 Skill 必须随包走，
 # 且用户覆盖安装后仍是最新版。见 tools/release.py 的 PROGRAM_DIRS。
 BUILTIN_SKILLS_DIR = os.path.join(BASE_DIR, "skills")
+# 必须常驻系统提示词的内置 Skill（不受「本机工具开关」与「办公关键词相关性」过滤）。
+# canvas-agent = 画布全功能手册：节点类型 / 参数白名单 / canvas_ops 协议。
+# 它是 Agent 理解这块画布的唯一权威来源，缺了就会瞎编节点类型和参数名。
+ALWAYS_ON_BUILTIN_SKILLS = {"canvas-agent", "ponytail"}
 SKILLS_MARKET_CACHE = os.path.join(DATA_DIR, "skills_market_cache.json")
 SKILLS_MARKET_STATE = os.path.join(DATA_DIR, "skills_market_state.json")
 SKILLS_MARKET_TTL = 6 * 3600             # 联网刷新缓存有效期（秒）
@@ -7891,6 +8652,9 @@ _OFFICE_SKILL_TRIGGER_RE = re.compile(
     r"pptx|\bppt\b|幻灯片|演示文稿|汇报|"
     r"\bpdf\b|csv|tsv|\btxt\b|markdown|\bmd\b|"
     r"附件|文件产物|导出文件|生成文件|保存成|保存为|"
+    # 🚨 2026-10-21 老板：「无法读取 Excel」。他嘴里说的是「图需」「需求表」，
+    #    一个 office 关键词都没有，于是办公 Skill 没注入 → 模型不知道有 read_file 能解析表格。
+    r"图需|brief|需求表|需求文档|读表|读取表格|读取文件|解析文件|"
     r"办公)",
     re.I,
 )
@@ -7922,10 +8686,15 @@ def installed_skills_prompt_block(query=None):
     传具体文本时按 _OFFICE_SKILL_TRIGGER_RE 判断是否与文件产物相关。
     """
     entries = []
-    if load_agent_tools_settings().get("enabled"):
-        if query is None or builtin_skills_relevant(query):
-            for item in load_builtin_skills():
-                entries.append((item.get("title") or item.get("id") or "Skill", item.get("content") or ""))
+    tools_on = bool(load_agent_tools_settings().get("enabled"))
+    office_relevant = query is None or builtin_skills_relevant(query)
+    for item in load_builtin_skills():
+        name = str(item.get("name") or "")
+        # 画布能力手册是 Agent 的地图，必须**始终**在场：
+        #   ① 它不依赖本机工具（全是 canvas_ops，不是 run_shell）；
+        #   ② 它跟「办公产物」无关，套 _OFFICE_SKILL_TRIGGER_RE 会把正常对话也过滤掉。
+        if name in ALWAYS_ON_BUILTIN_SKILLS or (tools_on and office_relevant):
+            entries.append((item.get("title") or item.get("id") or "Skill", item.get("content") or ""))
     for item in load_installed_skills().get("skills", []):
         skill_id = str(item.get("id") or "")
         if not skill_id:
@@ -7963,6 +8732,49 @@ def installed_skills_prompt_block(query=None):
 
 AUTO_COMPRESS_TOKEN_THRESHOLD = int(os.getenv("AUTO_COMPRESS_TOKEN_THRESHOLD", "192000"))
 COMPRESS_KEEP_RECENT = int(os.getenv("COMPRESS_KEEP_RECENT", "6"))
+
+# ---------- 上下文压缩阈值：按模型实际窗口动态计算（2026-10-19）----------
+# 🚨 老板要求「到 1000K 才压缩」，但多数对话模型的窗口远小于 1000K（常见 128K~200K）。
+#    真等到 1000K，请求早就被服务端 400 拒绝了。所以改成：
+#      阈值 = min(模型窗口 × 80%, 1000K)
+#    —— 小窗口模型及时压缩，大窗口模型（≥1M）才用到 1000K 这个上限。
+AUTO_COMPRESS_MAX_TOKENS = 1_000_000     # 上限兜底（老板要的 1000K）
+AUTO_COMPRESS_RATIO = 0.8                # 用掉窗口 80% 就压，留出工具输出/系统提示的余量
+DEFAULT_CONTEXT_WINDOW = 128_000         # 认不出来时按保守值算（宁可早压，不要被 400）
+
+# 顺序敏感：越具体的放越前。窗口值宁小勿大 —— 估小了只是早压缩，估大了会直接请求失败。
+_MODEL_WINDOW_RULES = (
+    (re.compile(r"gemini[-_.]1\.5[-_.]pro", re.I), 2_000_000),
+    (re.compile(r"gemini", re.I), 1_000_000),
+    (re.compile(r"gpt[-_.]?4\.1|gpt[-_.]?5|o3|o4", re.I), 1_000_000),
+    (re.compile(r"claude", re.I), 200_000),
+    (re.compile(r"minimax", re.I), 200_000),
+    (re.compile(r"gpt[-_.]?4o|gpt[-_.]?4[-_.]turbo", re.I), 128_000),
+    (re.compile(r"deepseek|qwen|kimi|moonshot|glm|yi[-_.]|ernie|doubao|seed", re.I), 128_000),
+)
+
+
+def model_context_window(model: str) -> int:
+    """按模型名猜上下文窗口大小（token）。认不出来返回保守默认值。"""
+    name = str(model or "")
+    for rx, window in _MODEL_WINDOW_RULES:
+        if rx.search(name):
+            return window
+    return DEFAULT_CONTEXT_WINDOW
+
+
+def auto_compress_threshold(model: str = "") -> int:
+    """自动压缩阈值 = min(模型窗口 × 80%, 1000K)。
+
+    显式设置环境变量 AUTO_COMPRESS_TOKEN_THRESHOLD 时以它为准（排障 / 强制固定阈值用）。
+    """
+    env = os.getenv("AUTO_COMPRESS_TOKEN_THRESHOLD")
+    if env:
+        try:
+            return max(1000, int(env))
+        except ValueError:
+            pass
+    return min(int(model_context_window(model) * AUTO_COMPRESS_RATIO), AUTO_COMPRESS_MAX_TOKENS)
 
 _CJK_TOKEN_RE = re.compile(r'[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef\u3040-\u30ff\u31f0-\u31ff]')
 
@@ -8035,9 +8847,13 @@ async def compress_conversation_history(messages, payload, keep_recent=COMPRESS_
 
 
 def chat_agent_system_prompt(payload, conversation):
-    """聊天 Agent 的 system prompt：默认提示词 + 已安装/内置 Skill（默认启用）+ 本次会话主动激活的 Skill。"""
+    """聊天 Agent 的 system prompt：用户画像（前置记忆）+ 默认提示词 + Skill + 本次会话主动激活的 Skill。"""
     base = chat_system_prompt(payload)
     parts = [base] if base else []
+    # 用户画像排最前面：称呼 / 职业 / 行业 / 平台 / 类目 / 服务群体，全局共用、每轮都带
+    profile_block = agent_profile_block()
+    if profile_block:
+        parts.append(profile_block)
     skill_block = installed_skills_prompt_block() + agent_file_capability_block()
     if skill_block:
         parts.append(skill_block)
@@ -8052,7 +8868,9 @@ async def maybe_auto_compress(conversation, payload, user_id=None):
     """上下文估算 token 达到阈值时自动压缩并持久化；返回 (window, did_compress)。"""
     window = conversation["messages"][-MAX_HISTORY_MESSAGES:]
     sys_msg = {"role": "system", "content": chat_agent_system_prompt(payload, conversation)}
-    if estimate_messages_tokens([sys_msg] + window) < AUTO_COMPRESS_TOKEN_THRESHOLD:
+    # 阈值按当前模型的实际窗口动态算，避免固定 192k 在小窗口模型上炸、在大窗口模型上白压
+    threshold = auto_compress_threshold(getattr(payload, "model", "") or "")
+    if estimate_messages_tokens([sys_msg] + window) < threshold:
         return window, False
     compressed_window = await compress_conversation_history(window, payload, COMPRESS_KEEP_RECENT)
     conversation["messages"] = conversation["messages"][:-MAX_HISTORY_MESSAGES] + compressed_window
@@ -13033,7 +13851,10 @@ def chat_prompt_size_override(message, current_size=""):
     return options[0]
 
 # GPT-Image-2 限制：长边最大 3840，主要受最大像素限制（约 829 万 = 3840x2160）。
-# 这里只用于上游报错后给出友好的像素上限提示；不对尺寸做任何缩小（用户选什么就原样发送）。
+# 🚨 2026-10-21 起**会在出图前自动压尺寸**（见 guard_size_for_model）：
+#    以前是「用户选什么就原样发送」→ 4096×4096 必然被上游拒，任务直接失败，
+#    而 agent 那条链路没人能接住这个失败（前端只显示一行红字）。
+#    确定性错误应该自己修掉，不该甩给用户。
 GPT_IMAGE2_MAX_EDGE = 3840
 GPT_IMAGE2_MAX_PIXELS = 8_294_400
 GPT_IMAGE2_MIN_PIXELS = 655_360
@@ -13078,18 +13899,45 @@ def normalize_gpt_image_2_size(size):
         height = int((height * grow + 15) // 16) * 16
     return f"{width}x{height}"
 
-def gpt_image_2_size_error_message(size):
-    width, height = parse_size_pair(size)
+def gpt_image_2_size_error_message(size, model=""):
+    """尺寸超限的说明。🚨 必须写**用户实际选的模型名**：
+    这个家族有 gpt-image-2 / -vip / -2.5 / -2.5-flare / -2.5-sunburst，
+    全写「GPT-Image-2」会让老板以为系统认错了模型（2026-10-21 就是这么被问的）。"""
     display_size = size or "未指定"
+    name = str(model or "").strip() or "GPT-Image-2"
     return (
-        f"GPT-Image-2 不支持当前尺寸 {display_size}：它有最大像素限制"
-        "（长边最大 3840、总像素约 829 万）。请改用更小的尺寸，"
-        "或切换到 nano-banana 生成更高分辨率。"
+        f"{name} 不支持尺寸 {display_size}：这个系列按总像素封顶"
+        f"（长边最大 {GPT_IMAGE2_MAX_EDGE}、总像素约 {round(GPT_IMAGE2_MAX_PIXELS / 10000)} 万）。"
+        "1:1 的 4K 档是 2880×2880，16:9 的 4K 档是 3840×2160 —— 按它的官方档位选就不会被拒。"
+        "需要更高分辨率请换 nano-banana；继续用这个系列就调低一档。"
     )
 
 def gpt_image_2_size_exceeds_supported(size):
     width, height = parse_size_pair(size)
     return bool(width and height and (max(width, height) > GPT_IMAGE2_MAX_EDGE or width * height > GPT_IMAGE2_MAX_PIXELS))
+
+def guard_size_for_model(model, size):
+    """出图前把尺寸压到该模型真正支持的范围，返回 (实际使用尺寸, 给用户看的说明)。
+
+    2026-10-21：agent 的默认 resolution 是 4k，方图 1:1 + 4K = 4096×4096 = 1677 万像素，
+    gpt-image-2 上限只有 829 万 ⇒ 以前这条请求**必定失败**，前端只剩一句红字，任务就断了。
+    现在在入口直接等比压到上限并告知，不再把确定性错误甩给用户。
+    🚨 算法必须和前端 agentGuardGenSize() 一致（等比缩、16 对齐、长边≤3840）。
+    🚨 只对「已知上限」的模型动手：别的模型（nano-banana 等）能吃 4K，压了反而降质。
+    """
+    raw = str(size or "").strip()
+    if not raw or raw.lower() == "auto":
+        return raw, ""
+    if not is_gpt_image_2_model(model):
+        return raw, ""
+    if not gpt_image_2_size_exceeds_supported(raw):
+        return raw, ""
+    fixed = normalize_gpt_image_2_size(raw)
+    if not fixed or fixed == raw:
+        return raw, ""
+    note = (f"{model} 不支持 {raw}（长边≤{GPT_IMAGE2_MAX_EDGE}、"
+            f"≤{round(GPT_IMAGE2_MAX_PIXELS / 10000)}万像素），已自动按 {fixed} 生成")
+    return fixed, note
 
 def apimart_size_resolution(size):
     width, height = parse_size_pair(size)
@@ -13177,7 +14025,7 @@ def friendly_image_error_detail(text, size="", model=""):
     text = str(text or "")
     lower_text = text.lower()
     if is_gpt_image_2_model(model) and gpt_image_2_size_exceeds_supported(size):
-        return gpt_image_2_size_error_message(size)
+        return gpt_image_2_size_error_message(size, model)
     mentions_size = any(token in lower_text for token in ["size", "resolution", "dimension"])
     is_gpt_size_error = is_gpt_image_2_model(model) and mentions_size and (
         "invalid" in lower_text
@@ -13189,7 +14037,7 @@ def friendly_image_error_detail(text, size="", model=""):
     m = re.search(r"longest edge must be less than or equal to (\d+)", text)
     if m and is_gpt_image_2_model(model):
         limit = m.group(1)
-        return f"GPT-Image-2 不支持当前尺寸 {size or '未指定'}：最长边超过 {limit}px。如果需要更高分辨率，请切换到 nano-banana；继续使用 GPT 时请调低分辨率。"
+        return f"{model or 'GPT-Image-2'} 不支持尺寸 {size or '未指定'}：最长边超过 {limit}px。需要更高分辨率请切换到 nano-banana；继续用这个系列就调低一档。"
     if m:
         limit = m.group(1)
         return f"该模型不支持当前分辨率：最长边超过 {limit}px。请把图片分辨率调低（例如换到 2K 或更小），或更换支持高分辨率的模型。"
@@ -13198,13 +14046,22 @@ def friendly_image_error_detail(text, size="", model=""):
         pixels = pixel_match.group(1) if pixel_match else "3686400"
         return f"该模型要求更高分辨率，当前尺寸 {size or '过小'} 不满足最低像素要求（至少 {pixels} 像素）。火山 Seedream 5.0 建议从 2K 起步。"
     if is_gpt_size_error or (("invalid size" in lower_text or "invalid_value" in lower_text) and is_gpt_image_2_model(model)):
-        return gpt_image_2_size_error_message(size)
+        return gpt_image_2_size_error_message(size, model)
     if "invalid size" in lower_text or "invalid_value" in lower_text:
         return f"该模型不支持当前尺寸：{size or '未指定'}。请尝试更换分辨率或模型。"
+    # 🚨 内容审核要认中文（2026-10-20 老板截图）：OpenAI 系返回的是
+    #    {"message":"非常抱歉，该提示可能违反了我们的内容政策…","code":"content_policy_violation"}
+    #    以前只认英文关键词 + 而且调用方把原文截到 300 字，`code` 字段被切掉就识别不出来。
+    if ("content_policy" in lower_text or "content policy" in lower_text or "content-policy" in lower_text
+            or "moderation_blocked" in lower_text or "内容政策" in text or "违反了我们的" in text
+            or "该提示可能违反" in text or "safety system" in lower_text
+            or "rejected by the safety system" in lower_text or "image_generation_user_error" in lower_text):
+        return ("上游内容审核拒绝了这条请求 —— **不是画布或遮罩的问题**，原图和遮罩都还在，改好提示词直接重发即可。\n"
+                "常见触发：把人物改成未成年人（成年→小孩这类「改变年龄」最容易被判违规）、暴力/血腥、成人内容、"
+                "名人、版权角色/IP、真实人物肖像。\n"
+                "建议：换一种说法只描述要改的外观（服装/发型/姿态/风格），或换一个模型通道（不同平台审核尺度不同）再试。")
     if "inputtextsensitivecontentdetected" in lower_text or "policyviolation" in lower_text or "copyright restrictions" in lower_text:
         return "上游内容安全拦截了这段提示词，原因偏向版权/敏感内容限制。请改写提示词，避免直接出现具体 IP、角色名、品牌名、影视/动漫作品名，改成风格特征描述再试。"
-    if "rejected by the safety system" in lower_text or "image_generation_user_error" in lower_text or "safety system" in lower_text or "content_policy_violation" in lower_text or "content policy" in lower_text:
-        return "上游（Azure/OpenAI 系）内容安全系统拒绝了本次生图请求。可能是提示词或参考图触发了内容审核。请改写提示词、避免敏感/暴力/成人/名人/版权角色等描述；若使用了人物参考图，可换一张图再试。这是上游平台的审核策略，并非本系统报错。"
     if "rate limit" in lower_text or "429" in lower_text:
         return "请求过于频繁，已被上游限流，请稍后再试。"
     if "unauthorized" in lower_text or "401" in lower_text:
@@ -13222,6 +14079,66 @@ def parse_error_payload_text(text):
     except Exception:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+REASONING_EFFORT_LEVELS = ("minimal", "low", "medium", "high")
+
+
+def apply_reasoning_effort(body: dict, effort: str) -> dict:
+    """把「思考强度」塞进上游请求体（2026-10-22 老板要求）。
+
+    🚨 空 / 'auto' 一律**不传** —— 让模型用它自己的默认档位。
+       原因：不少 OpenAI 兼容网关并不认 `reasoning_effort`，无条件塞会直接 400，
+       把本来能跑通的请求搞挂。只有用户明确选了档位才透传。
+    🚨 只支持 OpenAI 风格的 `reasoning_effort`（minimal/low/medium/high）。
+       Gemini 的 thinkingBudget、Anthropic 的 thinking.budget_tokens 是另一套，
+       走 CLI 的通道（codex / gemini-cli）也不经过这里 —— 它们用各自默认值。
+    """
+    val = str(effort or "").strip().lower()
+    if val in REASONING_EFFORT_LEVELS:
+        body["reasoning_effort"] = val
+    return body
+
+
+def friendly_upstream_http_error(exc):
+    """把 httpx 网络异常翻成「能自证」的人话（2026-10-21 老板：「始终处于上游报错」但正文是空的）。
+
+    🚨 为什么必须补：`str(httpx.ConnectTimeout())` 经常是**空串**，
+       原来把 exc 直接拼进「请求上游接口失败：{exc}」里，渲染出来就只剩一个冒号——
+       一个字都没有，用户只能反复重试、也没法判断该换通道还是等一会儿。
+       `ConnectTimeout` / `ReadTimeout` / `ConnectError` 的排查方向完全不同，必须分开说。
+    """
+    name = type(exc).__name__
+    detail = str(exc).strip() or "（异常对象没带任何描述）"
+    host = ""
+    try:
+        host = str(exc.request.url.host or "")
+    except Exception:
+        host = ""
+    hint = ""
+    if isinstance(exc, httpx.ConnectTimeout):
+        hint = "连接超时：网络不通、代理没生效，或上游地址写错"
+    elif isinstance(exc, httpx.ReadTimeout):
+        hint = "读超时：上游收到请求但迟迟不返回（模型太慢 / 这一轮太重）"
+    elif isinstance(exc, httpx.WriteTimeout):
+        hint = "写超时：请求体发不出去（附件太大 / 上行带宽不足）"
+    elif isinstance(exc, httpx.ConnectError):
+        hint = "连不上：域名解析失败、端口不通、被墙，或代理配置有问题"
+    elif isinstance(exc, httpx.RemoteProtocolError):
+        hint = "上游中途断开连接（响应没读完就断了，重试通常能好）"
+    elif isinstance(exc, httpx.HTTPError):
+        hint = "网络层异常，不是模型拒绝；重试一次，仍失败就换通道"
+    parts = [f"请求上游接口失败（{name}）：{detail}"]
+    if host:
+        parts.append(f"目标：{host}")
+    if hint:
+        parts.append(hint)
+    # 打进服务日志：下次再出现「上游报错」时，日志里能直接看到是哪一类异常、打给谁
+    try:
+        print(f"[upstream-error] {name} host={host or '?'} detail={detail[:160]}")
+    except Exception:
+        pass
+    return "\n".join(parts)
+
 
 def friendly_chat_error_detail(text, model="", provider=None):
     raw_text = str(text or "")
@@ -14044,11 +14961,43 @@ GRSAI_ASPECT_RATIOS = {
 }
 GRSAI_NANO2_EXTRA_ASPECT_RATIOS = {"1:4", "4:1", "1:8", "8:1"}
 
+def snap_aspect_ratio(value, allowed, tolerance=0.15):
+    """把「精确约分」出来的比例吸附到白名单里最接近的那个。
+
+    🚨 这是「说好 3:2，出图永远 1:1」的真因：`runninghub_aspect_from_size("3520x2352")`
+       做的是精确约分，返回 `220:147`（3520/2352=220/147），根本不在 Grsai 白名单里，
+       上游不报错、直接按 1:1 出图 —— 前端算对了尺寸也没用。
+    ⇒ 任何要交给上游的比例都必须过这一层吸附，偏差超过 15% 就放弃（别硬塞一个差太远的）。
+    """
+    match = re.fullmatch(r"(\d+)\s*[:：]\s*(\d+)", str(value or "").strip())
+    if not match:
+        return ""
+    width, height = int(match.group(1)), int(match.group(2))
+    if width <= 0 or height <= 0:
+        return ""
+    target = width / height
+    best, best_score = "", None
+    for item in allowed:
+        pair = re.fullmatch(r"(\d+)\s*[:：]\s*(\d+)", str(item).strip())
+        if not pair:
+            continue
+        x, y = int(pair.group(1)), int(pair.group(2))
+        if x <= 0 or y <= 0:
+            continue
+        score = abs(math.log(target / (x / y)))
+        if best_score is None or score < best_score:
+            best, best_score = item, score
+    if best and best_score is not None and best_score <= math.log(1 + tolerance):
+        return best
+    return ""
+
+
 def grsai_aspect_ratio(aspect_ratio, size, model=""):
     """把内部比例映射成 Grsai 的 aspectRatio。
 
     🚨 必须做白名单校验：前端历史遗留的 `9:21`（ultratall）**不在 Grsai 支持列表里**，
-    直接透传会被上游拒绝或静默忽略。不在白名单的一律按目标尺寸反推。
+    直接透传会被上游拒绝或静默忽略。不在白名单的一律按目标尺寸反推，**反推结果还要再吸附一次**
+    （反推给的是精确约分值，如 220:147，照样不合法）。
     """
     value = str(aspect_ratio or "").strip().lower().replace(" ", "")
     if value == "auto":
@@ -14058,7 +15007,14 @@ def grsai_aspect_ratio(aspect_ratio, size, model=""):
         allowed |= GRSAI_NANO2_EXTRA_ASPECT_RATIOS
     if value in allowed:
         return value
-    return runninghub_aspect_from_size(size)
+    derived = runninghub_aspect_from_size(size) if size else ""
+    for candidate in (value, derived):
+        snapped = snap_aspect_ratio(candidate, allowed)
+        if snapped:
+            return snapped
+    # 白名单里没有相近值（典型：9:21 竖长图）→ 放宽到"最接近"，至少保住横竖方向。
+    # 退成 1:1 是最差结果：用户要竖图，给他方图等于没照做。
+    return snap_aspect_ratio(derived or value, allowed, tolerance=1.0) or "1:1"
 
 def runninghub_resolution_from_size(size, fallback="2k"):
     width, height = parse_size_pair(size)
@@ -14933,7 +15889,9 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                         response = None
                 except httpx.HTTPError as e:
                     edit_failed_status = -1
-                    edit_failed_text = str(e)
+                    # 🚨 网络层异常 `str(e)` 经常是空串（老板截图里就只剩一个 "-1"，谁也看不出是超时还是连不上）。
+                    #    至少把异常类型带上：ConnectTimeout / ReadTimeout / ConnectError 的处理方向完全不同。
+                    edit_failed_text = f"{type(e).__name__}: {e}".strip().rstrip(":")
                     response = None
             finally:
                 for fh in opened:
@@ -14946,9 +15904,17 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
             # 2) edits 失败 → 非 GPT-Image-2 可回退到 /images/generations + JSON image:[urls/base64]（grsai 风格）
             if response is None:
                 if is_gpt2:
+                    # 🚨 先把原始错误翻成人话（内容审核 / 尺寸 / 限流…），翻不出来才回落到原文。
+                    #    之前直接把上游 JSON 甩给用户（老板 2026-10-20 截图），既看不懂也不知道该改什么。
+                    #    注意用**未截断**的原文：`content_policy_violation` 在 300 字之后会被切掉，一截就识别不出来。
+                    _friendly = friendly_image_error_detail(edit_failed_text, size, model)
                     raise HTTPException(
                         status_code=502,
-                        detail=f"GPT-Image-2 编辑接口 /images/edits 调用失败：{edit_failed_text[:300] or edit_failed_status}。已停止自动重试，避免上游可能已扣费后再次请求。"
+                        detail=_friendly or (
+                            f"{model or 'GPT-Image-2'} 的编辑接口 /images/edits 调用失败"
+                            f"（{edit_failed_text[:300] or ('状态 ' + str(edit_failed_status))}）。"
+                            "已停止自动重试，避免上游可能已扣费后再次请求。"
+                        )
                     )
                 print(f"/images/edits failed ({edit_failed_status}): {edit_failed_text[:200]} → 回退到 /images/generations + image:[] JSON")
                 _fallback_refs = image_refs[:ONLINE_IMAGE_REFERENCE_MAX]
@@ -14962,9 +15928,10 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                     body["quality"] = quality
                 response = await client.post(gen_url, headers=api_headers(provider=provider, model=model), json=body)
                 if response.status_code >= 400 and images_api_unsupported(response):
+                    _friendly = friendly_image_error_detail(edit_failed_text, size, model)
                     raise HTTPException(
                         status_code=502,
-                        detail=f"编辑接口 /images/edits 调用失败，且该平台不支持 /images/generations：{edit_failed_text[:300] or edit_failed_status}"
+                        detail=_friendly or f"编辑接口 /images/edits 调用失败，且该平台不支持 /images/generations：{edit_failed_text[:300] or edit_failed_status}"
                     )
         else:
             body = {"model": model, "prompt": prompt, "size": size, "response_format": "url", "n": 1}
@@ -15196,7 +16163,7 @@ async def decide_chat_agent_action(payload, conversation, refs):
         return fallback
 
 def agent_tool_label(name):
-    for spec in AGENT_TOOL_SPECS:
+    for spec in AGENT_TOOL_SPECS + AGENT_ALWAYS_ON_TOOL_SPECS:
         if spec["name"] == name:
             return spec["label"]
     return name or "工具"
@@ -15232,22 +16199,27 @@ def agent_tool_event_from_result(call_id, name, args, result, round_index):
         "args": args,
         "ok": bool(result.get("ok")),
         "summary": str(result.get("summary") or ""),
-        "output": agent_truncate(result.get("output"), 4000),
+        # 🚨 这里原来写死 4000（2026-10-21 老板「无法读取 Excel」的真凶）：
+        #    xlsx 解析出 4444 字符 → 回灌时被砍到 4000 → 正好断在「A+卖点模块五」中间，
+        #    模型于是正确地说「模块五被截断了，请补发」，用户以为它读不了 Excel。
+        #    实际是工具结果回灌额度太小。统一用 AGENT_TOOL_OUTPUT_LIMIT（12000），
+        #    与 agent_truncate 的默认值一致；真的超了它会带「已截断，原文共 N 字符」提示。
+        "output": agent_truncate(result.get("output"), AGENT_TOOL_OUTPUT_LIMIT),
         "round": round_index + 1,
     }
 
 async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, is_apimart, chat_base, chat_hdrs, model, tool_settings):
     """带本机工具（终端 / 文件）的聊天：跑一个 tool-calling 循环，直到模型给出最终文字回复。"""
     level = load_codex_permission()
-    tools = agent_tool_schemas(level)
+    tools = agent_tool_schemas(level) + agent_always_on_tool_schemas()
     # 与画布 Agent 一致：按最近几条用户消息判断是否注入内置办公 Skill（文件产物任务才需要）
     _recent_user = "\n".join(
         str(item.get("content") or "")
         for item in conversation["messages"][-6:]
         if isinstance(item, dict) and item.get("role") == "user"
     )
-    _system = chat_system_prompt(payload) + installed_skills_prompt_block(_recent_user) + agent_file_capability_block()
-    upstream_messages = [{"role": "system", "content": _system + AGENT_TOOLS_SYSTEM_HINT}]
+    _system = agent_profile_block() + chat_system_prompt(payload) + installed_skills_prompt_block(_recent_user) + agent_file_capability_block()
+    upstream_messages = [{"role": "system", "content": _system + AGENT_TOOLS_SYSTEM_HINT + AGENT_WEB_SYSTEM_HINT + AGENT_VIDEO_SYSTEM_HINT}]
     for item in conversation["messages"][-MAX_HISTORY_MESSAGES:]:
         msg = upstream_message_from_record(item)
         if msg:
@@ -15269,14 +16241,17 @@ async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, 
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 body = exc.response.text or ""
-                if tools and not tool_events and agent_tools_unsupported(body):
+                # 联网工具默认携带 ⇒ 400/422 也回退一次，避免只认「无 tools」的通道全线报错
+                if tools and not tool_events and (
+                    agent_tools_unsupported(body) or exc.response.status_code in (400, 422)
+                ):
                     print("[agent-tools] 上游不支持 tools，回退为普通对话")
                     tools = []
                     continue
                 friendly = friendly_chat_error_detail(body, model, provider_cfg)
                 raise HTTPException(status_code=exc.response.status_code, detail=friendly or f"上游接口错误：{body}") from exc
             except httpx.HTTPError as exc:
-                raise HTTPException(status_code=502, detail=f"请求上游接口失败：{exc}") from exc
+                raise HTTPException(status_code=502, detail=friendly_upstream_http_error(exc)) from exc
             raw = response.json()
             raw_data = unwrap_apimart_response(raw) if isinstance(raw, dict) else raw
             last_raw = raw
@@ -15385,7 +16360,7 @@ async def build_chat_text_reply(payload, conversation, user_id=None):
         friendly = friendly_chat_error_detail(body, model, provider_cfg)
         raise HTTPException(status_code=exc.response.status_code, detail=friendly or f"上游接口错误：{body}") from exc
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"请求上游接口失败：{exc}") from exc
+        raise HTTPException(status_code=502, detail=friendly_upstream_http_error(exc)) from exc
     raw_data = unwrap_apimart_response(raw) if isinstance(raw, dict) else raw
     return {
         "id": uuid.uuid4().hex,
@@ -15554,6 +16529,254 @@ async def export_minimax_timeline(payload: MiniMaxTimelineExportRequest):
         return {"url": output_url_for(filename, "output"), "name": filename, "kind": "video"}
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+# ===================== 图文成片（第 10 条：MoneyPrinterTurbo 流水线的落地实现）=====================
+# 🚨 为什么不整包 vendor 那个项目：它自带 Streamlit 界面 + moviepy/edge-tts/imageio 一堆依赖，
+#    进发布包只会变成版本冲突和几十 MB 死重。它真正有用的只有「文案 → 画面 → 配音 → 字幕 → 成片」
+#    这条流水线，而这里已经有：用户自己的 LLM 通道（写文案/分镜）、自己的生图/生视频通道（出画面）、
+#    系统 ffmpeg（合成）。所以本文件只补齐**最后一步合片**，其余全部复用项目现有能力。
+# 🚨 本地只做 CPU 编码，不跑任何模型推理 —— 符合老板「不消耗本地算力跑模型」的底线。
+# 🚨 ffmpeg 缺失不静默失败：直接返回可执行的引导（老板选的「检测 + 引导下载」）。
+# ⚠️ 相关上限常量定义在文件前部（工具规格要引用），这里不再重复定义。
+
+
+class AgentVideoSegment(BaseModel):
+    text: str = ""
+    image_url: str = ""
+    video_url: str = ""
+    duration: float = 0
+
+
+class AgentVideoComposeRequest(BaseModel):
+    title: str = ""
+    segments: List[AgentVideoSegment] = []
+    audio_url: str = ""          # 整段配音 / BGM，本地 /output/... 或 http(s)
+    subtitle: bool = True        # 有 text 就生成 .srt，并在可能时烧进画面
+    size: str = AGENT_VIDEO_SIZE_DEFAULT
+    fps: int = 30
+    filename: str = ""
+
+
+def agent_video_parse_size(raw):
+    text = str(raw or "").strip().lower().replace("*", "x").replace("×", "x")
+    match = re.match(r"^(\d{2,4})x(\d{2,4})$", text)
+    if not match:
+        return 720, 1280
+    width, height = int(match.group(1)), int(match.group(2))
+    # 偶数化（libx264 要求）+ 上限 1080p，避免一个 4K 请求把 CPU 拖死
+    width = max(240, min(width - width % 2, 1920))
+    height = max(240, min(height - height % 2, 1920))
+    return width, height
+
+
+def agent_video_srt_text(segments):
+    """按段落时长累加生成 SRT。字幕文本取自每段 text，空段落跳过。"""
+    def stamp(seconds):
+        total = max(0, int(round(seconds * 1000)))
+        h, rem = divmod(total, 3600_000)
+        m, rem = divmod(rem, 60_000)
+        s, ms = divmod(rem, 1000)
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+    lines, cursor, index = [], 0.0, 1
+    for seg in segments:
+        dur = float(seg.get("duration") or 0)
+        text = str(seg.get("text") or "").strip()
+        if text:
+            lines.append(f"{index}\n{stamp(cursor)} --> {stamp(cursor + dur)}\n{text}\n")
+            index += 1
+        cursor += dur
+    return "\n".join(lines)
+
+
+def agent_video_compose_sync(req: dict):
+    """同步合片（在线程里跑）。返回 {ok, url, name, summary, output}。"""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return {"ok": False, "summary": "未找到 ffmpeg", "output": AGENT_VIDEO_FFMPEG_HINT}
+    raw_segments = [s for s in (req.get("segments") or []) if isinstance(s, dict)]
+    if not raw_segments:
+        return {"ok": False, "summary": "没有可用的画面段落", "output": "segments 为空，至少给一段 image_url 或 video_url。"}
+    if len(raw_segments) > AGENT_VIDEO_SEGMENT_MAX:
+        return {"ok": False, "summary": "段落过多",
+                "output": f"最多 {AGENT_VIDEO_SEGMENT_MAX} 段（当前 {len(raw_segments)}），请合并后再试。"}
+    width, height = agent_video_parse_size(req.get("size"))
+    try:
+        fps = max(12, min(int(req.get("fps") or 30), 60))
+    except (TypeError, ValueError):
+        fps = 30
+    sources = []
+    total = 0.0
+    for item in raw_segments:
+        video_url = str(item.get("video_url") or "").strip()
+        image_url = str(item.get("image_url") or "").strip()
+        path = output_file_from_url(video_url) or output_file_from_url(image_url)
+        if not path or not os.path.exists(path):
+            return {"ok": False, "summary": "素材不可用",
+                    "output": f"素材只支持本机已生成的产物（/output/ 或 /assets/）：{video_url or image_url}"}
+        is_video = bool(video_url) and path.lower().endswith((".mp4", ".webm", ".mov", ".m4v"))
+        try:
+            duration = float(item.get("duration") or 0)
+        except (TypeError, ValueError):
+            duration = 0
+        if duration <= 0:
+            duration = 4.0
+        duration = max(1.0, min(duration, AGENT_VIDEO_SEGMENT_SECONDS_MAX))
+        total += duration
+        sources.append({
+            "path": path, "video": is_video, "duration": duration,
+            "text": str(item.get("text") or "").strip(),
+        })
+    if total > AGENT_VIDEO_TOTAL_SECONDS_MAX:
+        return {"ok": False, "summary": "总时长过长",
+                "output": f"合计 {total:.0f}s，超过 {AGENT_VIDEO_TOTAL_SECONDS_MAX}s 上限。请精简段落或缩短时长。"}
+    tmpdir = tempfile.mkdtemp(prefix="agent_video_")
+    try:
+        normalize = (
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}"
+        )
+        parts = []
+        for index, src in enumerate(sources):
+            part = os.path.join(tmpdir, f"part_{index:03d}.mp4")
+            duration = f"{src['duration']:.3f}"
+            if src["video"]:
+                cmd = [
+                    ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                    "-t", duration, "-i", src["path"],
+                    "-f", "lavfi", "-t", duration, "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                    "-map", "0:v:0", "-map", "1:a:0", "-vf", normalize, "-shortest",
+                    "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-ar", "48000", "-ac", "2",
+                    "-movflags", "+faststart", part,
+                ]
+            else:
+                # 静帧：轻微推镜（Ken Burns），避免整片像 PPT
+                zoom = (
+                    f"scale={width * 2}:{height * 2}:force_original_aspect_ratio=increase,"
+                    f"zoompan=z='min(zoom+0.0012,1.12)':d={max(1, int(src['duration'] * fps))}"
+                    f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={width}x{height}:fps={fps},"
+                    f"setsar=1"
+                )
+                cmd = [
+                    ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                    "-loop", "1", "-t", duration, "-i", src["path"],
+                    "-f", "lavfi", "-t", duration, "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                    "-map", "0:v:0", "-map", "1:a:0", "-vf", zoom, "-shortest",
+                    "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-ar", "48000", "-ac", "2",
+                    "-movflags", "+faststart", part,
+                ]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if proc.returncode != 0:
+                return {"ok": False, "summary": "单段编码失败",
+                        "output": (proc.stderr or "ffmpeg 返回非 0").strip()[:500]}
+            parts.append(part)
+        # 拼接
+        stitched = os.path.join(tmpdir, "stitched.mp4")
+        if len(parts) == 1:
+            shutil.copyfile(parts[0], stitched)
+        else:
+            concat_list = os.path.join(tmpdir, "concat.txt")
+            with open(concat_list, "w", encoding="utf-8") as fh:
+                for part in parts:
+                    fh.write("file '" + part.replace("\\", "/").replace("'", "'\\''") + "'\n")
+            proc = subprocess.run(
+                [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                 "-f", "concat", "-safe", "0", "-i", concat_list,
+                 "-c", "copy", "-movflags", "+faststart", stitched],
+                capture_output=True, text=True, timeout=300,
+            )
+            if proc.returncode != 0:
+                return {"ok": False, "summary": "拼接失败",
+                        "output": (proc.stderr or "").strip()[:500]}
+        # 字幕：先写 .srt（一定交付），再尝试烧进画面（失败就算了，不阻断成片）
+        srt_name = ""
+        if req.get("subtitle", True):
+            srt_body = agent_video_srt_text(sources)
+            if srt_body.strip():
+                srt_path = os.path.join(tmpdir, "sub.srt")
+                with open(srt_path, "w", encoding="utf-8") as fh:
+                    fh.write(srt_body)
+                # cwd=tmpdir + 相对文件名 ⇒ 绕开 ffmpeg 滤镜里 Windows 路径转义的坑
+                burned = os.path.join(tmpdir, "burned.mp4")
+                proc = subprocess.run(
+                    [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                     "-i", stitched, "-vf",
+                     "subtitles=sub.srt:force_style='FontSize=20,Outline=2,MarginV=48'",
+                     "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                     "-c:a", "copy", "-movflags", "+faststart", burned],
+                    cwd=tmpdir, capture_output=True, text=True, timeout=300,
+                )
+                if proc.returncode == 0 and os.path.exists(burned):
+                    stitched = burned
+                srt_name = "srt-ready"
+            else:
+                srt_body = ""
+        else:
+            srt_body = ""
+        filename = sanitize_export_filename(req.get("filename") or req.get("title") or "agent-video.mp4", "agent-video.mp4")
+        if not filename.lower().endswith(".mp4"):
+            filename = os.path.splitext(filename)[0] + ".mp4"
+        output_path = output_path_for(filename, "output")
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        # 配音 / BGM：有就混进去，视频长度不变（音频短了补静音，长了截断）
+        audio_url = str(req.get("audio_url") or "").strip()
+        audio_path = output_file_from_url(audio_url) if audio_url else None
+        if audio_path and os.path.exists(audio_path):
+            mixed = os.path.join(tmpdir, "mixed.mp4")
+            proc = subprocess.run(
+                [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                 "-i", stitched, "-i", audio_path,
+                 "-map", "0:v:0", "-map", "1:a:0",
+                 "-c:v", "copy", "-c:a", "aac", "-ar", "48000", "-ac", "2",
+                 "-af", "apad", "-shortest", "-movflags", "+faststart", mixed],
+                capture_output=True, text=True, timeout=300,
+            )
+            if proc.returncode == 0 and os.path.exists(mixed):
+                stitched = mixed
+        shutil.copyfile(stitched, output_path)
+        srt_out = ""
+        if srt_body.strip():
+            srt_file = os.path.splitext(filename)[0] + ".srt"
+            with open(output_path_for(srt_file, "output"), "w", encoding="utf-8") as fh:
+                fh.write(srt_body)
+            srt_out = srt_file
+        return {
+            "ok": True,
+            "summary": f"{len(sources)} 段 · {total:.0f}s · {width}x{height}",
+            "output": f"已生成 {filename}（{len(sources)} 段，{total:.0f} 秒，{width}x{height}）"
+                      + (f"，字幕文件 {srt_out}" if srt_out else ""),
+            "url": output_url_for(filename, "output"),
+            "name": filename,
+            "kind": "video",
+            "srt": output_url_for(srt_out, "output") if srt_out else "",
+            "srt_name": srt_out,
+        }
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@app.get("/api/agent/video/capabilities")
+async def agent_video_capabilities():
+    """视频合片能力自检：ffmpeg / ffprobe 是否可用，缺了给下载引导。"""
+    return {
+        "ffmpeg": bool(shutil.which("ffmpeg")),
+        "ffprobe": bool(shutil.which("ffprobe")),
+        "max_segments": AGENT_VIDEO_SEGMENT_MAX,
+        "max_total_seconds": AGENT_VIDEO_TOTAL_SECONDS_MAX,
+        "default_size": AGENT_VIDEO_SIZE_DEFAULT,
+        "hint": "" if shutil.which("ffmpeg") else AGENT_VIDEO_FFMPEG_HINT,
+    }
+
+
+@app.post("/api/agent/video/compose")
+async def agent_video_compose(payload: AgentVideoComposeRequest):
+    """把「文案 + 画面 + 配音」合成一条成片（OpenAI 生成素材后由 Agent 调这个收尾）。"""
+    result = await asyncio.to_thread(agent_video_compose_sync, payload.model_dump())
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=f"{result.get('summary')}\n{result.get('output')}")
+    return result
+
 
 @app.post("/api/upload")
 async def upload_image(files: List[UploadFile] = File(...)):
@@ -16785,6 +18008,18 @@ async def agent_tools_set(payload: AgentToolsRequest):
     if payload.enabled is not None or payload.max_rounds is not None:
         save_agent_tools_settings(enabled=payload.enabled, max_rounds=payload.max_rounds)
     data = agent_tools_payload()
+    data["saved"] = True
+    return data
+
+@app.get("/api/agent/profile")
+async def agent_profile_get():
+    """读取 Agent 基础记忆（5 组）。completed=false 时前端应弹出设置窗口。"""
+    return load_agent_profile()
+
+@app.post("/api/agent/profile")
+async def agent_profile_set(payload: AgentProfileRequest):
+    """保存 Agent 基础记忆。整份覆盖；**没传的字段保持原值**（避免局部提交把别项清空）。"""
+    data = save_agent_profile(payload.model_dump(exclude_none=True))
     data["saved"] = True
     return data
 
@@ -18095,14 +19330,54 @@ def inpaint_save_asset(image: Image.Image, prefix: str, category: str = "input")
     return output_url_for(name, category)
 
 
+async def _ensure_local_asset(url: str) -> str:
+    """把远程 URL 拉成本地 assets 路径，返回本地 URL。
+
+    🚨 为什么需要它（2026-10-20 老板踩中）：`compose_inpaint_result` 要用
+    `output_file_from_url()` 把 URL 换成本地文件路径，而它**只认 /assets/ 与 /output/**，
+    拿到 `https://上游/xxx.png` 一律返回 None ⇒ 回贴被静默跳过，
+    用户最终拿到的是**未回贴的局部图**（1024×1024 / 上游原尺寸），
+    原图尺寸和遮罩外的像素全丢了 —— 正是老板截图里「结果图和原图不贴」的样子。
+    `save_ai_image_to_output` 虽然会下载，但它失败时**原样返回远程 URL**，
+    于是这条链上没有第二道保险。这里补上：失败就返回原 URL，让上层退回原行为（不更差）。
+    """
+    text = str(url or "")
+    if not text or text.startswith("/assets/") or text.startswith("/output/"):
+        return text
+    if not re.match(r"^https?://", text, re.I):
+        return text
+    filename = f"inpaint_src_{uuid.uuid4().hex[:10]}.png"
+    path = output_path_for(filename, "output")
+    try:
+        timeout = httpx.Timeout(connect=20.0, read=300.0, write=60.0, pool=20.0)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            response = await client.get(rewrite_runninghub_file_url(text))
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "")
+            if "jpeg" in content_type or "jpg" in content_type:
+                filename = filename[:-4] + ".jpg"
+                path = output_path_for(filename, "output")
+            elif "webp" in content_type:
+                filename = filename[:-4] + ".webp"
+                path = output_path_for(filename, "output")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(response.content)
+        return output_url_for(filename, "output")
+    except Exception as exc:
+        print(f"[inpaint] 生成结果本地化失败（将放弃回贴）: {type(exc).__name__} {exc!r} url={text}")
+        return text
+
+
 async def compose_inpaint_result(meta: InpaintMeta, generated_url: str) -> str:
     """把生成结果按遮罩回贴到原图，返回合并图 URL；失败返回空串（调用方回退成未合并结果）。"""
+    gen_url = await _ensure_local_asset(generated_url)
     def _compose():
         base_path = output_file_from_url(meta.base_url)
         mask_path = output_file_from_url(meta.crop_mask_url)
-        gen_path = output_file_from_url(generated_url)
+        gen_path = output_file_from_url(gen_url)
         if not (base_path and mask_path and gen_path):
-            print(f"[inpaint] 回贴素材缺失 base={bool(base_path)} mask={bool(mask_path)} gen={bool(gen_path)}")
+            print(f"[inpaint] 回贴素材缺失 base={bool(base_path)} mask={bool(mask_path)} gen={bool(gen_path)} url={gen_url}")
             return ""
         base = inpaint_open_image(base_path)
         mask = inpaint_open_image(mask_path)
@@ -18264,6 +19539,10 @@ async def build_online_image_result(payload: OnlineImageRequest):
                 merged_url = await compose_inpaint_result(inpaint, local_url)
                 if merged_url:
                     local_url = merged_url
+                else:
+                    # 🚨 回贴失败必须留痕：否则用户只会看到「尺寸不对的局部图」，
+                    #    完全不知道是回贴挂了（2026-10-20 老板截图就是这个现象）。
+                    print(f"[inpaint] ⚠️ 回贴失败，已退化为未合并的局部结果：{local_url}")
             local_urls.append(local_url)
             local_items.append(image_output_meta(local_url, item))
         return local_urls, local_items, raw_item
@@ -18794,6 +20073,17 @@ async def run_agent_llm_task(task_id: str, payload: CanvasLLMRequest, stream: bo
             result = await canvas_llm_stream(task_id, payload)
         else:
             result = await canvas_llm(payload)
+        # 空回复 = 失败（2026-10-21）：以前这里把 "接口返回了空回复。" 当**正常回复**返回，
+        # 前端于是继续走「模型没给结构化结果」的兜底 → 拿用户原话当提示词去生图（老板截图里那 5 张垃圾图）。
+        # 宁可报一条能看懂的失败，也不能拿一句占位文案去触发真实生成（既浪费钱又污染画布）。
+        if isinstance(result, dict) and str(result.get("text") or "").strip() in {"", EMPTY_LLM_REPLY}:
+            raise HTTPException(
+                status_code=502,
+                detail=friendly_empty_llm_error(
+                    str(result.get("empty_reason") or ""),
+                    str(result.get("model") or ""),
+                ),
+            )
         with AGENT_LLM_TASK_LOCK:
             AGENT_LLM_TASKS[task_id].update({
                 "status": "succeeded",
@@ -18847,6 +20137,16 @@ async def get_agent_llm_task(task_id: str):
 @app.post("/api/canvas-image-tasks")
 async def create_canvas_image_task(payload: OnlineImageRequest):
     task_id = f"canvas_img_{uuid.uuid4().hex}"
+    # 尺寸护栏（2026-10-21）：模型吃不下就压到合规，绝不让一条必然失败的请求发出去。
+    # 实际用的尺寸记在任务里，前端能告诉用户「已自动改成多少」。
+    _requested_size = str(payload.size or "")
+    _used_size, _size_note = guard_size_for_model(payload.model, _requested_size)
+    if _used_size and _used_size != _requested_size:
+        try:
+            payload.size = _used_size
+        except Exception:
+            # pydantic 若禁止赋值，就整对象换一份，不能让护栏把请求搞挂
+            payload = payload.model_copy(update={"size": _used_size})
     with CANVAS_TASK_LOCK:
         CANVAS_TASKS[task_id] = {
             "id": task_id,
@@ -18858,9 +20158,12 @@ async def create_canvas_image_task(payload: OnlineImageRequest):
             "error": "",
             "provider_id": payload.provider_id,
             "model": payload.model,
+            "size_requested": _requested_size,
+            "size_used": _used_size or _requested_size,
+            "size_note": _size_note,
         }
     asyncio.create_task(run_canvas_image_task(task_id, payload))
-    return {"task_id": task_id, "status": "queued"}
+    return {"task_id": task_id, "status": "queued", "size_used": _used_size or _requested_size, "size_note": _size_note}
 
 @app.get("/api/canvas-image-tasks/{task_id}")
 async def get_canvas_image_task(task_id: str):
@@ -20433,6 +21736,10 @@ async def canvas_llm_stream(task_id: str, payload: CanvasLLMRequest):
     if file_block:
         payload.message = f"{payload.message}\n\n{file_block}"
     system_prompt = (payload.system_prompt or "").strip()
+    # 用户画像排最前面（第 12 条：跨画布、跨对话的前置记忆）
+    _profile_block = agent_profile_block()
+    if _profile_block:
+        system_prompt = (_profile_block + "\n\n" + system_prompt).strip()
     # Skill 市场里已安装的 Skill 统一在这里注入（流式路径与非流式保持一致）
     skill_block = installed_skills_prompt_block(canvas_llm_skill_query(payload)) + agent_file_capability_block()
     if skill_block:
@@ -20457,9 +21764,17 @@ async def canvas_llm_stream(task_id: str, payload: CanvasLLMRequest):
         upstream_messages.append({"role": "user", "content": payload.message})
     # 流式请求
     full_text = ""
+    # 空回复的病因追踪（2026-10-21）：老板截图「接口返回了空回复。」后面居然接着出了 5 张垃圾图
+    # ——上游 200 但正文为空，前端却当正常回复处理，还拿用户原话（含 [文件:…] 标记）去生图。
+    # 这里把「为什么空」记下来，交给 run_agent_llm_task 变成一条能看懂的失败原因。
+    _saw_reasoning = False
+    _finish_reason = ""
     try:
         async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
-            req_body = {"model": model, "messages": upstream_messages, "stream": True}
+            req_body = apply_reasoning_effort(
+                {"model": model, "messages": upstream_messages, "stream": True},
+                getattr(payload, "reasoning_effort", ""),
+            )
             async with client.stream("POST", f"{chat_base}/chat/completions", headers=chat_hdrs, json=req_body) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
@@ -20470,7 +21785,12 @@ async def canvas_llm_stream(task_id: str, payload: CanvasLLMRequest):
                         break
                     try:
                         chunk = json.loads(data_str)
-                        delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
+                        choice0 = (chunk.get("choices") or [{}])[0] or {}
+                        if choice0.get("finish_reason"):
+                            _finish_reason = str(choice0.get("finish_reason"))
+                        delta = choice0.get("delta") or {}
+                        if str(delta.get("reasoning_content") or "").strip():
+                            _saw_reasoning = True
                         token = delta.get("content") or ""
                         if token:
                             full_text += token
@@ -20485,9 +21805,16 @@ async def canvas_llm_stream(task_id: str, payload: CanvasLLMRequest):
         friendly = friendly_chat_error_detail(body, model, _llm_provider)
         raise HTTPException(status_code=exc.response.status_code, detail=friendly or f"上游接口错误：{body[:300]}") from exc
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"请求上游接口失败：{exc}") from exc
-    text = full_text.strip() or "接口返回了空回复。"
-    return {"text": text, "model": model, "raw_usage": None, "raw": None}
+        raise HTTPException(status_code=502, detail=friendly_upstream_http_error(exc)) from exc
+    if full_text.strip():
+        return {"text": full_text.strip(), "model": model, "raw_usage": None, "raw": None}
+    return {
+        "text": EMPTY_LLM_REPLY,
+        "model": model,
+        "raw_usage": None,
+        "raw": None,
+        "empty_reason": describe_empty_llm_output(_finish_reason, _saw_reasoning),
+    }
 
 @app.post("/api/canvas-llm")
 async def canvas_llm(payload: CanvasLLMRequest):
@@ -20511,15 +21838,22 @@ async def canvas_llm(payload: CanvasLLMRequest):
     _llm_provider = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
     _is_apimart = is_apimart_provider(_llm_provider)
     system_prompt = (payload.system_prompt or "").strip()
+    # 用户画像排最前面（第 12 条：跨画布、跨对话的前置记忆）
+    _profile_block = agent_profile_block()
+    if _profile_block:
+        system_prompt = (_profile_block + "\n\n" + system_prompt).strip()
     # Skill 市场里已安装的 Skill 统一在这里注入，保证「安装即生效」，并与客户端挂载的 skill 文件叠加
     skill_block = installed_skills_prompt_block(canvas_llm_skill_query(payload)) + agent_file_capability_block()
     if skill_block:
         system_prompt = (system_prompt + skill_block).strip()
     tool_settings = load_agent_tools_settings()
-    tools = agent_tool_schemas() if tool_settings.get("enabled") else []
-    if tools:
-        # 与 gpt-chat 页共用同一段工具说明，两处 agent 的行为保持一致
+    # 本机工具随开关；联网工具（web_search / web_read）始终在场 —— 只读联网，不碰本机，没理由关掉
+    local_tools = agent_tool_schemas() if tool_settings.get("enabled") else []
+    tools = local_tools + agent_always_on_tool_schemas()
+    if local_tools:
+        # 本机工具说明只在真的有 run_shell/read_file 时才注入，否则等于骗模型去调不存在的工具
         system_prompt = (system_prompt + AGENT_TOOLS_SYSTEM_HINT).strip()
+    system_prompt = (system_prompt + AGENT_WEB_SYSTEM_HINT + AGENT_VIDEO_SYSTEM_HINT).strip()
     upstream_messages = [{"role": "system", "content": system_prompt}] if system_prompt else []
     for item in payload.messages[-MAX_HISTORY_MESSAGES:]:
         role = item.get("role")
@@ -20566,7 +21900,10 @@ async def canvas_llm(payload: CanvasLLMRequest):
     exhausted = False
     async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
         for round_index in range(rounds + 1):
-            req_body = {"model": model, "messages": upstream_messages}
+            req_body = apply_reasoning_effort(
+                {"model": model, "messages": upstream_messages},
+                getattr(payload, "reasoning_effort", ""),
+            )
             if _is_apimart:
                 req_body["stream"] = False   # APIMart 默认流式，强制关闭
             if tools:
@@ -20585,14 +21922,18 @@ async def canvas_llm(payload: CanvasLLMRequest):
             except httpx.HTTPStatusError as exc:
                 body = exc.response.text or ""
                 # 上游不支持 tools 时清空工具、对**同一轮**重试，优雅回退成普通对话
-                if tools and not tool_events and agent_tools_unsupported(body):
+                # 🚨 因为联网工具现在是默认携带的，400/422 也一并回退一次 ——
+                #    否则一个只认「无 tools」的通道会从这里开始全线报错。
+                if tools and not tool_events and (
+                    agent_tools_unsupported(body) or exc.response.status_code in (400, 422)
+                ):
                     print("[canvas-agent-tools] 上游不支持 tools，回退为普通对话")
                     tools = []
                     continue
                 friendly = friendly_chat_error_detail(body, model, _llm_provider)
                 raise HTTPException(status_code=exc.response.status_code, detail=friendly or f"上游接口错误：{body}") from exc
             except httpx.HTTPError as exc:
-                raise HTTPException(status_code=502, detail=f"请求上游接口失败：{exc}") from exc
+                raise HTTPException(status_code=502, detail=friendly_upstream_http_error(exc)) from exc
             except HTTPException:
                 raise
             except Exception as exc:
@@ -20634,10 +21975,25 @@ async def canvas_llm(payload: CanvasLLMRequest):
         }
     try:
         text = text_from_chat_response(raw).strip() if isinstance(raw, dict) else ""
-        text = text or "接口返回了空回复。"
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"解析回复内容失败：{exc}") from exc
     raw_data = unwrap_apimart_response(raw) if isinstance(raw, dict) else {}
+    if not text:
+        # 空正文：记清楚病因（2026-10-21），别把「空」伪装成一句正常回复
+        _choices = (raw_data.get("choices") or []) if isinstance(raw_data, dict) else []
+        _first = (_choices[0] if _choices else {}) or {}
+        _msg = _first.get("message") or {}
+        return {
+            "text": EMPTY_LLM_REPLY,
+            "model": model,
+            "raw_usage": raw_data.get("usage"),
+            "raw": None,
+            "empty_reason": describe_empty_llm_output(
+                str(_first.get("finish_reason") or ""),
+                bool(str(_msg.get("reasoning_content") or "").strip()),
+            ),
+            "tool_events": tool_events,
+        }
     return {"text": text, "model": model, "raw_usage": raw_data.get("usage"), "tool_events": tool_events}
 
 # --- 对话管理 ---
@@ -21649,7 +23005,7 @@ async def caption_image_with_provider(abs_path, prompt, provider_id, model, ms_m
         raise HTTPException(status_code=exc.response.status_code, detail=friendly or f"上游接口错误：{body}") from exc
     except httpx.HTTPError as exc:
         log_net_error(f"对话 网络/TLS错误 provider={llm_provider} model={resolved_model}", exc)
-        raise HTTPException(status_code=502, detail=f"请求上游接口失败：{exc}") from exc
+        raise HTTPException(status_code=502, detail=friendly_upstream_http_error(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:
@@ -22127,7 +23483,7 @@ async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(d
             friendly = friendly_chat_error_detail(body, model, _conv_provider)
             raise HTTPException(status_code=exc.response.status_code, detail=friendly or f"上游接口错误：{body}") from exc
         except httpx.HTTPError as exc:
-            raise HTTPException(status_code=502, detail=f"请求上游接口失败：{exc}") from exc
+            raise HTTPException(status_code=502, detail=friendly_upstream_http_error(exc)) from exc
         raw_data = unwrap_apimart_response(raw) if isinstance(raw, dict) else raw
         assistant_message = {
             "id": uuid.uuid4().hex,
@@ -22381,7 +23737,7 @@ async def chat_stream(payload: ChatRequest, request: Request, x_user_id: str = H
                             yield sse_event({"type": "delta", "delta": delta})
         except httpx.HTTPError as exc:
             log_net_error("对话(流式) 网络/TLS错误", exc)
-            yield sse_event({"type": "error", "detail": f"请求上游接口失败：{exc}"})
+            yield sse_event({"type": "error", "detail": friendly_upstream_http_error(exc)})
             return
 
         assistant_message = {

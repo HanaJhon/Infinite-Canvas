@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="/static/images/logo.png?v=1.2.0" type="image/png">
+    <link rel="icon" href="/static/images/logo.png?v=1.2.2" type="image/png">
     <title data-i18n="smart.title">智能画布</title>
     <script>
         (function(){
@@ -16,15 +16,15 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/lucide.js?v=1.2.0.1767196800"></script>
-    <script src="/static/vendor/js/photopea.min.js?v=1.2.0.1767196800"></script>
-    <script src="/static/js/theme.js?v=1.2.0.1767196800"></script>
-    <script src="/static/js/touch-mouse.js?v=1.2.0.1767196800"></script>
-    <script src="/static/js/i18n.js?v=1.2.0.1792384059"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=1.2.0.1767196800">
+    <script src="/static/vendor/js/lucide.js?v=1.2.2.1767196800"></script>
+    <script src="/static/vendor/js/photopea.min.js?v=1.2.2.1767196800"></script>
+    <script src="/static/js/theme.js?v=1.2.2.1767196800"></script>
+    <script src="/static/js/touch-mouse.js?v=1.2.2.1767196800"></script>
+    <script src="/static/js/i18n.js?v=1.2.2.1792550183"></script>
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=1.2.2.1792642283">
     <!-- Skill 市场：浮层样式与逻辑都在共享模块里（gpt-chat 页用同一份），见 static/js/skill-market.js -->
-    <link rel="stylesheet" href="/static/css/skill-market.css?v=1.2.0.1767196800">
-    <link rel="stylesheet" href="/static/css/split-layers.css?v=1.2.0.1792329089">
+    <link rel="stylesheet" href="/static/css/skill-market.css?v=1.2.2.1767196800">
+    <link rel="stylesheet" href="/static/css/split-layers.css?v=1.2.2.1792329089">
 </head>
 <body>
     <div id="shell" class="shell">
@@ -253,13 +253,20 @@
             <div id="workflowEmpty" class="workflow-empty" style="display:none" data-i18n="smart.assetWorkflowEmpty">工作流资产先预留在这里，后续接入。</div>
         </aside>
         <aside id="agentPanel" class="agent-panel">
-            <div class="asset-head">
+            <!-- 🚨 顶部「拖动调高」条已移除（2026-10-21 老板：拖动对话记录顶部的展开条会把对话框往下推）。
+                 调高度改由面板四角的缩放手柄负责，不需要两条入口。 -->
+            <button id="agentChatToggleBtn" class="agent-chat-toggle" type="button">
+                <i data-lucide="chevron-up"></i><span id="agentChatToggleLabel" data-i18n="smart.agentPanel">小抽AI</span>
+            </button>
+            <div class="agent-head">
                 <div class="asset-title"><i data-lucide="bot"></i><span data-i18n="smart.agentPanel">AI Agent</span></div>
                 <button id="agentNewChatBtn" class="asset-mini-btn" type="button" title="新建对话"><i data-lucide="plus"></i></button>
                 <button id="agentChatListBtn" class="asset-mini-btn" type="button" title="对话列表"><i data-lucide="list"></i></button>
                 <div class="agent-more-wrap">
                     <button id="agentMoreBtn" class="asset-mini-btn" type="button" title="更多操作"><i data-lucide="more-horizontal"></i></button>
                     <div id="agentMorePanel" class="agent-more-panel" hidden>
+                        <!-- 偏好设置的常驻入口：只靠 /pref 斜杠命令没人找得到（2026-10-19 老板反馈） -->
+                        <button id="agentPrefBtn" class="agent-more-item" type="button"><i data-lucide="user-round-cog"></i><span>偏好设置</span></button>
                         <button id="agentDeleteChatBtn" class="agent-more-item" type="button"><i data-lucide="trash-2"></i><span>删除当前对话</span></button>
                     </div>
                 </div>
@@ -293,99 +300,103 @@
                 </select>
             </div>
             <div id="agentChatListPanel" class="agent-chat-list-panel" hidden></div>
-            <div id="agentMessages" class="agent-messages"></div>
+            <div class="agent-chat-drawer">
+                <div id="agentMessages" class="agent-messages"></div>
+            </div>
             <div class="agent-input-area">
-                <div class="agent-input-resize" id="agentInputResize"></div>
                 <div class="agent-onebox">
                     <div class="agent-topbar">
                         <div class="agent-toolbar-dropdown-wrap">
-                            <button id="agentModelBtn" class="agent-toolbar-btn" type="button"><i data-lucide="cpu"></i><span id="agentModelLabel">模型</span><i data-lucide="chevron-down"></i></button>
+                            <!-- 两个 pill 各显示一个当前生效的模型（2026-10-22 老板要求）：
+                                 左边=理解模型、右边=生图模型，都以用户的选择为准。
+                                 以前只显示通道名（Aizzz-image），用户看不出到底用哪个模型。 -->
+                            <button id="agentModelBtn" class="agent-toolbar-btn" type="button" title="理解模型 · 点击切换"><i data-lucide="cpu"></i><span id="agentModelLabel">理解</span><i data-lucide="chevron-down"></i></button>
+                            <button id="agentGenModelBtn" class="agent-toolbar-btn" type="button" title="生图模型 · 点击切换"><i data-lucide="image"></i><span id="agentGenModelLabel">生图</span><i data-lucide="chevron-down"></i></button>
+                            <!-- 思考强度（2026-10-22 老板要求）：auto 不传参，其余透传 reasoning_effort -->
+                            <button id="agentReasoningBtn" class="agent-toolbar-btn" type="button" title="思考强度 · 点击切换"><i data-lucide="brain"></i><span id="agentReasoningLabel">自动</span><i data-lucide="chevron-down"></i></button>
+                            <div id="agentReasoningPanel" class="agent-dropdown-panel" hidden>
+                                <div class="agent-reasoning-list">
+                                    <button type="button" class="agent-reasoning-item" data-reasoning="auto">自动<span class="agent-reasoning-hint">跟随模型默认</span></button>
+                                    <button type="button" class="agent-reasoning-item" data-reasoning="minimal">最低<span class="agent-reasoning-hint">minimal</span></button>
+                                    <button type="button" class="agent-reasoning-item" data-reasoning="low">低<span class="agent-reasoning-hint">low</span></button>
+                                    <button type="button" class="agent-reasoning-item" data-reasoning="medium">中<span class="agent-reasoning-hint">medium</span></button>
+                                    <button type="button" class="agent-reasoning-item" data-reasoning="high">高<span class="agent-reasoning-hint">high</span></button>
+                                </div>
+                            </div>
                             <div id="agentModelPanel" class="agent-dropdown-panel" hidden>
                                 <div class="agent-dropdown-row"><label>理解</label><div class="agent-dropdown-selects" id="agentChatModelSelects"></div></div>
                                 <div class="agent-dropdown-row"><label>生图</label><div class="agent-dropdown-selects" id="agentGenSelects"></div></div>
                             </div>
                         </div>
-                        <div class="agent-toolbar-dropdown-wrap">
-                            <button id="agentParamsBtn" class="agent-toolbar-btn" type="button"><i data-lucide="sliders-horizontal"></i><span id="agentParamsLabel">1:1 · 1K · 1张</span><i data-lucide="chevron-down"></i></button>
-                            <div id="agentParamsPanel" class="agent-dropdown-panel agent-params-panel" hidden>
-                                <div class="agent-params-section">
-                                    <div class="agent-params-title">质量</div>
-                                    <div class="agent-quality-seg" id="agentQualitySeg">
-                                        <button class="agent-quality-btn active" type="button" data-quality="">自动</button>
-                                        <button class="agent-quality-btn" type="button" data-quality="high">高</button>
-                                        <button class="agent-quality-btn" type="button" data-quality="medium">中</button>
-                                        <button class="agent-quality-btn" type="button" data-quality="low">低</button>
-                                    </div>
-                                </div>
-                                <div class="agent-params-section">
-                                    <div class="agent-params-title">比例</div>
-                                    <div class="agent-ratio-grid" id="agentRatioGrid">
-                                        <button class="agent-ratio-btn active" type="button" data-ratio="square"><span class="agent-ratio-icon" style="aspect-ratio:1/1"></span><span>1:1</span></button>
-                                        <button class="agent-ratio-btn" type="button" data-ratio="landscape"><span class="agent-ratio-icon" style="aspect-ratio:3/2"></span><span>3:2</span></button>
-                                        <button class="agent-ratio-btn" type="button" data-ratio="portrait"><span class="agent-ratio-icon" style="aspect-ratio:2/3"></span><span>2:3</span></button>
-                                        <button class="agent-ratio-btn" type="button" data-ratio="landscape43"><span class="agent-ratio-icon" style="aspect-ratio:4/3"></span><span>4:3</span></button>
-                                        <button class="agent-ratio-btn" type="button" data-ratio="portrait43"><span class="agent-ratio-icon" style="aspect-ratio:3/4"></span><span>3:4</span></button>
-                                        <button class="agent-ratio-btn" type="button" data-ratio="story"><span class="agent-ratio-icon" style="aspect-ratio:9/16"></span><span>9:16</span></button>
-                                        <button class="agent-ratio-btn" type="button" data-ratio="wide"><span class="agent-ratio-icon" style="aspect-ratio:16/9"></span><span>16:9</span></button>
-                                        <button class="agent-ratio-btn" type="button" data-ratio="ultrawide"><span class="agent-ratio-icon" style="aspect-ratio:21/9"></span><span>21:9</span></button>
-                                        <button class="agent-ratio-btn" type="button" data-ratio="ultratall"><span class="agent-ratio-icon" style="aspect-ratio:9/21"></span><span>9:21</span></button>
-                                    </div>
-                                </div>
-                                <div class="agent-params-section">
-                                    <div class="agent-params-title">分辨率</div>
-                                    <div class="agent-res-grid" id="agentResGrid">
-                                        <button class="agent-res-btn active" type="button" data-res="1k">1K</button>
-                                        <button class="agent-res-btn" type="button" data-res="2k">2K</button>
-                                        <button class="agent-res-btn" type="button" data-res="4k">4K</button>
-                                    </div>
-                                </div>
-                                <div class="agent-params-section">
-                                    <div class="agent-params-title">数量</div>
-                                    <div class="agent-count-grid" id="agentCountGrid">
-                                        <button class="agent-count-btn active" type="button" data-count="1">1</button>
-                                        <button class="agent-count-btn" type="button" data-count="2">2</button>
-                                        <button class="agent-count-btn" type="button" data-count="3">3</button>
-                                        <button class="agent-count-btn" type="button" data-count="4">4</button>
-                                        <button class="agent-count-btn" type="button" data-count="5">5</button>
-                                        <button class="agent-count-btn" type="button" data-count="6">6</button>
-                                        <button class="agent-count-btn" type="button" data-count="7">7</button>
-                                        <button class="agent-count-btn" type="button" data-count="8">8</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                        <!-- 参数选择已移除（2026-10-19）：比例/分辨率/数量/质量全部交给 LLM 判定，
+                             无法判定时回落 高质量 · 4K · 1:1 · 1 张。参数状态仍留在 agentState 里，
+                             由 Agent 的系统提示词与后端兜底控制，界面上不再暴露。 -->
                     </div>
                     <div id="agentAttachRow" class="agent-attach-row"></div>
-                    <textarea id="agentInput" rows="2" data-i18n-placeholder="smart.agentPlaceholder" placeholder="输入需求，@ 引用画布图片..."></textarea>
+                    <!-- 🚨 从 textarea 换成 contenteditable：只有 DOM 才能把附件做成「内嵌在句子里」的胶囊。
+                         `placeholder` 属性由 i18n 写入，CSS 用 attr(placeholder) 渲染。 -->
+                    <div id="agentInput" class="agent-input-rich" contenteditable="true" role="textbox" aria-multiline="true"
+                         data-i18n-placeholder="smart.agentPlaceholder" placeholder="输入需求，@ 引用画布图片..."></div>
                     <div class="agent-toolbar">
                         <button id="agentAttachBtn" class="agent-toolbar-icon" type="button" data-i18n-title="smart.agentAttach" title="添加图片或 Skill"><i data-lucide="paperclip"></i></button>
-                        <button id="agentSkillMarketBtn" class="agent-toolbar-btn agent-skill-market-btn" type="button" data-skill-market-open>
-                            <i data-lucide="store"></i><span data-i18n="smart.agentSkillLabel">Skill 市场</span>
-                            <div class="agent-toolbar-tooltip">
-                                <div class="agent-tooltip-title" data-i18n="smart.asmTitle">Skill 市场</div>
-                                <div class="agent-tooltip-sub">挑选并安装各种专业 Skill 扩展能力</div>
-                            </div>
+                        <!-- 出图参数（2026-10-22 老板要求）：把「比例 · 分辨率 · 质量 · 张数」显示在这里，
+                             点开可改。10-19 那次移除参数选择器之后，界面完全看不到也改不了参数，
+                             结果模型偷偷把分辨率写成 1k，老板只能看着出 1024×1024。
+                             ⚠️ 这里改的是**默认值**；用户原话里明确说了「4K / 2K / 草稿」时仍以原话为准。 -->
+                        <button id="agentParamsBtn" class="agent-toolbar-btn agent-params-btn" type="button" title="出图参数 · 点击调整">
+                            <i data-lucide="ruler"></i><span id="agentParamsLabel">1:1 · 4K · 1张 · 高</span><i data-lucide="chevron-down"></i>
                         </button>
-                        <button id="agentThinkingBtn" class="agent-thinking-btn" type="button">
-                            <i data-lucide="brain" class="agent-thinking-icon"></i><span class="agent-thinking-label" data-i18n="smart.agentThinkingTitle">思考</span>
-                            <div class="agent-thinking-tooltip">
-                                <div class="agent-tooltip-title" data-i18n="smart.agentThinkingTitle">思考</div>
-                                <div class="agent-tooltip-sub" data-i18n="smart.agentThinkingSub">开启后 AI 会多轮追问补充细节。如果你已有明确描述，建议关闭（可能过度改写）</div>
-                            </div>
-                        </button>
-                        <button id="agentDevModeBtn" class="agent-thinking-btn agent-dev-mode-btn" type="button">
-                            <i data-lucide="code" class="agent-thinking-icon"></i><span class="agent-thinking-label" data-i18n="smart.agentDevModeLabel">画布控制</span>
-                            <div class="agent-thinking-tooltip">
-                                <div class="agent-tooltip-title" data-i18n="smart.agentDevModeTitle">画布控制</div>
-                                <div class="agent-tooltip-sub" data-i18n="smart.agentDevModeSub">开启后 AI 可直接在画布中创建、连接或修改节点</div>
-                            </div>
-                        </button>
+                        <!-- Skill 市场 / 思考 / 画布控制 三个入口已移除（2026-10-19）：
+                             思考与画布控制改为常开（devMode / thinkingMode 强制 true），
+                             Skill 改为随包内置能力，不再需要用户在界面上挑选。 -->
                         <div class="agent-toolbar-spacer"></div>
                         <button id="agentSendBtn" class="agent-send-btn" type="button" data-i18n-title="smart.agentSend" title="发送"><i data-lucide="send"></i></button>
                     </div>
                 </div>
                 <div id="agentMentionPanel" class="agent-mention-panel" hidden></div>
                 <div id="agentSlashPalette" class="agent-slash-palette hidden"></div>
+                <!-- 出图参数面板（2026-10-22）：结构/样式/事件绑定原本都在，只是 HTML 在 10-19 被删了，
+                     这里按 agentSyncParamsPanel() 期望的 class 与 data-* 原样补回。 -->
+                <div id="agentParamsPanel" class="agent-dropdown-panel agent-params-panel" hidden>
+                    <div class="agent-params-section">
+                        <div class="agent-params-title">比例</div>
+                        <div class="agent-ratio-grid" id="agentRatioGrid">
+                            <button class="agent-ratio-btn" type="button" data-ratio="square"><span class="agent-ratio-icon" style="aspect-ratio:1/1"></span>1:1</button>
+                            <button class="agent-ratio-btn" type="button" data-ratio="landscape"><span class="agent-ratio-icon" style="aspect-ratio:3/2"></span>3:2</button>
+                            <button class="agent-ratio-btn" type="button" data-ratio="portrait"><span class="agent-ratio-icon" style="aspect-ratio:2/3"></span>2:3</button>
+                            <button class="agent-ratio-btn" type="button" data-ratio="landscape43"><span class="agent-ratio-icon" style="aspect-ratio:4/3"></span>4:3</button>
+                            <button class="agent-ratio-btn" type="button" data-ratio="portrait43"><span class="agent-ratio-icon" style="aspect-ratio:3/4"></span>3:4</button>
+                            <button class="agent-ratio-btn" type="button" data-ratio="wide"><span class="agent-ratio-icon" style="aspect-ratio:16/9"></span>16:9</button>
+                            <button class="agent-ratio-btn" type="button" data-ratio="story"><span class="agent-ratio-icon" style="aspect-ratio:9/16"></span>9:16</button>
+                        </div>
+                    </div>
+                    <div class="agent-params-section">
+                        <div class="agent-params-title">分辨率</div>
+                        <div class="agent-res-grid" id="agentResGrid">
+                            <button class="agent-res-btn" type="button" data-res="1k">1K</button>
+                            <button class="agent-res-btn" type="button" data-res="2k">2K</button>
+                            <button class="agent-res-btn" type="button" data-res="4k">4K</button>
+                        </div>
+                    </div>
+                    <div class="agent-params-section">
+                        <div class="agent-params-title">质量</div>
+                        <div class="agent-quality-seg" id="agentQualitySeg">
+                            <button class="agent-quality-btn" type="button" data-quality="">自动</button>
+                            <button class="agent-quality-btn" type="button" data-quality="high">高</button>
+                            <button class="agent-quality-btn" type="button" data-quality="medium">中</button>
+                            <button class="agent-quality-btn" type="button" data-quality="low">低</button>
+                        </div>
+                    </div>
+                    <div class="agent-params-section">
+                        <div class="agent-params-title">张数</div>
+                        <div class="agent-count-grid" id="agentCountGrid">
+                            <button class="agent-count-btn" type="button" data-count="1">1</button>
+                            <button class="agent-count-btn" type="button" data-count="2">2</button>
+                            <button class="agent-count-btn" type="button" data-count="3">3</button>
+                            <button class="agent-count-btn" type="button" data-count="4">4</button>
+                        </div>
+                    </div>
+                </div>
             </div>
             <!-- 附件节点：不设 accept，Agent 可接收任意格式附件 -->
             <input id="agentImageInput" type="file" multiple hidden>
@@ -400,7 +411,13 @@
                     <button id="agentRefConfirmYes" class="agent-ref-confirm-btn primary" type="button">确认生成</button>
                 </div>
             </div>
-                        </div>
+            <!-- 四角缩放把手（2026-10-21 老板：允许拉动四个角调节窗口大小）
+                 ⚠️ 必须放在 .agent-panel 的**最后一个子元素**：它们要盖在内容之上，
+                    放前面会被后面的消息区/输入区挡住。 -->
+            <div class="agent-resize-handle nw" data-agent-resize="nw" aria-hidden="true"></div>
+            <div class="agent-resize-handle ne" data-agent-resize="ne" aria-hidden="true"></div>
+            <div class="agent-resize-handle sw" data-agent-resize="sw" aria-hidden="true"></div>
+            <div class="agent-resize-handle se" data-agent-resize="se" aria-hidden="true"></div>
         </aside>
         <aside id="inspirePanel" class="inspire-panel">
             <div class="inspire-head">
@@ -840,7 +857,24 @@
     </div>
 
 
-    <script src="/static/js/skill-market.js?v=1.2.0.1767196800"></script>
-    <script src="/static/js/smart-canvas.js?v=1.2.0.1792384065"></script>
+    <!-- Agent 偏好设置（第 12 条）：首次使用自动弹出，六项全局记忆，跨画布 / 跨对话长期保留。
+         想改的时候在输入框打 /pref 或 /偏好 就能重新打开。 -->
+    <div id="agentProfileModal" class="agent-profile-mask" hidden>
+        <div class="agent-profile-dialog" role="dialog" aria-modal="true" aria-labelledby="agentProfileTitle">
+            <div class="agent-profile-head">
+                <div class="agent-profile-title"><i data-lucide="user-round-cog"></i><span id="agentProfileTitle">先花 30 秒认识一下你</span></div>
+                <button id="agentProfileClose" class="agent-profile-x" type="button" aria-label="关闭"><i data-lucide="x"></i></button>
+            </div>
+            <p class="agent-profile-sub" id="agentProfileSub">这些信息只保存在本机，用来让我直接懂你的处境，不用每开一块画布就重讲一遍。以后想改，在输入框打 <code>/pref</code>。</p>
+            <div class="agent-profile-body" id="agentProfileBody"></div>
+            <div class="agent-profile-foot">
+                <button id="agentProfileSkip" class="agent-profile-btn ghost" type="button">以后再说</button>
+                <button id="agentProfileSave" class="agent-profile-btn primary" type="button">保存并开始</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/skill-market.js?v=1.2.2.1767196800"></script>
+    <script src="/static/js/smart-canvas.js?v=1.2.2.1792642273"></script>
 </body>
 </html>

@@ -902,7 +902,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .prompt-row { position:relative; display:block; min-width:0; }
 .composer-card .prompt-row { grid-area:prompt; }
 .prompt-row { position:relative; }
-.prompt-input { width:100%; height:var(--prompt-h, 124px); min-height:60px; max-height:380px; resize:none; border:1px solid var(--line); border-radius:13px; outline:none; padding:10px 96px 10px 12px; background:var(--card); color:var(--text); font-size:11.5px; font-weight:400; line-height:1.5; overflow:auto; transition:border-color .15s ease, box-shadow .15s ease; white-space:pre-wrap; overflow-wrap:anywhere; }
+.prompt-input { width:100%; height:var(--prompt-h, 124px); min-height:60px; max-height:380px; resize:none; border:1px solid var(--line); border-radius:13px; outline:none; padding:10px 12px 36px 12px; background:var(--card); color:var(--text); font-size:11.5px; font-weight:400; line-height:1.5; overflow:auto; transition:border-color .15s ease, box-shadow .15s ease; white-space:pre-wrap; overflow-wrap:anywhere; }
 .prompt-input, .prompt-input * { cursor:text; }
 .prompt-input:empty::before { content:attr(data-placeholder); color:var(--faint); font-size:11px; font-weight:400; pointer-events:none; }
 .prompt-input:focus { border-color:var(--strong); box-shadow:0 0 0 3px rgba(15,23,42,.06); }
@@ -926,7 +926,11 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .prompt-node-text.llm-processing { pointer-events:none; border-color:var(--strong) !important; }
 .prompt-node-pill.prompt-llm-toggle.llm-processing { background:var(--strong) !important; color:var(--strong-text) !important; border-color:var(--strong) !important; }
 .prompt-node-pill.prompt-llm-toggle.llm-processing i, .prompt-node-pill.prompt-llm-toggle.llm-processing svg { animation:spin 1s linear infinite; }
-.composer-prompt-tools { position:absolute; right:8px; top:8px; z-index:4; display:flex; align-items:center; gap:5px; }
+/* 🚨 2026-10-21 老板：输入栏右上角那三个小按钮（模板库 / 历史 / LLM）挪到**右下角**。
+   右上角会压住第一行文字的开头，右下角是空着的（拖拽手柄在底部正中，不冲突）。
+   ⚠️ 同时要把输入框的右内边距还回来（原来 96px 是给右上角按钮让位的），
+      改成底部留 36px —— 否则右下角按钮会盖住最后一行字。 */
+.composer-prompt-tools { position:absolute; right:8px; top:auto; bottom:8px; z-index:4; display:flex; align-items:center; gap:5px; }
 .composer-prompt-tools .composer-template-btn, .composer-prompt-tools .composer-history-btn { position:static; }
 .composer-template-btn, .composer-history-btn, .composer-llm-toggle-btn { height:28px; border-radius:9px; display:inline-flex; align-items:center; justify-content:center; background:var(--soft); border:1px solid var(--line); color:var(--muted); box-shadow:0 4px 10px rgba(15,23,42,.04); transition:background .14s ease, color .14s ease, border-color .14s ease, transform .14s ease; }
 .composer-template-btn, .composer-history-btn { width:28px; }
@@ -1245,6 +1249,14 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .size-picker-option.active { background:var(--card); border-color:var(--line); color:var(--text); }
 .size-picker-option span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; font-weight:800; }
 .size-picker-option small { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--faint); font-size:9.5px; font-weight:650; }
+/* 比例改成圆角矩形卡片（2026-10-22 老板：跟 agent 尺寸面板一致）。
+   左列从「一行文字」变成 2 列卡片：上面是按真实宽高比画的图标，下面是比例。
+   ⚠️ 选择器要比 `.size-picker-option span` 更具体，否则 font-size / nowrap 会被它压住。 */
+.size-picker-preset { grid-template-columns:168px minmax(0,1fr); }
+.size-picker-list.size-picker-ratios { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px; align-content:start; }
+.size-picker-ratios .size-picker-option { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; min-height:52px; padding:6px 4px; }
+.size-picker-ratio-icon { display:block; border:1.5px solid currentColor; border-radius:3px; flex:0 0 auto; }
+.size-picker-ratios .size-picker-option > .size-picker-ratio-label { font-size:9.5px; font-weight:800; line-height:1; overflow:visible; }
 .size-picker-custom { padding:8px; display:flex; flex-direction:column; gap:7px; }
 .size-custom-box { padding:8px; border-radius:11px; border:1px solid var(--line); background:var(--soft); }
 .size-custom-title { margin-bottom:6px; color:var(--text); font-size:10.5px; font-weight:800; }
@@ -1361,8 +1373,11 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart-save-workflow-btn.visible { opacity:1; pointer-events:auto; transform:translateX(-50%) translateY(0); }
 .smart-save-workflow-btn:hover { color:var(--strong-text); background:var(--strong); border-color:var(--strong); box-shadow:0 16px 36px var(--shadow); transform:translateX(-50%) translateY(-1px); }
 .smart-save-workflow-btn i,.smart-save-workflow-btn svg { width:15px; height:15px; }
-#smartSendAgentBtn { left:50%; right:auto; bottom:22px; transform:translateX(-50%); }
-#smartSendAgentBtn:hover { transform:translateX(-50%) translateY(-1px); }
+/* 🚨 2026-10-21 老板：发送至Agent 原来钉在画布底部正中（left:50%; bottom:22px），
+   正好压在底部「小抽AI」胶囊上，两个字叠一起看不清。
+   改成跟「整理选中」同一列、贴在它上方（小地图顶在 bottom:150，整理选中 158~190）。 */
+#smartSendAgentBtn { left:22px; right:auto; bottom:196px; transform:none; }
+#smartSendAgentBtn:hover { transform:translateY(-1px); }
 .smart-minimap-content { position:absolute; inset:10px; border-radius:12px; overflow:hidden; background-image:radial-gradient(var(--grid) 1px, transparent 1px); background-size:12px 12px; opacity:.95; }
 .minimap-node { position:absolute; min-width:4px; min-height:4px; border-radius:3px; background:var(--strong); opacity:.8; }
 .smart-minimap-viewport { position:absolute; border-radius:8px; border:2px solid var(--strong); background:rgba(255,255,255,.12); }
@@ -1483,7 +1498,7 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .asset-head .asset-title { flex:1; }
 .asset-title { display:flex; align-items:center; gap:7px; font-size:12px; font-weight:800; color:var(--text); }
 .asset-title i,.asset-title svg { width:15px; height:15px; }
-.asset-mini-btn { width:26px; height:26px; border-radius:9px; background:transparent; color:var(--muted); display:inline-flex; align-items:center; justify-content:center; border:1px solid transparent; }
+.asset-mini-btn { width:26px; height:26px; border-radius:9px; background:transparent; color:var(--muted); display:inline-flex; align-items:center; justify-content:center; border:1px solid transparent; cursor:pointer; }
 .asset-mini-btn:hover { color:var(--text); background:var(--card); border-color:var(--line); }
 .asset-mini-btn:disabled { opacity:.4; cursor:not-allowed; pointer-events:none; }
 .asset-mini-btn i,.asset-mini-btn svg { width:13px; height:13px; }
@@ -1510,15 +1525,150 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-toggle:hover { border-color:var(--text); transform:translateY(-1px); }
 .agent-toggle.active { background:var(--strong); color:var(--strong-text); border-color:var(--strong); box-shadow:0 16px 38px var(--shadow); }
 .agent-toggle i,.agent-toggle svg { width:16px; height:16px; }
-.agent-panel { position:absolute; right:22px; top:66px; bottom:22px; z-index:55; width:360px; max-width:calc(100vw - 44px); min-height:0; display:flex; flex-direction:column; gap:10px; padding:12px; border-radius:18px; background:var(--panel); border:1px solid var(--line); box-shadow:0 22px 58px var(--shadow); backdrop-filter:blur(20px); transform:translateX(16px); opacity:0; visibility:hidden; pointer-events:none; transition:opacity .16s ease, transform .16s ease, visibility .16s ease; }
-.agent-panel.open { opacity:1; visibility:visible; pointer-events:auto; transform:translateX(0); }
+/* 🚨 2026-10-21 老板：移除顶部工具栏的「小抽AI」开关（截图里被红框圈住的那个）。
+   只是**隐藏入口**，不动 JS —— agentToggle 元素仍在 DOM 里，事件绑定照旧，
+   Agent 面板本身保持可用（底部胶囊「小抽AI」/「收起对话」就是它的开关）。
+   ⚠️ 用 display:none 而不是删元素：删了 `document.getElementById('agentToggle')` 变 null，
+      下面几处 addEventListener 会直接报错，整个画布脚本挂掉。 */
+.agent-toggle { display:none !important; }
+/* 它原本占 right:454px（宽 96 + 12 间距），隐藏后这一段会空出来 —— 把「灵感库」补上去，
+   否则工具栏中间会留一个洞（工作流在 346~442，灵感库原来在 574）。
+   ⚠️ 改的是下面 1620 行那条主规则里的 right 值；**不要在这里再写一条** ——
+      同优先级下后面的会覆盖前面的，写了也不生效（2026-10-21 第一版就这么踩的）。 */
+/* --- AI Agent：底部居中悬浮（2026-10-19 重构，原为右侧面板） ---
+   ⚠️ 定位与尺寸全部走 CSS 变量，JS 只改变量值：
+     --agent-dock-h   输入框「收起对话」时的可视高度（由拖拽手柄改）
+     --agent-chat-h   展开时对话区高度
+     --agent-dock-w   悬浮框宽度
+   🚨 底部居中是相对于「整页」而不是画布可视区，所以不能用 absolute+right 那套。 */
+.agent-panel { position:absolute; left:50%; bottom:18px; z-index:55; width:var(--agent-dock-w, 760px); max-width:calc(100vw - 140px); min-height:0; max-height:calc(100vh - 150px); display:flex; flex-direction:column; gap:8px; padding:10px 12px; border-radius:18px; background:var(--panel); border:1px solid var(--line); box-shadow:0 22px 58px var(--shadow); backdrop-filter:blur(20px); transform:translate(-50%, 12px); opacity:0; visibility:hidden; pointer-events:none; transition:opacity .16s ease, transform .16s ease, visibility .16s ease; }
+.agent-panel.open { opacity:1; visibility:visible; pointer-events:auto; transform:translate(-50%, 0); }
+/* 🚨 2026-10-21 老板：允许拖拽移动小抽AI 窗口 + 拉动四个角调大小。
+   默认仍是「底部居中」；一旦用户拖过（.dragged），改用 left/top 绝对定位 ——
+   位置和尺寸存进 agentState（dockPos / dockW），刷新后还原。
+   ⚠️ `.dragged.open` 必须单独写一条把 transform 清成 none：
+      `.open` 里的 translate(-50%,0) 是按居中算的，配上 left/top 会把面板再往左推半个宽度。 */
+.agent-panel.dragged { left:0; top:0; bottom:auto; }
+.agent-panel.dragged.open { transform:none; }
+/* 🚨 拖拽/缩放期间必须关掉过渡（2026-10-21）：`transform` 有 .16s 过渡，
+   面板会「追着鼠标慢慢挪」，手感很差；而且程序读 getBoundingClientRect 时
+   拿到的是过渡起点值（-380 而不是 0），位置换算全错。 */
+.agent-panel.dragged { transition:none; }
+/* 🚨 面板必须自己声明 cursor（2026-10-22 老板：Agent 区域鼠标一直显示抓手）。
+   根因：`.shell` 是画布容器、设了 `cursor:grab`（按住可平移画布），
+   面板是它的子元素 ⇒ **继承**成抓手，整个 Agent 区都是张开的手。
+   这里显式改回箭头；标题栏单独给 move（四向箭头），提示「这里能拖着走」。 */
+.agent-panel { cursor: default; }
+.agent-panel .agent-head { cursor: move; }
+.agent-panel.dragged .agent-head button,
+.agent-panel.dragged .agent-head .agent-more-wrap { cursor:pointer; }
+.agent-resize-handle { position:absolute; width:16px; height:16px; z-index:8; opacity:0; transition:opacity .12s ease; }
+.agent-panel.chat-open:hover .agent-resize-handle { opacity:1; }
+.agent-resize-handle.nw { left:0; top:0; cursor:nwse-resize; }
+.agent-resize-handle.ne { right:0; top:0; cursor:nesw-resize; }
+.agent-resize-handle.sw { left:0; bottom:0; cursor:nesw-resize; }
+.agent-resize-handle.se { right:0; bottom:0; cursor:nwse-resize; }
+.agent-resize-handle::after { content:""; position:absolute; inset:5px; border-radius:2px; border:1.5px solid transparent; transition:border-color .12s ease; }
+.agent-resize-handle:hover::after { border-color:var(--muted); }
+/* 收起态只剩一颗胶囊，没什么可缩放的 */
+.agent-panel:not(.chat-open) .agent-resize-handle { display:none; }
+/* 拖拽移动时：全窗口统一 move 光标 + 禁止选中文字（否则会拖出一片蓝色选区） */
+body.agent-dock-dragging, body.agent-dock-dragging * { cursor:move !important; user-select:none !important; }
+/* 头部：底部悬浮框比原来的右侧面板宽得多，且 .asset-head 原本是纵向堆叠用的，
+   这里必须显式改成「标题 + 按钮横排」的一行，否则图标会竖着挤成一条。 */
+.agent-panel .agent-head { display:flex; align-items:center; gap:6px; padding:0 2px 2px; flex:0 0 auto; }
+.agent-panel .agent-head .asset-title { flex:1 1 auto; display:flex; align-items:center; gap:6px; font-size:12px; font-weight:750; color:var(--text); min-width:0; }
+.agent-panel .agent-head .asset-title i,.agent-panel .agent-head .asset-title svg { width:14px; height:14px; }
+.agent-panel .agent-head .asset-mini-btn { position:static; flex:0 0 auto; }
+/* 顶部对话抽屉：默认收起，点「展开对话」才拉起 */
+.agent-panel .agent-chat-drawer { display:none; flex-direction:column; min-height:0; height:var(--agent-chat-h, 320px); flex:0 0 auto; }
+.agent-panel.chat-open .agent-chat-drawer { display:flex; }
+.agent-panel .agent-chat-drawer .agent-messages { flex:1 1 auto; height:auto; min-height:0; }
+/* 收起对话时，消息区不占位（只留输入框） */
+.agent-panel:not(.chat-open) .agent-messages { display:none; }
+/* 收起态 = 只剩一颗胶囊（2026-10-21 老板要求：输入框也一并隐藏）。
+   🚨 三条缺一不可：
+   ① 面板本身去掉底色/描边/阴影/圆角视觉 —— 否则会在画布上留一个空框；
+   ② `pointer-events:none` —— 面板还占着 760px 宽，不关掉会把画布那片区域的点击全吃掉；
+   ③ 只留 `.agent-chat-toggle`，其余直接子元素（标题行、对话抽屉、输入区）全隐藏。
+   ⚠️ 用 display:none，不要 height:0/visibility:hidden：flex 的 gap 还在，会留空缝。 */
+.agent-panel:not(.chat-open){
+    padding:0; gap:0; background:transparent; border:0;
+    box-shadow:none; backdrop-filter:none; pointer-events:none;
+}
+.agent-panel:not(.chat-open) > *:not(.agent-chat-toggle){ display:none; }
+.agent-panel:not(.chat-open) .agent-chat-toggle{ pointer-events:auto; }
+/* 拖拽调高：只在「已展开对话」时出现，贴在框的上边缘（压在边框上，看得出是把手）
+   🚨 收起态不出现 —— 收起时只有一行输入框，没有可调的高度；输入框自身也不再支持拖拽缩放。 */
+.agent-dock-resize { position:absolute; left:50%; top:0; transform:translateX(-50%); width:96px; height:10px; border-radius:999px; cursor:ns-resize; display:none; align-items:center; justify-content:center; touch-action:none; }
+.agent-panel.chat-open .agent-dock-resize { display:flex; }
+/* 🚨 别用 --line：浅色主题下是 rgba(148,163,184,.16)，几乎看不见把手 */
+.agent-dock-resize::after { content:""; width:40px; height:4px; border-radius:999px; background:rgba(148,163,184,.55); transition:background .14s ease, width .14s ease; }
+.agent-dock-resize:hover::after { background:var(--text); width:56px; }
+/* 折叠/展开对话的胶囊按钮：悬在悬浮框**外侧**正上方（bottom:100% + 间距），不压住框内任何内容 */
+.agent-chat-toggle { position:absolute; left:50%; bottom:calc(100% + 8px); transform:translateX(-50%); height:26px; padding:0 12px; border-radius:999px; border:1px solid var(--line); background:var(--panel); color:var(--text); font-size:11px; font-weight:700; display:flex; align-items:center; gap:6px; cursor:pointer; box-shadow:0 8px 22px var(--shadow); white-space:nowrap; }
+.agent-chat-toggle:hover { border-color:var(--text); }
+.agent-chat-toggle i,.agent-chat-toggle svg { width:13px; height:13px; }
+/* 深色主题：--panel 是半透明，浮在画布上容易透过节点走光 ⇒ 换成实底 --card */
+.theme-dark .agent-chat-toggle { background:var(--card); }
+.theme-dark .agent-dock-resize::after { background:#3f4a5c; }
+.theme-dark .agent-dock-resize:hover::after { background:var(--text); }
+
+/* --- Agent 偏好设置弹窗（第 12 条） ---
+   六项基础记忆：称呼 / 职业 / 行业 / 平台 / 类目 / 服务群体。
+   全部走主题变量（--panel/--card/--line/--text/--soft/--strong），浅色深色自动适配，
+   不要再为它单独写 .theme-dark 覆盖块。 */
+.agent-profile-mask { position:fixed; inset:0; z-index:240; background:rgba(8,12,22,.5); backdrop-filter:blur(6px); display:flex; align-items:center; justify-content:center; padding:24px; }
+.agent-profile-mask[hidden] { display:none; }
+/* 640 宽 + 86vh：18 项要滚动，宽一点能让 chip 少换行，屏高多给一点能少滚半屏 */
+.agent-profile-dialog { width:min(640px, 100%); max-height:min(86vh, 840px); display:flex; flex-direction:column; gap:12px; padding:18px; border-radius:18px; border:1px solid var(--line); background:var(--card); box-shadow:0 28px 70px rgba(0,0,0,.32); }
+.agent-profile-head { display:flex; align-items:center; gap:8px; }
+.agent-profile-title { flex:1 1 auto; display:flex; align-items:center; gap:8px; font-size:14px; font-weight:800; color:var(--text); }
+.agent-profile-title i,.agent-profile-title svg { width:17px; height:17px; }
+.agent-profile-x { width:28px; height:28px; border-radius:9px; border:1px solid transparent; background:transparent; color:var(--faint); display:flex; align-items:center; justify-content:center; cursor:pointer; }
+.agent-profile-x:hover { background:var(--soft); color:var(--text); }
+.agent-profile-x i,.agent-profile-x svg { width:15px; height:15px; }
+.agent-profile-sub { margin:0; font-size:11.5px; line-height:1.6; color:var(--faint); }
+.agent-profile-sub code { padding:1px 5px; border-radius:5px; background:var(--soft); color:var(--text); font-size:11px; }
+.agent-profile-body { flex:1 1 auto; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:16px; padding-right:4px; }
+.agent-profile-body::-webkit-scrollbar { width:6px; }
+.agent-profile-body::-webkit-scrollbar-thumb { background:var(--line); border-radius:999px; }
+/* 分组（基础信息 / 业务概况 / 协作方式 / 审美偏好 / 常用资产）：
+   🚨 18 项平铺会糊成一团，必须靠分组标题 + 虚线分隔压出层次，否则老板又找不到要改哪项。 */
+.agent-profile-group { display:flex; flex-direction:column; gap:12px; }
+.agent-profile-group + .agent-profile-group { padding-top:15px; border-top:1px dashed var(--line); }
+.agent-profile-group-head { display:flex; align-items:center; gap:6px; font-size:12px; font-weight:850; color:var(--text); }
+.agent-profile-group-head i,.agent-profile-group-head svg { width:14px; height:14px; color:var(--muted); flex:0 0 auto; }
+.agent-profile-field { display:flex; flex-direction:column; gap:7px; }
+.agent-profile-label { display:flex; align-items:center; gap:6px; font-size:11.5px; font-weight:750; color:var(--text); }
+.agent-profile-label em { font-style:normal; font-size:10.5px; font-weight:600; color:var(--faint); }
+.agent-profile-chips { display:flex; flex-wrap:wrap; gap:6px; }
+.agent-profile-chip { height:26px; padding:0 10px; border-radius:999px; border:1px solid var(--line); background:transparent; color:var(--faint); font-size:11.5px; font-weight:600; cursor:pointer; transition:all .13s ease; white-space:nowrap; }
+.agent-profile-chip:hover { border-color:var(--text); color:var(--text); }
+.agent-profile-chip.on { background:var(--strong); border-color:var(--strong); color:var(--strong-text); }
+.agent-profile-input { width:100%; height:34px; padding:0 11px; border-radius:10px; border:1px solid var(--line); background:var(--panel); color:var(--text); font-size:12.5px; outline:none; }
+.agent-profile-input:focus { border-color:var(--strong); }
+.agent-profile-input::placeholder { color:var(--faint); }
+.agent-profile-foot { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+.agent-profile-foot .agent-profile-btn { height:36px; padding:0 16px; border-radius:11px; font-size:12.5px; font-weight:750; cursor:pointer; border:1px solid var(--line); transition:all .14s ease; }
+.agent-profile-btn.ghost { margin-right:auto; background:transparent; color:var(--faint); }
+.agent-profile-btn.ghost:hover { color:var(--text); border-color:var(--text); }
+.agent-profile-btn.primary { background:var(--strong); border-color:var(--strong); color:var(--strong-text); }
+.agent-profile-btn.primary:hover { opacity:.9; }
 
 /* --- 灵感库（画布左侧提示词库） --- */
-.inspire-toggle { position:absolute; right:574px; top:22px; z-index:57; height:40px; padding:0 16px; border-radius:999px; background:var(--panel); color:var(--text); border:1px solid var(--line); box-shadow:0 14px 34px var(--shadow); backdrop-filter:blur(16px); display:flex; align-items:center; justify-content:center; gap:8px; font-size:12px; font-weight:750; white-space:nowrap; transition:transform .14s ease, border-color .14s ease; }
+.inspire-toggle { position:absolute; right:454px; top:22px; z-index:57; height:40px; padding:0 16px; border-radius:999px; background:var(--panel); color:var(--text); border:1px solid var(--line); box-shadow:0 14px 34px var(--shadow); backdrop-filter:blur(16px); display:flex; align-items:center; justify-content:center; gap:8px; font-size:12px; font-weight:750; white-space:nowrap; transition:transform .14s ease, border-color .14s ease; }
 .inspire-toggle:hover { border-color:var(--text); transform:translateY(-1px); }
 .inspire-toggle.active { background:var(--strong); color:var(--strong-text); border-color:var(--strong); box-shadow:0 16px 38px var(--shadow); }
 .inspire-toggle i,.inspire-toggle svg { width:16px; height:16px; }
-.inspire-panel { position:absolute; left:0; top:0; bottom:0; z-index:58; width:40vw; max-width:680px; min-width:340px; display:flex; flex-direction:column; gap:10px; padding:14px; background:var(--panel); border-right:1px solid var(--line); box-shadow:18px 0 50px var(--shadow); backdrop-filter:blur(20px); transform:translateX(-102%); opacity:0; visibility:hidden; pointer-events:none; transition:opacity .2s ease, transform .22s cubic-bezier(.4,0,.2,1), visibility .2s ease; }
+/* 🚨 2026-10-21 老板：灵感库改成**右侧展开**（原来从左边滑出，正好盖住画布左半区）。
+   四处都要跟着翻：定位 left→right、边框 border-right→border-left、阴影方向、滑入方向。 */
+/* 🚨 2026-10-21 老板：「灵感库不要遮挡功能按钮，尺寸需要预留功能按钮的位置」。
+   原来 top:0 + bottom:0 铺满整个右半边，40vw 宽正好把右上角那排
+   （资产库 / 日志 / 快捷键 / 工作流 / 灵感库）全压在面板底下，既看不见也点不到。
+   顶部工具栏是 top:22 + 高 40 = 到 62，这里从 74 起（留 12 间距），按钮区整排露出来。
+   ⚠️ 别改成 top:22 —— 那样只是把面板顶边对齐按钮顶边，按钮仍然被盖住。 */
+.inspire-panel { position:absolute; right:0; left:auto; top:74px; bottom:0; z-index:58; width:40vw; max-width:680px; min-width:340px; display:flex; flex-direction:column; gap:10px; padding:14px; background:var(--panel); border-left:1px solid var(--line); border-right:0; border-radius:16px 0 0 0; box-shadow:-18px 0 50px var(--shadow); backdrop-filter:blur(20px); transform:translateX(102%); opacity:0; visibility:hidden; pointer-events:none; transition:opacity .2s ease, transform .22s cubic-bezier(.4,0,.2,1), visibility .2s ease; }
 .inspire-panel.open { opacity:1; visibility:visible; pointer-events:auto; transform:translateX(0); }
 .inspire-head { display:flex; align-items:center; gap:8px; }
 .inspire-head .asset-title { flex:0 0 auto; }
@@ -1589,12 +1739,18 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-messages::-webkit-scrollbar-thumb { background:rgba(148,163,184,.42); border-radius:999px; border:2px solid transparent; background-clip:content-box; }
 .agent-chat-list-panel { position:absolute; top:46px; left:12px; right:12px; max-height:300px; overflow-y:auto; border-radius:13px; border:1px solid var(--line); background:var(--card); box-shadow:0 8px 32px rgba(15,23,42,.14); z-index:70; padding:6px; display:flex; flex-direction:column; gap:2px; }
 .agent-chat-list-panel[hidden] { display:none; }
-.agent-chat-item { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:9px; border:none; background:none; color:var(--text); font-size:10.5px; font-weight:650; cursor:pointer; text-align:left; transition:background .14s ease; }
+.agent-chat-item { display:flex; align-items:center; gap:8px; width:100%; box-sizing:border-box; padding:8px 10px; border-radius:9px; border:none; background:none; color:var(--text); font-size:10.5px; font-weight:650; cursor:pointer; text-align:left; transition:background .14s ease; }
+/* 就地重命名输入框（2026-10-22 老板要求）。⚠️ 标题用 div 承载，才能安全嵌 input。 */
+.agent-chat-rename { flex:1; min-width:0; height:22px; padding:0 6px; border-radius:6px; border:1px solid var(--muted); background:var(--card); color:var(--text); font-size:10.5px; font-weight:650; font-family:inherit; outline:none; }
 .agent-chat-item:hover { background:var(--soft); }
 .agent-chat-item.active { background:var(--soft); font-weight:750; }
 .agent-chat-item-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .agent-chat-item-time { flex:0 0 auto; font-size:9px; color:var(--faint); }
 .agent-chat-item-delete { flex:0 0 auto; width:20px; height:20px; border-radius:6px; border:none; background:none; color:var(--faint); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; }
+/* 重命名按钮（2026-10-22）：比双击可靠 —— 单击项会切走对话，双击够不着 */
+.agent-chat-item-rename { flex:0 0 auto; width:20px; height:20px; border-radius:6px; border:none; background:none; color:var(--faint); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; }
+.agent-chat-item-rename:hover { color:var(--text); background:var(--soft); }
+.agent-chat-item-rename i,.agent-chat-item-rename svg { width:11px; height:11px; }
 .agent-chat-item-delete:hover { color:#ef4444; background:rgba(239,68,68,.1); }
 .agent-chat-item-delete i,.agent-chat-item-delete svg { width:11px; height:11px; }
 .agent-chat-empty { padding:16px; text-align:center; font-size:10.5px; color:var(--faint); }
@@ -1701,6 +1857,23 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-msg-action-btn:hover { color:var(--text); background:var(--soft); }
 .agent-msg-action-btn i,.agent-msg-action-btn svg { width:11px; height:11px; }
 
+/* 重编辑历史消息（2026-10-20）：编辑态要占满整行 —— 空气泡（max-width:88%）里塞不下
+   三行文本 + 三个按钮，而且正文里的 [图:x] token 必须完整可见（用户靠删 token 摘附件）。
+   🚨 选择器必须写到 `.user.is-editing`：`.agent-msg.user` 在本文件更后面（align-items:flex-end），
+      同权重会被它盖掉 ⇒ 编辑框只能拿内容宽度（实测 387px 而不是 727px）。 */
+.agent-msg.is-editing,
+.agent-msg.user.is-editing { max-width:100%; width:100%; align-items:stretch; }
+.agent-msg-edit { width:100%; box-sizing:border-box; display:flex; flex-direction:column; gap:6px; padding:8px; border-radius:12px; border:1px solid var(--line); background:var(--card); }
+.agent-msg-edit-area {
+    width:100%; min-width:0; box-sizing:border-box; min-height:58px; max-height:220px; margin:0;
+    padding:7px 9px; border-radius:9px; border:1px solid var(--line); background:var(--soft);
+    color:var(--text); font-size:11.5px; line-height:1.55; font-family:inherit; resize:vertical; outline:none;
+}
+.agent-msg-edit-area:focus { border-color:var(--strong); }
+.agent-msg-edit-actions { display:flex; gap:4px; }
+.agent-msg-edit-actions .agent-prompt-btn { flex:1 1 0; }
+.agent-msg-edit-hint { font-size:10px; line-height:1.55; color:var(--muted); }
+
 .agent-empty { margin:auto; text-align:center; color:var(--faint); font-size:11px; line-height:1.7; padding:20px 12px; }
 .agent-empty i,.agent-empty svg { width:26px; height:26px; display:block; margin:0 auto 8px; }
 .agent-msg { display:flex; flex-direction:column; gap:5px; max-width:88%; min-width:0; }
@@ -1709,6 +1882,11 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-msg-bubble { padding:8px 11px; border-radius:14px; font-size:11.5px; line-height:1.55; white-space:pre-wrap; word-break:break-word; }
 .agent-msg.user .agent-msg-bubble { background:var(--strong); color:var(--strong-text); border-bottom-right-radius:5px; }
 .agent-msg.assistant .agent-msg-bubble { background:var(--card); color:var(--text); border:1px solid var(--line); border-bottom-left-radius:5px; }
+/* 执行计划：让用户先看到「打算怎么做」，再看到结果 */
+.agent-plan { display:flex; flex-direction:column; gap:3px; padding:7px 10px; border-radius:11px; border:1px dashed var(--line); background:var(--card); max-width:250px; }
+.agent-plan-step { display:flex; align-items:flex-start; gap:6px; font-size:11px; line-height:1.5; color:var(--muted); }
+.agent-plan-num { flex:none; width:14px; height:14px; margin-top:1px; border-radius:50%; background:var(--soft); color:var(--muted); font-size:9px; font-weight:600; line-height:14px; text-align:center; }
+.agent-plan-text { flex:1; word-break:break-word; }
 .agent-msg-thumbs { display:grid; grid-template-columns:repeat(3, 1fr); gap:5px; max-width:240px; }
 .agent-msg-thumbs img { width:100%; aspect-ratio:1/1; object-fit:cover; border-radius:9px; border:1px solid var(--line); cursor:pointer; display:block; }
 .agent-gen-thumb-wrap { position:relative; }
@@ -1719,6 +1897,17 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-gen-prompt-expanded { /* 展开后不截断 */ }
 .agent-gen-prompt-toggle { display:inline-block; margin-left:4px; padding:0 2px; border:none; background:none; color:var(--strong); font-size:10px; font-weight:700; cursor:pointer; vertical-align:baseline; white-space:nowrap; }
 .agent-gen-prompt-toggle:hover { text-decoration:underline; }
+/* 失败原因（2026-10-20）：后端已把上游报错翻成人话，是多行说明 ⇒ 必须保留换行，
+   否则「常见触发 / 建议」挤成一坨。颜色也跟普通提示词区分开。 */
+.agent-gen-error-text { white-space:pre-line; color:#c0392b; margin-top:4px; }
+html.studio-theme-dark .agent-gen-error-text { color:#ff8a80; }
+/* 尺寸被自动压过（2026-10-21）：要让老板看见「为什么出的图比我说的尺寸小」，但不能像报错那样刺眼 */
+.agent-gen-note { font-size:10px; line-height:1.5; color:var(--muted); padding:4px 6px; border-radius:6px; background:var(--soft); border:1px dashed var(--line); word-break:break-word; }
+/* 实际用的模型（2026-10-21）：比尺寸说明更轻 —— 它只是让老板能核对，不该抢眼 */
+.agent-gen-model { font-size:10px; line-height:1.4; color:var(--muted); opacity:.85; padding:2px 6px 0; word-break:break-all; }
+/* 失败后不走进死胡同：给一个明确的出口 */
+.agent-gen-askfix { width:100%; justify-content:center; color:var(--strong); border-color:var(--line); }
+.agent-gen-askfix:hover { background:var(--soft); }
 .agent-gen-status { display:flex; align-items:center; gap:6px; font-size:10px; font-weight:750; color:var(--muted); }
 .agent-gen-status.error { color:#e11d48; }
 .agent-gen-status.done { color:#059669; }
@@ -1764,16 +1953,38 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-onebox:focus-within { border-color:var(--strong); }
 .agent-attach-row { display:flex; flex-wrap:wrap; gap:6px; padding:8px 10px 0; }
 .agent-attach-row:empty { display:none; }
-.agent-attach-chip { position:relative; width:44px; height:44px; border-radius:10px; overflow:hidden; border:1px solid var(--line); cursor:pointer; transition:border-color .14s ease; }
-.agent-attach-chip:hover { border-color:var(--strong); }
-.agent-attach-chip img { width:100%; height:100%; object-fit:cover; display:block; }
-.agent-att-num { position:absolute; top:2px; left:2px; min-width:14px; height:14px; border-radius:4px; background:var(--strong); color:#fff; font-size:9px; font-weight:600; line-height:14px; text-align:center; padding:0 3px; z-index:2; pointer-events:none; }
-.agent-attach-chip button { position:absolute; top:2px; right:2px; width:15px; height:15px; border-radius:50%; background:rgba(15,23,42,.78); color:#fff; display:flex; align-items:center; justify-content:center; border:none; cursor:pointer; padding:0; opacity:0; transition:opacity .12s ease; }
-.agent-attach-chip:hover button { opacity:1; }
-.agent-attach-chip button i,.agent-attach-chip button svg { width:9px; height:9px; }
-.agent-attach-chip.dragging { opacity:.4; }
-.agent-attach-chip.drop-before { box-shadow:-2px 0 0 0 var(--strong); }
-.agent-attach-chip.drop-after { box-shadow:2px 0 0 0 var(--strong); }
+/* 附件内嵌胶囊：直接长在句子里（contenteditable），悬停才出预览 */
+.agent-inline-chip { position:relative; display:inline-flex; align-items:center; gap:3px; height:18px; max-width:150px; padding:0 2px 0 5px; margin:0 2px; border-radius:999px; border:1px solid var(--line); background:var(--card); font-size:10px; line-height:1; color:var(--text); vertical-align:-3px; cursor:default; user-select:none; }
+.agent-inline-chip > i,.agent-inline-chip > svg { width:10px; height:10px; flex:0 0 auto; color:var(--muted); }
+.agent-inline-chip-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:96px; }
+.agent-inline-chip-x { display:flex; align-items:center; justify-content:center; width:13px; height:13px; flex:0 0 auto; border-radius:50%; color:var(--muted); cursor:pointer; font-size:11px; line-height:1; }
+.agent-inline-chip-x:hover { background:rgba(15,23,42,.14); color:var(--text); }
+.agent-inline-chip[data-chip-kind="ref"] { border-style:dashed; border-color:var(--strong); }
+.agent-inline-chip[data-chip-kind="doc"] > i,.agent-inline-chip[data-chip-kind="doc"] > svg { color:var(--strong); }
+/* 对话记录里的胶囊：与输入框完全同一套外观（老板要求「历史记录要能完整回溯」）。
+   历史胶囊不可删，所以没有 ×；也允许点（文档打开 / 节点跳转）。 */
+.agent-msg-bubble .agent-inline-chip { cursor:pointer; }
+.agent-msg-chips { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; }
+.agent-msg-chips .agent-inline-chip { margin:0; }
+/* 条目已不在状态里（老消息 / 被裁掉的附件）：保留名字让人看得见，但弱化 + 虚线 */
+.agent-inline-chip.is-detached { opacity:.65; border-style:dashed; }
+/* 悬停预览卡：.agent-input-rich 是 overflow-y:auto，绝对定位的子元素会被裁掉，
+   所以真正的预览卡由 JS 克隆到 body 的浮层 #agentChipPopLayer（position:fixed）里显示。
+   这里的 .agent-attach-pop 只作为「模板」保留（display:none 不参与布局）。 */
+.agent-attach-pop { display:none; position:absolute; bottom:calc(100% + 6px); left:0; z-index:90; padding:6px; border-radius:10px; border:1px solid var(--line); background:var(--panel); box-shadow:0 12px 32px var(--shadow); cursor:default; }
+#agentChipPopLayer { position:fixed; z-index:9999; pointer-events:none; }
+#agentChipPopLayer > .agent-attach-pop { display:block; position:static; }
+.agent-attach-pop > img,.agent-attach-pop > video { display:block; width:150px; height:150px; object-fit:cover; border-radius:7px; background:var(--soft); }
+.agent-attach-pop-name { margin-top:4px; font-size:9.5px; font-weight:600; color:var(--text); max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.agent-attach-pop-sub { margin-top:2px; font-size:8.5px; color:var(--muted); }
+.agent-attach-pop-text { margin-top:4px; max-width:150px; max-height:64px; overflow:hidden; font-size:8.5px; line-height:1.45; color:var(--muted); word-break:break-word; }
+.agent-attach-pop-file { display:flex; align-items:center; gap:7px; min-width:150px; }
+.agent-attach-pop-file > i,.agent-attach-pop-file > svg { width:20px; height:20px; color:var(--strong); flex:0 0 auto; }
+.agent-attach-pop-meta { min-width:0; }
+.agent-attach-pop-meta .agent-attach-pop-name { margin-top:0; }
+.agent-attach-pop-skill { display:flex; align-items:center; gap:5px; margin-top:6px; width:100%; padding:4px 7px; border-radius:7px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:9px; cursor:pointer; }
+.agent-attach-pop-skill:hover { border-color:var(--strong); }
+.agent-attach-pop-skill i,.agent-attach-pop-skill svg { width:10px; height:10px; }
 .agent-ref-confirm { position:absolute; bottom:100%; left:0; right:0; margin-bottom:6px; background:var(--card); border:1px solid var(--line); border-radius:14px; box-shadow:0 -4px 24px rgba(0,0,0,.12); z-index:50; max-height:280px; display:flex; flex-direction:column; }
 .agent-ref-confirm[hidden] { display:none; }
 .agent-ref-confirm-head { display:flex; align-items:center; justify-content:space-between; padding:10px 14px 6px; border-bottom:1px solid var(--line); }
@@ -1798,7 +2009,10 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-ref-confirm-btn.primary:hover { opacity:.88; }
 .agent-ref-confirm-btn.secondary { background:var(--soft); color:var(--text); }
 .agent-ref-confirm-btn.secondary:hover { opacity:.88; }
-.agent-onebox textarea { display:block; width:100%; min-width:0; resize:none; max-height:200px; border:none; background:transparent; color:var(--text); padding:6px 12px 8px; font-size:11.5px; line-height:1.5; outline:none; font-family:inherit; }
+.agent-input-rich { display:block; width:100%; min-width:0; max-height:200px; overflow-y:auto; border:none; background:transparent; color:var(--text); padding:6px 12px 8px; font-size:11.5px; line-height:1.5; outline:none; font-family:inherit; white-space:pre-wrap; word-break:break-word; }
+/* placeholder：contenteditable 没有原生 placeholder，用 attr() 画；data-empty 由 JS 维护 */
+.agent-input-rich[data-empty="1"]::before { content:attr(placeholder); color:var(--muted); pointer-events:none; }
+.agent-input-rich[contenteditable="false"] { opacity:.55; }
 
 /* 输入框顶部固定栏：模型 / 参数 */
 .agent-topbar {
@@ -1821,7 +2035,9 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-topbar .agent-toolbar-btn:hover { background: var(--line); color: var(--text); }
 .agent-topbar .agent-toolbar-btn i,
 .agent-topbar .agent-toolbar-btn svg { width: 11px; height: 11px; }
-.agent-topbar .agent-toolbar-btn span { max-width: 118px; }
+.agent-topbar .agent-toolbar-btn span { max-width: 96px; }
+/* 两个模型 pill 并排（理解 / 生图），2026-10-22 老板要求分开显示 */
+.agent-topbar .agent-toolbar-dropdown-wrap { display:flex; align-items:center; gap:4px; min-width:0; }
 
 .agent-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:4px; row-gap:6px; padding:4px 8px 6px; }
 .agent-toolbar-icon { width:28px; height:28px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; border:none; background:none; color:var(--muted); cursor:pointer; transition:color .14s ease, background .14s ease; flex-shrink:0; position:relative; }
@@ -1846,6 +2062,11 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-toolbar-btn span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .agent-toolbar-btn:hover { color:var(--text); background:var(--soft); }
 .agent-toolbar-btn i,.agent-toolbar-btn svg { width:11px; height:11px; flex-shrink:0; }
+/* 思考强度面板（2026-10-22 老板要求） */
+.agent-reasoning-list { display:flex; flex-direction:column; gap:2px; min-width:158px; }
+.agent-reasoning-item { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:7px 10px; border-radius:8px; border:none; background:none; color:var(--text); font-size:10.5px; font-weight:650; cursor:pointer; text-align:left; }
+.agent-reasoning-item:hover { background:var(--soft); }
+.agent-reasoning-hint { font-size:9px; font-weight:500; color:var(--faint); }
 .agent-toolbar-spacer { flex:1; min-width:2px; }
 .agent-dropdown-panel { position:fixed; min-width:200px; max-width:calc(100vw - 60px); border-radius:13px; border:1px solid var(--line); background:var(--card); box-shadow:0 -4px 24px rgba(15,23,42,.12); z-index:9999; padding:8px; display:flex; flex-direction:column; gap:6px; }
 .agent-dropdown-panel[hidden] { display:none; }
@@ -1860,7 +2081,9 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-ratio-btn { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; height:52px; border-radius:9px; border:1px solid var(--line); background:var(--card); color:var(--muted); font-size:9.5px; font-weight:700; cursor:pointer; transition:border-color .14s ease, color .14s ease, background .14s ease; padding:6px 4px; }
 .agent-ratio-btn:hover { border-color:var(--strong); color:var(--text); }
 .agent-ratio-btn.active { border-color:var(--strong); background:var(--soft); color:var(--text); }
-.agent-ratio-icon { display:block; width:20px; max-height:24px; border:1.5px solid currentColor; border-radius:3px; }
+/* 🚨 宽高由 JS 按比例算好写进 inline style（2026-10-22）：这里**不能**再限制 width/max-height，
+   否则竖图会被压成方块，所有比例图标看起来都一样。 */
+.agent-ratio-icon { display:block; border:1.5px solid currentColor; border-radius:3px; }
 .agent-res-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:5px; }
 .agent-res-btn { height:30px; border-radius:9px; border:1px solid var(--line); background:var(--card); color:var(--muted); font-size:9.5px; font-weight:700; cursor:pointer; transition:border-color .14s ease, color .14s ease, background .14s ease; }
 .agent-res-btn:hover { border-color:var(--strong); color:var(--text); }
@@ -1911,14 +2134,6 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .agent-attach-skill button i,.agent-attach-skill button svg { width:9px; height:9px; }
 
 /* 附件节点：Agent 输入区的「文档附件」卡片（非图片 → 图标 + 文件名 + 扩展名） */
-.agent-attach-doc { position:relative; display:flex; align-items:center; gap:6px; height:44px; padding:0 44px 0 8px; border-radius:10px; border:1px solid var(--line); background:var(--card); max-width:190px; cursor:pointer; transition:border-color .14s ease; }
-.agent-attach-doc:hover { border-color:var(--strong); }
-.agent-attach-doc > i,.agent-attach-doc > svg { width:14px; height:14px; color:var(--strong); flex:0 0 auto; }
-.agent-attach-doc-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; font-weight:700; color:var(--text); }
-.agent-attach-doc-ext { flex:0 0 auto; font-size:8.5px; font-weight:800; letter-spacing:.4px; color:var(--muted); border:1px solid var(--line); border-radius:5px; padding:0 4px; }
-.agent-attach-doc button { position:absolute; top:2px; width:15px; height:15px; border-radius:50%; background:rgba(15,23,42,.78); color:#fff; display:flex; align-items:center; justify-content:center; border:none; cursor:pointer; padding:0; }
-.agent-attach-doc button[data-agent-doc-skill] { right:19px; }
-.agent-attach-doc button[data-agent-doc-remove] { right:2px; }
 .agent-attach-doc button i,.agent-attach-doc button svg { width:9px; height:9px; }
 
 /* 附件节点：Agent 消息里的文档附件 */
@@ -2009,33 +2224,8 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
     color:var(--muted);
 }
 
-/* 输入框拖拽手柄（顶部上拉条） */
-.agent-input-resize {
-    height: 10px;
-    cursor: ns-resize;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 999px;
-    margin: 0 auto 2px;
-    width: 100%;
-    transition: background .14s ease;
-}
-.agent-input-resize:hover, .agent-input-resize.dragging {
-    background: var(--soft);
-}
-.agent-input-resize::after {
-    content: '';
-    width: 36px;
-    height: 3.5px;
-    border-radius: 999px;
-    background: var(--line);
-    transition: background .14s ease, width .14s ease;
-}
-.agent-input-resize:hover::after, .agent-input-resize.dragging::after {
-    background: var(--strong);
-    width: 44px;
-}
+/* 🚨 输入框不再支持拖拽缩放（2026-10-19）：手柄已删，高度只随文字自动增长。
+   要调高请展开对话后拖悬浮框上边缘的把手。 */
 .agent-input-area { position:relative; }
 
 .asset-item { min-width:0; align-self:start; border-radius:12px; border:1px solid var(--line); background:var(--card); overflow:hidden; cursor:grab; }
