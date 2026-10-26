@@ -1974,7 +1974,11 @@ html.studio-theme-dark .agent-gen-error-text { color:#ff8a80; }
 .agent-attach-pop { display:none; position:absolute; bottom:calc(100% + 6px); left:0; z-index:90; padding:6px; border-radius:10px; border:1px solid var(--line); background:var(--panel); box-shadow:0 12px 32px var(--shadow); cursor:default; }
 #agentChipPopLayer { position:fixed; z-index:9999; pointer-events:none; }
 #agentChipPopLayer > .agent-attach-pop { display:block; position:static; }
-.agent-attach-pop > img,.agent-attach-pop > video { display:block; width:150px; height:150px; object-fit:cover; border-radius:7px; background:var(--soft); }
+/* 2026-10-26：原来固定 150x150 + object-fit:cover，长图/竖图会被裁掉一半。
+   改成「限最大边、按原比例缩放」：宽图撑满 260 宽、长图撑满 260 高，都能看全。 */
+.agent-attach-pop > img,.agent-attach-pop > video { display:block; max-width:260px; max-height:260px; width:auto; height:auto; object-fit:contain; border-radius:7px; background:var(--soft); }
+/* 图片可点击看大图 */
+.agent-attach-pop > img { cursor:zoom-in; }
 .agent-attach-pop-name { margin-top:4px; font-size:9.5px; font-weight:600; color:var(--text); max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .agent-attach-pop-sub { margin-top:2px; font-size:8.5px; color:var(--muted); }
 .agent-attach-pop-text { margin-top:4px; max-width:150px; max-height:64px; overflow:hidden; font-size:8.5px; line-height:1.45; color:var(--muted); word-break:break-word; }

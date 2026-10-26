@@ -27566,8 +27566,64 @@ function bindAgentChipHover(){
     }, {passive:true});
     agentInput?.addEventListener('scroll', hideAgentChipPop, {passive:true});
     agentMessages?.addEventListener('scroll', hideAgentChipPop, {passive:true});
+    /* 2026-10-26：点击图片胶囊 → 打开大图预览。
+       🚨 用**捕获阶段**（第三个参数 true）：消息区里有些子元素（编辑按钮等）会
+       stopPropagation，冒泡阶段到不了 document，之前那版就是因此完全没反应。
+       捕获阶段先于它们执行，稳。
+       🚨 判定用「排除 #agentInput」而不是「包含 #agentMessages」：
+       输入框是 contenteditable，点击要移动光标，必须排除；其余位置的 att 胶囊都能点。 */
+    document.addEventListener('click', e => {
+        const chip = e.target?.closest?.('.agent-inline-chip');
+        if(!chip) return;
+        if(String(chip.dataset.chipKind || '') !== 'att') return;
+        if(chip.closest('#agentInput')) return;
+        const url = (chip.querySelector('.agent-attach-pop img')?.getAttribute('src') || '').trim();
+        if(!url){
+            console.warn('[AgentChip] 胶囊里没有图片 url，跳过', chip);
+            return;
+        }
+        const hit = (nodes || []).find(n => (n.images || []).some(im => String(im?.url || '') === url));
+        if(hit){
+            const idx = (hit.images || []).findIndex(im => String(im?.url || '') === url);
+            hideAgentChipPop();
+            try{ openImagePreview(hit.id, Math.max(0, idx)); }
+            catch(err){ console.error('[AgentChip] openImagePreview 失败', err); }
+            return;
+        }
+        console.info('[AgentChip] 画布上没找到该图，改为新标签打开', url);
+        window.open(url, '_blank', 'noopener');
+    }, true);
 }
 bindAgentChipHover();
+/* 2026-10-26：Agent 里的图片胶囊可以拖到画布上。
+   复用画布「素材库拖入」那套协议（application/x-smart-asset + text/plain），
+   所以 drop 端一行都不用改。 */
+function bindAgentChipDrag(){
+    if(document.documentElement.dataset.chipDrag === '1') return;
+    document.documentElement.dataset.chipDrag = '1';
+    // span 默认不可拖，鼠标经过时打开（拖拽开始前必须已设置）
+    document.addEventListener('mouseover', e => {
+        const chip = e.target.closest?.('.agent-inline-chip');
+        if(chip && chip.dataset.chipKind === 'att') chip.draggable = true;
+    });
+    document.addEventListener('dragstart', e => {
+        const chip = e.target.closest?.('.agent-inline-chip');
+        if(!chip || chip.dataset.chipKind !== 'att') return;
+        if(!chip.closest('#agentMessages, #agentInput')) return;
+        const url = (chip.querySelector('.agent-attach-pop img')?.getAttribute('src') || '').trim();
+        if(!url) return;
+        const name = chip.querySelector('.agent-inline-chip-name')?.textContent?.trim() || '';
+        try{
+            e.dataTransfer.effectAllowed = 'copy';
+            e.dataTransfer.setData('application/x-smart-asset',
+                JSON.stringify(assetNodeImageFromItem({url, name, kind:'image'})));
+            e.dataTransfer.setData('text/plain', url);
+        }catch(_){}
+        // 拖拽期间把悬停预览卡收掉，否则会跟着鼠标飘
+        hideAgentChipPop();
+    });
+}
+bindAgentChipDrag();
 function agentRemoveChipByKey(key){
     if(!agentState || !key) return;
     const kind = String(key).split(':')[0];
