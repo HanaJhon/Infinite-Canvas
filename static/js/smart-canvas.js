@@ -25322,7 +25322,7 @@ let agentSaveTimer = null;
 let agentState = null;
 let agentMentionIdx = -1;
 function agentDefaultState(){
-    return {skills:[], attachments:[], documents:[], nodeRefs:[], messages:[], conversations:[], activeConversationId:'', chatProvider:'', chatModel:'', genProvider:'', genModel:'', genRatio:'square', genResolution:'4k', genCount:1, genQuality:'high', autoContext:true, devMode:true, thinkingMode:true, reasoningEffort:'auto'};
+    return {skills:[], attachments:[], documents:[], nodeRefs:[], messages:[], conversations:[], activeConversationId:'', chatProvider:'', chatModel:'', genProvider:'', genModel:'', genRatio:'square', genResolution:'4k', genCount:'auto', genQuality:'high', autoContext:true, devMode:true, thinkingMode:true, reasoningEffort:'auto'};
 }
 // 🚨 模型经常把 options 写成字符串数组（["方向1：温馨居家", …]）。渲染层要 opt.label/opt.value，
 //    字符串会渲染成一排**空白按钮**（点了还没值）。这里统一归一化成 {label,value}，去空、截 6 个。
@@ -25480,6 +25480,18 @@ function loadAgentState(){
     }
     delete agentState.skill;
     if(!Array.isArray(agentState.skills)) agentState.skills = [];
+    /* 🚨 张数默认值迁移（2026-10-26 老板：取消图片数量强规则，改由理解模型判断）。
+       老 localStorage 里 `genCount: 1` 是**旧默认值**，不是用户的选择 —— 不迁移的话
+       存量用户永远被「1 张」管着，改默认值救不了他们（BH.27 同一个坑）。
+       用一次性标记，只迁一次；迁完用户仍可在面板里显式选 1 张。 */
+    if(!agentState._genCountMigrated){
+        const _raw = String(agentState.genCount ?? '').trim();
+        if(_raw === '1' || _raw === '' || _raw === 'undefined' || _raw === 'null'){
+            agentState.genCount = 'auto';
+        }
+        agentState._genCountMigrated = true;
+    }
+    if(String(agentState.genCount ?? '').trim() === '') agentState.genCount = 'auto';
     // 挂载的 Skill 走全局：本画布存的那份只当兜底，全局有就以全局为准（跨画布互通）
     try {
         const rawGlobal = localStorage.getItem(AGENT_SKILLS_GLOBAL_KEY);
@@ -26598,11 +26610,17 @@ function chatRequestedImageCount(text){
 // 返回 {count, source}，count 始终 >=1
 function resolveFinalGenCount(text){
     const fromInput = chatRequestedImageCount(text);
-    // 只有输入框明确请求 >1 张时才覆盖工具栏设置
-    // 原因：数量1是默认值，且"一条龙"等固定词组会被误判为1
+    // ① 用户原话明确说了数字 → 以用户为准（这是硬需求，不能交给模型猜）
     if(fromInput > 1) return {count: Math.min(8, fromInput), source:'input'};
-    const toolbar = Math.max(1, Math.min(8, Number(agentState?.genCount) || 1));
-    return {count: toolbar, source:'toolbar'};
+    /* ② 面板里显式选了 2/3/4 → 用面板的值
+       ③ 否则（面板 = 自动 / 空）→ 返回 0，**交给理解模型判断**（2026-10-26 老板要求）：
+          原来这里回落到 `Number(genCount) || 1`，等于永远 1 张，把模型的多方向判断废掉了。 */
+    const toolbar = String(agentState?.genCount ?? 'auto').trim().toLowerCase();
+    if(toolbar && toolbar !== 'auto'){
+        // 显式选了 N（**含 1**）→ 如实返回，别把「选 1」当成 auto 混过去
+        return {count: Math.max(1, Math.min(8, Number(toolbar) || 1)), source:'toolbar'};
+    }
+    return {count: 0, source:'model'};
 }
 // 偏好记忆里是否要求「先给多个方向」。
 // 🚨 这是编排层能否真的给出多方向的前提：执行层原来无条件截成 1 条，记忆形同废纸。
@@ -26939,12 +26957,16 @@ function agentUpdateToolbarLabels(){
     if(paramsLabel && agentState){
         const ratio = agentRatioLabel(agentState.genRatio || 'square');
         const res = (agentState.genResolution || '1k').toUpperCase();
-        const count = agentState.genCount || 1;
+        // 张数：auto = 交给理解模型判断（2026-10-26 老板要求），显示成「自动」而不是「1张」
+        const _countRaw = String(agentState.genCount ?? 'auto').trim().toLowerCase();
+        const countText = _countRaw === 'auto'
+            ? '自动'
+            : `${Math.max(1, Math.min(8, Number(_countRaw) || 1))}张`;
         const quality = agentState.genQuality || '';
         // 🚨 质量段永远显示（2026-10-22 老板截图：pill 只显示「1:1 · 4K · 1张」，少了质量像没更新）。
         //    genQuality 为空 = 自动，也要写成「自动」，不能整段吞掉。
         const qLabel = ` · ${agentQualityLabel(quality)}`;
-        paramsLabel.textContent = `${ratio} · ${res} · ${count}张${qLabel}`;
+        paramsLabel.textContent = `${ratio} · ${res} · ${countText}${qLabel}`;
     }
 }
 function agentMoveSelectsToDropdown(){
@@ -27005,7 +27027,8 @@ function agentSyncParamsPanel(){
     if(!agentState) return;
     const ratio = agentState.genRatio || 'square';
     const res = agentState.genResolution || '1k';
-    const count = agentState.genCount || 1;
+    // 张数支持 'auto'（2026-10-26）：表示不设上限、由理解模型判断
+    const countRaw = String(agentState.genCount ?? 'auto').trim().toLowerCase();
     const quality = agentState.genQuality || '';
     /* 🚨 比例按钮按**当前生图模型**动态生成（2026-10-22 老板：「直接用节点下的这套尺寸规则」）：
        换模型后可选比例会变 —— nano-banana 有「自动」、Grsai 系没有 9:21、nano-banana-2 多四个极端比例。
@@ -27041,7 +27064,9 @@ function agentSyncParamsPanel(){
     });
     // 同步数量网格
     document.querySelectorAll('.agent-count-btn').forEach(btn => {
-        btn.classList.toggle('active', Number(btn.dataset.count) === count);
+        const v = String(btn.dataset.count || '').trim().toLowerCase();
+        const isAutoBtn = v === 'auto';
+        btn.classList.toggle('active', isAutoBtn ? countRaw === 'auto' : (countRaw !== 'auto' && Number(v) === Number(countRaw)));
     });
     // 同步质量
     document.querySelectorAll('.agent-quality-btn').forEach(btn => {
@@ -27050,7 +27075,7 @@ function agentSyncParamsPanel(){
     // 同步隐藏 select（保持后端兼容）
     if(agentGenRatio) agentGenRatio.value = ratio;
     if(agentGenResolution) agentGenResolution.value = res;
-    if(agentGenCount) agentGenCount.value = String(count);
+    if(agentGenCount) agentGenCount.value = (countRaw === 'auto') ? 'auto' : String(Number(countRaw) || 1);
 }
 function renderAgentSkill(){ /* Skill 已合并到附件系统，不再需要单独渲染 */ }
 function setAgentSkillFile(file){
@@ -28748,12 +28773,17 @@ When a skill document is provided, every prompt you generate MUST fully and verb
     // 注入最终出图数量（前端已决策：输入框显式要求 > 工具栏设置）
     // 🚨 必须写成「要是这轮出图的话」——原来那句「prompts 数组只返回恰好 1 条」会被模型理解成
     //    「每轮都必须返回一条 prompt」，于是连「你好」都在憋提示词。
-    const _finalCount = Math.max(1, Math.min(8, Number(finalCount) || Number(agentState?.genCount) || 1));
+    /* 🚨 张数：面板选「自动」时**不再强制 1**（2026-10-26 老板：取消数量强规则，改由理解模型判断）。
+       原来 `Number(agentState?.genCount)` 遇到 'auto' 会变 NaN → `|| 1` → 又把模型按回 1 张。 */
+    const _fcRaw = String(agentState?.genCount ?? 'auto').trim().toLowerCase();
+    const _fcAuto = (_fcRaw === 'auto' || _fcRaw === '');
+    const _fcFromState = _fcAuto ? 0 : (Number(_fcRaw) || 0);
+    const _finalCount = Math.max(1, Math.min(8, Number(finalCount) || _fcFromState || 1));
     // 🚨 「张数」和「prompt 条数」是两件事，原来混成一句 `prompts 只返回 1 条`，
     //    结果把用户画像里「先给 2-3 个方向」彻底压死了（实测：记忆块明写着要多方向，模型照样只回 1 条）。
     //    张数 = 每个方向出几张（count）；条数 = 给几个方向。
     parts.push(`【出图数量 / Output Count】**只有这一轮确实要出图时**才相关：
-- 每条 prompt 的 "count" = ${_finalCount}（同一方向出几张），不要靠堆多条 prompt 来凑张数${_finalCount > 1 ? `；同方向的 ${_finalCount} 张必须在主题、品牌方向、变体方向上有明显差异（不能只换个颜色或微调）` : ""}。
+- 每条 prompt 的 "count" = ${_fcAuto ? '**由你判断**（用户没特别要求就填 1；他明显想要多张备选时才 >1）' : _finalCount}（同一方向出几张），不要靠堆多条 prompt 来凑张数${_finalCount > 1 ? `；同方向的 ${_finalCount} 张必须在主题、品牌方向、变体方向上有明显差异（不能只换个颜色或微调）` : ""}。
 - prompts 的**条数** = 方向数：用户没提方向时 1 条就够；**用户记忆或本轮明确要多个方向时，每个方向各写 1 条**（要 2-3 个方向就写 2-3 条 prompt）。
 - 🚨 **用户本轮说了数量就以用户为准**：「一张」「两张」「给我 3 个方向」这类明确数字，
   一律压过偏好记忆里的「先给 2-3 个方向」—— 记忆是默认值，不是硬规矩。
@@ -29979,18 +30009,23 @@ if(!parsed.canvas_ops.length && parsed.prompts.length === 0 && parsed.generation
         if(requestedCount > 1 && parsed.prompts.length > requestedCount){
             parsed.prompts = parsed.prompts.slice(0, requestedCount);
         }
-        // 3c. 多方向截断规则（2026-10-20 改）：原来只要「用户没要多张」就硬截成 1 条，
-        //     把偏好记忆里的「先给 2-3 个方向」也一起砍了 —— 编排层想给多方向根本落不了地。
-        //     现在分三档：
-        //       ① 用户本轮说了数字（"一张""3个"）→ 以用户为准，按数字截；
-        //       ② 用户没说，但偏好记忆要多方向 → 保留模型给的多方向；
-        //       ③ 用户没说、记忆也不要多方向 → 才截成 1 条。
+        /* 3c. 多方向截断（2026-10-26 老板：**取消图片数量的强规则，改由理解模型判断**）。
+           原来还有第三档：用户没说数字、偏好记忆也不要多方向时 → **硬截成 1 条**。
+           那等于永远只出 1 张，模型判断出「这个需求适合给 2-3 个方向」也被砍掉。
+           现在只保留「用户原话明确说了数字」这一档（那是真需求），其余一律尊重模型给的数量。 */
         if(parsed.prompts.length > 1){
             const _explicitN = chatRequestedImageCount(text);
             if(_explicitN > 0){
+                // ① 用户原话说了数字 → 以用户为准
                 parsed.prompts = parsed.prompts.slice(0, Math.min(8, _explicitN));
-            } else if(requestedCount === 0 && !agentWantsMultiDirection()){
-                parsed.prompts = parsed.prompts.slice(0, 1);
+            } else {
+                // ② 参数面板里显式选了 N（含 1）→ 按面板截
+                // ③ 面板是「自动」→ **完全不截**，模型给几条就是几条（2026-10-26 老板要求）
+                const _tb = String(agentState?.genCount ?? 'auto').trim().toLowerCase();
+                if(_tb !== '' && _tb !== 'auto'){
+                    const _n = Math.max(1, Math.min(8, Number(_tb) || 1));
+                    parsed.prompts = parsed.prompts.slice(0, _n);
+                }
             }
         }
     }
@@ -30619,7 +30654,8 @@ async function sendAgentMessage(){
     const _finalCount = resolveFinalGenCount(text);
     // 阶段二继承：如果当前没有明确请求多张，但上一条 user 消息有 requestedCount，继承它
     // 这确保阶段二（选风格后）和阶段一的数量一致
-    if(_finalCount.count <= 1){
+    // 🚨 面板显式选了（source==='toolbar'，含选 1）时不继承 —— 那是用户刚下的指令
+    if(_finalCount.count <= 1 && _finalCount.source !== 'toolbar'){
         const _prevUserMsg = [...(agentState.messages || [])].reverse().find(m => m.role === 'user');
         if(_prevUserMsg?.requestedCount > 1){
             _finalCount.count = _prevUserMsg.requestedCount;
@@ -30630,7 +30666,9 @@ async function sendAgentMessage(){
     const _skills = Array.isArray(agentState?.skills) ? agentState.skills : [];
     if(_skills.length > 0){
         const skillNames = _skills.map(s => s?.name).filter(Boolean).join('、');
-        messageText += `${AGENT_NL}${AGENT_NL}【重要提醒】你必须完整遵循 Skill 文档（${skillNames}）的所有描述。Skill 描述的是单张图的样式（含画面内元素排列、构图、配色、排版等），每条 prompt 必须逐字保留这些样式描述，只能改变主题/变体方向。不得简化、概括或遗漏。每条 prompt 长度应与 Skill 文档相当。注意：Skill 不决定生成几张图，出图数量由系统决定（${_finalCount.count}张${_finalCount.source === 'input' ? '，来自你的输入要求' : '，来自工具栏设置'}）。`;
+        messageText += `${AGENT_NL}${AGENT_NL}【重要提醒】你必须完整遵循 Skill 文档（${skillNames}）的所有描述。Skill 描述的是单张图的样式（含画面内元素排列、构图、配色、排版等），每条 prompt 必须逐字保留这些样式描述，只能改变主题/变体方向。不得简化、概括或遗漏。每条 prompt 长度应与 Skill 文档相当。注意：Skill 不决定生成几张图，出图数量${_finalCount.count > 0
+            ? `由系统决定（${_finalCount.count}张${_finalCount.source === 'input' ? '，来自你的输入要求' : '，来自参数面板'}）`
+            : '**由你判断**（用户没特别要求就 1 张）'}。`;
     }
     const llmPayload = {
         message:messageText,
@@ -32005,7 +32043,10 @@ window.addEventListener('message', e => {
     document.getElementById('agentCountGrid')?.addEventListener('click', e => {
         const btn = e.target.closest('.agent-count-btn');
         if(!btn || !agentState) return;
-        agentState.genCount = Number(btn.dataset.count) || 1;
+        // 'auto' = 不设上限、由理解模型判断要几张（2026-10-26）
+        agentState.genCount = (String(btn.dataset.count || '').toLowerCase() === 'auto')
+            ? 'auto'
+            : (Number(btn.dataset.count) || 1);
         agentSyncParamsPanel();
         agentUpdateToolbarLabels();
         saveAgentState();

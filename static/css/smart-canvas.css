@@ -2109,7 +2109,7 @@ html.studio-theme-dark .agent-gen-error-text { color:#ff8a80; }
 .agent-size-btn { height:34px; border-radius:9px; border:1px solid var(--line); background:var(--card); color:var(--muted); font-size:9.5px; font-weight:700; cursor:pointer; transition:border-color .14s ease, color .14s ease, background .14s ease; display:flex; align-items:center; justify-content:center; }
 .agent-size-btn:hover { border-color:var(--strong); color:var(--text); }
 .agent-size-btn.active { border-color:var(--strong); background:var(--soft); color:var(--text); }
-.agent-count-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:5px; }
+.agent-count-grid { display:grid; grid-template-columns:repeat(5, 1fr); gap:5px; }
 .agent-count-btn { height:30px; border-radius:9px; border:1px solid var(--line); background:var(--card); color:var(--muted); font-size:9.5px; font-weight:700; cursor:pointer; transition:border-color .14s ease, color .14s ease, background .14s ease; }
 .agent-count-btn:hover { border-color:var(--strong); color:var(--text); }
 .agent-count-btn.active { border-color:var(--strong); background:var(--soft); color:var(--text); }
