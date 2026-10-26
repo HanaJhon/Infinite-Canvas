@@ -17,6 +17,9 @@
          上会被 Windows 整体位图拉伸 → 文字发虚、窗口圆角（1 位区域掩码）被放大成明显锯齿。 -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
+  <!-- 2026-10-26：CefSharp 试过但放弃（libcef.dll 276 MB，发布包翻 3 倍）；
+       仍用 WebView2（系统级运行时共享，包不变大）。本机运行时损坏时用
+       scripts/fix-webview2.ps1 重装即可。 -->
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
   </ItemGroup>
