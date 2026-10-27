@@ -83,6 +83,8 @@ ROOT_FILES = [
     "main.py",
     # 混元3D 节点的浏览器通道客户端（main.py 启动时直接 import，缺了服务起不来）
     "hunyuan3d_client.py",
+    # 多账号：用户/会话/鉴权（main.py 启动时直接 import，缺了服务起不来）
+    "auth.py",
     "VERSION",
     "requirements.txt",
     "README.md",

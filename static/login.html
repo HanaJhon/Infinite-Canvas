@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>登录 · Infinite Canvas</title>
+<style>
+  :root{
+    --bg:#f7f8fb; --card:#ffffff; --text:#141821; --dim:#6b7280;
+    --line:#e6e8ef; --accent:#141821; --danger:#e5484d; --soft:#f1f3f8;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#0b0d12; --card:#151922; --text:#e8ecf4; --dim:#8b94a6;
+           --line:#252b38; --accent:#e8ecf4; --soft:#1b202b; }
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:"Microsoft YaHei UI","PingFang SC",system-ui,-apple-system,sans-serif;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .wrap{width:100%; max-width:400px; padding:24px}
+  .brand{display:flex; align-items:center; gap:10px; margin-bottom:28px; justify-content:center}
+  .brand-mark{
+    width:34px;height:34px;border-radius:10px;background:var(--accent);
+    display:flex;align-items:center;justify-content:center;color:var(--bg);
+    font-weight:800;font-size:16px;
+  }
+  .brand-name{font-size:15px;font-weight:700;letter-spacing:.06em}
+  .card{
+    background:var(--card); border:1px solid var(--line); border-radius:16px;
+    padding:28px 26px; box-shadow:0 12px 40px rgba(16,24,40,.06);
+  }
+  h1{font-size:19px;margin:0 0 6px}
+  .sub{font-size:12.5px;color:var(--dim);margin:0 0 22px;line-height:1.6}
+  label{display:block;font-size:12px;font-weight:600;color:var(--dim);margin:0 0 6px}
+  input{
+    width:100%;height:42px;padding:0 12px;border-radius:10px;
+    border:1px solid var(--line);background:var(--soft);color:var(--text);
+    font-size:14px;outline:none;transition:border-color .15s, background .15s;
+  }
+  input:focus{border-color:var(--accent);background:var(--card)}
+  .field{margin-bottom:14px}
+  button{
+    width:100%;height:44px;border:0;border-radius:10px;cursor:pointer;
+    background:var(--accent);color:var(--bg);font-size:14px;font-weight:700;
+    margin-top:6px;transition:opacity .15s;
+  }
+  button:hover{opacity:.88}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .err{
+    display:none;margin-top:14px;padding:9px 12px;border-radius:9px;
+    background:rgba(229,72,77,.1);color:var(--danger);font-size:12.5px;line-height:1.5;
+  }
+  .err.on{display:block}
+  .tip{margin-top:18px;font-size:11.5px;color:var(--dim);text-align:center;line-height:1.7}
+  .hide{display:none !important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">
+    <div class="brand-mark">C</div>
+    <div class="brand-name">INFINITE CANVAS</div>
+  </div>
+
+  <div class="card">
+    <h1 id="title">登录</h1>
+    <p class="sub" id="subtitle">输入你的账号继续使用无限画布。</p>
+
+    <form id="form" autocomplete="on">
+      <div class="field">
+        <label for="name">账号</label>
+        <input id="name" name="username" type="text" autocomplete="username"
+               placeholder="2-24 位，中英文 / 数字 / _ -" required />
+      </div>
+      <div class="field">
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password"
+               autocomplete="current-password" placeholder="至少 6 位" required />
+      </div>
+      <div class="field hide" id="confirmField">
+        <label for="confirm">确认密码</label>
+        <input id="confirm" type="password" autocomplete="new-password" placeholder="再输一次" />
+      </div>
+      <button id="submit" type="submit">登录</button>
+      <div class="err" id="err"></div>
+    </form>
+
+    <p class="tip" id="tip"></p>
+    <p class="tip" id="switchLine" style="margin-top:8px">
+      <a href="#" id="switchMode" style="color:inherit;text-decoration:underline;cursor:pointer"></a>
+    </p>
+  </div>
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var form = $('form'), nameEl = $('name'), pwEl = $('password'), confirmEl = $('confirm');
+  var confirmField = $('confirmField'), errBox = $('err'), submitBtn = $('submit');
+  var titleEl = $('title'), subtitleEl = $('subtitle'), tipEl = $('tip');
+  var isSetup = false;   // 首次初始化（无任何账号）→ 创建管理员
+  var isRegister = false; // 手动注册 → 创建普通成员
+
+  function showErr(msg) {
+    errBox.textContent = msg || '';
+    errBox.classList.toggle('on', !!msg);
+  }
+
+  var switchLine = $('switchLine'), switchBtn = $('switchMode');
+
+  function applyMode(mode) {
+    isSetup = (mode === 'setup');
+    isRegister = (mode === 'register');
+    var needConfirm = isSetup || isRegister;
+
+    if (isSetup) {
+      titleEl.textContent = '初始化管理员';
+      subtitleEl.textContent = '这是第一次使用，请创建管理员账号。现有的画布和 Agent 记录会自动归到这个账号下。';
+      submitBtn.textContent = '创建并进入';
+      tipEl.textContent = '创建后，其他同事可以自行注册普通账号，画布互不影响。';
+      switchLine.classList.add('hide');
+    } else if (isRegister) {
+      titleEl.textContent = '注册账号';
+      subtitleEl.textContent = '创建一个普通账号。你的画布与 Agent 记录独立，工作流库与团队资产库和同事共享。';
+      submitBtn.textContent = '注册并进入';
+      tipEl.textContent = '注册后直接登录，无需等待审核。';
+      switchBtn.textContent = '已有账号？去登录';
+      switchLine.classList.remove('hide');
+    } else {
+      titleEl.textContent = '登录';
+      subtitleEl.textContent = '输入你的账号继续使用无限画布。';
+      submitBtn.textContent = '登录';
+      tipEl.textContent = '';
+      switchBtn.textContent = '还没有账号？注册一个';
+      switchLine.classList.remove('hide');
+    }
+
+    confirmField.classList.toggle('hide', !needConfirm);
+    confirmEl.required = needConfirm;
+    pwEl.setAttribute('autocomplete', needConfirm ? 'new-password' : 'current-password');
+  }
+
+  function api(path, payload) {
+    return fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+      credentials: 'same-origin'
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (data) {
+        if (!r.ok) throw new Error(data.detail || ('请求失败 ' + r.status));
+        return data;
+      });
+    });
+  }
+
+  function go() {
+    var next = new URLSearchParams(location.search).get('next');
+    // 🚨 跳 `/` 而不是 `/index.html`：后端只给 `/` 注册了路由，
+    //    `/index.html` 会 404（页面会显示 {"detail":"Not Found"}）。
+    location.replace(next && next.charAt(0) === '/' && next !== '/index.html' ? next : '/');
+  }
+
+  // 初始状态：判断是「首次初始化」还是「正常登录」
+  fetch('/api/auth/status', { credentials: 'same-origin' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d && d.user) { go(); return; }
+      applyMode(d && d.need_setup ? 'setup' : 'login');
+    })
+    .catch(function () { applyMode('login'); });
+
+  // 登录 / 注册 互相切换（首次初始化时隐藏）
+  switchBtn.addEventListener('click', function (e) {
+    e.preventDefault();
+    showErr('');
+    applyMode(isRegister ? 'login' : 'register');
+    nameEl.focus();
+  });
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    showErr('');
+    var name = nameEl.value.trim();
+    var pw = pwEl.value;
+    if (!name || !pw) { showErr('请填写账号和密码'); return; }
+    var creating = isSetup || isRegister;
+    if (creating && pw !== confirmEl.value) { showErr('两次输入的密码不一致'); return; }
+    if (creating && pw.length < 6) { showErr('密码至少 6 位'); return; }
+
+    submitBtn.disabled = true;
+    var req = creating
+      ? api('/api/auth/register', { name: name, password: pw })
+      : api('/api/auth/login', { name: name, password: pw });
+
+    req.then(function () { go(); })
+       .catch(function (err) { showErr(err.message || '操作失败'); })
+       .then(function () { submitBtn.disabled = false; });
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>账号管理 · Infinite Canvas</title>
+<style>
+  :root{--bg:#f7f8fb;--card:#fff;--text:#141821;--dim:#6b7280;--line:#e6e8ef;--accent:#141821;--soft:#f1f3f8;--danger:#e5484d}
+  @media (prefers-color-scheme:dark){:root{--bg:#0b0d12;--card:#151922;--text:#e8ecf4;--dim:#8b94a6;--line:#252b38;--accent:#e8ecf4;--soft:#1b202b}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:"Microsoft YaHei UI","PingFang SC",system-ui,sans-serif}
+  .wrap{max-width:720px;margin:0 auto;padding:32px 20px 60px}
+  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px}
+  h1{font-size:19px;margin:0}
+  .back{font-size:12.5px;color:var(--dim);text-decoration:none;padding:6px 12px;border-radius:8px;border:1px solid var(--line)}
+  .back:hover{background:var(--soft)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-bottom:16px}
+  .card h2{font-size:13px;margin:0 0 12px;color:var(--dim);font-weight:700;letter-spacing:.04em}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  input{height:38px;padding:0 11px;border-radius:9px;border:1px solid var(--line);background:var(--soft);color:var(--text);font-size:13px;outline:none;min-width:150px;flex:1}
+  input:focus{border-color:var(--accent)}
+  button{height:38px;padding:0 16px;border:0;border-radius:9px;background:var(--accent);color:var(--bg);font-size:13px;font-weight:700;cursor:pointer}
+  button:hover{opacity:.88}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--text);font-weight:600}
+  button.danger{background:transparent;border:1px solid var(--line);color:var(--danger);font-weight:600}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:10px 6px;border-bottom:1px solid var(--line)}
+  th{font-size:11px;color:var(--dim);font-weight:700;letter-spacing:.04em}
+  tr:last-child td{border-bottom:0}
+  .badge{display:inline-block;padding:2px 7px;border-radius:999px;background:var(--soft);font-size:10.5px;font-weight:700;color:var(--dim)}
+  .badge.admin{background:rgba(20,24,33,.9);color:#fff}
+  .msg{margin-top:10px;font-size:12.5px;min-height:18px}
+  .msg.err{color:var(--danger)}
+  .msg.ok{color:#1a7f4b}
+  .muted{color:var(--dim);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>账号管理</h1>
+    <a class="back" href="/index.html">返回画布</a>
+  </div>
+
+  <div class="card">
+    <h2>新增账号</h2>
+    <div class="row">
+      <input id="newName" placeholder="账号（2-24 位，中英文/数字/_ -）" />
+      <input id="newPw" type="password" placeholder="密码（至少 6 位）" />
+      <button id="addBtn">创建</button>
+    </div>
+    <div class="msg" id="addMsg"></div>
+    <p class="muted" style="margin:10px 0 0">新账号的画布与 Agent 记录从空白开始，互不影响；工作流库与团队资产库是共享的。</p>
+  </div>
+
+  <div class="card">
+    <h2>所有账号</h2>
+    <table>
+      <thead><tr><th>账号</th><th>角色</th><th style="width:190px">操作</th></tr></thead>
+      <tbody id="tbody"><tr><td colspan="3" class="muted">加载中…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+
+  function api(path, opts) {
+    return fetch(path, Object.assign({ credentials: 'same-origin' }, opts || {}))
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (d) {
+          if (!r.ok) throw new Error(d.detail || ('请求失败 ' + r.status));
+          return d;
+        });
+      });
+  }
+
+  function setMsg(node, text, kind) {
+    node.textContent = text || '';
+    node.className = 'msg' + (kind ? ' ' + kind : '');
+  }
+
+  var me = null;
+
+  function render(users) {
+    var tb = $('tbody');
+    tb.innerHTML = '';
+    users.forEach(function (u) {
+      var tr = document.createElement('tr');
+
+      var td1 = document.createElement('td');
+      td1.textContent = u.name;
+      if (u.id === me.id) {
+        var you = document.createElement('span');
+        you.className = 'badge';
+        you.style.marginLeft = '6px';
+        you.textContent = '我';
+        td1.appendChild(you);
+      }
+
+      var td2 = document.createElement('td');
+      var b = document.createElement('span');
+      b.className = 'badge' + (u.role === 'admin' ? ' admin' : '');
+      b.textContent = u.role === 'admin' ? '管理员' : '成员';
+      td2.appendChild(b);
+
+      var td3 = document.createElement('td');
+      var pwBtn = document.createElement('button');
+      pwBtn.className = 'ghost';
+      pwBtn.textContent = '重置密码';
+      pwBtn.onclick = function () {
+        var pw = prompt('给「' + u.name + '」设置新密码（至少 6 位）：');
+        if (!pw) return;
+        api('/api/auth/users/' + u.id + '/password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pw })
+        }).then(function () { alert('已重置，该账号需要重新登录'); })
+          .catch(function (e) { alert(e.message); });
+      };
+      td3.appendChild(pwBtn);
+
+      if (u.id !== me.id) {
+        var delBtn = document.createElement('button');
+        delBtn.className = 'danger';
+        delBtn.style.marginLeft = '8px';
+        delBtn.textContent = '删除';
+        delBtn.onclick = function () {
+          if (!confirm('删除账号「' + u.name + '」？\n该账号的画布和 Agent 记录会一并删除，无法恢复。')) return;
+          api('/api/auth/users/' + u.id, { method: 'DELETE' })
+            .then(load).catch(function (e) { alert(e.message); });
+        };
+        td3.appendChild(delBtn);
+      }
+
+      tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
+      tb.appendChild(tr);
+    });
+  }
+
+  function load() {
+    return api('/api/auth/users').then(function (d) { render(d.users || []); })
+      .catch(function (e) {
+        $('tbody').innerHTML = '<tr><td colspan="3" class="muted">' + e.message + '</td></tr>';
+      });
+  }
+
+  api('/api/auth/me').then(function (d) {
+    me = d.user;
+    if (!me || me.role !== 'admin') {
+      document.querySelector('.wrap').innerHTML =
+        '<p style="color:#e5484d">只有管理员可以访问这个页面。</p>';
+      return;
+    }
+    load();
+  }).catch(function () { location.replace('/login.html'); });
+
+  $('addBtn').onclick = function () {
+    var name = $('newName').value.trim();
+    var pw = $('newPw').value;
+    if (!name || !pw) { setMsg($('addMsg'), '请填写账号和密码', 'err'); return; }
+    api('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, password: pw })
+    }).then(function () {
+      setMsg($('addMsg'), '已创建「' + name + '」', 'ok');
+      $('newName').value = ''; $('newPw').value = '';
+      load();
+    }).catch(function (e) { setMsg($('addMsg'), e.message, 'err'); });
+  };
+})();
+</script>
+</body>
+</html>

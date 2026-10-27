@@ -36,7 +36,7 @@ from io import BytesIO
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse, RedirectResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -81,6 +81,19 @@ class QuietAccessLogFilter(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(QuietAccessLogFilter())
 
+# ---------------------------------------------------------------- 多账号（2026-10-27）
+import auth as _auth
+
+#: 免鉴权路径（登录页本身、静态资源、登录相关接口）
+_AUTH_OPEN_PREFIXES = (
+    "/api/auth/",
+    "/static/",
+    "/assets/",
+    "/output/",
+    "/favicon",
+)
+_AUTH_OPEN_EXACT = {"/login.html", "/login"}
+
 app = FastAPI()
 
 app.add_middleware(
@@ -90,9 +103,74 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def _auth_required(path: str) -> bool:
+    """判断该请求是否需要登录。"""
+    low = path.lower()
+    if low in _AUTH_OPEN_EXACT:
+        return False
+    for pref in _AUTH_OPEN_PREFIXES:
+        if low.startswith(pref):
+            return False
+    # 静态后缀一律放行（图片 / 字体 / 图标等）
+    if low.endswith((".js", ".css", ".png", ".jpg", ".jpeg", ".webp", ".gif",
+                     ".svg", ".ico", ".woff", ".woff2", ".ttf", ".mp4", ".webm")):
+        return False
+    return True
+
+
+def _is_admin_only(path: str) -> bool:
+    """管理员专属页面。🚨 必须在鉴权分支之前独立判断 ——
+    `/static/*` 是免鉴权前缀，写在 `if _auth_required(path):` 里面永远不会执行。"""
+    low = path.lower()
+    return low.startswith("/static/api-settings") or low == "/accounts.html"
+
+
 @app.middleware("http")
 async def no_cache_html_middleware(request: Request, call_next):
-    response = await call_next(request)
+    path = request.url.path
+    # ---- 多账号鉴权：未登录时 API 返回 401，页面跳登录页 ----
+    _token_set = None
+
+    # ① 管理员专属页面先拦（与是否免鉴权无关）
+    if _is_admin_only(path):
+        _u = _auth_store.session_user(request.cookies.get(_auth.SESSION_COOKIE, ""))
+        if not _u:
+            if path.startswith("/api/"):
+                return JSONResponse({"detail": "未登录", "need_login": True}, status_code=401)
+            return RedirectResponse("/login.html", status_code=302)
+        if _u.get("role") != "admin":
+            if path.startswith("/api/"):
+                return JSONResponse({"detail": "仅管理员可访问"}, status_code=403)
+            return HTMLResponse(
+                "<meta charset='utf-8'><div style='font:14px/1.8 system-ui;padding:48px;color:#e5484d'>"
+                "这个页面仅管理员可访问。</div>",
+                status_code=403,
+            )
+
+    if _auth_required(path):
+        token = request.cookies.get(_auth.SESSION_COOKIE, "")
+        user = _auth_store.session_user(token)
+        if not user:
+            if path.startswith("/api/"):
+                return JSONResponse(
+                    {"detail": "未登录", "need_login": True},
+                    status_code=401,
+                )
+            return RedirectResponse("/login.html", status_code=302)
+        # 用 contextvar 把当前用户传给 UserScopedPath（异步并发下安全）
+        _token_set = current_uid.set(user["id"])
+        # 🚨 新账号第一次访问时它的 data/users/<uid>/ 还不存在，
+        #    canvases/ conversations/ 等直接 listdir 会 500 —— 这里保证目录就位。
+        try:
+            _auth.ensure_user_dirs(DATA_DIR, user["id"])
+        except Exception:
+            pass
+        # 2026-10-27：API 设置页 / 账号管理页只给管理员 —— 已在上面 _is_admin_only 分支处理
+    try:
+        response = await call_next(request)
+    finally:
+        if _token_set is not None:
+            current_uid.reset(_token_set)
     path = request.url.path.lower()
     if path.endswith(".html"):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -299,11 +377,55 @@ LOCAL_UPLOAD_DIR = os.path.join(ASSETS_DIR, "uploads")
 HISTORY_FILE = os.path.join(BASE_DIR, "history.json")
 API_ENV_FILE = os.path.join(BASE_DIR, "API", ".env")
 DATA_DIR = os.path.join(BASE_DIR, "data")
-CONVERSATION_DIR = os.path.join(DATA_DIR, "conversations")
-CANVAS_DIR = os.path.join(DATA_DIR, "canvases")
-MEDIA_PREVIEW_DIR = os.path.join(DATA_DIR, "media_previews")
-ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library.json")
-PROMPT_LIBRARY_PATH = os.path.join(DATA_DIR, "prompt_libraries.json")
+
+# ---------------------------------------------------------------- 多账号（2026-10-27）
+# 局域网多人使用时，画布 / Agent 记录 / 个人资产库按账号隔离；
+# 工作流库（WORKFLOW_DIR）与团队资产库共享，不在这里处理。
+import contextvars as _contextvars
+
+current_uid: _contextvars.ContextVar[str] = _contextvars.ContextVar("ic_current_uid", default="")
+
+
+class UserScopedPath:
+    """按当前登录用户解析的数据路径；未登录时回落 data/ 根（兼容首次启动与迁移）。
+
+    关键：实现 __fspath__ / __str__，让 os.path.join / os.makedirs / open 都能直接用，
+    这样原有 19 处 CANVAS_DIR 引用一行都不用改，自动变成「当前用户的目录」。
+    """
+    __slots__ = ("parts",)
+
+    def __init__(self, *parts):
+        self.parts = parts
+
+    def resolve(self) -> str:
+        uid = current_uid.get()
+        if uid:
+            return os.path.join(DATA_DIR, "users", uid, *self.parts)
+        return os.path.join(DATA_DIR, *self.parts)
+
+    def __fspath__(self):
+        return self.resolve()
+
+    def __str__(self):
+        return self.resolve()
+
+    def __repr__(self):
+        return "<UserScopedPath %s>" % "/".join(self.parts)
+
+
+CONVERSATION_DIR = UserScopedPath("conversations")
+CANVAS_DIR = UserScopedPath("canvases")
+
+# 用户/会话存储（依赖 DATA_DIR，必须放在它之后）
+_auth_store = _auth.AuthStore(DATA_DIR)
+
+#: 团队资产库（所有账号共享，不随 current_uid 变化）
+TEAM_ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library_team.json")
+#: 团队资产文件目录（个人资产放 assets/users/<uid>/library/）
+TEAM_ASSETS_DIR = os.path.join(ASSETS_DIR, "library")
+MEDIA_PREVIEW_DIR = UserScopedPath("media_previews")
+ASSET_LIBRARY_PATH = UserScopedPath("asset_library.json")
+PROMPT_LIBRARY_PATH = UserScopedPath("prompt_libraries.json")
 API_PROVIDERS_FILE = os.path.join(DATA_DIR, "api_providers.json")
 RUNNINGHUB_WORKFLOW_STORE_FILE = os.path.join(DATA_DIR, "runninghub_workflows.json")
 SHARED_FOLDERS_FILE = os.path.join(DATA_DIR, "shared_folders.json")
@@ -1604,6 +1726,163 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(WORKFLOW_DIR, exist_ok=True)
 os.makedirs(CONVERSATION_DIR, exist_ok=True)
 os.makedirs(CANVAS_DIR, exist_ok=True)
+
+# ================================================================ 账号接口（2026-10-27）
+# 局域网多人使用：注册 / 登录 / 退出 / 当前用户 / 用户管理（admin）。
+# 首个注册的账号自动成为 admin，并接管 data/ 下已有的画布与 Agent 记录。
+
+
+def _auth_user_payload(user: dict) -> dict:
+    return {
+        "id": user.get("id"),
+        "name": user.get("name"),
+        "role": user.get("role", "member"),
+    }
+
+
+def _set_session_cookie(response, token: str) -> None:
+    response.set_cookie(
+        key=_auth.SESSION_COOKIE,
+        value=token,
+        max_age=_auth.SESSION_TTL,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+
+
+def _current_user_or_401(request: Request):
+    token = request.cookies.get(_auth.SESSION_COOKIE, "")
+    user = _auth_store.session_user(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+    return user
+
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request):
+    """登录页用：判断是「首次初始化」还是「正常登录」。"""
+    has_users = _auth_store.has_any_user()
+    token = request.cookies.get(_auth.SESSION_COOKIE, "")
+    user = _auth_store.session_user(token)
+    return {
+        "has_users": has_users,
+        "need_setup": not has_users,
+        "user": _auth_user_payload(user) if user else None,
+    }
+
+
+@app.post("/api/auth/register")
+async def auth_register(payload: dict):
+    """注册。首个账号自动为 admin 并接管存量数据。"""
+    name = str(payload.get("name", "")).strip()
+    password = str(payload.get("password", ""))
+    first = not _auth_store.has_any_user()
+    try:
+        user = _auth_store.create_user(name, password, role="admin" if first else "member")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    migrated = None
+    if first:
+        # 首个账号接管现有 data/ 下的画布 / Agent 记录 / 资产库等
+        try:
+            migrated = _auth.claim_legacy_data(DATA_DIR, user["id"])
+        except Exception as exc:
+            migrated = {"errors": [str(exc)]}
+
+    token = _auth_store.create_session(user["id"])
+    response = JSONResponse({
+        "ok": True,
+        "user": _auth_user_payload(user),
+        "first_user": first,
+        "migrated": migrated,
+    })
+    _set_session_cookie(response, token)
+    return response
+
+
+@app.post("/api/auth/login")
+async def auth_login(payload: dict):
+    name = str(payload.get("name", "")).strip()
+    password = str(payload.get("password", ""))
+    user = _auth_store.find_by_name(name)
+    if not user or not _auth.verify_password(password, user.get("pw", "")):
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    token = _auth_store.create_session(user["id"])
+    response = JSONResponse({"ok": True, "user": _auth_user_payload(user)})
+    _set_session_cookie(response, token)
+    return response
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request):
+    token = request.cookies.get(_auth.SESSION_COOKIE, "")
+    _auth_store.drop_session(token)
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(_auth.SESSION_COOKIE, path="/")
+    return response
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    return {"user": _auth_user_payload(_current_user_or_401(request))}
+
+
+@app.get("/api/auth/users")
+async def auth_list_users(request: Request):
+    """管理员：列出所有账号。"""
+    me = _current_user_or_401(request)
+    if me.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可操作")
+    return {
+        "users": [
+            {**_auth_user_payload(u), "created_at": u.get("created_at")}
+            for u in _auth_store.users()
+        ]
+    }
+
+
+@app.delete("/api/auth/users/{uid}")
+async def auth_delete_user(uid: str, request: Request):
+    """管理员：删除账号（连同其个人数据目录）。"""
+    import shutil as _shutil
+
+    me = _current_user_or_401(request)
+    if me.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可操作")
+    if uid == me.get("id"):
+        raise HTTPException(status_code=400, detail="不能删除当前登录的账号")
+    target = _auth_store.find_by_id(uid)
+    if not target:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    if target.get("role") == "admin" and sum(1 for u in _auth_store.users() if u.get("role") == "admin") <= 1:
+        raise HTTPException(status_code=400, detail="至少要保留一个管理员")
+    _auth_store.drop_user_sessions(uid)
+    _auth_store.delete_user(uid)
+    try:
+        _shutil.rmtree(_auth.user_data_dir(DATA_DIR, uid), ignore_errors=True)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@app.post("/api/auth/users/{uid}/password")
+async def auth_reset_password(uid: str, payload: dict, request: Request):
+    """管理员：重置某个账号的密码。"""
+    me = _current_user_or_401(request)
+    if me.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可操作")
+    try:
+        ok = _auth_store.set_password(uid, str(payload.get("password", "")))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not ok:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    _auth_store.drop_user_sessions(uid)
+    return {"ok": True}
+
+
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
@@ -4310,7 +4589,7 @@ def normalize_canvas_kind(kind="classic"):
     return "smart" if str(kind or "").strip().lower() == "smart" else "classic"
 
 # ===== 项目（按项目分类管理画布）=====
-PROJECTS_PATH = os.path.join(DATA_DIR, "projects.json")
+PROJECTS_PATH = UserScopedPath("projects.json")
 DEFAULT_PROJECT_ID = "default"
 
 def load_projects():
@@ -6678,7 +6957,7 @@ def save_agent_tools_settings(enabled=None, max_rounds=None):
 #    deliverable / directionScene / 审美偏好三项改为**可多选**（存储仍是单个字符串，多值用「、」连接）。
 # ⚠️ 旧的 6 个 key（nickname/occupation/industry/platform/category/audience）**必须保留**，
 #    老板已经填过，改 key 等于清空他的资料。toolset 已废弃，老数据里的值下次保存会被丢掉。
-AGENT_PROFILE_FILE = os.path.join(DATA_DIR, "agent_profile.json")
+AGENT_PROFILE_FILE = UserScopedPath("agent_profile.json")
 AGENT_PROFILE_GROUPS = (
     ("基础信息", (
         ("nickname", "称呼"),
@@ -11410,13 +11689,19 @@ def migrate_asset_item_registrations(item):
     for key in AVATAR_LEGACY_FLAT_FIELDS:
         item.pop(key, None)
 
-def load_asset_library():
-    if not os.path.exists(ASSET_LIBRARY_PATH):
+def _asset_library_path(scope: str = "personal") -> str:
+    """个人资产库按账号隔离；团队资产库全局共享（2026-10-27）。"""
+    return TEAM_ASSET_LIBRARY_PATH if str(scope) == "team" else str(ASSET_LIBRARY_PATH)
+
+
+def load_asset_library(scope: str = "personal"):
+    path = _asset_library_path(scope)
+    if not os.path.exists(path):
         lib = default_asset_library()
-        save_asset_library(lib)
+        save_asset_library(lib, scope)
         return lib
     try:
-        with open(ASSET_LIBRARY_PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             lib = json.load(f)
     except Exception:
         lib = default_asset_library()
@@ -11793,12 +12078,13 @@ def make_workflow_library_item_from_bytes(raw: bytes, filename: str, name: str =
         "created_at": now_ms(),
     }
 
-def save_asset_library(lib):
+def save_asset_library(lib, scope: str = "personal"):
     lib = normalize_asset_library(lib)
     sort_asset_library_items(lib)
     lib["updated_at"] = now_ms()
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(ASSET_LIBRARY_PATH, "w", encoding="utf-8") as f:
+    path = _asset_library_path(scope)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(lib, f, ensure_ascii=False, indent=2)
     if GLOBAL_LOOP:
         asyncio.run_coroutine_threadsafe(manager.broadcast_asset_library_updated(int(lib["updated_at"])), GLOBAL_LOOP)
@@ -16376,6 +16662,24 @@ async def build_chat_text_reply(payload, conversation, user_id=None):
 @app.get("/")
 async def index():
     return static_html_response("index.html")
+
+
+@app.get("/index.html")
+async def index_alias():
+    """`/index.html` 兜底：只注册了 `/`，直接访问 `/index.html` 会 404。"""
+    return static_html_response("index.html")
+
+
+@app.get("/login.html")
+async def login_page():
+    """登录 / 首次初始化页（多账号，2026-10-27）。"""
+    return static_html_response("login.html")
+
+
+@app.get("/accounts.html")
+async def accounts_page():
+    """账号管理页（仅管理员，权限在接口层校验）。"""
+    return static_html_response("accounts.html")
 
 @app.get("/api/view")
 def view_image(filename: str, type: str = "input", subfolder: str = ""):
@@ -22370,7 +22674,8 @@ async def export_canvas_workflow_to_library(payload: CanvasWorkflowExportRequest
     filename = sanitize_export_filename(payload.filename or "canvas-workflow.zip", "canvas-workflow.zip")
     if not filename.lower().endswith(".zip"):
         filename += ".zip"
-    lib = load_asset_library()
+    # 2026-10-27：工作流库是**团队共享**的 → 写团队库（个人库按账号隔离，放这儿别人看不到）
+    lib = load_asset_library("team")
     _, cat = asset_library_workflow_category(lib, payload.library_id, payload.category_id)
     item = make_workflow_library_item_from_bytes(archive, filename, payload.name or os.path.splitext(filename)[0])
     if payload.thumbnail:
@@ -22379,7 +22684,7 @@ async def export_canvas_workflow_to_library(payload: CanvasWorkflowExportRequest
     item["connection_count"] = meta.get("connection_count") or len(payload.connections or [])
     item["resource_count"] = len(meta.get("resources") or [])
     cat.setdefault("items", []).append(item)
-    save_asset_library(lib)
+    save_asset_library(lib, "team")
     return {"library": lib, "item": item}
 
 @app.post("/api/asset-library/workflows/upload")
@@ -22388,7 +22693,8 @@ async def upload_asset_library_workflows(
     library_id: str = Form(""),
     category_id: str = Form(""),
 ):
-    lib = load_asset_library()
+    # 2026-10-27：工作流库团队共享 → 写团队库
+    lib = load_asset_library("team")
     _, cat = asset_library_workflow_category(lib, library_id, category_id)
     added = []
     for file in files[:100]:
@@ -22531,8 +22837,78 @@ async def export_smart_canvas_group(payload: SmartCanvasGroupExportRequest):
     return {"ok": True, "folder": target_dir, "count": count}
 
 @app.get("/api/asset-library")
-async def get_asset_library():
-    return {"library": load_asset_library()}
+async def get_asset_library(scope: str = "personal"):
+    """scope=personal（默认，按账号隔离）| team（全局共享）。"""
+    return {"library": load_asset_library(scope)}
+
+
+def _iter_asset_items(lib):
+    """遍历资产库里所有条目（含 libraries[].categories[] 两级）。"""
+    for cat in lib.get("categories") or []:
+        for item in cat.get("items") or []:
+            yield cat, item
+    for library in lib.get("libraries") or []:
+        for cat in library.get("categories") or []:
+            for item in cat.get("items") or []:
+                yield cat, item
+
+
+@app.post("/api/asset-library/promote")
+async def promote_assets_to_team(payload: dict):
+    """把个人资产库的条目「加入团队资产库」（2026-10-27）。
+
+    只复制索引条目（url 仍指向原文件），所以团队库不会额外占磁盘。
+    重复加入会跳过（按 url 判重）。
+    """
+    import copy as _copy
+    import uuid as _uuid
+
+    ids = payload.get("item_ids") or []
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(status_code=400, detail="item_ids 不能为空")
+    wanted = {str(x) for x in ids}
+
+    personal = load_asset_library("personal")
+    team = load_asset_library("team")
+
+    # 团队库里已有的 url，用于判重
+    team_urls = {str(it.get("url") or "") for _c, it in _iter_asset_items(team) if it.get("url")}
+
+    # 团队库的落点：优先复用「团队共享」分类，没有就建一个
+    target_cat = None
+    for cat in team.get("categories") or []:
+        if str(cat.get("name") or "") == "团队共享":
+            target_cat = cat
+            break
+    if target_cat is None:
+        target_cat = {
+            "id": "cat_" + _uuid.uuid4().hex[:12],
+            "name": "团队共享",
+            "items": [],
+        }
+        team.setdefault("categories", []).append(target_cat)
+    target_cat.setdefault("items", [])
+
+    added, skipped = 0, 0
+    for _cat, item in _iter_asset_items(personal):
+        if str(item.get("id") or "") not in wanted:
+            continue
+        url = str(item.get("url") or "")
+        if url and url in team_urls:
+            skipped += 1
+            continue
+        clone = _copy.deepcopy(item)
+        clone["id"] = "item_" + _uuid.uuid4().hex[:12]
+        clone["promoted_from"] = item.get("id")
+        clone["promoted_at"] = now_ms()
+        target_cat["items"].append(clone)
+        if url:
+            team_urls.add(url)
+        added += 1
+
+    if added:
+        save_asset_library(team, "team")
+    return {"ok": True, "added": added, "skipped": skipped, "library": team}
 
 @app.get("/api/prompt-libraries")
 async def get_prompt_libraries():
@@ -23155,49 +23531,67 @@ async def check_asset_library_avatar(item_id: str, payload: AssetAvatarRegisterR
     save_asset_library(lib)
     return {"library": lib, "item": target_item}
 
-@app.delete("/api/asset-library/items/{item_id}")
-async def delete_asset_library_item(item_id: str):
-    lib = load_asset_library()
-    removed = None
+def _strip_asset_items(lib, ids, library_id: str = ""):
+    """从资产库里摘掉指定 id 的条目（含 libraries[].categories[] 两级），返回被摘掉的条目。"""
+    removed = []
     for library in lib.get("libraries", []):
+        if library_id and library.get("id") != library_id:
+            continue
         for cat in library.get("categories", []):
             keep = []
             for item in cat.get("items", []):
-                if item.get("id") == item_id:
-                    removed = item
+                if str(item.get("id")) in ids:
+                    removed.append(item)
                 else:
                     keep.append(item)
             cat["items"] = keep
-    if not removed:
-        raise HTTPException(status_code=404, detail="资产不存在")
-    remove_asset_library_file(removed)  # 同时删除本地文件，避免磁盘上堆积
-    save_asset_library(lib)
-    return {"library": lib}
+    # 顶层 categories（团队库的「工作流」「团队共享」等直接挂这里）
+    for cat in lib.get("categories", []):
+        keep = []
+        for item in cat.get("items", []):
+            if str(item.get("id")) in ids:
+                removed.append(item)
+            else:
+                keep.append(item)
+        cat["items"] = keep
+    return removed
+
+
+@app.delete("/api/asset-library/items/{item_id}")
+async def delete_asset_library_item(item_id: str):
+    """删除资产。🚨 2026-10-27：工作流存在**团队库**，所以两个库都要扫，
+    否则删工作流会 404（前端表现为「点了没反应」）。"""
+    ids = {str(item_id)}
+    for scope in ("personal", "team"):
+        lib = load_asset_library(scope)
+        removed = _strip_asset_items(lib, ids)
+        if removed:
+            for item in removed:
+                remove_asset_library_file(item)  # 同时删本地文件，避免磁盘堆积
+            save_asset_library(lib, scope)
+            return {"library": lib}
+    raise HTTPException(status_code=404, detail="资产不存在")
 
 @app.post("/api/asset-library/items/delete")
 async def batch_delete_asset_library_items(payload: AssetLibraryBatchDeleteRequest):
     ids = {str(item) for item in (payload.ids or []) if str(item)}
     if not ids:
         raise HTTPException(status_code=400, detail="没有选择资产")
-    lib = load_asset_library()
-    removed = 0
+    # 🚨 2026-10-27：工作流在团队库，两个库都要扫
     removed_items = []
-    for library in lib.get("libraries", []):
-        if payload.library_id and library.get("id") != payload.library_id:
-            continue
-        for cat in library.get("categories", []):
-            keep = []
-            for item in cat.get("items", []):
-                if item.get("id") in ids:
-                    removed += 1
-                    removed_items.append(item)
-                else:
-                    keep.append(item)
-            cat["items"] = keep
-    for item in removed_items:  # 批量删除同时清理本地文件
-        remove_asset_library_file(item)
-    save_asset_library(lib)
-    return {"library": lib, "removed": removed}
+    last_lib = None
+    for scope in ("personal", "team"):
+        lib = load_asset_library(scope)
+        got = _strip_asset_items(lib, ids, payload.library_id or "")
+        if got:
+            for item in got:  # 批量删除同时清理本地文件
+                remove_asset_library_file(item)
+            save_asset_library(lib, scope)
+            removed_items.extend(got)
+            last_lib = lib
+    if last_lib is None:
+        last_lib = load_asset_library()
+    return {"library": last_lib, "removed": len(removed_items)}
 
 @app.post("/api/asset-library/items/move")
 async def batch_move_asset_library_items(payload: AssetLibraryBatchMoveRequest):

@@ -6117,6 +6117,24 @@ function itemsForAssetSmartClass(optionId=''){
 function workflowAssetCategories(){
     const cats = [];
     const seenCatKeys = new Set();
+    /* 🚨 2026-10-27：工作流库是**团队共享**的（后端写入也走 team 库），
+       所以这里优先用团队库，否则每个账号只能看到自己存的，别人的都看不到。 */
+    const _teamLib = window.__teamLibrary;
+    if(_teamLib){
+        const _teamCats = [];
+        const pushCat = (cat, libId, libName) => {
+            if((cat.type || '') !== 'workflow') return;
+            const key = `${libId}:${cat.id}`;
+            if(seenCatKeys.has(key)) return;
+            seenCatKeys.add(key);
+            _teamCats.push({...cat, __libraryId:libId, __libraryName:libName || '团队资产库'});
+        };
+        (_teamLib.libraries || []).forEach(lib => {
+            (lib.categories || []).forEach(cat => pushCat(cat, lib.id, lib.name));
+        });
+        (_teamLib.categories || []).forEach(cat => pushCat(cat, _teamLib.active_library_id || 'team', '团队资产库'));
+        if(_teamCats.length) return _teamCats;
+    }
     assetLibraries().forEach(lib => {
         (lib.categories || []).filter(cat => (cat.type || '') === 'workflow').forEach(cat => {
             const key = `${lib.id}:${cat.id}`;
@@ -6197,10 +6215,13 @@ function setActiveAssetTabCategory(categoryId=''){
 }
 async function loadAssetLibrary(){
     try {
-        const [data, localData] = await Promise.all([
-            fetch('/api/asset-library').then(r => r.json()),
-            fetch('/api/local-assets').then(r => r.ok ? r.json() : {items:[], tree:null}).catch(() => ({items:[], tree:null}))
+        const [data, localData, teamData] = await Promise.all([
+            fetch('/api/asset-library?scope=' + (window.__assetScope || 'personal')).then(r => r.json()),
+            fetch('/api/local-assets').then(r => r.ok ? r.json() : {items:[], tree:null}).catch(() => ({items:[], tree:null})),
+            // 2026-10-27：工作流库是团队共享的，单独拉一份团队库备用
+            fetch('/api/asset-library?scope=team').then(r => r.ok ? r.json() : null).catch(() => null)
         ]);
+        window.__teamLibrary = (teamData && teamData.library) ? teamData.library : null;
         localAssetLibrary = {items:Array.isArray(localData.items) ? localData.items : [], tree:localData.tree || null};
         setAssetLibraryFromResponse(data, {render:false});
         renderAssetLibrary();
@@ -32728,4 +32749,3 @@ window.onload = async () => {
     checkWorkflowInbox();
     render();
 };
-
