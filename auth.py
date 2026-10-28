@@ -79,7 +79,17 @@ class AuthStore:
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
+        # 🚨 Windows 上 os.replace 会被「瞬时占用」打回 WinError 5（杀毒/索引/另一个进程正在读）——
+        #    实测过一次登录因此 500。这里做 4 次短重试，仍失败才抛。
+        last = None
+        for attempt in range(4):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError as exc:   # WinError 5 / sharing violation
+                last = exc
+                time.sleep(0.05 * (attempt + 1))
+        raise last  # type: ignore[misc]
 
     # -- 用户
     def users(self) -> list:

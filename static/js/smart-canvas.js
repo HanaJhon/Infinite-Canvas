@@ -63,6 +63,7 @@ const assetGrid = document.getElementById('assetGrid');
 const assetDropZone = document.getElementById('assetDropZone');
 const workflowEmpty = document.getElementById('workflowEmpty');
 const assetImageControls = document.getElementById('assetImageControls');
+const assetScopeSwitch = document.getElementById('assetScopeSwitch');
 const assetAddCategoryBtn = document.getElementById('assetAddCategoryBtn');
 const assetRenameCategoryBtn = document.getElementById('assetRenameCategoryBtn');
 const assetDialogBackdrop = document.getElementById('assetDialogBackdrop');
@@ -6155,7 +6156,50 @@ function workflowAssetCategories(){
     return cats;
 }
 function assetLibraries(){
-    return Array.isArray(assetLibrary.libraries) && assetLibrary.libraries.length ? assetLibrary.libraries : [{id:'default', name:'默认资产库', categories:assetLibrary.categories || []}];
+    const data = scopedAssetData();
+    return Array.isArray(data.libraries) && data.libraries.length
+        ? data.libraries
+        : [{id:'default', name:(canvasAssetScope() === 'team' ? '团队资产库' : '默认资产库'), categories:data.categories || []}];
+}
+/* 🚨 2026-10-28：资产库面板分「个人 / 团队」两个数据源。
+   个人 = assetLibrary（按账号隔离）；团队 = window.__teamLibrary（loadAssetLibrary 里拉的那份）。
+   团队视图**只读**：没有按人归属的编辑/删除语义，所以不渲染改名/删除/拖入保存。 */
+function canvasAssetScope(){
+    return window.__assetScope === 'team' ? 'team' : 'personal';
+}
+function scopedAssetData(){
+    if(canvasAssetScope() === 'team' && window.__teamLibrary) return window.__teamLibrary;
+    return assetLibrary;
+}
+function setCanvasAssetScope(scope){
+    const next = scope === 'team' ? 'team' : 'personal';
+    if(next === canvasAssetScope()) return;
+    window.__assetScope = next;
+    // 两个库的库 id / 分组 id 完全不同，全部重置，避免带着上一份的选中态渲染
+    activeAssetLibraryId = '';
+    activeAssetCategoryId = '';
+    mentionAssetCategoryId = '';
+    assetLibraryOpen = true;
+    renderAssetLibrary();
+    loadAssetLibrary();
+    toast(next === 'team' ? '已切换到团队资产库（只读）' : '已切换到个人资产库');
+}
+async function promoteCanvasAssetToTeam(itemId){
+    if(!itemId) return;
+    const item = (activeAssetCategory()?.items || []).find(x => x.id === itemId);
+    try {
+        const data = await fetch('/api/asset-library/promote', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({item_ids:[itemId]})
+        }).then(async r => { if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '加入团队失败'); return r.json(); });
+        const added = Number(data?.added || 0);
+        const skipped = Number(data?.skipped || 0);
+        toast(added ? `已加入团队资产库：${item.name || ''}`.trim() : (skipped ? '这条素材已在团队资产库里' : '没有可加入的素材'));
+        await loadAssetLibrary();
+    } catch(err){
+        toast(err.message || '加入团队失败');
+    }
 }
 function localAssetFolderCategories(){
     const result = [];
@@ -6179,8 +6223,11 @@ function assetLibraryIsLocal(){
     return activeAssetLibraryId === LOCAL_ASSET_LIBRARY_ID;
 }
 function currentAssetSourceLibraries(){
+    const libs = [...assetLibraries()];
+    // 团队视图不提供「本地素材」：那是本机目录、跟账号无关，混进共享视图只会让人误会
+    if(canvasAssetScope() === 'team') return libs;
     return [
-        ...assetLibraries(),
+        ...libs,
         {id:LOCAL_ASSET_LIBRARY_ID, name:'本地素材', categories:localAssetFolderCategories(), readonly:true, source:'local'}
     ];
 }
@@ -6215,15 +6262,22 @@ function setActiveAssetTabCategory(categoryId=''){
 }
 async function loadAssetLibrary(){
     try {
+        const scope = canvasAssetScope();
         const [data, localData, teamData] = await Promise.all([
-            fetch('/api/asset-library?scope=' + (window.__assetScope || 'personal')).then(r => r.json()),
+            fetch('/api/asset-library?scope=' + scope).then(r => r.json()),
             fetch('/api/local-assets').then(r => r.ok ? r.json() : {items:[], tree:null}).catch(() => ({items:[], tree:null})),
             // 2026-10-27：工作流库是团队共享的，单独拉一份团队库备用
             fetch('/api/asset-library?scope=team').then(r => r.ok ? r.json() : null).catch(() => null)
         ]);
-        window.__teamLibrary = (teamData && teamData.library) ? teamData.library : null;
+        const teamLib = (teamData && teamData.library) ? teamData.library : null;
         localAssetLibrary = {items:Array.isArray(localData.items) ? localData.items : [], tree:localData.tree || null};
-        setAssetLibraryFromResponse(data, {render:false});
+        if(scope === 'team'){
+            // 团队视图：data 本身就是团队库（比上面那份更新），**不要**拿它覆盖个人 assetLibrary
+            window.__teamLibrary = (data && data.library) ? data.library : teamLib;
+        } else {
+            window.__teamLibrary = teamLib;
+            setAssetLibraryFromResponse(data, {render:false});
+        }
         renderAssetLibrary();
     } catch(e) {
         toast(tr('smart.assetLoadFail'));
@@ -6650,9 +6704,18 @@ function renderAssetLibrary(){
     }
     const imageMode = assetTab === 'image';
     const workflowMode = assetTab === 'workflow';
+    const teamView = canvasAssetScope() === 'team';
+    if(assetScopeSwitch){
+        assetScopeSwitch.querySelectorAll('[data-asset-scope]').forEach(btn => {
+            const on = btn.dataset.assetScope === canvasAssetScope();
+            btn.classList.toggle('active', on);
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+    }
     assetImageControls.style.display = (imageMode || workflowMode) ? 'block' : 'none';
     const localMode = assetLibraryIsLocal();
-    assetDropZone.style.display = imageMode ? 'flex' : 'none';
+    // 团队视图只读：不允许把画布图片拖进来（那是往个人库写），也不给改名/新建分组
+    assetDropZone.style.display = (imageMode && !teamView) ? 'flex' : 'none';
     assetGrid.style.display = (imageMode || workflowMode) ? 'grid' : 'none';
     workflowEmpty.style.display = 'none';
     if(!imageMode && !workflowMode){ refreshIcons(); return; }
@@ -6673,8 +6736,8 @@ function renderAssetLibrary(){
     const cat = workflowMode ? activeWorkflowAssetCategory() : activeAssetCategory();
     const smartClass = imageMode ? parseAssetSmartClassId(activeAssetCategoryId) : null;
     const items = smartClass ? itemsForAssetSmartClass(activeAssetCategoryId) : (cat?.items || []);
-    if(assetAddCategoryBtn) assetAddCategoryBtn.disabled = Boolean(smartClass);
-    if(assetRenameCategoryBtn) assetRenameCategoryBtn.disabled = !cat || Boolean(smartClass) || (localMode && (cat.id === '__root__' || !cat.id));
+    if(assetAddCategoryBtn) assetAddCategoryBtn.disabled = Boolean(smartClass) || teamView;
+    if(assetRenameCategoryBtn) assetRenameCategoryBtn.disabled = !cat || Boolean(smartClass) || teamView || (localMode && (cat.id === '__root__' || !cat.id));
     assetGrid.innerHTML = items.length ? items.map(item => `
         <div class="asset-item ${workflowMode ? 'workflow-asset-item' : ''}" draggable="${workflowMode ? 'false' : 'true'}" data-asset-id="${escapeHtml(item.id)}" data-url="${escapeHtml(item.url)}" data-name="${escapeHtml(item.name || 'asset')}" data-kind="${escapeHtml(assetMediaKind(item))}">
             ${assetThumbHtml(item)}
@@ -6684,11 +6747,14 @@ function renderAssetLibrary(){
                     ? `<button class="asset-mini-btn" type="button" data-rename-workflow-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('smart.assetRename'))}"><i data-lucide="pencil"></i></button>
                        <button class="asset-mini-btn" type="button" data-delete-workflow-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>`
                     : localMode ? `<button class="asset-mini-btn" type="button" data-rename-local-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('smart.assetRename'))}"><i data-lucide="pencil"></i></button>
-                       <button class="asset-mini-btn" type="button" data-delete-local-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>` : `<button class="asset-mini-btn" type="button" data-rename-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('smart.assetRename'))}"><i data-lucide="pencil"></i></button>
+                       <button class="asset-mini-btn" type="button" data-delete-local-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>`
+                    : teamView ? `<span class="asset-readonly-tag" title="团队资产库为只读">只读</span>`
+                    : `<button class="asset-mini-btn" type="button" data-rename-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('smart.assetRename'))}"><i data-lucide="pencil"></i></button>
+                       <button class="asset-mini-btn" type="button" data-promote-asset="${escapeHtml(item.id)}" title="加入团队资产库"><i data-lucide="users-round"></i></button>
                        <button class="asset-mini-btn" type="button" data-delete-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>`}
             </div>
         </div>
-    `).join('') : `<div class="asset-empty">${escapeHtml(localMode ? '暂无本地素材，拖入图片即可保存' : (smartClass ? '这个智能分类下暂无素材' : (workflowMode ? '暂无工作流资产' : tr('smart.assetEmpty'))))}</div>`;
+    `).join('') : `<div class="asset-empty">${escapeHtml(localMode ? '暂无本地素材，拖入图片即可保存' : (smartClass ? '这个智能分类下暂无素材' : (workflowMode ? '暂无工作流资产' : (teamView ? '团队资产库还没有素材：切到「个人」，点素材上的小人图标加入团队' : tr('smart.assetEmpty')))))}</div>`;
     if(workflowMode) bindWorkflowAssetItemEvents();
     else bindAssetItemEvents();
     bindSmartPreviewImageFallbacks(assetGrid);
@@ -6916,6 +6982,14 @@ function bindAssetItemEvents(){
             e.preventDefault(); e.stopPropagation();
             btn.disabled = true;
             await deleteLocalAssetFromPanel(btn.dataset.deleteLocalAsset || '');
+        };
+    });
+    assetGrid.querySelectorAll('[data-promote-asset]').forEach(btn => {
+        btn.onclick = async e => {
+            e.preventDefault(); e.stopPropagation();
+            btn.disabled = true;
+            await promoteCanvasAssetToTeam(btn.dataset.promoteAsset || '');
+            btn.disabled = false;
         };
     });
     assetGrid.querySelectorAll('[data-delete-asset]').forEach(btn => {
@@ -25022,6 +25096,15 @@ if(assetCategorySelect) assetCategorySelect.onchange = () => {
     else activeAssetCategoryId = assetCategorySelect.value;
     renderAssetLibrary();
 };
+if(assetScopeSwitch) assetScopeSwitch.addEventListener('click', event => {
+    const btn = event.target.closest('[data-asset-scope]');
+    if(!btn) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setCanvasAssetScope(btn.dataset.assetScope || 'personal');
+});
+// 默认态显式落到 window.__assetScope，别让 loadAssetLibrary 读到 ''
+if(!window.__assetScope) window.__assetScope = 'personal';
 if(assetAddCategoryBtn) assetAddCategoryBtn.onclick = async () => {
     const workflowMode = currentAssetTabIsWorkflow();
     const fallbackName = workflowMode ? '工作流' : tr('smart.assetFolder');

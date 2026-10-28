@@ -1504,6 +1504,12 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .asset-mini-btn i,.asset-mini-btn svg { width:13px; height:13px; }
 .asset-tabs { display:flex; gap:5px; padding:3px; border-radius:12px; background:var(--soft); border:1px solid var(--line); }
 .asset-library-select { margin-bottom:8px; }
+/* 2026-10-28：画布内资产库面板的「个人 / 团队」切换 + 团队只读标记 */
+.asset-scope-switch { display:flex; gap:3px; padding:2px; margin-bottom:8px; border-radius:10px; background:var(--soft); border:1px solid var(--line); }
+.asset-scope-btn { flex:1; height:22px; border:0; border-radius:8px; background:transparent; color:var(--muted); font-size:10.5px; line-height:1; font-weight:650; cursor:pointer; transition:background .14s ease, color .14s ease; }
+.asset-scope-btn:hover:not(.active) { color:var(--text); }
+.asset-scope-btn.active { background:var(--strong); color:var(--strong-text); }
+.asset-readonly-tag { margin-left:auto; padding:0 6px; height:18px; display:inline-flex; align-items:center; border-radius:6px; background:var(--soft); border:1px solid var(--line); color:var(--faint); font-size:9.5px; line-height:1; font-weight:700; }
 .asset-tab { flex:1; height:26px; border-radius:9px; background:transparent; color:var(--muted); font-size:10.5px; font-weight:600; }
 .asset-tab.active { background:var(--strong); color:var(--strong-text); box-shadow:0 6px 16px rgba(15,23,42,.14); }
 .asset-category-row { display:flex; align-items:center; gap:6px; }

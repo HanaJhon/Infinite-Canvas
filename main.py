@@ -85,14 +85,20 @@ logging.getLogger("uvicorn.access").addFilter(QuietAccessLogFilter())
 import auth as _auth
 
 #: 免鉴权路径（登录页本身、静态资源、登录相关接口）
+#: 🚨 2026-10-28：`/assets/` 与 `/output/` **已移出白名单** —— 它们是用户/产物文件
+#: （素材、生成物、Agent 产出），原来未登录就能按 URL 直取，等于"画布隔离了、图片没隔离"。
+#: 浏览器同源请求会自动带 `ic_session`（samesite=lax，同站子资源照发），所以页面里的
+#: `<img>` / `<video>` / `<a download>` 不受影响；只有未登录/外站拿不到。
 _AUTH_OPEN_PREFIXES = (
     "/api/auth/",
     "/static/",
-    "/assets/",
-    "/output/",
     "/favicon",
 )
 _AUTH_OPEN_EXACT = {"/login.html", "/login"}
+
+#: 这些前缀是"媒体文件"而不是页面：未登录时返回 401，**不能** 302 到登录页
+#: （把登录页 HTML 当图片喂给 `<img>` 只会得到一个坏图标，还误导排查）。
+_AUTH_MEDIA_PREFIXES = ("/assets/", "/output/")
 
 app = FastAPI()
 
@@ -106,6 +112,11 @@ app.add_middleware(
 def _auth_required(path: str) -> bool:
     """判断该请求是否需要登录。"""
     low = path.lower()
+    # 🚨 2026-10-28：用户文件（/assets/、/output/）**必须先登录**，哪怕后缀是 .png/.jpg。
+    #    下面那条「静态后缀一律放行」会把 /assets/*.png 全部放过 —— 这正是原来
+    #    「未登录按 URL 直取图片」的漏点，所以这里要在后缀判断之前拦。
+    if low.startswith(_AUTH_MEDIA_PREFIXES):
+        return True
     if low in _AUTH_OPEN_EXACT:
         return False
     for pref in _AUTH_OPEN_PREFIXES:
@@ -123,6 +134,45 @@ def _is_admin_only(path: str) -> bool:
     `/static/*` 是免鉴权前缀，写在 `if _auth_required(path):` 里面永远不会执行。"""
     low = path.lower()
     return low.startswith("/static/api-settings") or low == "/accounts.html"
+
+
+# ---------------------------------------------------------------- 角色隔离（2026-10-28）
+#: 站点级写操作的**精确**路径（方法, 路径）—— 只有管理员可用。
+#: 🚨 只列「没有成员入口、且影响所有人」的；读接口一律不动（成员要用 GET /api/providers 选模型）。
+_ADMIN_ONLY_WRITES_EXACT = {
+    ("POST", "/api/update-from-github"),      # 下载并替换程序文件
+    ("POST", "/api/update-rollback"),
+    ("PUT", "/api/providers"),                # 改全站通道 / 密钥
+    ("POST", "/api/providers/test-connection"),
+    ("POST", "/api/providers/probe-async"),
+    ("POST", "/api/providers/fetch-models"),
+    ("PATCH", "/api/storage-settings"),       # 改存储根目录
+    ("POST", "/api/storage-files/delete"),    # 真删磁盘文件（os.remove）
+    ("PUT", "/api/comfyui/instances"),
+    ("POST", "/api/codex/permissions"),
+    ("POST", "/api/workflows"),               # 新建 ComfyUI 工作流（/run 不拦）
+    ("PATCH", "/api/asset-classification-prompt"),  # 全站智能分类提示词
+}
+
+#: 站点级写操作的**前缀**（方法, 前缀）—— 带 id 的路径用这个。
+_ADMIN_ONLY_WRITES_PREFIX = (
+    ("PUT", "/api/workflows/"),               # 改工作流配置
+    ("DELETE", "/api/workflows/"),            # 删 ComfyUI 工作流
+    ("POST", "/api/shared-folders"),          # 把宿主机任意目录注册给全员读
+    ("DELETE", "/api/shared-folders/"),
+)
+
+
+def _is_admin_only_write(method: str, path: str) -> bool:
+    """成员能不能打这个写接口。🚨 必须在鉴权分支之前判断（同 `_is_admin_only`）。"""
+    m = str(method or "").upper()
+    low = str(path or "").lower().rstrip("/") or "/"
+    if (m, low) in _ADMIN_ONLY_WRITES_EXACT:
+        return True
+    for pref in _ADMIN_ONLY_WRITES_PREFIX:
+        if m == pref[0] and low.startswith(pref[1].rstrip("/")):
+            return True
+    return False
 
 
 @app.middleware("http")
@@ -147,6 +197,17 @@ async def no_cache_html_middleware(request: Request, call_next):
                 status_code=403,
             )
 
+    # ①' 站点级写接口：成员一律 403（2026-10-28）
+    if _is_admin_only_write(request.method, path):
+        _wu = _auth_store.session_user(request.cookies.get(_auth.SESSION_COOKIE, ""))
+        if not _wu:
+            return JSONResponse({"detail": "未登录", "need_login": True}, status_code=401)
+        if _wu.get("role") != "admin":
+            return JSONResponse(
+                {"detail": "该操作仅管理员可执行（站点级设置）", "admin_only": True},
+                status_code=403,
+            )
+
     if _auth_required(path):
         token = request.cookies.get(_auth.SESSION_COOKIE, "")
         user = _auth_store.session_user(token)
@@ -156,6 +217,9 @@ async def no_cache_html_middleware(request: Request, call_next):
                     {"detail": "未登录", "need_login": True},
                     status_code=401,
                 )
+            # 媒体文件（/assets/、/output/）不能 302：`<img>` 会把登录页 HTML 当图片解码
+            if path.lower().startswith(_AUTH_MEDIA_PREFIXES):
+                return Response(status_code=401, headers={"Cache-Control": "no-store"})
             return RedirectResponse("/login.html", status_code=302)
         # 用 contextvar 把当前用户传给 UserScopedPath（异步并发下安全）
         _token_set = current_uid.set(user["id"])
@@ -22843,22 +22907,39 @@ async def get_asset_library(scope: str = "personal"):
 
 
 def _iter_asset_items(lib):
-    """遍历资产库里所有条目（含 libraries[].categories[] 两级）。"""
+    """遍历资产库里所有条目（含 libraries[].categories[] 两级）。
+
+    🚨 2026-10-28：`normalize_asset_library()` 会把 `lib["categories"]` 指向
+    **当前资产库 categories 的同一个 list 对象**，所以顶层与 libraries[] 里是同一批
+    dict —— 不去重就会把每个条目遍历两遍（promote 曾因此报「新增 1 个，跳过 1 个重复」）。
+    按对象身份去重（和 `sort_asset_library_items()` 一致）。
+    """
+    seen = set()
     for cat in lib.get("categories") or []:
         for item in cat.get("items") or []:
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
             yield cat, item
     for library in lib.get("libraries") or []:
         for cat in library.get("categories") or []:
             for item in cat.get("items") or []:
+                if id(item) in seen:
+                    continue
+                seen.add(id(item))
                 yield cat, item
 
 
 @app.post("/api/asset-library/promote")
 async def promote_assets_to_team(payload: dict):
-    """把个人资产库的条目「加入团队资产库」（2026-10-27）。
+    """把个人资产库的条目「加入团队资产库」（2026-10-27，2026-10-28 改为复制文件实体）。
 
-    只复制索引条目（url 仍指向原文件），所以团队库不会额外占磁盘。
-    重复加入会跳过（按 url 判重）。
+    🚨 2026-10-28：原来只复制索引条目、`url` 仍指向个人那份文件 —— 个人删素材或清理
+    `assets/` 后，团队库里那条就变成死链（裂图且无提示）。现在：
+      * 能定位到本地文件的（`/assets/**`、`/output/**`），**复制实体**到 `assets/library/`，
+        团队条目的 `url` 指副本 —— 个人删了也不影响；
+      * 定位不到本地的（远端 http url），保留原 url，不复制也不丢（标记 `promoted_remote`）；
+      * 判重按「来源条目 id + 来源 url」双键，因为复制后团队库 url 已经变了，单靠 url 判重会重复复制。
     """
     import copy as _copy
     import uuid as _uuid
@@ -22871,8 +22952,17 @@ async def promote_assets_to_team(payload: dict):
     personal = load_asset_library("personal")
     team = load_asset_library("team")
 
-    # 团队库里已有的 url，用于判重
-    team_urls = {str(it.get("url") or "") for _c, it in _iter_asset_items(team) if it.get("url")}
+    # 判重：① 团队库已有的 url；② 已 promote 过的来源条目 id / 来源 url
+    team_urls = set()
+    team_sources = set()
+    for _c, it in _iter_asset_items(team):
+        url = str(it.get("url") or "")
+        if url:
+            team_urls.add(url)
+        if it.get("promoted_from"):
+            team_sources.add(str(it.get("promoted_from")))
+        if it.get("source_url"):
+            team_sources.add(str(it.get("source_url")))
 
     # 团队库的落点：优先复用「团队共享」分类，没有就建一个
     target_cat = None
@@ -22889,26 +22979,72 @@ async def promote_assets_to_team(payload: dict):
         team.setdefault("categories", []).append(target_cat)
     target_cat.setdefault("items", [])
 
-    added, skipped = 0, 0
+    added, skipped, copied, remote, failed = 0, 0, 0, 0, 0
     for _cat, item in _iter_asset_items(personal):
-        if str(item.get("id") or "") not in wanted:
+        item_id = str(item.get("id") or "")
+        if item_id not in wanted:
             continue
-        url = str(item.get("url") or "")
-        if url and url in team_urls:
+        src_url = str(item.get("url") or "")
+        if src_url in team_urls or item_id in team_sources or src_url in team_sources:
             skipped += 1
             continue
+
         clone = _copy.deepcopy(item)
         clone["id"] = "item_" + _uuid.uuid4().hex[:12]
-        clone["promoted_from"] = item.get("id")
+        clone["promoted_from"] = item_id
         clone["promoted_at"] = now_ms()
+        if src_url:
+            clone["source_url"] = src_url
+
+        # ---- 复制文件实体 ----
+        src_path = output_file_from_url(src_url)
+        new_url = src_url
+        if src_path and os.path.isfile(src_path):
+            try:
+                _dest, made = make_asset_library_item(src_path, item.get("name") or os.path.basename(src_path))
+                new_url = made.get("url") or src_url
+                copied += 1
+            except Exception:
+                failed += 1
+                new_url = src_url
+        elif src_url:
+            remote += 1
+            clone["promoted_remote"] = True
+        if new_url != src_url:
+            clone["url"] = new_url
+
+        # 缩略图/预览若指向另一个本地文件，也一并复制，别让团队卡片裂图
+        for field in ("thumbnail", "thumb", "preview"):
+            raw = str(clone.get(field) or "")
+            if not raw or raw == src_url:
+                continue
+            t_src = output_file_from_url(raw)
+            if not t_src or not os.path.isfile(t_src) or (src_path and os.path.abspath(t_src) == os.path.abspath(src_path)):
+                continue
+            try:
+                _td, t_made = make_asset_library_item(t_src, os.path.basename(t_src))
+                if t_made.get("url"):
+                    clone[field] = t_made["url"]
+            except Exception:
+                pass
+
         target_cat["items"].append(clone)
-        if url:
-            team_urls.add(url)
+        team_sources.add(item_id)
+        if clone.get("url"):
+            team_urls.add(str(clone["url"]))
         added += 1
 
     if added:
         save_asset_library(team, "team")
-    return {"ok": True, "added": added, "skipped": skipped, "library": team}
+    return {
+        "ok": True,
+        "added": added,
+        "skipped": skipped,
+        "copied": copied,
+        "remote": remote,
+        "copy_failed": failed,
+        "library": team,
+    }
 
 @app.get("/api/prompt-libraries")
 async def get_prompt_libraries():

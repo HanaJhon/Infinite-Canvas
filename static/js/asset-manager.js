@@ -27,6 +27,15 @@ const savedLocalCaptionSettings = readLocalCaptionSettings();
 
 let activeTab = 'assets';
 let assetLibrary = {libraries:[], categories:[]};
+// 🚨 2026-10-28：团队资产库**单独缓存**，绝不覆盖 assetLibrary。
+//    原因：「工作流管理」「提示词库」等页签都读 assetLibrary，如果按范围覆盖它，
+//    用户在团队视图下切到工作流页签会看到另一套数据（工作流目前仍写个人库那份索引）。
+//    只有「图片资产」页签按 assetScope 取数据源。
+let teamAssetLibrary = {libraries:[], categories:[]};
+let assetScope = 'personal';
+function scopedAssetLibrary(){
+    return assetScope === 'team' ? teamAssetLibrary : assetLibrary;
+}
 let promptLibrary = {libraries:[]};
 let apiProviders = [];
 let avatarRegisterProvider = '';
@@ -437,33 +446,35 @@ function formatFileSize(bytes=0){
     const idx = Math.min(units.length - 1, Math.floor(Math.log(size) / Math.log(1024)));
     return `${(size / Math.pow(1024, idx)).toFixed(idx ? 1 : 0)} ${units[idx]}`;
 }
-function assetLibraries(){
-    return Array.isArray(assetLibrary.libraries) && assetLibrary.libraries.length
-        ? assetLibrary.libraries
-        : [{id:'default', name:'默认资产库', categories:assetLibrary.categories || []}];
+function assetLibraries(source = scopedAssetLibrary()){
+    const libs = Array.isArray(source?.libraries) ? source.libraries : [];
+    return libs.length
+        ? libs
+        : [{id:'default', name:(source === teamAssetLibrary ? '团队资产库' : '默认资产库'), categories:source?.categories || []}];
 }
-function activeAssetLibrary(){
-    const libs = assetLibraries();
+function activeAssetLibrary(source = scopedAssetLibrary()){
+    const libs = assetLibraries(source);
     return libs.find(lib => lib.id === activeAssetLibraryId) || libs[0] || null;
 }
 function activeWorkflowLibrary(){
-    const libs = assetLibraries();
+    // 工作流页签固定读个人库（团队库那份索引由画布页的 __teamLibrary 兜底）
+    const libs = assetLibraries(assetLibrary);
     return libs.find(lib => lib.id === activeWorkflowLibraryId) || libs[0] || null;
 }
-function assetCategories(){
-    return (activeAssetLibrary()?.categories || []).filter(cat => (cat.type || 'image') === 'image');
+function assetCategories(source = scopedAssetLibrary()){
+    return (activeAssetLibrary(source)?.categories || []).filter(cat => (cat.type || 'image') === 'image');
 }
 function workflowCategories(){
     const cats = [];
-    assetLibraries().forEach(lib => {
+    assetLibraries(assetLibrary).forEach(lib => {
         (lib.categories || []).filter(cat => (cat.type || '') === 'workflow').forEach(cat => {
             cats.push({...cat, __libraryId:lib.id, __libraryName:lib.name || '资产库'});
         });
     });
     return cats;
 }
-function activeAssetCategory(){
-    const cats = assetCategories();
+function activeAssetCategory(source = scopedAssetLibrary()){
+    const cats = assetCategories(source);
     return cats.find(cat => cat.id === activeAssetCategoryId) || cats[0] || null;
 }
 function assetViewTitle(){
@@ -1131,7 +1142,7 @@ function findAssetItem(id){
     return null;
 }
 function findWorkflowItem(id){
-    for(const lib of assetLibraries()) for(const cat of lib.categories || []) {
+    for(const lib of assetLibraries(assetLibrary)) for(const cat of lib.categories || []) {
         if((cat.type || '') !== 'workflow') continue;
         for(const item of cat.items || []) if(item.id === id) return item;
     }
@@ -1252,7 +1263,7 @@ function normalizeAssetState(){
     selectedAssetIds = new Set([...selectedAssetIds].filter(id => findAssetItem(id)));
 }
 function normalizeWorkflowState(){
-    const libs = assetLibraries();
+    const libs = assetLibraries(assetLibrary);
     if(!activeWorkflowLibraryId || !libs.some(lib => lib.id === activeWorkflowLibraryId)) activeWorkflowLibraryId = assetLibrary.active_library_id || libs[0]?.id || '';
     const cats = workflowCategories();
     if(
@@ -1313,8 +1324,10 @@ async function refreshCanvasAssets(){
 }
 async function loadAll(){
     setStatus('加载中...');
-    const [assetData, promptData, providerData, canvasAssetData] = await Promise.all([
+    const [assetData, teamData, promptData, providerData, canvasAssetData] = await Promise.all([
         apiJson('/api/asset-library'),
+        // 团队资产库：全局共享，只有「图片资产」页签的团队视图会用到
+        apiJson('/api/asset-library?scope=team').catch(() => null),
         apiJson('/api/prompt-libraries'),
         apiJson('/api/providers').catch(() => ({providers:[]})),
         apiJson('/api/canvas-assets').catch(() => ({categories:[], canvases:[], items:[]})),
@@ -1322,6 +1335,7 @@ async function loadAll(){
         loadLocalAssets()
     ]);
     assetLibrary = assetData.library || {libraries:[], categories:[]};
+    teamAssetLibrary = (teamData && teamData.library) || {libraries:[], categories:[]};
     promptLibrary = promptData.library || {libraries:[]};
     apiProviders = Array.isArray(providerData.providers) ? providerData.providers : [];
     canvasAssetsData = {
@@ -1349,7 +1363,11 @@ async function refreshAssetLibraryAuto(){
     clearTimeout(assetLibraryAutoRefreshTimer);
     assetLibraryAutoRefreshTimer = setTimeout(async () => {
         try {
-            const assetData = await apiJson('/api/asset-library');
+            const [assetData, teamData] = await Promise.all([
+                apiJson('/api/asset-library'),
+                apiJson('/api/asset-library?scope=team').catch(() => null)
+            ]);
+            if(teamData && teamData.library) teamAssetLibrary = teamData.library;
             if(assetData && assetData.library){
                 assetLibrary = assetData.library;
                 if(activeTab === 'workflows'){
@@ -1953,18 +1971,19 @@ function renderAssetManager(){
     const items = currentAssetItems();
     const detail = selectedAsset();
     const imageCount = selectedAssetImageItems().length;
+    const teamView = assetScope === 'team';
     root.innerHTML = `
         <aside class="asset-panel asset-nav">
             <div class="panel-head">
-                <div class="panel-title"><strong>资产层级</strong><span>先选库，再选分组</span></div>
+                <div class="panel-title"><strong>资产层级</strong><span>${teamView ? '团队共享，全员可见' : '先选库，再选分组'}</span></div>
                 <div class="panel-actions compact-actions">
-                    ${assetTreeEdit?.placement === 'head' ? '' : '<button class="asset-icon-btn" type="button" data-asset-lib-new title="新建资产库"><i data-lucide="plus"></i></button>'}
+                    ${teamView || assetTreeEdit?.placement === 'head' ? '' : '<button class="asset-icon-btn" type="button" data-asset-lib-new title="新建资产库"><i data-lucide="plus"></i></button>'}
                     ${renderHeadTreeInlineEdit(assetTreeEdit, 'assetTreeEditInput', 'data-asset-tree-edit-save', 'data-asset-tree-edit-cancel')}
                 </div>
             </div>
             <div class="nav-scroll">
                 <div class="nav-tree">
-                    ${libs.map(item => renderAssetTreeBranch(item)).join('')}
+                    ${libs.map(item => renderAssetTreeBranch(item, teamView)).join('')}
                 </div>
             </div>
         </aside>
@@ -1975,10 +1994,15 @@ function renderAssetManager(){
                     <span>${assetViewSubtitle(items)}</span>
                 </div>
                 <div class="asset-tools">
+                    <div class="asset-scope-switch" role="group" aria-label="资产库范围">
+                        <button class="asset-scope-btn ${teamView ? '' : 'active'}" type="button" data-asset-scope="personal" aria-pressed="${teamView ? 'false' : 'true'}"><i data-lucide="user"></i><span>个人</span></button>
+                        <button class="asset-scope-btn ${teamView ? 'active' : ''}" type="button" data-asset-scope="team" aria-pressed="${teamView ? 'true' : 'false'}"><i data-lucide="users"></i><span>团队</span></button>
+                    </div>
                     <label class="asset-search-wrap"><i data-lucide="search"></i><input id="assetSearch" class="asset-search" type="search" value="${escapeAttr(assetQuery)}" placeholder="搜索素材"></label>
                     <button class="asset-btn ${assetManageMode ? 'primary' : ''}" type="button" data-asset-manage><i data-lucide="list-checks"></i><span>${assetManageMode ? '完成管理' : '批量管理'}</span></button>
                 </div>
             </div>
+            ${teamView ? '<div class="asset-scope-hint"><i data-lucide="users"></i><span>团队资产库对所有人可见；加入团队请到「个人」里选中素材后点「加入团队」。</span></div>' : ''}
             ${renderAssetClipboardBar()}
             ${renderLocalClipboardBar()}
             <div class="manage-tools">
@@ -1988,23 +2012,26 @@ function renderAssetManager(){
                     <div class="asset-tools">
                         <button class="asset-btn" type="button" data-asset-select-all ${items.length ? '' : 'disabled'}><i data-lucide="check-square"></i><span>全选</span></button>
                         <button class="asset-btn" type="button" data-asset-clear-selection ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="square"></i><span>清空</span></button>
-                        <button class="asset-btn" type="button" data-asset-cut-selected ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="scissors"></i><span>剪切</span></button>
-                        <button class="asset-btn" type="button" data-asset-copy-selected ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="copy"></i><span>复制</span></button>
+                        ${teamView ? '' : `<button class="asset-btn" type="button" data-asset-cut-selected ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="scissors"></i><span>剪切</span></button>`}
+                        ${teamView ? '' : `<button class="asset-btn" type="button" data-asset-copy-selected ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="copy"></i><span>复制</span></button>`}
                         <button class="asset-btn" type="button" data-asset-download-selected ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="download"></i><span>下载所选</span></button>
                         <button class="asset-btn" type="button" data-asset-copy-to-canvas ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="clipboard-paste"></i><span>复制到画布</span></button>
-                        <button class="asset-btn danger" type="button" data-asset-delete-selected ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="trash-2"></i><span>删除所选</span></button>
+                        ${teamView ? '' : `<button class="asset-btn" type="button" data-asset-promote ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="users-round"></i><span>加入团队</span></button>`}
+                        ${teamView ? '' : `<button class="asset-btn danger" type="button" data-asset-delete-selected ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="trash-2"></i><span>删除所选</span></button>`}
                     </div>
                 </div>
-                <div class="manage-group manage-ai-group">
+                ${teamView ? '' : `<div class="manage-group manage-ai-group">
                     <span class="manage-group-title">AI 处理</span>
                     <button class="asset-btn" type="button" data-asset-classify-selected ${imageCount && !assetClassifyBusy ? '' : 'disabled'}><i data-lucide="${assetClassifyBusy ? 'loader-2' : 'tags'}"></i><span>${assetClassifyBusy ? '分类中' : '智能分类'}</span></button>
-                </div>
+                </div>`}
             </div>
             <div class="content-scroll">
                 <div class="asset-grid">
-                    ${activeAssetClassFilter ? '' : renderUploadCard(cat)}
+                    ${activeAssetClassFilter || teamView ? '' : renderUploadCard(cat)}
                     ${items.map(item => renderAssetCard(item)).join('')}
-                    ${items.length ? '' : '<div class="empty-state">当前分组还没有素材，可以上传，或从智能画布输出保存到素材库。</div>'}
+                    ${items.length ? '' : (teamView
+                        ? '<div class="empty-state">团队资产库还没有素材。切到「个人」，选中素材后点「加入团队」即可共享给所有人。</div>'
+                        : '<div class="empty-state">当前分组还没有素材，可以上传，或从智能画布输出保存到素材库。</div>')}
                 </div>
             </div>
         </section>
@@ -2171,14 +2198,14 @@ function renderAssetClipboardBar(){
         </div>
     </div>`;
 }
-function renderAssetTreeBranch(lib){
+function renderAssetTreeBranch(lib, readOnly=false){
     const isActiveLib = lib.id === activeAssetLibraryId;
     const cats = (lib.categories || []).filter(cat => (cat.type || 'image') === 'image');
     const smartClasses = isActiveLib ? assetClassificationEntriesForLibrary(lib) : [];
     const smartGroups = groupedAssetClassificationEntries(smartClasses);
     const activeClassEntry = isActiveLib ? activeAssetClassEntry() : null;
     const activeClassGroup = activeClassEntry ? assetClassificationEntryGroup(activeClassEntry)?.id : '';
-    const showLibActions = isActiveLib && assetTreeFocus === 'library';
+    const showLibActions = isActiveLib && assetTreeFocus === 'library' && !readOnly;
     return `<div class="tree-branch ${isActiveLib ? 'expanded' : ''}">
         <button class="tree-row tree-parent ${isActiveLib ? 'contains-active' : ''} ${showLibActions ? 'active' : ''}" type="button" data-asset-lib="${escapeAttr(lib.id)}">
             <span class="tree-row-icon"><i data-lucide="${isActiveLib ? 'folder-open' : 'folder'}"></i></span>
@@ -2192,7 +2219,7 @@ function renderAssetTreeBranch(lib){
                 <span class="tree-row-icon"><i data-lucide="image"></i></span>
                 <span class="tree-row-name">${escapeHtml(cat.name || '分组')}</span>
                 <span class="tree-row-count">${(cat.items || []).length}</span>
-            </button>${isActiveLib && cat.id === activeAssetCategoryId && assetTreeFocus === 'category' ? renderAssetTreeActionBar('category') : ''}`).join('') : '<div class="tree-empty">暂无分组</div>'}
+            </button>${isActiveLib && cat.id === activeAssetCategoryId && assetTreeFocus === 'category' && !readOnly ? renderAssetTreeActionBar('category') : ''}`).join('') : '<div class="tree-empty">暂无分组</div>'}
             ${isActiveLib ? `<div class="tree-smart-class">
                 <button class="tree-row tree-parent ${activeAssetClassFilter ? 'contains-active' : ''}" type="button" data-asset-class-root="${escapeAttr(lib.id)}">
                     <span class="tree-row-icon"><i data-lucide="tags"></i></span>
@@ -3169,6 +3196,7 @@ async function runLocalUploadClassifySelected(){
     }
 }
 async function runAssetClassifySelected(){
+    if(teamScopeReadOnly()) return;
     const images = selectedAssetImageItems();
     if(!images.length || assetClassifyBusy) return;
     normalizeLocalCaptionSettings();
@@ -3655,6 +3683,9 @@ async function handleClick(event){
     if(target.closest?.('[data-asset-edit-cancel]')){ assetEditMode = false; render(); return; }
     const assetEditStart = target.closest?.('[data-asset-edit-start]');
     if(assetEditStart){ selectedAssetId = assetEditStart.dataset.assetEditStart || selectedAssetId; assetEditMode = true; pendingDeleteAssetId = ''; render(); return; }
+    const scopeBtn = target.closest?.('[data-asset-scope]');
+    if(scopeBtn){ setAssetScope(scopeBtn.dataset.assetScope || 'personal'); return; }
+    if(target.closest?.('[data-asset-promote]')){ await promoteSelectedAssetsToTeam(); return; }
     if(target.closest?.('[data-asset-manage]')){
         assetManageMode = !assetManageMode;
         pendingBatchDelete = '';
@@ -4234,6 +4265,7 @@ async function deleteAssetCategory(){
     render();
 }
 async function renameAssetItem(id){
+    if(teamScopeReadOnly()) return;
     const item = findAssetItem(id);
     if(!item) return;
     selectedAssetId = id;
@@ -4339,6 +4371,7 @@ function scheduleAvatarPoll(id, providerId){
     }, 6000);
 }
 async function deleteAssetItem(id){
+    if(teamScopeReadOnly()) return;
     const item = findAssetItem(id);
     if(!item) return;
     const data = await apiJson(`/api/asset-library/items/${encodeURIComponent(id)}`, {method:'DELETE'});
@@ -4349,7 +4382,72 @@ async function deleteAssetItem(id){
     render();
     setStatus('素材已删除');
 }
+/** 团队视图目前是只读的：条目属于所有人，没有按人归属的编辑/删除语义。 */
+function teamScopeReadOnly(){
+    if(assetScope !== 'team') return false;
+    setStatus('团队资产库当前为只读视图，切回「个人」再操作');
+    return true;
+}
+/** 切换「个人 / 团队」数据源。只影响图片资产页签，不动工作流/提示词库。 */
+function setAssetScope(scope){
+    const next = scope === 'team' ? 'team' : 'personal';
+    if(next === assetScope) return;
+    assetScope = next;
+    // 两个库的 id / 条目完全不同，全部重置，避免带着上一个库的选中态渲染
+    selectedAssetIds.clear();
+    selectedAssetId = '';
+    activeAssetClassFilter = '';
+    assetManageMode = false;
+    pendingDeleteAssetId = '';
+    pendingBatchDelete = '';
+    assetClipboard = null;
+    assetTreeEdit = null;
+    activeAssetLibraryId = '';
+    activeAssetCategoryId = '';
+    normalizeAssetState();
+    render();
+    setStatus(next === 'team' ? '已切换到团队资产库' : '已切换到个人资产库');
+}
+async function reloadTeamLibrary(){
+    try {
+        const data = await apiJson('/api/asset-library?scope=team');
+        teamAssetLibrary = data?.library || {libraries:[], categories:[]};
+        return true;
+    } catch(e) {
+        return false;
+    }
+}
+/** 把「个人」里选中的条目加入团队资产库（后端会把文件实体复制到 assets/library/） */
+async function promoteSelectedAssetsToTeam(){
+    if(assetScope !== 'personal') return;
+    if(!selectedAssetIds.size) return;
+    const ids = [...selectedAssetIds];
+    setStatus('正在加入团队资产库...');
+    try {
+        const data = await apiJson('/api/asset-library/promote', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({item_ids:ids})
+        });
+        await reloadTeamLibrary();
+        selectedAssetIds.clear();
+        pendingBatchDelete = '';
+        render();
+        const added = Number(data?.added || 0);
+        const skipped = Number(data?.skipped || 0);
+        const copied = Number(data?.copied || 0);
+        const remote = Number(data?.remote || 0);
+        const bits = [`新增 ${added} 个`];
+        if(copied) bits.push(`已复制文件 ${copied} 份`);
+        if(remote) bits.push(`远端链接 ${remote} 个`);
+        if(skipped) bits.push(`跳过 ${skipped} 个重复`);
+        setStatus('已加入团队资产库：' + bits.join('，'));
+    } catch(err) {
+        setStatus('加入团队失败：' + (err?.message || '未知错误'));
+    }
+}
 async function deleteSelectedAssets(){
+    if(teamScopeReadOnly()) return;
     if(!selectedAssetIds.size) return;
     const ids = [...selectedAssetIds];
     const data = await apiJson('/api/asset-library/items/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:activeAssetLibraryId, ids})});
@@ -4361,6 +4459,7 @@ async function deleteSelectedAssets(){
     setStatus(`已删除 ${data.removed || ids.length} 个素材`);
 }
 function setAssetClipboard(mode){
+    if(teamScopeReadOnly()) return;
     if(!selectedAssetIds.size) return;
     assetClipboard = {
         mode,
@@ -4376,6 +4475,7 @@ function setAssetClipboard(mode){
     setStatus(`${label}了 ${assetClipboard.ids.length} 个素材，切换分组后粘贴`);
 }
 async function pasteAssetClipboard(){
+    if(teamScopeReadOnly()) return;
     if(!assetClipboard?.ids?.length) return;
     if(assetClipboard.mode === 'cut'){
         if(assetClipboard.sourceLibraryId === activeAssetLibraryId && assetClipboard.sourceCategoryId === activeAssetCategoryId) return;
@@ -4851,9 +4951,21 @@ storageSettingsBtn?.addEventListener('click', () => openStorageSettings().catch(
 window.addEventListener('message', event => {
     if(event.data?.type === 'studio-theme') window.StudioTheme?.apply?.(event.data.theme);
 });
+/* 🚨 2026-10-28：偏好设置（存储根目录 / 智能分类提示词）是**站点级**配置，后端已对成员 403。
+   这里同步把入口藏掉，别让成员点了才看到报错。 */
+async function syncAdminOnlyUi(){
+    try {
+        const res = await fetch('/api/auth/me');
+        if(!res.ok) return;
+        const data = await res.json();
+        if(data?.user?.role === 'admin') return;
+        if(storageSettingsBtn) storageSettingsBtn.style.display = 'none';
+    } catch(e) {}
+}
 document.addEventListener('DOMContentLoaded', () => {
     loadAll().catch(err => setStatus(err.message || '加载失败'));
     connectAssetLibrarySyncSocket();
+    syncAdminOnlyUi();
 });
 window.addEventListener('focus', () => {
     refreshAssetLibraryAuto();
