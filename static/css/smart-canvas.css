@@ -2771,3 +2771,18 @@ a.smart3d-run { text-decoration:none; cursor:pointer; }
 .image-edit-stage.angle-mode[data-face="back"] #previewStage { outline:1px dashed var(--faint,#94a3b8); outline-offset:6px; }
 .angle-stage-hint { display:none; position:absolute; left:50%; bottom:10px; transform:translateX(-50%); padding:4px 10px; border-radius:999px; background:rgba(15,23,42,.6); color:#fff; font-size:10.5px; font-weight:700; z-index:5; pointer-events:none; white-space:nowrap; }
 .image-edit-stage.angle-mode .angle-stage-hint { display:block; }
+
+/* 视角模式：把画布输入框下方的生成参数条（通道 / 模型 / 尺寸 / 质量 / 张数）搬到弹窗底部左侧。
+   进去搬过来、离开搬回去（见 mountAngleParams），所以这里只管排版和尺寸，不再复制一套控件。 */
+.angle-params { display:flex; align-items:center; gap:8px; flex:0 0 auto; margin-right:auto; }
+.angle-params:empty { display:none; }
+.angle-params .dynamic-params { display:flex; align-items:center; gap:8px; flex:0 0 auto; flex-wrap:nowrap; overflow:visible; }
+.angle-params .smart-control { flex:0 0 auto; }
+/* 底栏地方足够，胶囊别再按 124px 截断，否则通道名只剩「Aizzz-ima…」看不出是哪个通道 */
+.angle-params .smart-pill { max-width:none; }
+/* 弹层改成贴着胶囊左缘弹出：底栏在最左边，居中对齐会让第一个弹层被窗口左边缘裁掉 */
+.angle-params .smart-control .smart-popover { left:0; transform:translate(0, 4px); z-index:80; }
+.angle-params .smart-control:hover .smart-popover,
+.angle-params .smart-control:focus-within .smart-popover,
+.angle-params .smart-control.pinned .smart-popover,
+.angle-params .smart-control.interacting .smart-popover { transform:translate(0, 0); }

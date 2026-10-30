@@ -63,6 +63,9 @@ const assetGrid = document.getElementById('assetGrid');
 const assetDropZone = document.getElementById('assetDropZone');
 const workflowEmpty = document.getElementById('workflowEmpty');
 const assetImageControls = document.getElementById('assetImageControls');
+// 视角模式把生成参数条（通道/模型/尺寸/质量/张数）临时搬进弹窗底部左侧，关掉再搬回去。
+const imageAngleParams = document.getElementById('imageAngleParams');
+let dynamicParamsHome = null;
 const assetScopeSwitch = document.getElementById('assetScopeSwitch');
 const assetAddCategoryBtn = document.getElementById('assetAddCategoryBtn');
 const assetRenameCategoryBtn = document.getElementById('assetRenameCategoryBtn');
@@ -16337,6 +16340,24 @@ function resizeEditDrawCanvas(){
     resizeEditTextCanvas();
     if(imageEditMode === 'grid') refreshGridSplitPreview();
 }
+/* 视角模式要把「通道 / 模型 / 尺寸 / 质量 / 张数」放在弹窗底部左侧，直接用**同一个** #dynamicParams 节点：
+   搬过去而不是复制一份 —— 复制就得整套再同步一次状态，早晚对不上。renderDynamicParams() 只写这个元素的
+   innerHTML，节点搬到哪儿都照样工作。离开视角（或关弹窗）再搬回原位置。 */
+function mountAngleParams(active){
+    if(!dynamicParams || !imageAngleParams) return;
+    if(active){
+        if(!dynamicParamsHome){
+            dynamicParamsHome = { parent: dynamicParams.parentElement, next: dynamicParams.nextElementSibling };
+        }
+        if(dynamicParams.parentElement !== imageAngleParams) imageAngleParams.appendChild(dynamicParams);
+        renderDynamicParams();
+        return;
+    }
+    if(dynamicParamsHome && dynamicParams.parentElement === imageAngleParams){
+        const { parent, next } = dynamicParamsHome;
+        if(parent) parent.insertBefore(dynamicParams, next && next.parentElement === parent ? next : null);
+    }
+}
 function setImageEditMode(mode, userTouched=false){
     const editKind = mediaKindForItem(currentEditImage().image || {});
     const isVideoPreview = editKind === 'video';
@@ -16390,6 +16411,7 @@ function setImageEditMode(mode, userTouched=false){
     }
     document.getElementById('imagePreviewTools').classList.toggle('active', isPreview && !isVideoPreview);
     document.getElementById('imageAngleTools')?.classList.toggle('active', imageEditMode === 'angle');
+    mountAngleParams(imageEditMode === 'angle');
     if(isAngle){
         bindImageAngleControls();
         refreshComparePanel();
@@ -18314,6 +18336,7 @@ function openImageEditor(nodeId, imageIndex=0){
 }
 function closeImageEditor(){
     cleanupSmartLogPreviewNode();
+    mountAngleParams(false);   // 参数条搬回输入框下方，别把 composer 留成空的
     hideBrushCursor();   // 编辑器关掉时圆环要一起收走，否则会飘在画布上
     imageEditModal.classList.remove('open');
     document.querySelector('.image-edit-panel')?.classList.remove('video-preview-mode');
