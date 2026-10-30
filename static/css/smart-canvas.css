@@ -3,17 +3,20 @@
     --page:#f8fafc; --grid:#d9e1ea; --panel:rgba(255,255,255,.9); --card:#fff;
     --text:#111827; --muted:#64748b; --faint:#94a3b8; --line:#e8edf3; --soft:#f8fafc;
     --shadow:rgba(15,23,42,.08); --strong:#111827; --strong-text:#fff;
+    /* 画布底：浅淡斜向渐变，给白底节点卡片留出对比，不做成花哨背景 */
+    --page-grad:linear-gradient(155deg,#f9fbff 0%,#eef4fb 46%,#e4ecf7 100%);
 }
 .theme-dark {
     --page:#0f141d; --grid:rgba(148,163,184,.18); --panel:rgba(23,29,41,.92); --card:#171d29;
     --text:#e5e9f0; --muted:#8f9aab; --faint:#657286; --line:#2a3444; --soft:#111722;
     --shadow:rgba(0,0,0,.28); --strong:#d8dee9; --strong-text:#10141d;
+    --page-grad:linear-gradient(155deg,#0c1220 0%,#101a2b 48%,#0a1018 100%);
 }
 * { box-sizing:border-box; }
 body { margin:0; height:100vh; overflow:hidden; color:var(--text); font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--page); }
 button,input,select,textarea { font:inherit; }
 button { border:0; cursor:pointer; }
-.shell { position:relative; width:100vw; height:100vh; overflow:hidden; background-color:var(--page); background-image:radial-gradient(var(--grid) 1px, transparent 1px); background-size:24px 24px; cursor:grab; }
+.shell { position:relative; width:100vw; height:100vh; overflow:hidden; background-color:var(--page); background-image:radial-gradient(var(--grid) 1px, transparent 1px), var(--page-grad); background-size:24px 24px, 100% 100%; background-repeat:repeat, no-repeat; cursor:grab; }
 html[data-studio-scale="off"].studio-scale-managed .smart-back,
 html[data-studio-scale="off"].studio-scale-managed .smart-title,
 html[data-studio-scale="off"].studio-scale-managed .smart-log-toggle,

@@ -2859,7 +2859,7 @@ function applyViewport(){
     // 缩小时位图被降采样 → 组件发虚。缩放态下关闭这些 backdrop-filter（底色本身已接近不透明，
     // 观感几乎无差），让卡片随矢量重新栅格化，保持清晰。
     world.classList.toggle('canvas-scaled', Math.abs(viewport.scale - 1) > 0.001);
-    shell.style.backgroundSize = '24px 24px';
+    shell.style.backgroundSize = '24px 24px, 100% 100%';   // 第二层是画布底渐变，必须跟着 shell 铺满，不能被 24px 平铺
     shell.style.backgroundPosition = '0 0';
     renderMinimap();
     scheduleSmartImageResolutionSync(world, 120);
