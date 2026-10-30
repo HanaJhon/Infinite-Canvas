@@ -165,6 +165,12 @@ let mentionRange = null;
 let mentionAnchorEl = null;
 let mentionInsertMode = 'token';
 let panState = null;
+// 轻击平移（惯性滑行）：松手后画布按松手时的速度继续滑一小段并衰减，对齐 lovart / Figma 的手感
+let panGlide = null;
+let panSamples = [];
+const PAN_GLIDE_MIN_SPEED = 0.22;   // px/ms，低于它当作「轻轻放下」，不滑
+const PAN_GLIDE_STOP_SPEED = 0.03;  // px/ms，衰减到这个速度就停
+const PAN_GLIDE_DECAY = 0.90;       // 每 16.7ms 保留 90% 速度（一次甩手约 0.6 秒停稳）
 let didPan = false;
 let portDragState = null;
 let connectionEraseState = null;
@@ -24438,7 +24444,68 @@ shell.addEventListener('click', e => {
     if(nodeEl?.dataset?.id) exitZoomPreviewToNode(nodeEl.dataset.id);
     else exitZoomPreview(screenToWorld(e));
 }, true);
+function panGlideVelocity(samples, now){
+    if(!samples || samples.length < 2) return null;
+    const release = typeof now === 'number' ? now : performance.now();
+    const last = samples[samples.length - 1];
+    // 松手前 90ms 内没有新样本 = 拖到位置后停住了，不该再飞出去
+    if(release - last.t > 90) return null;
+    const recent = samples.filter(s => release - s.t <= 90);
+    if(recent.length < 2) return null;
+    const first = recent[0];
+    const dt = release - first.t;
+    if(dt <= 0) return null;
+    const vx = (last.x - first.x) / dt;
+    const vy = (last.y - first.y) / dt;
+    if(Math.hypot(vx, vy) < PAN_GLIDE_MIN_SPEED) return null;
+    return {vx, vy};
+}
+function stopPanGlide(){
+    if(!panGlide) return;
+    if(panGlide.raf) cancelAnimationFrame(panGlide.raf);
+    if(panGlide.timer) clearTimeout(panGlide.timer);
+    panGlide = null;
+    shell.classList.remove('pan-gliding');
+}
+function startPanGlide(velocity){
+    stopPanGlide();
+    const state = panGlide = {vx:velocity.vx, vy:velocity.vy, raf:0, timer:0, last:performance.now()};
+    shell.classList.add('pan-gliding');
+    let token = 0;
+    const schedule = () => {
+        const mine = ++token;
+        state.raf = requestAnimationFrame(now => step(mine, now));
+        // rAF 在窗口被遮挡、无头环境或后台标签页里可能不派发，用定时器兜底，
+        // 否则滑行动画会停在半路（画面卡住、位置也不保存）
+        state.timer = setTimeout(() => step(mine, performance.now()), 34);
+    };
+    const step = (mine, now) => {
+        if(!panGlide || panGlide !== state || mine !== token) return;   // 同一帧只走一次
+        if(state.timer) clearTimeout(state.timer);
+        if(state.raf) cancelAnimationFrame(state.raf);
+        // 帧间隔上限：切标签页回来时不要瞬移一大段
+        const dt = Math.min(48, Math.max(0, now - state.last));
+        state.last = now;
+        if(dt > 0){
+            viewport.x += state.vx * dt;
+            viewport.y += state.vy * dt;
+            const decay = Math.pow(PAN_GLIDE_DECAY, dt / 16.7);
+            state.vx *= decay;
+            state.vy *= decay;
+        }
+        applyViewport();
+        if(Math.hypot(state.vx, state.vy) < PAN_GLIDE_STOP_SPEED){
+            stopPanGlide();
+            scheduleSave();
+            setTimeout(() => { didPan = false; }, 0);
+            return;
+        }
+        schedule();
+    };
+    schedule();
+}
 shell.onmousedown = e => {
+    stopPanGlide();
     if(zoomPreviewState && e.button === 0 && !e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.agent-panel,.agent-toggle,.inspire-panel,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
     if(e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.agent-panel,.agent-toggle,.inspire-panel,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.create-menu,.smart-minimap')) return;
     closeCreateMenu();
@@ -24469,6 +24536,7 @@ shell.onmousedown = e => {
     e.preventDefault();
     didPan = false;
     panState = {button:e.button, startX:e.clientX, startY:e.clientY, ox:viewport.x, oy:viewport.y};
+    panSamples = [{t:performance.now(), x:viewport.x, y:viewport.y}];
     shell.classList.add('panning');
 };
 shell.oncontextmenu = e => {
@@ -24795,6 +24863,8 @@ window.onmousemove = e => {
         viewport.x = panState.ox + dx;
         viewport.y = panState.oy + dy;
         applyViewport();
+        panSamples.push({t:performance.now(), x:viewport.x, y:viewport.y});
+        if(panSamples.length > 10) panSamples.shift();
         return;
     }
     if(!dragState) return;
@@ -24899,10 +24969,14 @@ window.onmouseup = e => {
         thumbDragState = null;
     }
     if(panState) {
+        const glide = panGlideVelocity(panSamples, performance.now());
         panState = null;
+        panSamples = [];
         shell.classList.remove('panning');
         scheduleSave();
-        setTimeout(() => { didPan = false; }, 0);
+        // 松手时还有速度就继续滑一段；didPan 保持到滑行结束，避免滑行中右击弹菜单
+        if(glide) startPanGlide(glide);
+        else setTimeout(() => { didPan = false; }, 0);
     }
     if(smartMinimapDrag){
         smartMinimapDrag = false;
@@ -25017,6 +25091,7 @@ window.onmouseup = e => {
 shell.addEventListener('wheel', e => {
     if(e.target.closest('.composer,.smart-back,.image-edit-modal,.asset-panel,.asset-toggle,.agent-panel,.agent-toggle,.inspire-panel,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.workflow-transfer-panel,.log-modal,.shortcut-modal,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,.minimax-library-list,.minimax-ref-track,[data-thumb-scroll]')) return;
     e.preventDefault();
+    stopPanGlide();
     const rect = shell.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
