@@ -11673,6 +11673,7 @@ function smartNodeToolbarHtml(node){
         {key:'crop', icon:'crop', label:'裁剪', enabled:canEditImage},
         {key:'outpaint', icon:'expand', label:'扩图', enabled:canEditImage},
         {key:'mask', icon:'brush', label:'遮罩', enabled:canEditImage},
+        {key:'angle', icon:'camera', label:'视角', enabled:canEditImage},
         {key:'brush', icon:'paintbrush', label:'画笔', enabled:canEditImage},
         {key:'grid', icon:'grid-3x3', label:gridLabel, enabled:canEditImage},
         // 🚨 「拆分图层」只对 GPT 相关 LLM 开放（老板 2026-10-09）：不是 GPT 就**整条不显示**，
@@ -11783,7 +11784,7 @@ function runSmartNodeToolbarAction(nodeId, action){
         openSplitLayersEditor(nodeId, index);
         return;
     }
-    const modeMap = {crop:'crop', outpaint:'outpaint', mask:'mask', brush:'brush', grid:'grid'};
+    const modeMap = {crop:'crop', outpaint:'outpaint', mask:'mask', angle:'angle', brush:'brush', grid:'grid'};
     openImageEditor(nodeId, index);
     setImageEditMode(modeMap[action] || 'preview', true);
     if(action === 'grid' && canGridJoinCurrentNode()){
