@@ -2858,6 +2858,13 @@ function arrangeSelectedSmartNodes(){
     scheduleSave();
     toast('已整理选中节点');
 }
+// 浮动 UI（节点快捷菜单、composer）要跟画布缩放反向补偿，屏幕尺寸才恒定。
+// 只用 1/scale 不做上下夹取：夹了就会在「缩得很小 / 放得很大」时又开始跟着缩，
+// 老板实测反馈的正是「缩小到一定程度依旧会缩小」。
+function uiInverseScale(scale = viewport.scale){
+    const sc = Math.min(40, Math.max(0.02, Number(scale) || 1));
+    return Math.min(50, Math.max(0.02, 1 / sc));
+}
 function applyViewport(){
     world.style.transform = `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`;
     // world 被 transform:scale 缩放后，其内部带 backdrop-filter 的卡片（参数设置/合成卡等）
@@ -2868,8 +2875,8 @@ function applyViewport(){
     // 节点浮动快捷菜单（选中节点/分组时浮在卡片上方那条）跟着 world 一起被缩放会显得忽大忽小：
     // 放大后按钮比卡片还夸张、缩小后又点不着。这里用 1/缩放 反向补偿让它保持恒定尺寸，
     // 但位置仍贴合节点（transform-origin 在底部中心）。夹在 0.5~2 之间，极端缩放下不至于铺满屏幕。
-    const invUi = Math.min(2, Math.max(0.5, 1 / viewport.scale));
-    shell.style.setProperty('--ui-inv', invUi.toFixed(3));
+    const invUi = uiInverseScale();
+    shell.style.setProperty('--ui-inv', invUi.toFixed(4));
     // composer 的间距按缩放折算（见 positionComposerForNode），所以缩放后要重算一次锚点，
     // 否则它会一直贴在缩放前的世界坐标上。
     if(composer.classList.contains('open')){
@@ -19298,8 +19305,8 @@ function positionComposerForNode(node){
     // composer 用 --ui-inv 反向补偿后，屏幕宽度是 cardW * (scale * inv)，缩放小的时候
     // 会比节点宽得多，居中放在节点下方就可能越过视口左右边缘（被裁掉一半）。
     // 所以按屏幕坐标夹一下：始终留 12px 边距，再换算回世界坐标。
-    const scale = Math.max(0.05, Number(viewport.scale) || 1);
-    const inv = Math.min(2, Math.max(0.5, 1 / scale));
+    const scale = Math.max(0.02, Number(viewport.scale) || 1);
+    const inv = uiInverseScale(scale);
     const screenW = cardW * scale * inv;   // 反向补偿后的实际屏幕宽度
     const margin = 12;
     const vx = Number(viewport.x) || 0;
