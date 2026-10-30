@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="/static/images/logo.png?v=1.2.6" type="image/png">
+    <link rel="icon" href="/static/images/logo.png?v=1.2.7" type="image/png">
     <title data-i18n="smart.title">智能画布</title>
     <script>
         (function(){
@@ -16,15 +16,15 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/lucide.js?v=1.2.6.1767196800"></script>
-    <script src="/static/vendor/js/photopea.min.js?v=1.2.6.1767196800"></script>
-    <script src="/static/js/theme.js?v=1.2.6.1767196800"></script>
-    <script src="/static/js/touch-mouse.js?v=1.2.6.1767196800"></script>
-    <script src="/static/js/i18n.js?v=1.2.6.1792550183"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=1.2.6.1793179908">
+    <script src="/static/vendor/js/lucide.js?v=1.2.7.1767196800"></script>
+    <script src="/static/vendor/js/photopea.min.js?v=1.2.7.1767196800"></script>
+    <script src="/static/js/theme.js?v=1.2.7.1767196800"></script>
+    <script src="/static/js/touch-mouse.js?v=1.2.7.1767196800"></script>
+    <script src="/static/js/i18n.js?v=1.2.7.1792550183"></script>
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=1.2.7.1793365167">
     <!-- Skill 市场：浮层样式与逻辑都在共享模块里（gpt-chat 页用同一份），见 static/js/skill-market.js -->
-    <link rel="stylesheet" href="/static/css/skill-market.css?v=1.2.6.1767196800">
-    <link rel="stylesheet" href="/static/css/split-layers.css?v=1.2.6.1792329089">
+    <link rel="stylesheet" href="/static/css/skill-market.css?v=1.2.7.1767196800">
+    <link rel="stylesheet" href="/static/css/split-layers.css?v=1.2.7.1792329089">
 </head>
 <body>
     <div id="shell" class="shell">
@@ -111,6 +111,13 @@
                     <span>
                         <div class="create-card-title">提示词节点</div>
                         <div class="create-card-sub" data-i18n="smart.createPromptSub">手写或用 LLM 生成文本</div>
+                    </span>
+                </button>
+                <button class="create-card" type="button" data-create-type="llm">
+                    <span class="create-card-icon"><i data-lucide="message-square-text"></i></span>
+                    <span>
+                        <div class="create-card-title">文本生成</div>
+                        <div class="create-card-sub">调对话模型处理文本，输出可连到生图</div>
                     </span>
                 </button>
                 <button class="create-card" type="button" data-create-type="loop">
@@ -506,6 +513,8 @@
                     </div>
                     <div class="image-edit-mode">
                         <button type="button" data-image-edit-mode="preview" class="active"><i data-lucide="eye" class="w-3.5 h-3.5"></i><span data-i18n="smart.modePreview">预览</span></button>
+                        <!-- 旋转视角：拖圆环绕主体转镜头 → 生成新视角图（图生图），不是本地图像编辑 -->
+                        <button type="button" data-image-edit-mode="angle"><i data-lucide="camera" class="w-3.5 h-3.5"></i><span>视角</span></button>
                         <button type="button" data-image-edit-mode="crop"><i data-lucide="crop" class="w-3.5 h-3.5"></i><span data-i18n="canvas.modeCrop">裁剪</span></button>
                         <button type="button" data-image-edit-mode="outpaint"><i data-lucide="expand" class="w-3.5 h-3.5"></i><span data-i18n="canvas.modeOutpaint">Expand</span></button>
                         <button type="button" data-image-edit-mode="mask"><i data-lucide="brush" class="w-3.5 h-3.5"></i><span data-i18n="canvas.modeMask">遮罩</span></button>
@@ -554,6 +563,42 @@
                             </div>
                         </div>
                     </div>
+                </div>
+                <div id="imageAngleTools" class="image-edit-tools image-angle-tools">
+                    <div class="angle-bar">
+                        <div class="angle-row">
+                            <span class="image-edit-sub angle-label">方位</span>
+                            <input id="angleDegRange" class="angle-range" type="range" min="-180" max="180" step="5" value="0" aria-label="方位角">
+                            <span id="angleDegValue" class="angle-value">正面</span>
+                        </div>
+                        <div class="angle-scale" aria-hidden="true">
+                            <span data-face-mark="back">背面</span>
+                            <span>左侧</span>
+                            <span data-face-mark="front">正面</span>
+                            <span>右侧</span>
+                            <span data-face-mark="back">背面</span>
+                        </div>
+                        <div class="angle-row">
+                            <span class="image-edit-sub angle-label">俯仰</span>
+                            <div class="angle-seg">
+                                <button type="button" data-angle-elev="-30" title="低机位仰拍 −30°">仰拍</button>
+                                <button type="button" data-angle-elev="0" class="active" title="平视 0°">平视</button>
+                                <button type="button" data-angle-elev="30" title="略俯 30°">略俯</button>
+                                <button type="button" data-angle-elev="60" title="高角度俯拍 60°">俯拍</button>
+                            </div>
+                        </div>
+                        <div class="angle-row">
+                            <span class="image-edit-sub angle-label">景别</span>
+                            <div class="angle-seg">
+                                <button type="button" data-angle-shot="close">特写</button>
+                                <button type="button" data-angle-shot="mid" class="active">中景</button>
+                                <button type="button" data-angle-shot="wide">远景</button>
+                            </div>
+                            <span id="angleDegLabel" class="angle-deg"></span>
+                        </div>
+                        <div id="anglePresets" class="angle-presets"></div>
+                    </div>
+                    <textarea id="anglePromptPreview" class="angle-prompt" spellcheck="false" aria-label="视角提示词"></textarea>
                 </div>
                 <div id="imageMaskTools" class="image-edit-tools">
                     <label><span data-i18n="canvas.brushSize">笔刷</span> <input id="maskBrushSize" type="range" min="4" max="160" value="42"></label>
@@ -626,6 +671,26 @@
                 <div id="imageEditStage" class="image-edit-stage">
                     <button id="previewPrevBtn" class="preview-nav-btn prev" type="button" onclick="navigatePreviewImage(-1)" title="上一张"><i data-lucide="chevron-left"></i></button>
                     <button id="previewNextBtn" class="preview-nav-btn next" type="button" onclick="navigatePreviewImage(1)" title="下一张"><i data-lucide="chevron-right"></i></button>
+                    <div id="angleFaceBadge" class="angle-face-badge" data-face="front"><span class="angle-face-name">正面</span><i data-lucide="user"></i></div>
+                    <div id="angleCameraRing" class="angle-camera-ring" aria-hidden="true">
+                        <div class="angle-camera-orbit"></div>
+                        <div id="angleCameraDot" class="angle-camera-dot"><i data-lucide="camera"></i></div>
+                    </div>
+                    <div id="angleCardScene" class="angle-card-scene" aria-hidden="true">
+                        <div id="angleCard" class="angle-card">
+                            <div class="angle-card-edge edge-left"></div>
+                            <div class="angle-card-edge edge-right"></div>
+                            <div class="angle-card-face angle-card-front">
+                                <img id="angleCardFrontImg" alt="">
+                                <div class="angle-card-sheen"></div>
+                            </div>
+                            <div class="angle-card-face angle-card-back">
+                                <img id="angleCardBackImg" alt="">
+                                <div class="angle-card-shade"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="angleStageHint" class="angle-stage-hint">拖动画面：左右绕主体转机位 · 上下调俯仰 · 滚轮切景别</div>
                     <div class="image-edit-stage-inner">
                         <div id="previewStage" class="preview-stage" style="display:none">
                             <div id="previewFrame" class="preview-frame">
@@ -879,7 +944,7 @@
         </div>
     </div>
 
-    <script src="/static/js/skill-market.js?v=1.2.6.1767196800"></script>
-    <script src="/static/js/smart-canvas.js?v=1.2.6.1793179958"></script>
+    <script src="/static/js/skill-market.js?v=1.2.7.1767196800"></script>
+    <script src="/static/js/smart-canvas.js?v=1.2.7.1793365177"></script>
 </body>
 </html>

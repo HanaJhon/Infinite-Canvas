@@ -98,18 +98,18 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity:0 !impo
 .image-node.history-group-node { border-color:rgba(148,163,184,.34); background:rgba(248,250,252,.66); }
 .theme-dark .image-node.history-group-node { border-color:rgba(148,163,184,.28); background:rgba(30,41,59,.28); }
 .image-node.selected { outline:0; }
-.image-node.selected:not(.empty-node):not(.group-node):not(.prompt-smart-node):not(.loop-smart-node):not(.minimax-smart-node):not(.smart-group-node):not(.smart3d-node) { box-shadow:none; border-radius:12px; }
+.image-node.selected:not(.empty-node):not(.group-node):not(.prompt-smart-node):not(.loop-smart-node):not(.minimax-smart-node):not(.smart-group-node):not(.smart3d-node):not(.smart-llm-node) { box-shadow:none; border-radius:12px; }
 .image-node.selected:not(.empty-node):not(.group-node) .image-wrap > img:not(.node-mask-overlay), .image-node.selected:not(.empty-node):not(.group-node) .image-wrap > .node-img { border-color:var(--strong); box-shadow:0 0 0 1px var(--strong); }
 .image-node.group-node:hover, .image-node.group-node.selected { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
 .image-node.group-node.selected { box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow); }
 .image-node.empty-node:hover { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
 .image-node.empty-node.selected { border-color:var(--strong); box-shadow:0 0 0 1px var(--strong), 0 12px 34px var(--shadow); }
-.image-node.prompt-smart-node, .image-node.loop-smart-node, .image-node.minimax-smart-node, .image-node.smart3d-node { padding:12px; background:var(--panel); border:1px solid var(--line); box-shadow:0 20px 56px var(--shadow); backdrop-filter:blur(20px); overflow:visible; }
+.image-node.prompt-smart-node, .image-node.loop-smart-node, .image-node.minimax-smart-node, .image-node.smart3d-node, .image-node.smart-llm-node { padding:12px; background:var(--panel); border:1px solid var(--line); box-shadow:0 20px 56px var(--shadow); backdrop-filter:blur(20px); overflow:visible; }
 .image-node.loop-smart-node { padding-top:14px; padding-bottom:12px; }
-.theme-dark .image-node.prompt-smart-node, .theme-dark .image-node.loop-smart-node, .theme-dark .image-node.minimax-smart-node, .theme-dark .image-node.smart3d-node { background:var(--panel); border-color:var(--line); }
-.image-node.prompt-smart-node:hover, .image-node.loop-smart-node:hover, .image-node.minimax-smart-node:hover, .image-node.smart3d-node:hover, .image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected, .image-node.smart3d-node.selected { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
-.image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected, .image-node.smart3d-node.selected { box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow); }
-.prompt-smart-node .node-body, .loop-smart-node .node-body, .minimax-smart-node .node-body, .smart3d-node .node-body { align-items:stretch; justify-content:stretch; padding:0; height:100%; min-height:0; }
+.theme-dark .image-node.prompt-smart-node, .theme-dark .image-node.loop-smart-node, .theme-dark .image-node.minimax-smart-node, .theme-dark .image-node.smart3d-node, .theme-dark .image-node.smart-llm-node { background:var(--panel); border-color:var(--line); }
+.image-node.prompt-smart-node:hover, .image-node.loop-smart-node:hover, .image-node.minimax-smart-node:hover, .image-node.smart3d-node:hover, .image-node.smart-llm-node:hover, .image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected, .image-node.smart3d-node.selected, .image-node.smart-llm-node.selected { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
+.image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected, .image-node.smart3d-node.selected, .image-node.smart-llm-node.selected { box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow); }
+.prompt-smart-node .node-body, .loop-smart-node .node-body, .minimax-smart-node .node-body, .smart3d-node .node-body, .smart-llm-node .node-body { align-items:stretch; justify-content:stretch; padding:0; height:100%; min-height:0; }
 .image-node.smart-group-member-node { padding:0; border-radius:12px; overflow:hidden; background:var(--card); border:1px solid rgba(148,163,184,.34); box-shadow:none; backdrop-filter:none; }
 .theme-dark .image-node.smart-group-member-node { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.24); }
 .image-node.smart-group-member-node:hover,
@@ -317,13 +317,13 @@ body.smart-prompt-split-resize .prompt-node-llm select { pointer-events:none !im
 .loop-smart-run i,.loop-smart-run svg { width:15px !important; height:15px !important; }
 .loop-smart-run:disabled { opacity:.45; cursor:not-allowed; }
 
-.image-node.selected:not(.empty-node):not(.group-node):not(.prompt-smart-node):not(.loop-smart-node):not(.minimax-smart-node):not(.smart-group-node):not(.smart3d-node) { box-shadow:none; border-radius:12px; }
-.image-node.prompt-smart-node, .image-node.loop-smart-node, .image-node.minimax-smart-node, .image-node.smart3d-node { padding:12px; background:var(--panel); border:1px solid var(--line); box-shadow:0 20px 56px var(--shadow); backdrop-filter:blur(20px); overflow:visible; }
+.image-node.selected:not(.empty-node):not(.group-node):not(.prompt-smart-node):not(.loop-smart-node):not(.minimax-smart-node):not(.smart-group-node):not(.smart3d-node):not(.smart-llm-node) { box-shadow:none; border-radius:12px; }
+.image-node.prompt-smart-node, .image-node.loop-smart-node, .image-node.minimax-smart-node, .image-node.smart3d-node, .image-node.smart-llm-node { padding:12px; background:var(--panel); border:1px solid var(--line); box-shadow:0 20px 56px var(--shadow); backdrop-filter:blur(20px); overflow:visible; }
 .image-node.loop-smart-node { padding-top:14px; padding-bottom:12px; }
-.theme-dark .image-node.prompt-smart-node, .theme-dark .image-node.loop-smart-node, .theme-dark .image-node.minimax-smart-node, .theme-dark .image-node.smart3d-node { background:var(--panel); border-color:var(--line); }
-.image-node.prompt-smart-node:hover, .image-node.loop-smart-node:hover, .image-node.minimax-smart-node:hover, .image-node.smart3d-node:hover, .image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected, .image-node.smart3d-node.selected { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
-.image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected, .image-node.smart3d-node.selected { box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow); }
-.prompt-smart-node .node-body, .loop-smart-node .node-body, .minimax-smart-node .node-body, .smart3d-node .node-body { align-items:stretch; justify-content:stretch; padding:0; height:100%; min-height:0; }
+.theme-dark .image-node.prompt-smart-node, .theme-dark .image-node.loop-smart-node, .theme-dark .image-node.minimax-smart-node, .theme-dark .image-node.smart3d-node, .theme-dark .image-node.smart-llm-node { background:var(--panel); border-color:var(--line); }
+.image-node.prompt-smart-node:hover, .image-node.loop-smart-node:hover, .image-node.minimax-smart-node:hover, .image-node.smart3d-node:hover, .image-node.smart-llm-node:hover, .image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected, .image-node.smart3d-node.selected, .image-node.smart-llm-node.selected { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
+.image-node.prompt-smart-node.selected, .image-node.loop-smart-node.selected, .image-node.minimax-smart-node.selected, .image-node.smart3d-node.selected, .image-node.smart-llm-node.selected { box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow); }
+.prompt-smart-node .node-body, .loop-smart-node .node-body, .minimax-smart-node .node-body, .smart3d-node .node-body, .smart-llm-node .node-body { align-items:stretch; justify-content:stretch; padding:0; height:100%; min-height:0; }
 .image-node.minimax-smart-node .node-head, .image-node.minimax-smart-node .node-title { display:none; }
 .minimax-card { width:100%; height:100%; min-height:0; display:flex; flex-direction:column; gap:10px; color:var(--text); overflow:hidden; }
 .minimax-top,.minimax-track,.minimax-lane,.minimax-media { cursor:grab; }
@@ -2607,3 +2607,167 @@ a.smart3d-run { text-decoration:none; cursor:pointer; }
 .agent-msg.has-tools { align-self:stretch; max-width:100%; }
 .agent-msg.has-tools .agent-msg-bubble { align-self:flex-start; }
 .agent-msg.has-tools .agent-tool-calls { width:100%; }
+
+/* --- LLM 节点（2026-10-29 从经典画布移植；外观/交互复用 prompt-node-* 语言） --- */
+.smart-llm-node .node-body { padding:0; }
+.smart-llm-card { gap:6px; }
+.smart-llm-output {
+    flex:1 1 auto; min-height:72px; width:100%; overflow:auto; white-space:pre-wrap; overflow-wrap:break-word;
+    border:1px solid rgba(148,163,184,.32); border-radius:13px; background:rgba(255,255,255,.74);
+    color:var(--text); font-size:12px; line-height:1.5; padding:9px 10px; font-weight:600;
+    scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent;
+}
+.theme-dark .smart-llm-output { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.24); }
+.smart-llm-output.is-empty { color:var(--faint); }
+.smart-llm-card .prompt-node-llm-actions { margin-top:auto; }
+
+/* --- LLM 节点卡片与标题栏（2026-10-29）：跟 3D 节点一样是「少数保留标题栏的非空节点」 --- */
+.image-node.smart-llm-node { display:flex; flex-direction:column; padding-top:0; }
+.image-node.smart-llm-node .node-head { display:flex; flex:0 0 auto; padding:0; border-bottom:0; }
+.image-node.smart-llm-node .node-title { display:block; flex:0 0 auto; }
+.image-node.smart-llm-node .node-body { flex:1 1 auto; height:auto; min-height:0; }
+.smart-llm-node .node-head { cursor:move; }
+.image-node.smart-llm-node .node-head .node-delete { box-shadow:none; backdrop-filter:none; }
+.image-node.smart-llm-node .node-head .node-delete:hover { color:#dc2626; background:#fee2e2; }
+.theme-dark .image-node.smart-llm-node .node-head .node-delete:hover { color:#fca5a5; background:rgba(239,68,68,.18); }
+/* 标题可双击重命名：给个可编辑暗示，避免用户以为只是灰标签 */
+.image-node.smart-llm-node .node-title { cursor:text; border-radius:6px; padding:1px 4px; margin-left:-4px; }
+.image-node.smart-llm-node .node-title:hover { background:var(--soft); color:var(--text); }
+.smart-llm-card { display:flex; flex-direction:column; gap:6px; height:100%; min-height:0; }
+/* 输出框：可直接编辑（改完即成为下游取用的文本） */
+.smart-llm-output { flex:1 1 auto; min-height:64px; width:100%; resize:none; overflow:auto;
+    border:1px solid rgba(148,163,184,.32); border-radius:13px; background:rgba(255,255,255,.74);
+    color:var(--text); font-size:12px; line-height:1.5; padding:9px 10px; font-weight:600; outline:none;
+    white-space:pre-wrap; overflow-wrap:break-word; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent; }
+.smart-llm-output:focus { border-color:var(--strong); background:var(--card); }
+.smart-llm-output::placeholder { color:var(--faint); font-weight:600; }
+.theme-dark .smart-llm-output { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.24); }
+.smart-llm-card .prompt-node-llm-actions { margin-top:auto; flex:0 0 auto; }
+.smart-llm-card .prompt-node-text { min-height:64px; }
+
+/* --- LLM 节点：隐藏标题栏里那个常驻的删除图标（删除仍可用 hover 浮动操作/选中后删） --- */
+.image-node.smart-llm-node .node-head .node-delete { display:none; }
+/* 输入框右下角「图片描述」预设胶囊 */
+.smart-llm-input-wrap { position:relative; display:flex; flex:1 1 auto; min-height:64px; min-width:0; }
+.smart-llm-input-wrap .smart-llm-input { flex:1 1 auto; min-height:64px; padding-bottom:34px; }
+.smart-llm-desc-preset { position:absolute; right:8px; bottom:8px; height:22px; padding:0 8px; font-size:10px; z-index:2; }
+.smart-llm-desc-preset i, .smart-llm-desc-preset svg { width:12px; height:12px; }
+
+/* --- 图片预览「视角」模式：图片上直接拖 + 方位滑条/俯仰/景别 --- */
+#imageAngleTools.active { display:grid; grid-template-columns:minmax(300px, 460px) minmax(0,1fr); gap:12px; flex:0 0 auto; height:auto; min-height:0; overflow:visible; align-items:stretch; }
+.angle-bar { display:flex; flex-direction:column; gap:7px; min-width:0; }
+.angle-row { display:flex; align-items:center; gap:8px; min-width:0; }
+.angle-label { flex:0 0 26px; }
+.angle-range { flex:1 1 auto; min-width:0; height:18px; accent-color:var(--strong); cursor:pointer; }
+.angle-value { flex:0 0 auto; min-width:52px; text-align:right; font-size:11px; font-weight:800; color:var(--text); white-space:nowrap; }
+.angle-presets { display:flex; flex-wrap:wrap; gap:4px; }
+.angle-preset { height:22px; padding:0 8px; border-radius:999px; border:1px solid var(--line); background:var(--soft); color:var(--muted); font-size:10.5px; font-weight:800; cursor:pointer; white-space:nowrap; }
+.angle-preset:hover { color:var(--text); border-color:var(--muted); }
+.angle-preset.active { background:var(--strong); border-color:var(--strong); color:var(--strong-text); }
+.angle-seg { display:flex; gap:4px; padding:3px; border-radius:11px; background:var(--card); border:1px solid var(--line); }
+.angle-seg button { height:24px; padding:0 10px; border-radius:8px; font-size:11px; font-weight:800; color:var(--muted); background:transparent; cursor:pointer; }
+.angle-seg button.active { background:var(--strong); color:var(--strong-text); }
+.angle-deg { margin-left:auto; font-size:11px; font-weight:800; color:var(--muted); white-space:nowrap; }
+.angle-prompt { min-width:200px; height:auto; min-height:132px; resize:none; padding:9px 11px; border-radius:12px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:11px; line-height:1.6; font-weight:600; outline:none; }
+.angle-prompt:focus { border-color:var(--strong); }
+/* 图片跟着机位一起转，只是「我绕着主体走了」的视觉提示，不代表生成结果 */
+.image-edit-stage.angle-mode { overflow:hidden; cursor:ew-resize; }
+.image-edit-stage.angle-mode .preview-stage,
+.image-edit-stage.angle-mode .preview-stage * { cursor:ew-resize; }
+.image-edit-stage.angle-mode.angle-dragging .preview-stage,
+.image-edit-stage.angle-mode.angle-dragging .preview-stage * { cursor:grabbing; }
+.image-edit-stage.angle-mode.angle-dragging { cursor:grabbing; }
+/* 视角模式不用普通预览图：换成下面那张 3D 卡片（避免两套 transform 打架） */
+.image-edit-stage.angle-mode .image-edit-stage-inner { display:none; }
+/* 3D 卡片：正面受光（原图 + 高光），背面背光（同一张图压暗）。
+   之前 rotateY 直接把 img 转过去会露背、还会渲染成黑块，所以做成两面的卡片。 */
+.angle-card-scene {
+    position:absolute; inset:0; z-index:4; display:none;
+    align-items:center; justify-content:center; perspective:1400px; pointer-events:none;
+}
+.image-edit-stage.angle-mode .angle-card-scene { display:flex; }
+.angle-card {
+    position:relative; width:320px; height:180px;
+    transform-style:preserve-3d; transform-origin:center center;
+    transition:transform .1s linear; will-change:transform;
+}
+.angle-card-face {
+    position:absolute; inset:0; border-radius:12px; overflow:hidden;
+    backface-visibility:hidden; -webkit-backface-visibility:hidden;
+    box-shadow:0 18px 40px rgba(15,23,42,.28);
+}
+.angle-card-face img { width:100%; height:100%; object-fit:cover; display:block; }
+/* 卡片得有厚度：正好转到 90° 时两面都是侧对着镜头，没有侧边就整张消失。
+   侧边贴同一张图的切片，看起来就是「卡片转成一条缝」，而不是一根黑棍。 */
+.angle-card-edge {
+    position:absolute; top:0; width:9px; height:100%; border-radius:3px;
+    background-image:var(--angle-card-img, none);
+    background-size:cover; background-position:center;
+    filter:brightness(.72) saturate(.75);
+    box-shadow:inset 0 0 0 1px rgba(15,23,42,.45);
+    backface-visibility:visible;
+}
+.angle-card-edge.edge-left { left:0; transform-origin:left center; transform:rotateY(-90deg) translateX(0); }
+.angle-card-edge.edge-right { right:0; transform-origin:right center; transform:rotateY(90deg) translateX(0); }
+/* 正/背面用「换一层」而不是把卡片真的翻过去：薄片翻到 90° 会整张消失，
+   换层则任何角度都看得见。正面=原图+高光，背面=同一张图压暗（背光）。 */
+.angle-card[data-face="front"] .angle-card-back { display:none; }
+.angle-card[data-face="back"] .angle-card-front { display:none; }
+.angle-card-back { transform:none; }
+/* 背面：背光 → 压暗、去饱和，跟正面一眼区分（暗到还能认出内容，不能黑成一块） */
+.angle-card-back img { filter:brightness(.62) saturate(.7); }
+.angle-card-shade {
+    position:absolute; inset:0;
+    background:linear-gradient(160deg, rgba(15,23,42,.30), rgba(15,23,42,.52));
+    mix-blend-mode:multiply;
+}
+.angle-card-back::after {
+    content:"背面"; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    font-size:11px; font-weight:800; letter-spacing:.18em; color:rgba(255,255,255,.72);
+    border:1px dashed rgba(255,255,255,.4); border-radius:999px; padding:3px 10px;
+}
+/* 正面高光：光从相机这一侧打过来，位置跟着方位/俯仰走 */
+.angle-card-sheen {
+    position:absolute; inset:0; pointer-events:none;
+    background:radial-gradient(circle at var(--sheen-x, 50%) var(--sheen-y, 36%),
+        rgba(255,255,255,.55), rgba(255,255,255,.12) 38%, rgba(255,255,255,0) 68%);
+    opacity:.9;
+}
+/* 机位圆环：拖的是「相机绕主体转」，不是图片在平移 */
+.angle-camera-ring {
+    position:absolute; inset:6% 8%; z-index:5; display:none; pointer-events:none;
+}
+.image-edit-stage.angle-mode .angle-camera-ring { display:block; }
+.angle-camera-orbit {
+    position:absolute; inset:0; border-radius:50%;
+    border:1px dashed rgba(148,163,184,.55);
+    background:radial-gradient(closest-side, rgba(148,163,184,.06), transparent 72%);
+}
+.angle-camera-dot {
+    position:absolute; left:50%; top:58%; width:26px; height:26px; margin:-13px 0 0 -13px;
+    display:flex; align-items:center; justify-content:center; border-radius:50%;
+    background:var(--strong); color:var(--strong-text);
+    box-shadow:0 6px 16px var(--shadow); transition:left .08s linear, top .08s linear, background .15s ease;
+}
+.angle-camera-dot i { width:13px; height:13px; }
+.angle-camera-dot.behind { background:var(--muted); }
+.image-edit-stage.angle-mode.angle-dragging #previewStage { transition:none; }
+.angle-scale { display:flex; justify-content:space-between; padding:0 2px; margin:-2px 0 2px; }
+.angle-scale span { font-size:9.5px; font-weight:700; color:var(--faint,#94a3b8); letter-spacing:.02em; }
+.angle-scale span[data-face-mark="back"] { color:var(--strong); }
+.angle-face-badge {
+    position:absolute; top:12px; left:12px; z-index:6;
+    display:none; align-items:center; gap:6px; height:26px; padding:0 12px;
+    border-radius:999px; font-size:12px; font-weight:800; letter-spacing:.02em;
+    border:1px solid var(--line); background:rgba(255,255,255,.92); color:var(--text);
+    box-shadow:0 10px 24px var(--shadow); pointer-events:none;
+}
+.angle-face-badge i { width:13px; height:13px; }
+.image-edit-stage.angle-mode .angle-face-badge { display:flex; }
+/* 背面：深色虚线徽标 + 图片虚线外框，跟「正面」对比明显，避免转了半圈还以为没动 */
+.angle-face-badge[data-face="back"] { background:var(--strong); color:var(--strong-text); border-color:var(--strong); border-style:dashed; height:28px; padding:0 14px; font-size:13px; letter-spacing:.06em; }
+.angle-face-badge[data-face="back"]::before { content:"◄"; font-size:10px; opacity:.85; }
+.angle-face-badge[data-face="back"]::after { content:"►"; font-size:10px; opacity:.85; }
+.image-edit-stage.angle-mode[data-face="back"] #previewStage { outline:1px dashed var(--faint,#94a3b8); outline-offset:6px; }
+.angle-stage-hint { display:none; position:absolute; left:50%; bottom:10px; transform:translateX(-50%); padding:4px 10px; border-radius:999px; background:rgba(15,23,42,.6); color:#fff; font-size:10.5px; font-weight:700; z-index:5; pointer-events:none; white-space:nowrap; }
+.image-edit-stage.angle-mode .angle-stage-hint { display:block; }

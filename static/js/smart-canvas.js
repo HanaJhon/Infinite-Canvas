@@ -2625,6 +2625,7 @@ function imageLayout(images, scale=1, node=null){
     }
     if(node?.type === 'smart-prompt') return {cols:1, rows:1, ...promptNodeLayoutSize(node), thumb:96, single:true};
     if(node?.type === 'smart-minimax') return {cols:1, rows:1, ...smartMinimaxLayoutSize(node), thumb:96, single:true};
+    if(node?.type === 'smart-llm') return {cols:1, rows:1, ...smartLlmLayoutSize(node), thumb:96, single:true};
     if(node?.type === 'smart-3d') return {cols:1, rows:1, ...smart3DLayoutSize(node), thumb:96, single:true};
     if(node?.type === 'smart-hy3d') return {cols:1, rows:1, ...smart3DLayoutSize(node), thumb:96, single:true};
     if(node?.type === 'smart-loop'){
@@ -7304,6 +7305,248 @@ function createPromptNode(x, y, options={}){
     scheduleSave();
     return node;
 }
+// ---------------------------------------------------------------------------
+// LLM 节点（2026-10-29 从经典画布 canvas.js 移植）：
+//   一段输入文本（或上游提示词节点的文本）→ 调对话模型 → outputText 供下游生图使用。
+// 经典版还有 chat 模式 / cascade 链式 / retry 重试，这一版先只做 node 模式（够用且好验证）。
+// ---------------------------------------------------------------------------
+const SMART_LLM_DEFAULT_W = 380;
+const SMART_LLM_DEFAULT_H = 440;
+function smartLlmLayoutSize(node){
+    return {
+        width: Math.max(300, Math.round(Number(node?.w) || SMART_LLM_DEFAULT_W)),
+        height: Math.max(300, Math.round(Number(node?.h) || SMART_LLM_DEFAULT_H)),
+    };
+}
+function createLLMNode(x, y, options={}){
+    if(!options.skipUndo) pushUndo();
+    const providerId = resolveChatProviderId('');
+    const node = {
+        id:uid('llm'),
+        type:'smart-llm',
+        x,
+        y,
+        w:SMART_LLM_DEFAULT_W,
+        h:SMART_LLM_DEFAULT_H,
+        title:'文本生成',
+        llmProvider:providerId,
+        model:resolveChatModel('', providerId),
+        llmSystemMode:'',
+        llmSystemPrompt:'',
+        userInput:'',
+        outputText:'',
+        created_at:Date.now()
+    };
+    nodes.push(node);
+    if(options.select !== false) selectedId = node.id;
+    render();
+    scheduleSave();
+    return node;
+}
+// 上游连过来的提示词文本（提示词节点 / 循环 / 分组 / 别的 LLM 节点）
+function smartLlmUpstreamText(node){
+    try { return inputPromptTextFor(node).join('\n\n').trim(); } catch(e){ return ''; }
+}
+function smartLlmSystemPrompt(node){
+    const mode = node.llmSystemMode || '';
+    if(!mode) return '';
+    const preset = LLM_SYSTEM_PRESETS[mode] || '';
+    return String(node.llmSystemPrompt || preset || '').trim();
+}
+// 输入框右下角的「图片描述」预设：点一下自动填入这段提示词
+const SMART_LLM_IMAGE_DESC_PRESET = '请把这张图片描述成一段详细的图像生成提示词，涵盖主体、构图、光线、配色、风格和镜头。只回复提示词本身。';
+function smartLlmBodyHtml(node){
+    const upstream = smartLlmUpstreamText(node);
+    const readonly = upstream.length > 0;
+    const value = readonly ? upstream : (node.userInput || '');
+    const provider = resolveChatProviderId(node.llmProvider || '');
+    const model = resolveChatModel(node.model || '', provider);
+    const out = String(node.outputText || '').trim();
+    // 老节点（第一版用的是 showSystem + systemPrompt）平滑迁移到「预设 chip」模型
+    if(node.llmSystemMode === undefined){
+        node.llmSystemMode = node.showSystem && node.systemPrompt ? 'custom' : (node.showSystem ? 'custom' : '');
+        node.llmSystemPrompt = node.systemPrompt || '';
+    }
+    const sysMode = node.llmSystemMode || '';
+    const sysPrompt = sysMode ? (node.llmSystemPrompt || LLM_SYSTEM_PRESETS[sysMode] || '') : '';
+    // 🚨 样式刻意复用提示词节点那一套 class（prompt-node-*）：
+    //    智能画布里只有它是"文本框类节点"的既有语言，自造一套会被一眼看出不像同一个应用。
+    return `<div class="prompt-node-card smart-llm-card">
+        <div class="prompt-node-llm smart-llm-params">
+            <select class="prompt-node-control smart-llm-provider">${chatProviderOptions(provider)}</select>
+            <select class="prompt-node-control smart-llm-model">${chatModelOptions(model, provider)}</select>
+        </div>
+        <div class="prompt-system-preset-group smart-llm-presets">
+            ${['custom','text2img','img2img','minimaxH3'].map(mode => `<button type="button" class="prompt-node-pill prompt-node-control prompt-system-mode-btn ${sysMode === mode ? 'active' : ''}" data-system-mode="${mode}">${escapeHtml(tr(mode === 'custom' ? 'smart.promptLlmPresetCustom' : mode === 'text2img' ? 'smart.promptLlmPresetText2Img' : mode === 'img2img' ? 'smart.promptLlmPresetImg2Img' : 'smart.promptLlmPresetMinimaxH3'))}</button>`).join('')}
+        </div>
+        ${sysMode ? `<div class="prompt-node-llm smart-llm-syswrap"><textarea class="prompt-node-control prompt-llm-system smart-llm-system" placeholder="${escapeHtml(tr('smart.promptLlmSystemPlaceholder'))}">${escapeHtml(sysPrompt)}</textarea></div>` : ''}
+        <div class="prompt-node-section-title">输入${readonly ? ' · 来自上游' : ''}</div>
+        <div class="smart-llm-input-wrap">
+            <textarea class="prompt-node-control prompt-node-text smart-llm-input" ${readonly ? 'readonly' : ''} placeholder="直接输入，或把提示词节点连上来…">${escapeHtml(value)}</textarea>
+            ${readonly ? '' : `<button class="prompt-node-pill prompt-node-control smart-llm-desc-preset" type="button" title="填入「图片描述」预设提示词"><i data-lucide="image"></i><span>图片描述</span></button>`}
+        </div>
+        <div class="prompt-node-section-title">输出${out ? '' : ' · 可直接编辑'}</div>
+        <textarea class="smart-llm-output" placeholder="运行后输出文本，可连到生图节点；也可以直接在这里改">${escapeHtml(out)}</textarea>
+        <div class="prompt-node-llm-actions">
+            <button class="prompt-node-run prompt-node-control smart-llm-run" type="button" ${node.running ? 'disabled' : ''}><i data-lucide="${node.running ? 'loader-2' : 'play'}"></i><span>${node.running ? '生成中…' : '生成文本'}</span></button>
+            <button class="prompt-node-pill prompt-node-control smart-llm-copy" type="button" ${out ? '' : 'disabled'}><i data-lucide="copy"></i><span>复制</span></button>
+            <button class="prompt-node-pill prompt-node-control smart-llm-clear" type="button"><i data-lucide="eraser"></i><span>清空</span></button>
+        </div>
+    </div>`;
+}
+function bindSmartLlmControls(el, node){
+    const providerSel = el.querySelector('.smart-llm-provider');
+    const modelSel = el.querySelector('.smart-llm-model');
+    const sysEl = el.querySelector('.smart-llm-system');
+    const inputEl = el.querySelector('.smart-llm-input');
+    const outputEl = el.querySelector('.smart-llm-output');
+    const copyBtn = el.querySelector('.smart-llm-copy');
+    const clearBtn = el.querySelector('.smart-llm-clear');
+    const runBtn = el.querySelector('.smart-llm-run');
+    // 标题双击重命名（LLM 是少数保留标题栏的节点，标题得能改）
+    const titleEl = el.querySelector('.node-title');
+    if(titleEl){
+        titleEl.title = '双击重命名';
+        titleEl.ondblclick = async e => {
+            e.preventDefault();
+            e.stopPropagation();
+            const name = await openAssetNameDialog({ title:'重命名节点', value: node.title || '文本生成', placeholder:'节点名' });
+            const next = String(name || '').trim();
+            if(!next || next === node.title) return;
+            node.title = next.slice(0, 40);
+            render();
+            scheduleSave();
+        };
+    }
+    if(outputEl){
+        outputEl.onmousedown = e => e.stopPropagation();
+        outputEl.oninput = e => { node.outputText = e.target.value; scheduleSave(); };
+    }
+    if(clearBtn){
+        clearBtn.onmousedown = e => e.stopPropagation();
+        clearBtn.onclick = e => {
+            e.stopPropagation();
+            node.outputText = '';
+            render();
+            scheduleSave();
+        };
+    }
+    [providerSel, modelSel].forEach(sel => {
+        if(!sel) return;
+        sel.onmousedown = e => e.stopPropagation();
+        sel.onclick = e => e.stopPropagation();
+    });
+    if(providerSel){
+        providerSel.onchange = e => {
+            e.stopPropagation();
+            node.llmProvider = e.target.value;
+            node.model = resolveChatModel('', node.llmProvider);
+            render();
+            scheduleSave();
+        };
+    }
+    if(modelSel){
+        modelSel.onchange = e => {
+            e.stopPropagation();
+            node.model = e.target.value;
+            scheduleSave();
+        };
+    }
+    if(sysEl){
+        sysEl.onmousedown = e => e.stopPropagation();
+        sysEl.oninput = e => { node.llmSystemPrompt = e.target.value; scheduleSave(); };
+    }
+    // 系统提示词预设 chip：点一次启用（并写入该预设文案），再点一次关闭 —— 不选就是不用 system 提示词
+    el.querySelectorAll('.prompt-system-mode-btn').forEach(btn => {
+        btn.onmousedown = e => e.stopPropagation();
+        btn.onclick = e => {
+            e.preventDefault();
+            e.stopPropagation();
+            const mode = btn.dataset.systemMode || '';
+            if(!mode || !LLM_SYSTEM_PRESETS[mode]) return;
+            if((node.llmSystemMode || '') === mode){
+                node.llmSystemMode = '';
+                node.llmSystemPrompt = '';
+            } else {
+                node.llmSystemMode = mode;
+                node.llmSystemPrompt = LLM_SYSTEM_PRESETS[mode];
+            }
+            render();
+            scheduleSave();
+        };
+    });
+    if(inputEl && !inputEl.readOnly){
+        inputEl.onmousedown = e => e.stopPropagation();
+        inputEl.oninput = e => { node.userInput = e.target.value; scheduleSave(); };
+    }
+    // 「图片描述」预设胶囊：空则填入，已有内容则追加换行 —— 不覆盖用户已经写的东西
+    const descChip = el.querySelector('.smart-llm-desc-preset');
+    if(descChip){
+        descChip.onmousedown = e => e.stopPropagation();
+        descChip.onclick = e => {
+            e.preventDefault();
+            e.stopPropagation();
+            if(inputEl?.readOnly) return;
+            const current = String(node.userInput || '');
+            node.userInput = current.trim() ? `${current.replace(/\s+$/, '')}\n${SMART_LLM_IMAGE_DESC_PRESET}` : SMART_LLM_IMAGE_DESC_PRESET;
+            if(inputEl) inputEl.value = node.userInput;
+            inputEl?.focus?.();
+            scheduleSave();
+        };
+    }
+    if(copyBtn){
+        copyBtn.onmousedown = e => e.stopPropagation();
+        copyBtn.onclick = async e => {
+            e.stopPropagation();
+            const text = String(node.outputText || '');
+            if(!text) return;
+            const ok = await copyTextToClipboard(text);
+            toast(ok ? '已复制输出' : '复制失败');
+        };
+    }
+    if(runBtn){
+        runBtn.onmousedown = e => e.stopPropagation();
+        runBtn.onclick = e => { e.stopPropagation(); runSmartLlmNode(node.id); };
+    }
+}
+async function runSmartLlmNode(nodeId){
+    const node = nodes.find(n => n.id === nodeId);
+    if(!node || node.type !== 'smart-llm' || node.running) return;
+    const message = (smartLlmUpstreamText(node) || node.userInput || '').trim();
+    if(!message){ toast('先输入文本，或把提示词节点连上来'); return; }
+    const provider = resolveChatProviderId(node.llmProvider || '');
+    const model = resolveChatModel(node.model || '', provider);
+    node.running = true;
+    render();
+    try {
+        const result = await fetch('/api/canvas-llm', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+                message,
+                messages:[],
+                images:[],
+                videos:[],
+                model,
+                provider,
+                ms_model: provider === 'modelscope' ? model : '',
+                system_prompt: smartLlmSystemPrompt(node)
+            })
+        }).then(async r => {
+            if(!r.ok) throw new Error(await r.text());
+            return r.json();
+        });
+        node.outputText = String(result.text || '').trim();
+        node.llmProvider = provider;
+        node.model = model;
+        scheduleSave();
+    } catch(e) {
+        window.alert(`文本生成节点运行失败：${(e.message || '').slice(0, 160)}`);
+    } finally {
+        node.running = false;
+        render();
+    }
+}
 function createLoopNode(x, y, options={}){
     if(!options.skipUndo) pushUndo();
     const node = {id:uid('loop'), type:'smart-loop', x, y, w:340, h:168, title:'Loop', count:1, mode:'serial', showPrompt:false, imageInput:false, loopStart:1, imageBatchSize:1, variablePrompt:'', created_at:Date.now()};
@@ -11344,6 +11587,7 @@ function nodeBodyHtml(node, layout){
     if(node.type === 'smart-minimax') return smartMinimaxBodyHtml(node);
     if(node.type === 'smart-group') return smartGroupBodyHtml(node);
     if(node.type === 'smart-prompt') return promptNodeBodyHtml(node);
+    if(node.type === 'smart-llm') return smartLlmBodyHtml(node);
     if(node.type === 'smart-loop') return smartLoopBodyHtml(node);
     const imgs = (node.images || []).map(imageForDisplay);
     if(node.jimengPending && node.jimengPending.submitId && imgs.length === 0){
@@ -13875,12 +14119,15 @@ function render(){
         .sort((a, b) => (isSmartGroupNode(a) ? 0 : 1) - (isSmartGroupNode(b) ? 0 : 1))
         .map(node => {
         const imgs = node.images || [];
-        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : node.type === 'smart-minimax' ? 'MiniMax H3' : isSmart3DNode(node) ? escapeHtml(tr('smart.3dTitle')) : isHy3dNode(node) ? escapeHtml(tr('smart.hy3dTitle')) : smartImageNodeTitle(node, imgs);
+        // 2026-10-29：LLM 节点改名为「文本生成节点」；老画布里存的是默认标题 'LLM'，这里懒迁移
+        if(node.type === 'smart-llm' && node.title === 'LLM') node.title = '文本生成';
+        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : node.type === 'smart-llm' ? (node.title || '文本生成') : node.type === 'smart-minimax' ? 'MiniMax H3' : isSmart3DNode(node) ? escapeHtml(tr('smart.3dTitle')) : isHy3dNode(node) ? escapeHtml(tr('smart.hy3dTitle')) : smartImageNodeTitle(node, imgs);
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
         const isLoop = node.type === 'smart-loop';
         const isMinimax = node.type === 'smart-minimax';
+        const isLlm = node.type === 'smart-llm';
         const is3D = isSmart3DNode(node);
         const isHy3d = isHy3dNode(node);
         const isSmartGroup = node.type === 'smart-group';
@@ -13898,8 +14145,8 @@ function render(){
         // 仅在「已有场景」时显示：空场景/生成失败的提示由舞台中央的占位层负责，避免同一句话重复出现，
         // 也避免生成失败时标题栏错误地显示「连接上传后点生成」。
         const headSub = (is3D && smart3DHasScene(node)) ? `<span class="node-head-sub">${escapeHtml(tr('smart.3dDragHint'))}</span>` : (isHy3d && hy3dHasContent(node)) ? `<span class="node-head-sub">${escapeHtml(tr('smart.3dDragHint'))}</span>` : '';
-        const hint = (is3D || isHy3d) ? '' : isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${(is3D || isHy3d) ? 'smart3d-node' : ''} ${isHy3d ? 'smart-hy3d-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
+        const hint = (is3D || isHy3d || isLlm) ? '' : isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLlm ? 'smart-llm-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${(is3D || isHy3d) ? 'smart3d-node' : ''} ${isHy3d ? 'smart-hy3d-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
 
             <div class="node-head"><div class="node-title">${title}</div>${headSub}<div class="node-actions">${deleteBtn}</div></div>
             ${!isEmpty && !isGroup && !isMinimax && !is3D && !isHy3d ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
@@ -13908,7 +14155,7 @@ function render(){
             <div class="node-body">${body}</div>
             ${isCompactMember && (isPrompt || isLoop) ? '<div class="smart-group-member-grab" title="拖动移出分组"></div>' : ''}
             ${hint ? `<div class="node-hint">${hint}</div>` : ''}
-            ${imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isMinimax || is3D || isHy3d || isSmartGroup ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
+            ${imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isLlm || isMinimax || is3D || isHy3d || isSmartGroup ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
             <div class="node-port port-in" data-port="in" title="input"></div>
             <div class="node-port port-out" data-port="out" title="output"></div>
         </div>`;
@@ -13971,6 +14218,7 @@ function render(){
         const isPrompt = node.type === 'smart-prompt';
         const isLoop = node.type === 'smart-loop';
         const isMinimax = node.type === 'smart-minimax';
+        const isLlm = node.type === 'smart-llm';
         const is3D = isSmart3DNode(node);
         const isImageNode = node.type === 'smart-image' || !node.type;
         const isQueued = Boolean(node.queued && imgs.length === 0 && !node.pending);
@@ -15109,6 +15357,7 @@ function bindNodeEvents(){
         const id = el.dataset.id;
         const nodeForControls = nodes.find(n => n.id === id);
         if(nodeForControls?.type === 'smart-prompt') bindPromptNodeControls(el, nodeForControls);
+        if(nodeForControls?.type === 'smart-llm') bindSmartLlmControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-loop') bindLoopNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-minimax') bindMinimaxNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-3d') bind3DNodeControls(el, nodeForControls);
@@ -15473,7 +15722,8 @@ function canAutoConnectDraggedNode(sourceNode, targetNode){
     if(isSmartGroupNode(targetNode)) return false;
     if(isSmartImageNode(sourceNode)) return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || targetNode.type === 'smart-prompt' || isSmart3DNode(targetNode) || isHy3dNode(targetNode);
     if(isSmart3DNode(sourceNode) || isHy3dNode(sourceNode)) return isSmartImageNode(targetNode);
-    if(sourceNode.type === 'smart-prompt') return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop';
+    if(sourceNode.type === 'smart-prompt') return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || targetNode.type === 'smart-llm';
+    if(sourceNode.type === 'smart-llm') return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || targetNode.type === 'smart-prompt' || targetNode.type === 'smart-llm';
     if(sourceNode.type === 'smart-loop') return isSmartImageNode(targetNode);
     if(sourceNode.type === 'smart-group') return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || isSmart3DNode(targetNode) || isHy3dNode(targetNode);
     return false;
@@ -16093,7 +16343,7 @@ function setImageEditMode(mode, userTouched=false){
     if(userTouched) imageEditModeTouched = true;
     const prev = imageEditMode;
     if(mode !== 'brush') removeEditTextInlineEditor(true);
-    imageEditMode = ['preview','crop','outpaint','mask','brush','resize','grid'].includes(mode) ? mode : 'preview';
+    imageEditMode = ['preview','angle','crop','outpaint','mask','brush','resize','grid'].includes(mode) ? mode : 'preview';
     hideBrushCursor();   // 切模式可能就不该有圆环了，先收掉，下次 pointermove 自会按新模式决定
     const cropCanvasEl = document.getElementById('cropCanvas');
     const previewStageEl = document.getElementById('previewStage');
@@ -16106,10 +16356,14 @@ function setImageEditMode(mode, userTouched=false){
     const zoomLabel = document.getElementById('imageEditZoomLabel');
     const cancelBtn = document.getElementById('imageEditCancelBtn');
     const isPreview = imageEditMode === 'preview';
+    // 视角模式也用图片舞台：原来复用裁剪画布，用户看到的是一张带裁剪框的原图，跟「调机位」毫无关系
+    const isAngle = imageEditMode === 'angle';
+    const showsImage = isPreview || isAngle;
     if(!isPreview && panoramaState.enabled) disposePanoramaPreview();
-    cropCanvasEl.style.display = isPreview ? 'none' : '';
-    previewStageEl.style.display = isPreview ? 'inline-flex' : 'none';
+    cropCanvasEl.style.display = showsImage ? 'none' : '';
+    previewStageEl.style.display = showsImage ? 'inline-flex' : 'none';
     editStageEl?.classList.toggle('preview-mode', isPreview);
+    editStageEl?.classList.toggle('angle-mode', isAngle);
     editPanelEl?.classList.toggle('video-preview-mode', isVideoPreview);
     if(previewDownloadBtn) previewDownloadBtn.style.display = isPreview ? 'inline-flex' : 'none';
     if(previewDownloadAllBtn) previewDownloadAllBtn.style.display = isPreview && !isVideoPreview && previewDownloadGroupItems().length > 1 ? 'inline-flex' : 'none';
@@ -16134,6 +16388,13 @@ function setImageEditMode(mode, userTouched=false){
         splitLayersEntry.style.display = (!isVideoPreview && splitLayersGptGateOpen()) ? 'inline-flex' : 'none';
     }
     document.getElementById('imagePreviewTools').classList.toggle('active', isPreview && !isVideoPreview);
+    document.getElementById('imageAngleTools')?.classList.toggle('active', imageEditMode === 'angle');
+    if(isAngle){
+        bindImageAngleControls();
+        refreshComparePanel();
+        syncPreviewFrameSize();
+        syncImageAngleUI();
+    }
     document.getElementById('imageCropTools')?.classList.toggle('active', imageEditMode === 'crop');
     document.getElementById('imageMaskTools').classList.toggle('active', imageEditMode === 'mask');
     document.getElementById('imageBrushTools').classList.toggle('active', imageEditMode === 'brush');
@@ -16157,7 +16418,11 @@ function setImageEditMode(mode, userTouched=false){
         ensureImageEditBaseSize(true);
         applyImageEditZoom();
         applyBtn.style.display = '';
-        if(imageEditMode === 'resize'){
+        if(imageEditMode === 'angle'){
+            document.getElementById('imageEditTitle').textContent = '旋转视角';
+            document.getElementById('imageEditSub').textContent = '在图片上左右拖动转视角、上下调俯仰，选好景别后生成';
+            applyBtn.innerHTML = `<i data-lucide="sparkles" class="w-4 h-4"></i><span>生成视角图</span>`;
+        } else if(imageEditMode === 'resize'){
             document.getElementById('imageEditTitle').textContent = '缩放图片';
             document.getElementById('imageEditSub').textContent = '选择缩小倍数，应用会替换当前原图';
             applyBtn.innerHTML = `<i data-lucide="minimize-2" class="w-4 h-4"></i><span>应用缩放</span>`;
@@ -17964,6 +18229,7 @@ function openImageEditor(nodeId, imageIndex=0){
     gridCustomMode = false; gridCustomLines = []; gridCustomHistory = []; gridCustomDrag = null; gridCustomOrientation = 'h';
     gridOperationMode = 'split'; gridJoinLayout = null; gridJoinDrag = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridJoinGroupId = '';
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
+    imageAngleState = {deg:0, elev:0, shot:'mid'};
     cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
     editTextItems = []; editTextSelectedId = ''; editTextDrag = null; editTextDirty = false;
     const toggle = document.getElementById('gridCustomToggle');
@@ -18066,6 +18332,7 @@ function closeImageEditor(){
     cropState = null; cropDrag = null; editDrawState = null; resetEditDrawingHistory(); gridCustomDrag = null; gridJoinDrag = null; gridJoinLayout = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridOperationMode = 'split'; gridJoinGroupId = '';
     previewNavState = {nodeId:'', index:0, count:0};
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
+    imageAngleState = {deg:0, elev:0, shot:'mid'};
     cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
     disposePanoramaPreview();
     previewPanDrag = null; previewCompareDrag = false; imageEditPanDrag = null; resetPreviewTransform();
@@ -18425,6 +18692,301 @@ async function prepareInpaintMeta(imageItem, maskUrl){
     if(!data?.crop_url || !data?.crop_mask_url) return {error:tr('smart.maskPrepareFailed')};
     return {data};
 }
+/* ── 旋转视角（多角度）2026-10-30 ──────────────────────────────
+   图片预览里新增「视角」模式：直接在图片上拖（左右转方位、上下调俯仰），
+   配方位滑条/8 档预设/俯仰 4 档/景别 3 档，实时拼出中文提示词；
+   点「生成视角图」走既有 runGeneration 链路
+   （节点自身的图当参考图 → 图生图，结果落在右侧新分支节点）。
+   提示词句式对齐业界常用写法：运镜句 + 景别句 + 「保持主体…不变」后缀。 */
+const IMAGE_ANGLE_PRESETS = [
+    {deg:0, label:'正面'},
+    {deg:45, label:'右 45°'},
+    {deg:90, label:'右侧面'},
+    {deg:135, label:'右后'},
+    {deg:180, label:'背面'},
+    {deg:-135, label:'左后'},
+    {deg:-90, label:'左侧面'},
+    {deg:-45, label:'左 45°'}
+];
+// 俯仰四档对齐 ComfyUI-qwenmultiangle 的机位取值（-30 低机位 / 0 平视 / 30 略俯 / 60 高角度），
+// 三轴（方位 8 档 × 俯仰 4 档 × 景别 3 档）与那套方案一致，只是这里用中文句式而不发 <sks> 令牌。
+const IMAGE_ANGLE_ELEVATIONS = [
+    {elev:-30, label:'仰拍'},
+    {elev:0, label:'平视'},
+    {elev:30, label:'略俯'},
+    {elev:60, label:'俯拍'}
+];
+const IMAGE_ANGLE_SHOTS = [
+    {shot:'close', label:'特写'},
+    {shot:'mid', label:'中景'},
+    {shot:'wide', label:'远景'}
+];
+const IMAGE_ANGLE_ELEV_MIN = -30;
+const IMAGE_ANGLE_ELEV_MAX = 60;
+let imageAngleState = {deg:0, elev:0, shot:'mid'};
+let imageAngleBound = false;
+let imageAngleDragging = false;
+let imageAngleDragOrigin = null;
+function clampAngleElev(elev){
+    const v = Math.round((Number(elev) || 0) / 5) * 5;
+    return Math.max(IMAGE_ANGLE_ELEV_MIN, Math.min(IMAGE_ANGLE_ELEV_MAX, v));
+}
+function normalizeAngleDeg(deg){
+    const v = ((Math.round((Number(deg) || 0) / 5) * 5) % 360 + 360) % 360;
+    return v > 180 ? v - 360 : v;
+}
+function imageAngleElevSentence(elev){
+    if(elev >= 45) return '从高处俯拍同一主体。';
+    if(elev >= 15) return '从略高于主体的角度俯拍同一主体。';
+    if(elev <= -15) return '以低机位仰拍同一主体。';
+    return '';
+}
+function imageAngleAzimuthLabel(deg){
+    const preset = IMAGE_ANGLE_PRESETS.find(p => p.deg === deg);
+    if(preset) return preset.label;
+    const abs = Math.abs(deg);
+    if(!abs) return '正面';
+    // 过了 90° 就是背面那一侧，文案必须写「后」，否则用户只看度数分不清前后
+    const zone = abs > 90 ? '后' : abs >= 60 ? '侧' : '前';
+    return `${deg > 0 ? '右' : '左'}${zone} ${abs}°`;
+}
+function imageAnglePrompt(state = imageAngleState){
+    const deg = normalizeAngleDeg(state.deg);
+    const elev = clampAngleElev(state.elev);
+    const shot = state.shot || 'mid';
+    const elevSentence = imageAngleElevSentence(elev);
+    let head;
+    if(deg === 0){
+        // 正面时俯仰句本身就说明了机位，不再追加第二条，避免「正面 + 仰拍」互相打架
+        head = elevSentence || '以正面平视角度展示同一主体。';
+    } else {
+        const abs = Math.abs(deg);
+        head = abs === 180 ? '从正后方展示同一主体。'
+            : abs === 90 ? `以 90 度正侧面（${deg > 0 ? '右' : '左'}侧）展示同一主体。`
+            : `将镜头绕主体向${deg > 0 ? '右' : '左'}旋转 ${abs} 度。`;
+        head += elevSentence;
+    }
+    head += shot === 'close' ? '将镜头推近，给主体一个特写。'
+        : shot === 'wide' ? '将镜头拉远，拍一个能看到更多周围环境的远景。' : '';
+    // 景别拉远/特写、俯拍时看不到服装细节，写了模型反而会硬补，故去掉「服装」
+    const keepClothing = !(elev >= 15 || shot !== 'mid');
+    return `${head}保持主体${keepClothing ? '、服装' : ''}、配色、光线和风格不变。`;
+}
+function imageAngleLabel(state = imageAngleState){
+    const deg = normalizeAngleDeg(state.deg);
+    const elev = clampAngleElev(state.elev);
+    const elevLabel = IMAGE_ANGLE_ELEVATIONS.find(item => item.elev === elev)?.label || `${elev}°`;
+    const shot = IMAGE_ANGLE_SHOTS.find(item => item.shot === (state.shot || 'mid'))?.label || '中景';
+    return `${imageAngleAzimuthLabel(deg)} · ${elevLabel} · ${shot}`;
+}
+// 背面/正面的区别必须一眼看出来：只看 3D 倾斜分不清 45° 和 135°，所以给一个明写「背面」的徽标 + 背面态视觉
+function imageAngleIsBack(deg = imageAngleState.deg){
+    return Math.abs(normalizeAngleDeg(deg)) > 90;
+}
+function syncImageAngleFace(deg){
+    const badge = document.getElementById('angleFaceBadge');
+    if(!badge) return;
+    const back = imageAngleIsBack(deg);
+    badge.dataset.face = back ? 'back' : 'front';
+    badge.title = back ? '背面：卡片转到背光面（图变暗），表示镜头在主体背后' : '正面：受光的一面，镜头在主体前方';
+    const name = badge.querySelector('.angle-face-name');
+    const next = imageAngleAzimuthLabel(deg);
+    if(name && name.textContent !== next) name.textContent = next;
+    const stage = document.getElementById('imageEditStage');
+    if(stage) stage.dataset.face = back ? 'back' : 'front';
+}
+// 鼠标在画面上移动时给一点「角度偏移」，观感上就是手在摸这张 3D 卡片；不改变实际机位（提示词不变）
+let imageAngleHover = {x: 0, y: 0};
+function syncImageAngleCard(){
+    const card = document.getElementById('angleCard');
+    if(!card) return;
+    const deg = normalizeAngleDeg(imageAngleState.deg);
+    const elev = clampAngleElev(imageAngleState.elev);
+    const shot = imageAngleState.shot || 'mid';
+    const shotScale = shot === 'close' ? 1.16 : shot === 'wide' ? 0.62 : 0.9;
+    const back = Math.abs(deg) > 90;
+    // 一张薄片正好转到 90° 会整张消失，所以两侧各留 8°；过 90° 后改按「翻过来的背面」算角度
+    // （180° 时背面对正镜头），并换一层压暗的图——这样任何角度都看得见卡片，不会出现一道缝或一块黑。
+    const mapped = back ? (deg > 0 ? deg - 180 : deg + 180) : deg;
+    const rotY = Math.max(-82, Math.min(82, mapped)) + imageAngleHover.x * 0.5;
+    const rotX = -elev * 0.55 + imageAngleHover.y;
+    card.style.transform = `rotateY(${rotY.toFixed(1)}deg) rotateX(${rotX.toFixed(1)}deg) scale(${shotScale})`;
+    card.dataset.face = Math.abs(deg) > 90 ? 'back' : 'front';
+    card.style.setProperty('--sheen-x', `${(50 + 30 * Math.sin(deg * Math.PI / 180)).toFixed(1)}%`);
+    card.style.setProperty('--sheen-y', `${(36 - elev * 0.3).toFixed(1)}%`);
+    const url = (typeof currentEditImage === 'function' ? currentEditImage()?.image?.url : '') || '';
+    const front = document.getElementById('angleCardFrontImg');
+    const backImg = document.getElementById('angleCardBackImg');
+    if(front && url && front.getAttribute('src') !== url){
+        front.src = url;
+        if(backImg) backImg.src = url;
+        card.style.setProperty('--angle-card-img', `url("${url.replace(/"/g, '%22')}")`);
+    }
+    // 卡片尺寸按原图比例，最多占舞台 74% 宽 / 70% 高
+    const stage = document.getElementById('imageEditStage');
+    if(stage && front && front.naturalWidth && front.naturalHeight){
+        const maxW = Math.min(stage.clientWidth * 0.74, 520);
+        const maxH = Math.max(120, stage.clientHeight * 0.70);
+        const ratio = front.naturalWidth / front.naturalHeight;
+        let w = maxW;
+        let h = w / ratio;
+        if(h > maxH){ h = maxH; w = h * ratio; }
+        card.style.width = `${Math.round(w)}px`;
+        card.style.height = `${Math.round(h)}px`;
+    }
+}
+function syncImageAngleUI(){
+    const state = imageAngleState;
+    const deg = normalizeAngleDeg(state.deg);
+    const elev = clampAngleElev(state.elev);
+    const shot = state.shot || 'mid';
+    const stage = document.getElementById('imageEditStage');
+    // 3D 卡片：正面 = 受光的一面（原图 + 高光），背面 = 背光的一面（同一张图压暗），
+    // 卡片跟着机位转，所以「转到背面」这件事自己就能看出来，不用靠平移或镜像。
+    if(stage){
+        stage.style.setProperty('--angle-sc', String(shot === 'close' ? 1.16 : shot === 'wide' ? 0.62 : 0.9));
+    }
+    syncImageAngleCard();
+    const camDot = document.getElementById('angleCameraDot');
+    if(camDot){
+        const rad = deg * Math.PI / 180;
+        const camX = 50 + 40 * Math.sin(rad);
+        const camY = 56 + 22 * Math.cos(rad) - elev * 0.32;
+        camDot.style.left = camX.toFixed(2) + '%';
+        camDot.style.top = Math.min(86, Math.max(14, camY)).toFixed(2) + '%';
+        camDot.classList.toggle('behind', Math.abs(deg) > 90);
+    }
+    const range = document.getElementById('angleDegRange');
+    if(range && Number(range.value) !== deg) range.value = String(deg);
+    const valueEl = document.getElementById('angleDegValue');
+    if(valueEl) valueEl.textContent = imageAngleAzimuthLabel(deg);
+    const degLabel = document.getElementById('angleDegLabel');
+    if(degLabel) degLabel.textContent = imageAngleLabel(state);
+    const preview = document.getElementById('anglePromptPreview');
+    if(preview) preview.value = imageAnglePrompt(state);
+    document.querySelectorAll('[data-angle-deg]').forEach(btn => btn.classList.toggle('active', normalizeAngleDeg(btn.dataset.angleDeg) === deg));
+    document.querySelectorAll('[data-angle-elev]').forEach(btn => btn.classList.toggle('active', Number(btn.dataset.angleElev) === elev));
+    document.querySelectorAll('[data-angle-shot]').forEach(btn => btn.classList.toggle('active', btn.dataset.angleShot === (state.shot || 'mid')));
+    syncImageAngleFace(deg);
+}
+function setImageAngleDeg(deg, {snap = false} = {}){
+    let next = normalizeAngleDeg(deg);
+    if(snap){
+        const nearest = IMAGE_ANGLE_PRESETS.reduce((best, p) => Math.abs(p.deg - next) < Math.abs(best - next) ? p.deg : best, IMAGE_ANGLE_PRESETS[0].deg);
+        if(Math.abs(nearest - next) <= 8) next = nearest;
+    }
+    imageAngleState.deg = next;
+    syncImageAngleUI();
+}
+function setImageAngleElev(elev, {snap = false} = {}){
+    let next = clampAngleElev(elev);
+    if(snap){
+        const nearest = IMAGE_ANGLE_ELEVATIONS.reduce((best, item) => Math.abs(item.elev - next) < Math.abs(best - next) ? item.elev : best, IMAGE_ANGLE_ELEVATIONS[1].elev);
+        if(Math.abs(nearest - next) <= 6) next = nearest;
+    }
+    imageAngleState.elev = next;
+    syncImageAngleUI();
+}
+function setImageAngleShot(shot){
+    imageAngleState.shot = IMAGE_ANGLE_SHOTS.some(s => s.shot === shot) ? shot : 'mid';
+    syncImageAngleUI();
+}
+function stepImageAngleShot(direction){
+    const idx = Math.max(0, IMAGE_ANGLE_SHOTS.findIndex(s => s.shot === (imageAngleState.shot || 'mid')));
+    const next = Math.max(0, Math.min(IMAGE_ANGLE_SHOTS.length - 1, idx + direction));
+    setImageAngleShot(IMAGE_ANGLE_SHOTS[next].shot);
+}
+function bindImageAngleControls(){
+    if(imageAngleBound) return;
+    const stage = document.getElementById('imageEditStage');
+    const tools = document.getElementById('imageAngleTools');
+    if(!stage || !tools) return;
+    imageAngleBound = true;
+    const presetsEl = document.getElementById('anglePresets');
+    if(presetsEl && !presetsEl.childElementCount){
+        presetsEl.innerHTML = IMAGE_ANGLE_PRESETS.map(p => `<button type="button" class="angle-preset" data-angle-deg="${p.deg}">${p.label}</button>`).join('');
+    }
+    tools.addEventListener('click', event => {
+        const degBtn = event.target.closest('[data-angle-deg]');
+        if(degBtn){ setImageAngleDeg(Number(degBtn.dataset.angleDeg)); return; }
+        const elevBtn = event.target.closest('[data-angle-elev]');
+        if(elevBtn){ setImageAngleElev(Number(elevBtn.dataset.angleElev)); return; }
+        const shotBtn = event.target.closest('[data-angle-shot]');
+        if(shotBtn) setImageAngleShot(shotBtn.dataset.angleShot);
+    });
+    document.getElementById('angleDegRange')?.addEventListener('input', event => setImageAngleDeg(Number(event.target.value)));
+    // 卡片尺寸要等图片真的解码完才算得出来（naturalWidth 之前是 0）
+    const cardFrontImg = document.getElementById('angleCardFrontImg');
+    if(cardFrontImg && !cardFrontImg.dataset.angleSized){
+        cardFrontImg.dataset.angleSized = '1';
+        cardFrontImg.addEventListener('load', () => {
+            if(imageEditMode === 'angle') syncImageAngleCard();
+        });
+    }
+    // 直接在图片上拖：左右 = 绕主体转，上下 = 俯仰，滚轮 = 景别（对齐 ComfyUI-qwenmultiangle 的 orbit 手感）
+    stage.addEventListener('pointerdown', event => {
+        if(imageEditMode !== 'angle' || event.button !== 0) return;
+        if(event.target.closest('button')) return;
+        imageAngleDragging = true;
+        imageAngleDragOrigin = {x:event.clientX, y:event.clientY, deg:imageAngleState.deg, elev:imageAngleState.elev};
+        stage.classList.add('angle-dragging');
+        try{ stage.setPointerCapture(event.pointerId); }catch(err){}
+        event.preventDefault();
+    });
+    stage.addEventListener('pointermove', event => {
+        if(imageEditMode !== 'angle') return;
+        const rect = stage.getBoundingClientRect();
+        const px = rect.width ? (event.clientX - rect.left) / rect.width : 0.5;
+        const py = rect.height ? (event.clientY - rect.top) / rect.height : 0.5;
+        if(!imageAngleDragging || !imageAngleDragOrigin){
+            // 没按键时：跟着鼠标轻轻偏一点，卡片像被手推着
+            imageAngleHover = {x: (px - 0.5) * 26, y: (0.5 - py) * 16};
+            syncImageAngleCard();
+            return;
+        }
+        const dx = event.clientX - imageAngleDragOrigin.x;
+        const dy = event.clientY - imageAngleDragOrigin.y;
+        setImageAngleDeg(imageAngleDragOrigin.deg + dx * 0.6);
+        setImageAngleElev(imageAngleDragOrigin.elev - dy * 0.35);
+    });
+    stage.addEventListener('pointerleave', () => {
+        if(imageAngleDragging) return;
+        imageAngleHover = {x: 0, y: 0};
+        syncImageAngleCard();
+    });
+    const endDrag = event => {
+        if(!imageAngleDragging) return;
+        imageAngleDragging = false;
+        imageAngleDragOrigin = null;
+        stage.classList.remove('angle-dragging');
+        setImageAngleDeg(imageAngleState.deg, {snap:true});
+        setImageAngleElev(imageAngleState.elev, {snap:true});
+        try{ stage.releasePointerCapture(event.pointerId); }catch(err){}
+    };
+    stage.addEventListener('pointerup', endDrag);
+    stage.addEventListener('pointercancel', endDrag);
+    stage.addEventListener('wheel', event => {
+        if(imageEditMode !== 'angle') return;
+        event.preventDefault();
+        if(event.shiftKey) setImageAngleDeg(imageAngleState.deg + (event.deltaY > 0 ? 5 : -5));
+        else stepImageAngleShot(event.deltaY > 0 ? 1 : -1);  // 往下滚 = 镜头拉远
+    }, {passive:false});
+}
+async function applyImageAngle(){
+    const {node, image, index} = currentEditImage();
+    if(!node || !image) return;
+    const prompt = String(document.getElementById('anglePromptPreview')?.value || '').trim();
+    if(!prompt){ toast('请先选一个视角'); return; }
+    const imageIndex = Number.isFinite(index) ? Math.max(0, index) : 0;
+    // 视角图不是本地像素编辑：把提示词交给 composer 生成链路，节点自身的图即参考图（图生图）
+    closeImageEditor();
+    selectedId = node.id;
+    selectedImage = {nodeId:node.id, index:imageIndex};
+    render();
+    updateComposer();
+    setPromptDraftForNode(node, prompt);
+    await runGeneration();
+}
 async function applyImageMask(){
     if(!cropState || !editCanvasHasPixels()){ toast(tr('smart.maskEmpty')); return; }
     const {node, image, index} = currentEditImage();
@@ -18634,6 +19196,7 @@ async function applyImageResize(){
 }
 function applyImageEdit(){
     if(imageEditMode === 'preview') return;
+    if(imageEditMode === 'angle') return applyImageAngle();
     if(imageEditMode === 'outpaint') return applyImageOutpaint();
     if(imageEditMode === 'mask') return applyImageMask();
     if(imageEditMode === 'brush') return applyImageBrush();
@@ -19883,12 +20446,13 @@ function selfReferenceImagesForNode(node, consume=false, ctx=smartLoopContext){
 function textForNode(node, ctx=smartLoopContext){
     if(!node) return '';
     if(node.type === 'smart-prompt') return promptNodePromptItems(node).join('\n\n');
+    if(node.type === 'smart-llm') return String(node.outputText || '').trim();
     if(node.type === 'smart-loop') return smartLoopPrompt(node, ctx);
     if(node.type === 'smart-group') return smartGroupMembers(node).map(member => textForNode(member, ctx)).filter(Boolean).join('\n\n');
     return '';
 }
 function promptInputNodesFor(node){
-    return inputNodesFor(node).filter(input => input?.type === 'smart-prompt' || input?.type === 'smart-loop' || input?.type === 'smart-group');
+    return inputNodesFor(node).filter(input => input?.type === 'smart-prompt' || input?.type === 'smart-loop' || input?.type === 'smart-group' || input?.type === 'smart-llm');
 }
 function inputPromptTextFor(node, ctx=smartLoopContext){
     const directText = promptInputNodesFor(node).map(input => textForNode(input, ctx)).filter(Boolean);
@@ -23666,6 +24230,7 @@ function createNodeFromMenu(type){
     if(type === 'group') return createSmartGroupNode(p.x - 170, p.y - 110);
     let created = null;
     if(type === 'prompt') created = createPromptNode(p.x - 158, p.y - 97);
+    else if(type === 'llm') created = createLLMNode(p.x - 190, p.y - 220);
     else if(type === 'loop') created = createLoopNode(p.x - 135, p.y - 95);
     else if(type === 'minimax') created = createMinimaxNode(p.x - 520, p.y - 320);
     else if(type === '3d') created = create3DNode(p.x - 280, p.y - 235);
@@ -32704,6 +33269,8 @@ document.querySelectorAll('[data-panorama-ratio]').forEach(btn => {
 });
 document.getElementById('imageEditStage').addEventListener('wheel', event => {
     if(!cropState) return;
+    // 视角模式自己管滚轮（切景别 / Shift 微调方位），这里直接让路，别再偷偷缩放图片
+    if(imageEditMode === 'angle') return;
     event.preventDefault();
     event.stopPropagation();
     if(imageEditMode === 'preview'){
