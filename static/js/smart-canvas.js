@@ -2865,6 +2865,11 @@ function applyViewport(){
     // 缩小时位图被降采样 → 组件发虚。缩放态下关闭这些 backdrop-filter（底色本身已接近不透明，
     // 观感几乎无差），让卡片随矢量重新栅格化，保持清晰。
     world.classList.toggle('canvas-scaled', Math.abs(viewport.scale - 1) > 0.001);
+    // 节点浮动快捷菜单（选中节点/分组时浮在卡片上方那条）跟着 world 一起被缩放会显得忽大忽小：
+    // 放大后按钮比卡片还夸张、缩小后又点不着。这里用 1/缩放 反向补偿让它保持恒定尺寸，
+    // 但位置仍贴合节点（transform-origin 在底部中心）。夹在 0.5~2 之间，极端缩放下不至于铺满屏幕。
+    const invUi = Math.min(2, Math.max(0.5, 1 / viewport.scale));
+    shell.style.setProperty('--ui-inv', invUi.toFixed(3));
     shell.style.backgroundSize = '24px 24px, 100% 100%';   // 第二层是画布底渐变，必须跟着 shell 铺满，不能被 24px 平铺
     shell.style.backgroundPosition = '0 0';
     renderMinimap();
