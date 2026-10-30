@@ -2870,6 +2870,12 @@ function applyViewport(){
     // 但位置仍贴合节点（transform-origin 在底部中心）。夹在 0.5~2 之间，极端缩放下不至于铺满屏幕。
     const invUi = Math.min(2, Math.max(0.5, 1 / viewport.scale));
     shell.style.setProperty('--ui-inv', invUi.toFixed(3));
+    // composer 的间距按缩放折算（见 positionComposerForNode），所以缩放后要重算一次锚点，
+    // 否则它会一直贴在缩放前的世界坐标上。
+    if(composer.classList.contains('open')){
+        const anchor = (typeof activeComposerNode === 'function' && (activeComposerNode() || selectedNode()));
+        if(anchor) positionComposerForNode(anchor);
+    }
     shell.style.backgroundSize = '24px 24px, 100% 100%';   // 第二层是画布底渐变，必须跟着 shell 铺满，不能被 24px 平铺
     shell.style.backgroundPosition = '0 0';
     renderMinimap();
@@ -19284,10 +19290,26 @@ function loadPromptDraft(subject){
 function positionComposerForNode(node){
     if(!node) return;
     const rect = nodeRect(node);
-    const gap = 14;
+    // composer 用 --ui-inv 反向补偿保持屏幕尺寸恒定（见 applyViewport），
+    // 所以它跟节点之间的间距也要按缩放折算，否则缩小时间距会缩没、放大时又离得很远。
+    const gap = 14 / Math.max(0.2, Number(viewport.scale) || 1);
     const cardW = 540;
     composer.style.width = `${cardW}px`;
-    composer.style.left = `${rect.x + rect.width / 2 - cardW / 2}px`;
+    // composer 用 --ui-inv 反向补偿后，屏幕宽度是 cardW * (scale * inv)，缩放小的时候
+    // 会比节点宽得多，居中放在节点下方就可能越过视口左右边缘（被裁掉一半）。
+    // 所以按屏幕坐标夹一下：始终留 12px 边距，再换算回世界坐标。
+    const scale = Math.max(0.05, Number(viewport.scale) || 1);
+    const inv = Math.min(2, Math.max(0.5, 1 / scale));
+    const screenW = cardW * scale * inv;   // 反向补偿后的实际屏幕宽度
+    const margin = 12;
+    const vx = Number(viewport.x) || 0;
+    // transform-origin 在顶部中心，所以「卡片屏幕中心」= 节点中心；夹住中心点就能保证两边不越界
+    let centerScreen = vx + (rect.x + rect.width / 2) * scale;
+    const minCenter = margin + screenW / 2;
+    const maxCenter = Math.max(minCenter, window.innerWidth - margin - screenW / 2);
+    centerScreen = Math.min(maxCenter, Math.max(minCenter, centerScreen));
+    const leftWorld = (centerScreen - vx) / scale - cardW / 2;
+    composer.style.left = `${leftWorld}px`;
     composer.style.top = `${rect.y + rect.height + gap}px`;
 }
 let composerUpdateTimer = 0;
