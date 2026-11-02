@@ -7372,8 +7372,24 @@ function createLLMNode(x, y, options={}){
 }
 // 上游连过来的提示词文本（提示词节点 / 循环 / 分组 / 别的 LLM 节点）
 function smartLlmUpstreamText(node){
-    try { return inputPromptTextFor(node).join('\n\n').trim(); } catch(e){ return ''; }
+    // inputPromptTextFor() 返回的已经是拼好的字符串，早先这里再 .join() 会抛 TypeError 被吞掉，
+    // 结果「上游文本」永远是空 —— 连提示词节点看起来像没连上。
+    try { return String(inputPromptTextFor(node) || '').trim(); } catch(e){ return ''; }
 }
+// 上游连进来的图片（图片节点 / 上传 / 生图结果），最多 8 张，重复 URL 去掉
+function smartLlmInputImages(node){
+    try {
+        const seen = new Set();
+        return activeInputImagesFor(node).filter(img => {
+            const url = String(img?.url || '');
+            if(!url || seen.has(url)) return false;
+            seen.add(url);
+            return true;
+        }).slice(0, 8);
+    } catch(e){ return []; }
+}
+// 只连了图、一句话没写时的兜底指令：直接让它把画面描述成提示词
+const SMART_LLM_IMAGE_ONLY_PROMPT = '请查看这张图片，输出一段可直接用于图像生成的详细提示词，涵盖主体、构图、光线、配色、风格和镜头。只回复提示词本身。';
 function smartLlmSystemPrompt(node){
     const mode = node.llmSystemMode || '';
     if(!mode) return '';
@@ -7396,6 +7412,7 @@ function smartLlmBodyHtml(node){
     }
     const sysMode = node.llmSystemMode || '';
     const sysPrompt = sysMode ? (node.llmSystemPrompt || LLM_SYSTEM_PRESETS[sysMode] || '') : '';
+    const inputImages = smartLlmInputImages(node);
     // 🚨 样式刻意复用提示词节点那一套 class（prompt-node-*）：
     //    智能画布里只有它是"文本框类节点"的既有语言，自造一套会被一眼看出不像同一个应用。
     return `<div class="prompt-node-card smart-llm-card">
@@ -7407,9 +7424,9 @@ function smartLlmBodyHtml(node){
             ${['custom','text2img','img2img','minimaxH3'].map(mode => `<button type="button" class="prompt-node-pill prompt-node-control prompt-system-mode-btn ${sysMode === mode ? 'active' : ''}" data-system-mode="${mode}">${escapeHtml(tr(mode === 'custom' ? 'smart.promptLlmPresetCustom' : mode === 'text2img' ? 'smart.promptLlmPresetText2Img' : mode === 'img2img' ? 'smart.promptLlmPresetImg2Img' : 'smart.promptLlmPresetMinimaxH3'))}</button>`).join('')}
         </div>
         ${sysMode ? `<div class="prompt-node-llm smart-llm-syswrap"><textarea class="prompt-node-control prompt-llm-system smart-llm-system" placeholder="${escapeHtml(tr('smart.promptLlmSystemPlaceholder'))}">${escapeHtml(sysPrompt)}</textarea></div>` : ''}
-        <div class="prompt-node-section-title">输入${readonly ? ' · 来自上游' : ''}</div>
+        <div class="prompt-node-section-title">输入${readonly ? ' · 来自上游' : ''}${inputImages.length ? ` · 已读 ${inputImages.length} 张图` : ''}</div>
         <div class="smart-llm-input-wrap">
-            <textarea class="prompt-node-control prompt-node-text smart-llm-input" ${readonly ? 'readonly' : ''} placeholder="直接输入，或把提示词节点连上来…">${escapeHtml(value)}</textarea>
+            <textarea class="prompt-node-control prompt-node-text smart-llm-input" ${readonly ? 'readonly' : ''} placeholder="${inputImages.length ? '说说想让模型怎么用这些图；留空则直接让它把画面描述成提示词' : '直接输入，或把提示词节点连上来…'}">${escapeHtml(value)}</textarea>
             ${readonly ? '' : `<button class="prompt-node-pill prompt-node-control smart-llm-desc-preset" type="button" title="填入「图片描述」预设提示词"><i data-lucide="image"></i><span>图片描述</span></button>`}
         </div>
         <div class="prompt-node-section-title">输出${out ? '' : ' · 可直接编辑'}</div>
@@ -7539,8 +7556,13 @@ function bindSmartLlmControls(el, node){
 async function runSmartLlmNode(nodeId){
     const node = nodes.find(n => n.id === nodeId);
     if(!node || node.type !== 'smart-llm' || node.running) return;
-    const message = (smartLlmUpstreamText(node) || node.userInput || '').trim();
-    if(!message){ toast('先输入文本，或把提示词节点连上来'); return; }
+    const images = smartLlmInputImages(node).map(img => img.url);
+    const message = (
+        smartLlmUpstreamText(node)
+        || String(node.userInput || '').trim()
+        || (images.length ? SMART_LLM_IMAGE_ONLY_PROMPT : '')
+    ).trim();
+    if(!message){ toast('先输入文本，或把提示词节点 / 图片节点连上来'); return; }
     const provider = resolveChatProviderId(node.llmProvider || '');
     const model = resolveChatModel(node.model || '', provider);
     node.running = true;
@@ -7552,7 +7574,7 @@ async function runSmartLlmNode(nodeId){
             body:JSON.stringify({
                 message,
                 messages:[],
-                images:[],
+                images,
                 videos:[],
                 model,
                 provider,
@@ -15748,7 +15770,7 @@ function canAutoConnectDraggedNode(sourceNode, targetNode){
     if(!sourceNode || !targetNode || sourceNode.id === targetNode.id) return false;
     if(isHistoryGroupNode(sourceNode) || isHistoryGroupNode(targetNode)) return false;
     if(isSmartGroupNode(targetNode)) return false;
-    if(isSmartImageNode(sourceNode)) return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || targetNode.type === 'smart-prompt' || isSmart3DNode(targetNode) || isHy3dNode(targetNode);
+    if(isSmartImageNode(sourceNode)) return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || targetNode.type === 'smart-prompt' || targetNode.type === 'smart-llm' || isSmart3DNode(targetNode) || isHy3dNode(targetNode);
     if(isSmart3DNode(sourceNode) || isHy3dNode(sourceNode)) return isSmartImageNode(targetNode);
     if(sourceNode.type === 'smart-prompt') return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || targetNode.type === 'smart-llm';
     if(sourceNode.type === 'smart-llm') return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || targetNode.type === 'smart-prompt' || targetNode.type === 'smart-llm';
