@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="/static/images/logo.png?v=1.2.8" type="image/png">
+    <link rel="icon" href="/static/images/logo.png?v=1.2.9" type="image/png">
     <title data-i18n="smart.title">智能画布</title>
     <script>
         (function(){
@@ -16,15 +16,15 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/lucide.js?v=1.2.8.1767196800"></script>
-    <script src="/static/vendor/js/photopea.min.js?v=1.2.8.1767196800"></script>
-    <script src="/static/js/theme.js?v=1.2.8.1767196800"></script>
-    <script src="/static/js/touch-mouse.js?v=1.2.8.1767196800"></script>
-    <script src="/static/js/i18n.js?v=1.2.8.1792550183"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=1.2.8.1793591472">
+    <script src="/static/vendor/js/lucide.js?v=1.2.9.1767196800"></script>
+    <script src="/static/vendor/js/photopea.min.js?v=1.2.9.1767196800"></script>
+    <script src="/static/js/theme.js?v=1.2.9.1767196800"></script>
+    <script src="/static/js/touch-mouse.js?v=1.2.9.1767196800"></script>
+    <script src="/static/js/i18n.js?v=1.2.9.1792550183"></script>
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=1.2.9.1793624998">
     <!-- Skill 市场：浮层样式与逻辑都在共享模块里（gpt-chat 页用同一份），见 static/js/skill-market.js -->
-    <link rel="stylesheet" href="/static/css/skill-market.css?v=1.2.8.1767196800">
-    <link rel="stylesheet" href="/static/css/split-layers.css?v=1.2.8.1792329089">
+    <link rel="stylesheet" href="/static/css/skill-market.css?v=1.2.9.1767196800">
+    <link rel="stylesheet" href="/static/css/split-layers.css?v=1.2.9.1792329089">
 </head>
 <body>
     <div id="shell" class="shell">
@@ -62,8 +62,12 @@
                             <button id="composerLlmToggleBtn" class="composer-llm-toggle-btn" type="button" title="LLM 提示词扩展" aria-label="LLM">
                                 <i data-lucide="sparkles"></i><span>LLM</span>
                             </button>
+                            <button id="composerStyleBtn" class="composer-style-btn" type="button" title="风格（风格库里建好的风格 Skill）" aria-label="风格">
+                                <i data-lucide="palette"></i><span>风格</span>
+                            </button>
                         </div>
                         <div id="composerHistoryPanel" class="composer-history-panel" style="display:none"></div>
+                        <div id="composerStylePanel" class="composer-style-panel" style="display:none"></div>
                         <div id="mentionPicker" class="mention-picker"></div>
                         <div id="promptResize" class="prompt-resize" data-i18n-title="smart.promptResize" title="拖拽调整文本框高度"></div>
                     </div>
@@ -247,6 +251,11 @@
                 <div class="asset-title"><i data-lucide="library"></i><span data-i18n="smart.assetLibrary">资产库</span></div>
                 <button id="assetCloseBtn" class="asset-mini-btn" type="button" title="收起" data-i18n-title="common.close"><i data-lucide="chevron-right"></i></button>
             </div>
+            <!-- 2026-11-02 老板：风格库在画布内的资产库面板里也要有，不能只在独立资源库页 -->
+            <div id="assetPanelTabs" class="asset-panel-tabs" role="tablist">
+                <button class="asset-panel-tab active" type="button" role="tab" data-asset-panel-tab="assets">素材</button>
+                <button class="asset-panel-tab" type="button" role="tab" data-asset-panel-tab="styles">风格库</button>
+            </div>
             <div id="assetImageControls">
                 <div id="assetScopeSwitch" class="asset-scope-switch" role="group" aria-label="资产库范围">
                     <button class="asset-scope-btn active" type="button" data-asset-scope="personal">个人</button>
@@ -260,8 +269,28 @@
                 </div>
             </div>
             <div id="assetDropZone" class="asset-drop-zone" data-i18n="smart.assetDropHint">把画布图片拖到这里保存到当前文件夹</div>
+            <div id="assetStyleBar" class="asset-style-bar" style="display:none">
+                <span id="assetStyleHint" class="asset-style-hint"></span>
+                <button id="assetStyleNewBtn" class="asset-mini-btn" type="button" title="新建风格类型"><i data-lucide="plus"></i></button>
+                <div id="assetStyleComposer" class="style-composer" hidden>
+                    <input id="assetStyleNameInput" class="style-composer-name" type="text" placeholder="风格名称" maxlength="40" autocomplete="off">
+                    <button id="assetStylePickBtn" class="style-composer-pick" type="button">
+                        <i data-lucide="image-plus"></i><span id="assetStylePickText">选择参考图</span>
+                    </button>
+                    <div id="assetStyleThumbs" class="style-composer-thumbs"></div>
+                    <div id="assetStyleProgress" class="style-progress" hidden>
+                        <div class="style-progress-track"><i></i></div>
+                        <span class="style-progress-text"></span>
+                    </div>
+                    <div class="style-composer-actions">
+                        <button id="assetStyleComposerCancel" class="style-composer-cancel" type="button">取消</button>
+                        <button id="assetStyleComposerCreate" class="style-composer-create" type="button">创建</button>
+                    </div>
+                </div>
+            </div>
             <div id="assetGrid" class="asset-grid"></div>
             <div id="workflowEmpty" class="workflow-empty" style="display:none" data-i18n="smart.assetWorkflowEmpty">工作流资产先预留在这里，后续接入。</div>
+            <input id="assetStyleUploadInput" type="file" accept="image/*" multiple hidden>
         </aside>
         <aside id="agentPanel" class="agent-panel">
             <!-- 🚨 顶部「拖动调高」条已移除（2026-10-21 老板：拖动对话记录顶部的展开条会把对话框往下推）。
@@ -945,7 +974,7 @@
         </div>
     </div>
 
-    <script src="/static/js/skill-market.js?v=1.2.8.1767196800"></script>
-    <script src="/static/js/smart-canvas.js?v=1.2.8.1793591443"></script>
+    <script src="/static/js/skill-market.js?v=1.2.9.1767196800"></script>
+    <script src="/static/js/smart-canvas.js?v=1.2.9.1793626495"></script>
 </body>
 </html>

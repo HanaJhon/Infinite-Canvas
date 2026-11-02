@@ -4225,6 +4225,9 @@ class AssetLibraryRenameRequest(BaseModel):
     name: str = ""
     library_id: str = ""
 
+class StyleLibraryPromoteRequest(BaseModel):
+    style_ids: List[str] = []
+
 class AssetLibraryBatchDeleteRequest(BaseModel):
     ids: List[str] = []
     library_id: str = ""
@@ -9048,6 +9051,10 @@ def installed_skills_prompt_block(query=None):
         skill_id = str(item.get("id") or "")
         if not skill_id:
             continue
+        # 风格库生成的 Skill 只在用户手动挂载时生效（老板 2026-11-02：风格会越攒越多，
+        # 全量自动注入会互相混淆，用户还以为「没用到的风格也在影响出图」）。
+        if str(item.get("source") or "") == "style":
+            continue
         path = os.path.join(agent_skill_dir(skill_id), "SKILL.md")
         if not os.path.isfile(path):
             continue
@@ -11764,6 +11771,12 @@ def _asset_library_path(scope: str = "personal") -> str:
     return TEAM_ASSET_LIBRARY_PATH if str(scope) == "team" else str(ASSET_LIBRARY_PATH)
 
 
+# ponytail: 资产库是「读-改-写」整份 JSON，批次入库中间有 await（智能分类每张最多 25s），
+# 两个并发批次会互相覆盖丢条目。用一把进程内锁把「重载 + 追加 + 落盘」串起来就够了；
+# 单进程 uvicorn，不需要跨进程文件锁。
+ASSET_LIBRARY_LOCK = Lock()
+
+
 def load_asset_library(scope: str = "personal"):
     path = _asset_library_path(scope)
     if not os.path.exists(path):
@@ -12049,9 +12062,19 @@ async def classify_image_with_provider(abs_path, provider_id="", model="", ms_mo
     classification["provider"] = provider_id or get_primary_provider_id()
     return classification
 
+ASSET_CLASSIFY_TIMEOUT = 25  # 秒；通道没配/挂了时不能让「上传素材」无限挂住
+
+
 async def classify_asset_image_best_effort(abs_path, provider_id="", model="", ms_model="", prompt=""):
     try:
-        return await classify_image_with_provider(abs_path, provider_id, model, ms_model, prompt)
+        # ponytail: 分类是锦上添花，超时就直接放弃（素材照常入库），不再让请求无限等待
+        return await asyncio.wait_for(
+            classify_image_with_provider(abs_path, provider_id, model, ms_model, prompt),
+            timeout=ASSET_CLASSIFY_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        print(f"素材智能分类超时（>{ASSET_CLASSIFY_TIMEOUT}s），跳过分类")
+        return None
     except Exception as exc:
         print(f"素材智能分类失败: {exc}")
         return None
@@ -23270,6 +23293,288 @@ async def delete_asset_library(library_id: str):
     save_asset_library(lib)
     return {"library": lib}
 
+# ---------------- 风格库（2026-11-02） ----------------
+# 一个「风格类型」= 资产库里 type=="style" 的一个 library，参考图放在它唯一的图片分类里。
+# 「开始创建」把这些图写成一个真 Skill（data/agent_skills/<id>/SKILL.md + index.json 一条），
+# 这样 agent 在提示词里就能读到「这个风格长什么样、参考图在哪」。
+STYLE_MIN_IMAGES = 3
+STYLE_MAX_REF_IMAGES = 6   # 参考图上限跟 openai-json 模式对齐，超过会被上游静默截断
+
+
+def style_libraries(lib):
+    return [item for item in (lib.get("libraries") or [])
+            if isinstance(item, dict) and str(item.get("type") or "") == "style"]
+
+
+def find_style_library(lib, style_id):
+    return next((item for item in style_libraries(lib) if str(item.get("id") or "") == str(style_id or "")), None)
+
+
+def style_image_category(library, create=False):
+    for cat in library.get("categories") or []:
+        if isinstance(cat, dict) and str(cat.get("type") or "") == "image":
+            return cat
+    if not create:
+        return None
+    cat = {"id": f"cat_{uuid.uuid4().hex[:12]}", "name": "参考图", "type": "image", "items": []}
+    library.setdefault("categories", []).append(cat)
+    return cat
+
+
+def style_image_items(library):
+    cat = style_image_category(library)
+    if not cat:
+        return []
+    return [item for item in (cat.get("items") or [])
+            if isinstance(item, dict) and item.get("url") and str(item.get("kind") or "image") == "image"]
+
+
+def public_style(library):
+    meta = library.get("style") if isinstance(library.get("style"), dict) else {}
+    items = style_image_items(library)
+    return {
+        "id": library.get("id"),
+        "name": library.get("name") or "未命名风格",
+        "category_id": (style_image_category(library) or {}).get("id") or "",
+        "image_count": len(items),
+        "images": [{"id": item.get("id"), "name": item.get("name") or "", "url": item.get("url") or ""}
+                   for item in items[:24]],
+        "status": meta.get("status") or "draft",
+        "skill_id": meta.get("skill_id") or "",
+        "skill_title": meta.get("skill_title") or "",
+        "built_at": int(meta.get("built_at") or 0),
+        "error": meta.get("error") or "",
+        "promoted_from": library.get("promoted_from") or "",
+        # 个人侧被共享出去时记一条回指，否则前端无法显示「已共享」（重复点只会静默 skipped）
+        "promoted_to": meta.get("promoted_to") or "",
+    }
+
+
+def style_payload(lib):
+    styles = sorted((public_style(item) for item in style_libraries(lib)),
+                    key=lambda item: int(item.get("built_at") or 0), reverse=True)
+    return {"styles": styles, "min_images": STYLE_MIN_IMAGES}
+
+
+def style_skill_markdown(library, items):
+    """把参考图 + 风格标签写成 agent 能照做的 SKILL.md（纯文本；skill 目录只支持 SKILL.md 一个文件）。"""
+    name = str(library.get("name") or "未命名风格")
+    refs = [str(item.get("url") or "") for item in items[:STYLE_MAX_REF_IMAGES]]
+    tags = {}
+    for item in items:
+        cls = item.get("classification") if isinstance(item.get("classification"), dict) else {}
+        cats = cls.get("categories") if isinstance(cls.get("categories"), dict) else {}
+        for dim in ("style", "lighting", "color", "materials", "mood", "composition"):
+            for tag in (cats.get(dim) or [])[:6]:
+                tags.setdefault(dim, [])
+                if tag not in tags[dim]:
+                    tags[dim].append(tag)
+    dim_names = {"style": "风格", "lighting": "光线", "color": "配色",
+                 "materials": "材质", "mood": "氛围", "composition": "构图"}
+    tag_lines = [f"- {dim_names[dim]}：{'、'.join(values)}" for dim, values in tags.items() if values]
+    ref_lines = [f"{i + 1}. `{url}`" for i, url in enumerate(refs)]
+    return "\n".join([
+        f"# Skill: {name}（用户自建风格）",
+        "",
+        f"这是本机用户在「风格库」里用 {len(items)} 张参考图创建的风格「{name}」。",
+        "用户说「用这个风格」「按 XX 风格画」时，指的就是它。",
+        "",
+        "## 复现方式（必须照做）",
+        f"1. 生图时把这 {len(refs)} 张图作为**参考图**（reference_images）一起提交，不要只靠文字描述。",
+        "2. 提示词写成「按参考图的风格绘制：<用户要画的内容>」，不要复述用户已经说过的内容。",
+        "3. 保留参考图体现出的材质、配色、光线和笔触特征；内容按用户要求替换。",
+        "4. 参考图最多 6 张，超出部分模型会自动丢弃。",
+        "",
+        "## 参考图",
+        *ref_lines,
+        "",
+        "## 风格特征（从参考图自动提取，供你写提示词时参考）",
+        *(tag_lines or ["- （暂无自动标签，直接以参考图为准）"]),
+        "",
+    ])
+
+
+def write_style_skill(library, items):
+    """写 Skill 文件 + 更新 index.json，两步都要做（只有目录没人读，只有索引项会被 isfile 跳过）。"""
+    meta = library.get("style") if isinstance(library.get("style"), dict) else {}
+    skill_id = str(meta.get("skill_id") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,60}", skill_id):
+        skill_id = f"style-{uuid.uuid4().hex[:12]}"
+    skill_dir = agent_skill_dir(skill_id)
+    os.makedirs(skill_dir, exist_ok=True)
+    name = str(library.get("name") or "未命名风格")
+    title = f"{name}（风格）"
+    with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as f:
+        f.write(style_skill_markdown(library, items))
+    data = load_installed_skills()
+    skills = data.get("skills") if isinstance(data.get("skills"), list) else []
+    record = {
+        "id": skill_id,
+        "name": f"style-{library.get('id') or ''}",
+        "title": title,
+        "summary": f"用户自建风格「{name}」，基于 {len(items)} 张参考图",
+        "source": "style",
+        "style_id": library.get("id") or "",
+        "installed_at": now_ms(),
+        "tags": ["风格", "style"],
+        "category": "风格",
+    }
+    data["skills"] = [item for item in skills if str(item.get("id") or "") != skill_id] + [record]
+    save_installed_skills(data)
+    return skill_id, title
+
+
+def remove_style_skill(library):
+    meta = library.get("style") if isinstance(library.get("style"), dict) else {}
+    skill_id = str(meta.get("skill_id") or "").strip()
+    if not skill_id:
+        return
+    try:
+        if re.fullmatch(r"[A-Za-z0-9._-]{1,60}", skill_id):
+            shutil.rmtree(agent_skill_dir(skill_id), ignore_errors=True)
+    except Exception as exc:
+        print(f"删除风格 Skill 目录失败: {exc}")
+    data = load_installed_skills()
+    skills = [item for item in (data.get("skills") or []) if str(item.get("id") or "") != skill_id]
+    save_installed_skills({**data, "skills": skills})
+
+
+@app.get("/api/style-library")
+async def list_style_library(scope: str = "personal"):
+    return {**style_payload(load_asset_library(scope)), "scope": "team" if str(scope) == "team" else "personal"}
+
+
+@app.post("/api/style-library/styles")
+async def create_style_library(payload: AssetLibraryRequest):
+    lib = load_asset_library()
+    library = {
+        "id": f"style_{uuid.uuid4().hex[:12]}",
+        "name": sanitize_asset_name(payload.name, "新风格"),
+        "type": "style",
+        "categories": [],
+        "style": {"status": "draft", "skill_id": "", "built_at": 0, "error": ""},
+        "created_at": now_ms(),
+    }
+    style_image_category(library, create=True)
+    lib.setdefault("libraries", []).append(library)
+    save_asset_library(lib)
+    return {"style": public_style(library), **style_payload(lib)}
+
+
+@app.patch("/api/style-library/styles/{style_id}")
+async def rename_style_library(style_id: str, payload: AssetLibraryRenameRequest):
+    lib = load_asset_library()
+    library = find_style_library(lib, style_id)
+    if not library:
+        raise HTTPException(status_code=404, detail="风格不存在")
+    library["name"] = sanitize_asset_name(payload.name, library.get("name") or "未命名风格")
+    meta = library.get("style") if isinstance(library.get("style"), dict) else {}
+    if meta.get("status") == "ready":
+        # 名字变了，Skill 标题也得跟着变，否则 agent 看到的是旧名字
+        try:
+            write_style_skill(library, style_image_items(library))
+            meta = library.setdefault("style", {})
+            meta["skill_title"] = f"{library['name']}（风格）"
+        except HTTPException as exc:
+            meta["status"] = "failed"
+            meta["error"] = str(exc.detail)
+    save_asset_library(lib)
+    return {"style": public_style(library), **style_payload(lib)}
+
+
+@app.delete("/api/style-library/styles/{style_id}")
+async def delete_style_library(style_id: str):
+    lib = load_asset_library()
+    library = find_style_library(lib, style_id)
+    if not library:
+        raise HTTPException(status_code=404, detail="风格不存在")
+    remove_style_skill(library)
+    for item in style_image_items(library):
+        remove_asset_library_file(item)
+    lib["libraries"] = [item for item in (lib.get("libraries") or []) if item is not library]
+    if lib.get("active_library_id") == style_id:
+        lib["active_library_id"] = (lib.get("libraries") or [{}])[0].get("id") or "default"
+    save_asset_library(lib)
+    return style_payload(lib)
+
+
+@app.post("/api/style-library/styles/{style_id}/build")
+async def build_style_library(style_id: str):
+    lib = load_asset_library()
+    library = find_style_library(lib, style_id)
+    if not library:
+        raise HTTPException(status_code=404, detail="风格不存在")
+    items = style_image_items(library)
+    if len(items) < STYLE_MIN_IMAGES:
+        raise HTTPException(status_code=400,
+                            detail=f"至少需要 {STYLE_MIN_IMAGES} 张参考图才能创建风格（当前 {len(items)} 张）")
+    meta = library.setdefault("style", {})
+    meta["status"] = "building"
+    meta["error"] = ""
+    save_asset_library(lib)
+    try:
+        skill_id, title = write_style_skill(library, items)
+    except HTTPException as exc:
+        meta["status"] = "failed"
+        meta["error"] = str(exc.detail)
+        save_asset_library(lib)
+        raise
+    except Exception as exc:
+        meta["status"] = "failed"
+        meta["error"] = f"写入 Skill 失败：{exc}"
+        save_asset_library(lib)
+        raise HTTPException(status_code=500, detail=meta["error"])
+    meta.update({"status": "ready", "skill_id": skill_id, "skill_title": title,
+                 "built_at": now_ms(), "error": ""})
+    save_asset_library(lib)
+    return {"style": public_style(library), **style_payload(lib)}
+
+
+@app.post("/api/style-library/promote")
+async def promote_style_library(payload: StyleLibraryPromoteRequest):
+    """把个人风格共享到团队：整条风格（含参考图文件）复制进团队资产库，团队侧只读。"""
+    personal = load_asset_library()
+    team = load_asset_library("team")
+    existing = {str(item.get("promoted_from") or "") for item in style_libraries(team)}
+    existing |= {str(item.get("id") or "") for item in style_libraries(team)}
+    added, skipped = [], []
+    for style_id in (payload.style_ids or [])[:50]:
+        source = find_style_library(personal, style_id)
+        if not source or style_id in existing:
+            skipped.append(style_id)
+            continue
+        library = {
+            "id": f"style_{uuid.uuid4().hex[:12]}",
+            "name": source.get("name") or "未命名风格",
+            "type": "style",
+            "categories": [],
+            "style": {"status": "draft", "skill_id": "", "built_at": 0, "error": ""},
+            "promoted_from": style_id,
+            "promoted_at": now_ms(),
+            "created_at": now_ms(),
+        }
+        cat = style_image_category(library, create=True)
+        cat["dir"] = unique_asset_category_dir(library, library["name"])
+        for item in style_image_items(source):
+            src_path = output_file_from_url(item.get("url"))
+            if not src_path or not os.path.isfile(src_path):
+                continue
+            _, copy = make_asset_library_item(src_path, item.get("name") or "style", subdir=cat["dir"])
+            cat.setdefault("items", []).append(copy)
+        library["style"]["status"] = "shared"
+        library["style"]["skill_title"] = f"{library['name']}（风格）"
+        team.setdefault("libraries", []).append(library)
+        existing.add(style_id)
+        added.append(public_style(library))
+        # 在个人侧记下已共享，前端按钮才能变成「已共享到团队」而不是可以重复点
+        smeta = source.setdefault("style", {})
+        smeta["promoted_to"] = library["id"]
+    if added:
+        save_asset_library(personal)
+    save_asset_library(team, "team")
+    return {"added": added, "skipped": skipped, **style_payload(personal)}
+
+
 @app.post("/api/asset-library/categories")
 async def create_asset_library_category(payload: AssetLibraryCategoryRequest):
     lib = load_asset_library()
@@ -23345,27 +23650,37 @@ async def add_asset_library_item(payload: AssetLibraryAddRequest):
 
 @app.post("/api/asset-library/items/batch")
 async def batch_add_asset_library_items(payload: AssetLibraryBatchAddRequest):
-    added = []
-    lib = load_asset_library()
-    cat = find_asset_category_in_library(lib, payload.category_id, payload.library_id)
-    if not cat:
+    # 先把耗时的活（复制文件 + 智能分类）在锁外做完，再上锁重载最新库一次性追加，
+    # 否则并发批次各持一份旧库，后写的把先写的条目整段覆盖掉（风格库上传丢图就是这么来的）。
+    lib0 = load_asset_library()
+    cat0 = find_asset_category_in_library(lib0, payload.category_id, payload.library_id)
+    if not cat0:
         raise HTTPException(status_code=404, detail="分类不存在")
-    if cat.get("type") != "image":
+    if cat0.get("type") != "image":
         raise HTTPException(status_code=400, detail="该分类暂不支持添加媒体")
+    prepared = []
     for entry in (payload.items or [])[:200]:
-        entry.category_id = payload.category_id
-        entry.library_id = payload.library_id
         src = output_file_from_url(entry.url)
         if not src:
             continue
-        _, item = make_asset_library_item(src, entry.name or os.path.basename(src), subdir=cat.get("dir") or "")
+        _, item = make_asset_library_item(src, entry.name or os.path.basename(src), subdir=cat0.get("dir") or "")
         if item.get("kind") == "image":
             classification = await classify_asset_image_best_effort(output_file_from_url(item.get("url") or "") or src)
             if classification:
                 item["classification"] = classification
-        cat.setdefault("items", []).append(item)
-        added.append(item)
-    save_asset_library(lib)
+        prepared.append(item)
+    with ASSET_LIBRARY_LOCK:
+        lib = load_asset_library()
+        cat = find_asset_category_in_library(lib, payload.category_id, payload.library_id)
+        if not cat:
+            raise HTTPException(status_code=404, detail="分类不存在")
+        if cat.get("type") != "image":
+            raise HTTPException(status_code=400, detail="该分类暂不支持添加媒体")
+        added = []
+        for item in prepared:
+            cat.setdefault("items", []).append(item)
+            added.append(item)
+        save_asset_library(lib)
     return {"library": lib, "items": added}
 
 @app.get("/api/shared-folders")

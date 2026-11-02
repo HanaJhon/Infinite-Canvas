@@ -447,7 +447,8 @@ function formatFileSize(bytes=0){
     return `${(size / Math.pow(1024, idx)).toFixed(idx ? 1 : 0)} ${units[idx]}`;
 }
 function assetLibraries(source = scopedAssetLibrary()){
-    const libs = Array.isArray(source?.libraries) ? source.libraries : [];
+    // 风格库是独立板块（type==='style'），不混进「图片资产」的导航树
+    const libs = (Array.isArray(source?.libraries) ? source.libraries : []).filter(lib => (lib?.type || 'asset') !== 'style');
     return libs.length
         ? libs
         : [{id:'default', name:(source === teamAssetLibrary ? '团队资产库' : '默认资产库'), categories:source?.categories || []}];
@@ -1419,6 +1420,7 @@ function render(){
         .map((el, index) => ({index, top:el.scrollTop, left:el.scrollLeft}));
     document.querySelectorAll('[data-tab]').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === activeTab));
     if(activeTab === 'prompts') renderPromptManager();
+    else if(activeTab === 'styles') renderStyleManager();
     else if(activeTab === 'workflows') renderWorkflowManager();
     else if(activeTab === 'local') renderLocalManager();
     else if(activeTab === 'canvas-assets') renderCanvasAssetsManager();
@@ -1961,6 +1963,249 @@ function renderLocalDetail(item){
             </div>
         </div>
     `;
+}
+/* ---------------- 风格库（2026-11-02） ----------------
+   一个风格类型 = 资产库里 type==='style' 的一条 library；参考图在它唯一的图片分类里。
+   「开始创建」由后端把这些图写成一个真 Skill（data/agent_skills/<id>/SKILL.md）。 */
+let styleLibraryData = {styles:[], min_images:3};
+let styleLibraryLoadedScope = '';
+let activeStyleId = '';
+let pendingStyleDeleteId = '';
+const STYLE_STATUS_TEXT = {draft:'未创建', building:'构建中', ready:'构建完成', failed:'创建失败', shared:'团队共享'};
+function styleStatusText(style){ return STYLE_STATUS_TEXT[style?.status] || '未创建'; }
+function styleScopeName(){ return assetScope === 'team' ? 'team' : 'personal'; }
+function styleTeamView(){ return styleScopeName() === 'team'; }
+function styleMinImages(){ return Number(styleLibraryData.min_images) || 3; }
+function currentStyleEntry(){
+    const list = styleLibraryData.styles || [];
+    return list.find(item => item.id === activeStyleId) || list[0] || null;
+}
+async function ensureStyleLibrary(force = false){
+    const scope = styleScopeName();
+    if(!force && styleLibraryLoadedScope === scope) return styleLibraryData;
+    try{
+        const data = await apiJson(`/api/style-library?scope=${scope}`);
+        styleLibraryData = {
+            styles: Array.isArray(data?.styles) ? data.styles : [],
+            min_images: Number(data?.min_images) || 3
+        };
+        styleLibraryLoadedScope = scope;
+    }catch(err){
+        styleLibraryData = {styles:[], min_images:3};
+        setStatus(`风格库加载失败：${err?.message || err}`);
+    }
+    return styleLibraryData;
+}
+function bindStyleManagerEvents(){
+    if(bindStyleManagerEvents.done) return;
+    bindStyleManagerEvents.done = true;
+    root.addEventListener('click', event => {
+        const select = event.target.closest('[data-style-select]');
+        if(select){
+            activeStyleId = select.dataset.styleSelect;
+            pendingStyleDeleteId = '';
+            render();
+            return;
+        }
+        const trigger = event.target.closest('[data-style-action]');
+        if(trigger) handleStyleAction(trigger.dataset.styleAction);
+    });
+    root.addEventListener('change', event => {
+        if(event.target?.id === 'styleUploadInput'){
+            const files = [...(event.target.files || [])];
+            event.target.value = '';
+            handleStyleUpload(files);
+        }
+    });
+}
+function renderStyleDetail(style, opts){
+    const {teamView, min, canBuild} = opts;
+    const badge = `<em class="style-badge ${escapeAttr(style.status || 'draft')}">${styleStatusText(style)}</em>`;
+    return `
+        <div class="panel-head">
+            <div class="panel-title"><strong>风格状态</strong><span>${styleStatusText(style)}</span></div>
+            <div class="panel-actions compact-actions">
+                ${teamView ? '' : `<button class="asset-icon-btn" type="button" data-style-action="rename" title="重命名"><i data-lucide="pencil"></i></button>
+                <button class="asset-icon-btn" type="button" data-style-action="delete" title="删除风格"><i data-lucide="trash-2"></i></button>`}
+            </div>
+        </div>
+        <div class="detail-scroll">
+            <div class="detail-body">
+                <div class="detail-meta"><span>参考图</span><strong>${style.image_count} 张 / 至少 ${min} 张</strong></div>
+                <div class="detail-meta"><span>状态</span><strong>${badge}</strong></div>
+                ${style.skill_id ? `<div class="detail-meta"><span>Skill</span><strong>${escapeHtml(style.skill_id)}</strong></div>` : ''}
+                ${style.built_at ? `<div class="detail-url">创建于 ${new Date(style.built_at).toLocaleString()}</div>` : ''}
+                ${style.error ? `<div class="detail-url style-error">${escapeHtml(style.error)}</div>` : ''}
+                ${teamView ? '<div class="detail-url">团队风格为只读视图；要修改请切回「个人」。</div>' : `
+                    <button class="asset-btn primary style-build-btn" type="button" data-style-action="build" ${canBuild ? '' : 'disabled'}>
+                        <i data-lucide="sparkles"></i><span>${style.status === 'ready' ? '重新创建' : '开始创建'}</span>
+                    </button>
+                    ${style.status !== 'ready' && style.image_count < min ? `<div class="detail-url">还差 ${min - style.image_count} 张参考图</div>` : ''}
+                    ${style.status === 'ready' ? `<button class="asset-btn" type="button" data-style-action="promote" ${(style.promoted_to || style.promoted_from) ? 'disabled' : ''}>
+                        <i data-lucide="users"></i><span>${(style.promoted_to || style.promoted_from) ? '已共享到团队' : '共享到团队'}</span>
+                    </button>` : ''}
+                    ${pendingStyleDeleteId === style.id ? `<button class="asset-btn danger" type="button" data-style-action="delete-confirm"><i data-lucide="trash-2"></i><span>确认删除风格与 Skill</span></button>` : ''}
+                `}
+            </div>
+        </div>
+    `;
+}
+async function renderStyleManager(){
+    bindStyleManagerEvents();
+    const data = await ensureStyleLibrary();
+    const styles = data.styles || [];
+    if(activeStyleId && !styles.some(item => item.id === activeStyleId)) activeStyleId = '';
+    const current = currentStyleEntry();
+    if(current) activeStyleId = current.id;
+    const teamView = styleTeamView();
+    const min = styleMinImages();
+    const images = current?.images || [];
+    const canBuild = !!current && !teamView && current.image_count >= min && current.status !== 'building';
+    root.innerHTML = `
+        <aside class="asset-panel asset-nav">
+            <div class="panel-head">
+                <div class="panel-title"><strong>风格库</strong><span>${teamView ? '团队共享，全员可见' : `每类至少 ${min} 张图才能创建`}</span></div>
+                <div class="panel-actions compact-actions">
+                    <button class="asset-icon-btn" type="button" data-style-action="new" title="新建风格类型" ${teamView ? 'disabled' : ''}><i data-lucide="plus"></i></button>
+                </div>
+            </div>
+            <div class="nav-scroll">
+                <div class="nav-tree">
+                    ${styles.length ? styles.map(style => `
+                        <button class="style-nav-item ${current && style.id === current.id ? 'active' : ''}" type="button" data-style-select="${escapeAttr(style.id)}">
+                            <span class="style-nav-name">${escapeHtml(style.name)}</span>
+                            <span class="style-nav-meta"><em class="style-badge ${escapeAttr(style.status || 'draft')}">${styleStatusText(style)}</em>${style.image_count} 图</span>
+                        </button>`).join('') : '<div class="nav-empty">还没有风格类型</div>'}
+                </div>
+                <div class="nav-hint" style="padding:10px 12px;font-size:12px;opacity:.7;">上传至少 ${min} 张同画风的参考图，点「开始创建」后系统会把它们写成一个 Skill，Agent 生图时会自动调用。</div>
+            </div>
+        </aside>
+        <section class="asset-panel asset-content">
+            <div class="content-toolbar">
+                <div class="content-heading">
+                    <strong>${current ? escapeHtml(current.name) : '风格库'}</strong>
+                    <span>${current ? `${current.image_count} 张参考图（至少 ${min} 张）` : '先在左侧新建一个风格类型'}</span>
+                </div>
+                <div class="asset-tools">
+                    <div class="asset-scope-switch" role="group" aria-label="风格库范围">
+                        <button class="asset-scope-btn ${teamView ? '' : 'active'}" type="button" data-asset-scope="personal" aria-pressed="${teamView ? 'false' : 'true'}"><i data-lucide="user"></i><span>个人</span></button>
+                        <button class="asset-scope-btn ${teamView ? 'active' : ''}" type="button" data-asset-scope="team" aria-pressed="${teamView ? 'true' : 'false'}"><i data-lucide="users"></i><span>团队</span></button>
+                    </div>
+                    ${current && !teamView ? `<button class="asset-btn primary" type="button" data-style-action="upload"><i data-lucide="upload"></i><span>上传参考图</span></button>` : ''}
+                </div>
+            </div>
+            <div class="content-scroll">
+                ${current ? `<div class="style-grid">
+                    ${images.map(img => `<figure class="style-thumb" title="${escapeAttr(img.name)}"><img src="${escapeAttr(img.url)}" alt="" loading="lazy"><figcaption>${escapeHtml(img.name)}</figcaption></figure>`).join('')}
+                    ${teamView ? '' : '<button class="style-add" type="button" data-style-action="upload"><i data-lucide="plus"></i><span>添加参考图</span></button>'}
+                </div>` : '<div class="style-empty"><i data-lucide="palette"></i><span>新建一个风格类型，上传至少 3 张参考图，然后点「开始创建」</span></div>'}
+            </div>
+            <input id="styleUploadInput" type="file" accept="image/*" multiple hidden>
+        </section>
+        <aside class="asset-panel asset-detail">
+            ${current ? renderStyleDetail(current, {teamView, min, canBuild})
+                : `<div class="panel-head"><div class="panel-title"><strong>风格状态</strong><span>选择左侧风格查看</span></div></div>
+                   <div class="detail-scroll"><div class="detail-empty"><i data-lucide="palette"></i><span>暂无风格</span></div></div>`}
+        </aside>
+    `;
+    refreshIcons();
+}
+async function handleStyleAction(action){
+    if(action === 'upload'){ document.getElementById('styleUploadInput')?.click(); return; }
+    const style = currentStyleEntry();
+    if(!style) return;
+    if(styleTeamView() && action !== 'new'){
+        setStatus('团队风格库当前为只读视图，切回「个人」再操作');
+        return;
+    }
+    try{
+        if(action === 'new'){
+            const name = (window.prompt('新风格类型名称', '') || '').trim();
+            if(!name) return;
+            const created = await apiJson('/api/style-library/styles', {
+                method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})
+            });
+            await ensureStyleLibrary(true);
+            const styleId = created?.style?.id || (styleLibraryData.styles || [])[0]?.id || '';
+            if(styleId) activeStyleId = styleId;
+            render();
+            // 建完直接弹选图：命名 → 选图 → 够张数自动生成 Skill，一步到底
+            if(styleId) document.getElementById('styleUploadInput')?.click();
+            setStatus(`已新建风格类型：${name}，选至少 ${Number(styleLibraryData.min_images) || 3} 张参考图即可完成`);
+        } else if(action === 'rename'){
+            const name = (window.prompt('重命名风格类型', style.name) || '').trim();
+            if(!name || name === style.name) return;
+            await apiJson(`/api/style-library/styles/${encodeURIComponent(style.id)}`, {
+                method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})
+            });
+            await ensureStyleLibrary(true);
+            setStatus(`已重命名为：${name}`);
+        } else if(action === 'build'){
+            await buildStyleType(style.id);
+            return;
+        } else if(action === 'promote'){
+            const data = await apiJson('/api/style-library/promote', {
+                method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({style_ids:[style.id]})
+            });
+            await ensureStyleLibrary(true);
+            setStatus((data.added || []).length ? `已共享到团队：${style.name}` : '该风格已在团队风格库中');
+        } else if(action === 'delete'){
+            pendingStyleDeleteId = style.id;
+        } else if(action === 'delete-confirm'){
+            await apiJson(`/api/style-library/styles/${encodeURIComponent(style.id)}`, {method:'DELETE'});
+            pendingStyleDeleteId = '';
+            activeStyleId = '';
+            await ensureStyleLibrary(true);
+            setStatus(`已删除风格：${style.name}`);
+        }
+    }catch(err){
+        setStatus(`操作失败：${err?.message || err}`);
+        await ensureStyleLibrary(true);
+    }
+    render();
+}
+async function buildStyleType(styleId){
+    try{
+        setStatus('正在创建风格 Skill…');
+        const data = await apiJson(`/api/style-library/styles/${encodeURIComponent(styleId)}/build`, {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'
+        });
+        styleLibraryData = {styles: Array.isArray(data?.styles) ? data.styles : [], min_images: Number(data?.min_images) || 3};
+        styleLibraryLoadedScope = styleScopeName();
+        setStatus(`风格「${data?.style?.name || ''}」构建完成，Agent 生图时会调用它`);
+    }catch(err){
+        setStatus(`创建失败：${err?.message || err}`);
+        await ensureStyleLibrary(true);
+    }
+    render();
+}
+async function handleStyleUpload(files){
+    const style = currentStyleEntry();
+    if(!style || !files.length) return;
+    if(styleTeamView()){ setStatus('团队风格库当前为只读视图，切回「个人」再操作'); return; }
+    setStatus(`正在上传 ${files.length} 张参考图…`);
+    try{
+        const form = new FormData();
+        files.forEach(file => form.append('files', file));
+        const uploaded = await apiJson('/api/ai/upload', {method:'POST', body:form});
+        const items = (uploaded?.files || []).filter(file => file && file.url)
+            .map(file => ({library_id: style.id, category_id: style.category_id, url: file.url, name: file.name || 'style'}));
+        if(!items.length) throw new Error('没有可用的图片');
+        await apiJson('/api/asset-library/items/batch', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({library_id: style.id, category_id: style.category_id, items})
+        });
+        await ensureStyleLibrary(true);
+        const fresh = (styleLibraryData.styles || []).find(item => item.id === style.id) || style;
+        const min = Number(styleLibraryData.min_images) || 3;
+        // 传够最少张数就自动生成 Skill（新建流程一步到底），已生成过的按新图重建
+        if(Number(fresh.image_count) >= min){ await buildStyleType(style.id); return; }
+        setStatus(`已添加 ${items.length} 张参考图`);
+    }catch(err){
+        setStatus(`上传失败：${err?.message || err}`);
+        await ensureStyleLibrary(true);
+    }
+    render();
 }
 function renderAssetManager(){
     normalizeAssetState();
@@ -4404,6 +4649,10 @@ function setAssetScope(scope){
     assetTreeEdit = null;
     activeAssetLibraryId = '';
     activeAssetCategoryId = '';
+    // 风格库走独立的 scope 缓存，也必须一起清
+    styleLibraryLoadedScope = '';
+    activeStyleId = '';
+    pendingStyleDeleteId = '';
     normalizeAssetState();
     render();
     setStatus(next === 'team' ? '已切换到团队资产库' : '已切换到个人资产库');

@@ -63,6 +63,20 @@ const assetGrid = document.getElementById('assetGrid');
 const assetDropZone = document.getElementById('assetDropZone');
 const workflowEmpty = document.getElementById('workflowEmpty');
 const assetImageControls = document.getElementById('assetImageControls');
+const assetPanelTabs = document.getElementById('assetPanelTabs');
+const assetStyleBar = document.getElementById('assetStyleBar');
+const assetStyleHint = document.getElementById('assetStyleHint');
+const assetStyleNewBtn = document.getElementById('assetStyleNewBtn');
+const assetStyleUploadInput = document.getElementById('assetStyleUploadInput');
+const assetStyleComposer = document.getElementById('assetStyleComposer');
+const assetStyleNameInput = document.getElementById('assetStyleNameInput');
+const assetStylePickBtn = document.getElementById('assetStylePickBtn');
+const assetStylePickText = document.getElementById('assetStylePickText');
+const assetStyleThumbs = document.getElementById('assetStyleThumbs');
+const assetStyleProgress = document.getElementById('assetStyleProgress');
+const assetStyleComposerCancel = document.getElementById('assetStyleComposerCancel');
+const assetStyleComposerCreate = document.getElementById('assetStyleComposerCreate');
+const assetCategoryRow = document.querySelector('#assetImageControls .asset-category-row');
 // 视角模式把生成参数条（通道/模型/尺寸/质量/张数）临时搬进弹窗底部左侧，关掉再搬回去。
 const imageAngleParams = document.getElementById('imageAngleParams');
 let dynamicParamsHome = null;
@@ -136,6 +150,8 @@ const composerTemplateBtn = document.getElementById('composerTemplateBtn');
 const composerHistoryBtn = document.getElementById('composerHistoryBtn');
 const composerHistoryPanel = document.getElementById('composerHistoryPanel');
 const composerLlmToggleBtn = document.getElementById('composerLlmToggleBtn');
+const composerStyleBtn = document.getElementById('composerStyleBtn');
+const composerStylePanel = document.getElementById('composerStylePanel');
 const composerLlmSection = document.getElementById('composerLlmSection');
 const composerLlmProvider = document.getElementById('composerLlmProvider');
 const composerLlmModel = document.getElementById('composerLlmModel');
@@ -6185,8 +6201,12 @@ function workflowAssetCategories(){
 }
 function assetLibraries(){
     const data = scopedAssetData();
-    return Array.isArray(data.libraries) && data.libraries.length
-        ? data.libraries
+    // 风格库（type:"style"）只属于「风格库」页签，不能混进素材库列表，
+    // 否则新建风格时上传的参考图会以「素材库」的身份出现在素材页签里
+    const libs = (Array.isArray(data.libraries) ? data.libraries : [])
+        .filter(lib => (lib.type || 'asset') !== 'style');
+    return libs.length
+        ? libs
         : [{id:'default', name:(canvasAssetScope() === 'team' ? '团队资产库' : '默认资产库'), categories:data.categories || []}];
 }
 /* 🚨 2026-10-28：资产库面板分「个人 / 团队」两个数据源。
@@ -6207,6 +6227,9 @@ function setCanvasAssetScope(scope){
     activeAssetLibraryId = '';
     activeAssetCategoryId = '';
     mentionAssetCategoryId = '';
+    canvasStyleLoadedScope = '';
+    canvasStyleDetailId = '';
+    canvasStyleComposer = null;
     assetLibraryOpen = true;
     renderAssetLibrary();
     loadAssetLibrary();
@@ -6665,7 +6688,9 @@ function setAssetLibraryFromResponse(data, options={}){
 function toggleAssetLibrary(open=!assetLibraryOpen){
     if(!assetPanel || !assetToggle) return;
     assetLibraryOpen = !!open;
-    if(assetLibraryOpen) toggleAgentPanel(false);
+    /* 资产库/灵感库与 Agent 面板互不干扰（老板 2026-11-02：只有这两个会顺手把 Agent 收起来，
+       和「工作流/快捷键/日志」不一致）；两者同为右侧浮层，只互相排斥。 */
+    if(assetLibraryOpen) toggleInspirePanel(false);
     assetPanel.classList.toggle('open', assetLibraryOpen);
     assetToggle?.classList.toggle('active', assetLibraryOpen);
     if(assetLibraryOpen) loadAssetLibrary();
@@ -6722,6 +6747,373 @@ function assetThumbHtml(item){
     // 网格缩略图用较小尺寸 + 懒加载/异步解码：素材多时滚动不再一次性加载解码全部图片。
     return smartPreviewImgHtml({...item, url:thumb}, 256, 'class="asset-thumb" loading="lazy" decoding="async" alt=""');
 }
+/* 🚨 2026-11-02 老板：「没有看到风格库啊」——之前风格库只做在独立资源库页（asset-manager.html），
+   画布内这个「资产库」浮层面板没接。这里给面板加「素材 / 风格库」两个页签，数据源复用同一套
+   /api/style-library 接口（一个风格类型 = 一个 type:"style" 的资产库，参考图放它唯一的「参考图」分类）。 */
+let assetPanelTab = 'assets';
+let canvasStyleLibrary = {styles:[], min_images:3};
+let canvasStyleLoadedScope = '';
+let pendingCanvasStyleUploadId = '';
+let canvasStyleUploadBusy = '';                                    // 正在上传的风格 id，防重入
+let canvasStyleUploadProgress = {id:'', done:0, total:0};
+let canvasStyleDetailId = '';                                      // 点卡片进入的风格详情（看图/删图/加图）
+let canvasStyleComposer = null;                                    // 新建风格的草稿：{name, files, busy, phase, done, total}
+const CANVAS_STYLE_STATUS_TEXT = {draft:'未创建', building:'构建中', ready:'构建完成', failed:'构建失败', shared:'已共享'};
+function canvasStyleStatusText(style){
+    return CANVAS_STYLE_STATUS_TEXT[style?.status] || '未创建';
+}
+function canvasStyleList(){ return canvasStyleLibrary.styles || []; }
+function canvasStyleMinImages(){ return Number(canvasStyleLibrary.min_images) || 3; }
+function findCanvasStyle(styleId){ return canvasStyleList().find(item => item.id === styleId) || null; }
+async function fetchCanvasStyles(){
+    const scope = canvasAssetScope();
+    if(scope === canvasStyleLoadedScope) return canvasStyleLibrary;
+    try {
+        const data = await fetch('/api/style-library?scope=' + scope).then(r => r.ok ? r.json() : null);
+        canvasStyleLibrary = {styles:Array.isArray(data?.styles) ? data.styles : [], min_images:Number(data?.min_images) || 3};
+    } catch(e) {
+        canvasStyleLibrary = {styles:[], min_images:3};
+    }
+    canvasStyleLoadedScope = scope;
+    return canvasStyleLibrary;
+}
+async function reloadCanvasStyles(){
+    canvasStyleLoadedScope = '';
+    await fetchCanvasStyles();
+    if(assetPanelTab === 'styles') renderAssetLibrary();
+}
+async function canvasStyleRequest(path, options={}){
+    const res = await fetch(path, options);
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok) throw new Error(data?.detail || '操作失败');
+    return data;
+}
+let canvasStyleThumbUrls = [];
+function releaseCanvasStyleThumbs(){
+    canvasStyleThumbUrls.forEach(url => { try { URL.revokeObjectURL(url); } catch(e) {} });
+    canvasStyleThumbUrls = [];
+}
+function canvasStyleThumbUrl(file){
+    const url = URL.createObjectURL(file);
+    canvasStyleThumbUrls.push(url);
+    return url;
+}
+// 风格栏：平时只有「提示 + 新建」，点新建就换成「命名 + 选图 + 创建」同一块面板
+function renderCanvasStyleBar(){
+    const teamView = canvasAssetScope() === 'team';
+    const min = canvasStyleMinImages();
+    const composing = !!canvasStyleComposer;
+    if(assetStyleComposer) assetStyleComposer.hidden = !composing;
+    if(assetStyleHint) assetStyleHint.style.display = composing ? 'none' : '';
+    if(assetStyleNewBtn) assetStyleNewBtn.style.display = composing ? 'none' : '';
+    if(!composing){
+        if(assetStyleHint) assetStyleHint.textContent = teamView ? '团队风格只读' : `至少 ${min} 张参考图才能创建`;
+        if(assetStyleNewBtn) assetStyleNewBtn.disabled = teamView;
+        return;
+    }
+    const files = canvasStyleComposer.files || [];
+    const busy = !!canvasStyleComposer.busy;
+    if(assetStylePickText) assetStylePickText.textContent = files.length ? `已选 ${files.length} 张` : '选择参考图';
+    if(assetStyleNameInput && assetStyleNameInput.value !== canvasStyleComposer.name) assetStyleNameInput.value = canvasStyleComposer.name || '';
+    if(assetStyleThumbs){
+        releaseCanvasStyleThumbs();
+        assetStyleThumbs.innerHTML = files.slice(0, 6)
+            .map(file => `<img src="${escapeAttr(canvasStyleThumbUrl(file))}" alt="">`).join('');
+    }
+    const total = Number(canvasStyleComposer.total) || files.length || 1;
+    const done = Number(canvasStyleComposer.done) || 0;
+    const phase = canvasStyleComposer.phase || '';
+    const percent = phase === '构建中' ? 100 : Math.round(Math.min(done, total) / Math.max(total, 1) * 100);
+    if(assetStyleProgress){
+        assetStyleProgress.hidden = !phase;
+        const bar = assetStyleProgress.querySelector('.style-progress-track i');
+        const text = assetStyleProgress.querySelector('.style-progress-text');
+        if(bar) bar.style.width = percent + '%';
+        if(text) text.textContent = phase === '构建中'
+            ? '正在生成风格 Skill…'
+            : `上传参考图 ${Math.min(done + (busy ? 1 : 0), total)}/${total}`;
+    }
+    if(assetStylePickBtn) assetStylePickBtn.disabled = busy;
+    if(assetStyleComposerCancel) assetStyleComposerCancel.disabled = busy;
+    if(assetStyleNameInput) assetStyleNameInput.disabled = busy;
+    if(assetStyleComposerCreate) assetStyleComposerCreate.disabled = busy || (!(canvasStyleComposer.name || '').trim() || !files.length);
+}
+function openCanvasStyleComposer(){
+    if(canvasAssetScope() === 'team'){ toast('团队风格库为只读，切回「个人」再操作'); return; }
+    canvasStyleComposer = {name:'', files:[], busy:false, phase:'', done:0, total:0};
+    canvasStyleDetailId = '';
+    renderAssetLibrary();
+    setTimeout(() => assetStyleNameInput?.focus(), 40);
+}
+function closeCanvasStyleComposer(){
+    canvasStyleComposer = null;
+    releaseCanvasStyleThumbs();
+    renderAssetLibrary();
+}
+async function createCanvasStyleFromComposer(){
+    if(!canvasStyleComposer || canvasStyleComposer.busy) return;
+    const name = (canvasStyleComposer.name || '').trim();
+    const files = (canvasStyleComposer.files || []).slice();
+    if(!name){ toast('先给风格起个名字'); assetStyleNameInput?.focus(); return; }
+    if(!files.length){ toast('先选参考图'); return; }
+    // 创建期间面板不关，进度条就长在这块面板里（上传 n/total → 生成 Skill）
+    canvasStyleComposer.busy = true;
+    canvasStyleComposer.phase = '上传中';
+    canvasStyleComposer.done = 0;
+    canvasStyleComposer.total = files.length;
+    renderCanvasStyleBar();
+    let styleId = '';
+    try {
+        const created = await canvasStyleRequest('/api/style-library/styles', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})
+        });
+        styleId = created?.style?.id || '';
+        if(!styleId) throw new Error('创建失败');
+        await reloadCanvasStyles();
+        pendingCanvasStyleUploadId = styleId;
+        await uploadCanvasStyleImages(files, {
+            onProgress: (done, total) => {
+                if(!canvasStyleComposer) return;
+                canvasStyleComposer.done = done;
+                canvasStyleComposer.total = total;
+                renderCanvasStyleBar();
+            },
+            onBuildStart: () => {
+                if(!canvasStyleComposer) return;
+                canvasStyleComposer.done = files.length;
+                canvasStyleComposer.phase = '构建中';
+                renderCanvasStyleBar();
+            }
+        });
+        canvasStyleComposer = null;
+        releaseCanvasStyleThumbs();
+        canvasStyleDetailId = styleId;
+        if(assetPanelTab === 'styles') renderAssetLibrary();
+    } catch(err) {
+        toast(err.message || '创建失败');
+        if(canvasStyleComposer){
+            canvasStyleComposer.busy = false;
+            canvasStyleComposer.phase = '';
+            renderCanvasStyleBar();
+        }
+    }
+}
+async function deleteCanvasStyleImage(styleId, itemId){
+    const style = findCanvasStyle(styleId);
+    if(!style || !itemId) return;
+    try {
+        await canvasStyleRequest('/api/asset-library/items/' + encodeURIComponent(itemId), {method:'DELETE'});
+    } catch(err) {
+        toast(err.message || '删除失败');
+        return;
+    }
+    await reloadCanvasStyles();
+    const fresh = findCanvasStyle(styleId);
+    if(!fresh) return;
+    const count = Number(fresh.image_count) || 0;
+    if(count >= canvasStyleMinImages()){
+        try {
+            await canvasStyleRequest(`/api/style-library/styles/${encodeURIComponent(styleId)}/build`, {method:'POST'});
+            await reloadCanvasStyles();
+            toast('参考图已更新，风格 Skill 已重新生成');
+        } catch(err) {
+            toast(err.message || 'Skill 更新失败');
+        }
+    } else {
+        toast(`已删除，参考图只剩 ${count} 张，Skill 仍是上一次的`);
+    }
+}
+function renderCanvasStyleDetail(style){
+    const teamView = canvasAssetScope() === 'team';
+    const min = canvasStyleMinImages();
+    const busy = canvasStyleUploadBusy === style.id;
+    const images = style.images || [];
+    const canBuild = !teamView && !busy && Number(style.image_count) >= min && style.status !== 'building';
+    const buildLabel = style.status === 'ready' ? '重新创建' : '开始创建';
+    const thumbs = images.map(image => `
+        <figure class="style-detail-item">
+            <img src="${escapeAttr(image.url)}" loading="lazy" decoding="async" alt="">
+            ${teamView ? '' : `<button class="style-detail-del" type="button" data-style-image-del="${escapeAttr(image.id || '')}" data-style-image-of="${escapeAttr(style.id)}" title="删除这张参考图"><i data-lucide="x"></i></button>`}
+        </figure>`).join('');
+    assetGrid.innerHTML = `
+        <div class="style-detail">
+            <div class="style-detail-head">
+                <button class="asset-mini-btn" type="button" data-style-detail-back title="返回列表"><i data-lucide="arrow-left"></i></button>
+                <span class="style-detail-name" title="${escapeAttr(style.name)}">${escapeHtml(style.name)}</span>
+                <span class="style-card-status" data-style-status="${escapeAttr(style.status || 'draft')}">${escapeHtml(`${canvasStyleStatusText(style)} · ${style.image_count}/${min}`)}</span>
+            </div>
+            <div class="style-detail-grid">${thumbs || '<div class="asset-empty">还没有参考图</div>'}</div>
+            <div class="style-detail-actions">
+                ${teamView
+                    ? '<span class="asset-readonly-tag" title="团队风格为只读">只读</span>'
+                    : `<button class="asset-mini-btn" type="button" data-style-upload="${escapeAttr(style.id)}" title="添加更多参考图"><i data-lucide="upload"></i></button>
+                       <button class="asset-mini-btn" type="button" data-style-build="${escapeAttr(style.id)}" title="${buildLabel}" ${canBuild ? '' : 'disabled'}><i data-lucide="sparkles"></i></button>
+                       <button class="asset-mini-btn" type="button" data-style-rename="${escapeAttr(style.id)}" title="重命名"><i data-lucide="pencil"></i></button>
+                       <button class="asset-mini-btn" type="button" data-style-promote="${escapeAttr(style.id)}" title="${style.promoted_to || style.promoted_from ? '已共享到团队' : '共享到团队'}" ${!busy && style.status === 'ready' && !(style.promoted_to || style.promoted_from) ? '' : 'disabled'}><i data-lucide="users-round"></i></button>
+                       <button class="asset-mini-btn" type="button" data-style-delete="${escapeAttr(style.id)}" title="删除风格与 Skill"><i data-lucide="trash-2"></i></button>`}
+            </div>
+            ${busy && canvasStyleUploadProgress.id === style.id ? `<div class="style-progress">
+                <div class="style-progress-track"><i style="width:${Math.round(Math.min(canvasStyleUploadProgress.done + 1, canvasStyleUploadProgress.total) / Math.max(canvasStyleUploadProgress.total, 1) * 100)}%"></i></div>
+                <span class="style-progress-text">正在上传参考图 ${Math.min(canvasStyleUploadProgress.done + 1, canvasStyleUploadProgress.total)}/${canvasStyleUploadProgress.total}</span>
+            </div>` : ''}
+            <div class="style-card-hint">${escapeHtml(
+                busy && canvasStyleUploadProgress.id === style.id
+                    ? `上传中 ${Math.min(canvasStyleUploadProgress.done + 1, canvasStyleUploadProgress.total)}/${canvasStyleUploadProgress.total}`
+                    : (Number(style.image_count) < min
+                        ? `还差 ${min - Number(style.image_count)} 张参考图才能生成 Skill`
+                        : '改动参考图后会自动重新生成 Skill')
+            )}</div>
+            ${style.error ? `<div class="style-card-hint style-card-error">${escapeHtml(style.error)}</div>` : ''}
+        </div>`;
+    refreshIcons();
+}
+function renderCanvasStyleLibrary(){
+    if(!assetGrid) return;
+    renderCanvasStyleBar();
+    const teamView = canvasAssetScope() === 'team';
+    const min = canvasStyleMinImages();
+    const styles = canvasStyleList();
+    if(canvasStyleDetailId){
+        const detail = findCanvasStyle(canvasStyleDetailId);
+        if(detail) return renderCanvasStyleDetail(detail);
+        canvasStyleDetailId = '';
+    }
+    if(!styles.length){
+        assetGrid.innerHTML = `<div class="asset-empty">${escapeHtml(teamView ? '团队还没有共享的风格' : '还没有风格类型：点右上角 + 新建，命名并选参考图即可')}</div>`;
+        refreshIcons();
+        return;
+    }
+    assetGrid.innerHTML = styles.map(style => {
+        const cover = (style.images || [])[0]?.url || '';
+        const busy = canvasStyleUploadBusy === style.id;
+        const progress = busy && canvasStyleUploadProgress.id === style.id
+            ? `上传中 ${Math.min(canvasStyleUploadProgress.done + 1, canvasStyleUploadProgress.total)}/${canvasStyleUploadProgress.total}`
+            : '';
+        const canBuild = !teamView && !busy && style.image_count >= min && style.status !== 'building';
+        const buildLabel = style.status === 'ready' ? '重新创建' : '开始创建';
+        const locked = busy ? 'disabled' : '';
+        return `
+        <div class="asset-item style-card" data-style-id="${escapeAttr(style.id)}" title="点击查看/编辑参考图">
+            ${cover
+                ? `<img class="asset-thumb" src="${escapeAttr(cover)}" loading="lazy" decoding="async" alt="">`
+                : '<div class="asset-thumb-wrap media-thumb style-thumb-empty"><i data-lucide="palette"></i></div>'}
+            <div class="asset-meta">
+                <span class="asset-name" title="${escapeAttr(style.name)}">${escapeHtml(style.name)}</span>
+                <span class="style-card-status" data-style-status="${escapeAttr(busy ? 'building' : (style.status || 'draft'))}">${escapeHtml(progress || `${canvasStyleStatusText(style)} · ${style.image_count}/${min}`)}</span>
+            </div>
+            <div class="style-card-actions">
+                ${teamView
+                    ? '<span class="asset-readonly-tag" title="团队风格为只读">只读</span>'
+                    : `<button class="asset-mini-btn" type="button" data-style-upload="${escapeAttr(style.id)}" title="添加参考图" ${locked}><i data-lucide="upload"></i></button>
+                       <button class="asset-mini-btn" type="button" data-style-build="${escapeAttr(style.id)}" title="${buildLabel}" ${canBuild ? '' : 'disabled'}><i data-lucide="sparkles"></i></button>
+                       <button class="asset-mini-btn" type="button" data-style-rename="${escapeAttr(style.id)}" title="重命名" ${locked}><i data-lucide="pencil"></i></button>
+                       <button class="asset-mini-btn" type="button" data-style-promote="${escapeAttr(style.id)}" title="${style.promoted_to || style.promoted_from ? '已共享到团队' : '共享到团队'}" ${!busy && style.status === 'ready' && !(style.promoted_to || style.promoted_from) ? '' : 'disabled'}><i data-lucide="users-round"></i></button>
+                       <button class="asset-mini-btn" type="button" data-style-delete="${escapeAttr(style.id)}" title="删除风格与 Skill" ${locked}><i data-lucide="trash-2"></i></button>`}
+            </div>
+            ${!teamView && !busy && style.image_count < min ? `<div class="style-card-hint">还差 ${min - style.image_count} 张参考图</div>` : ''}
+            ${style.error ? `<div class="style-card-hint style-card-error">${escapeHtml(style.error)}</div>` : ''}
+        </div>`;
+    }).join('');
+    refreshIcons();
+}
+async function uploadCanvasStyleImages(files, options = {}){
+    const style = findCanvasStyle(pendingCanvasStyleUploadId);
+    pendingCanvasStyleUploadId = '';
+    if(!style || !files.length) return;
+    if(canvasAssetScope() === 'team'){ toast('团队风格库为只读，切回「个人」再操作'); return; }
+    if(canvasStyleUploadBusy){ toast('上一批参考图还在上传，稍等一下'); return; }
+    const before = Number(style.image_count) || 0;
+    canvasStyleUploadBusy = style.id;
+    canvasStyleUploadProgress = {id:style.id, done:0, total:files.length};
+    if(assetPanelTab === 'styles') renderCanvasStyleLibrary();
+    toast(`正在上传 ${files.length} 张参考图…`);
+    let added = 0;
+    let failure = '';
+    // 一张一张传：卡片上能看见「上传中 n/total」，也不会让一批图全压在一个长请求里
+    for(let i = 0; i < files.length; i++){
+        try {
+            const form = new FormData();
+            form.append('files', files[i]);
+            const uploaded = await canvasStyleRequest('/api/ai/upload', {method:'POST', body:form});
+            const items = (uploaded?.files || []).filter(file => file && file.url)
+                .map(file => ({library_id:style.id, category_id:style.category_id, url:file.url, name:file.name || 'style'}));
+            if(!items.length) throw new Error('没有可用的图片');
+            await canvasStyleRequest('/api/asset-library/items/batch', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({library_id:style.id, category_id:style.category_id, items})
+            });
+            added += items.length;
+        } catch(err) {
+            failure = err.message || '上传失败';
+            break;
+        }
+        canvasStyleUploadProgress = {id:style.id, done:i + 1, total:files.length};
+        if(typeof options.onProgress === 'function') options.onProgress(i + 1, files.length);
+        if(assetPanelTab === 'styles') renderCanvasStyleLibrary();
+    }
+    canvasStyleUploadBusy = '';
+    canvasStyleUploadProgress = {id:'', done:0, total:0};
+    await reloadCanvasStyles();
+    let fresh = findCanvasStyle(style.id);
+    const count = Number(fresh?.image_count) || 0;
+    // 传够最少张数就自动生成 Skill（新建流程因此一步到底），已生成过的按新图重建
+    if(added && fresh && count >= canvasStyleMinImages()){
+        try {
+            if(typeof options.onBuildStart === 'function') options.onBuildStart();
+            toast(fresh.status === 'ready' ? '正在按新参考图重建风格…' : '参考图够了，正在生成风格 Skill…');
+            await canvasStyleRequest(`/api/style-library/styles/${encodeURIComponent(style.id)}/build`, {method:'POST'});
+            toast(fresh.status === 'ready' ? '已添加参考图并重新创建风格' : '风格已创建完成，Agent 生图时会自动调用');
+        } catch(err) {
+            toast(err.message || '风格 Skill 生成失败');
+        }
+        await reloadCanvasStyles();
+        fresh = findCanvasStyle(style.id);
+    } else if(added){
+        toast(`已添加 ${added} 张参考图${count < canvasStyleMinImages() ? `，还差 ${canvasStyleMinImages() - count} 张` : ''}`);
+    }
+    if(failure) toast(failure);
+    if(added && fresh && Number(fresh.image_count || 0) < before + added){
+        toast(`只有 ${Math.max(0, Number(fresh.image_count || 0) - before)} 张进了库，剩下的请再传一次`);
+    }
+}
+async function runCanvasStyleAction(action, styleId){
+    const style = findCanvasStyle(styleId) || {};
+    try {
+        if(action === 'new'){
+            // 命名和选图放在同一块面板里，一次填完再创建
+            openCanvasStyleComposer();
+            return;
+        } else if(action === 'upload'){
+            pendingCanvasStyleUploadId = styleId;
+            if(assetStyleUploadInput){ assetStyleUploadInput.value = ''; assetStyleUploadInput.click(); }
+            return;
+        } else if(action === 'build'){
+            toast(`正在创建风格「${style.name || ''}」…`);
+            await canvasStyleRequest(`/api/style-library/styles/${encodeURIComponent(styleId)}/build`, {method:'POST'});
+            toast('风格创建完成，Agent 生图时会自动调用这个 Skill');
+        } else if(action === 'rename'){
+            const name = await openAssetNameDialog({title:'重命名风格', value:style.name || '', placeholder:'风格名'});
+            if(!name || name === style.name) return;
+            await canvasStyleRequest(`/api/style-library/styles/${encodeURIComponent(styleId)}`, {
+                method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})
+            });
+        } else if(action === 'promote'){
+            await canvasStyleRequest('/api/style-library/promote', {
+                method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({style_ids:[styleId]})
+            });
+            toast('已共享到团队风格库');
+        } else if(action === 'delete'){
+            if(!confirm(`删除风格「${style.name || ''}」及其 Skill？参考图文件也会一起删除。`)) return;
+            await canvasStyleRequest(`/api/style-library/styles/${encodeURIComponent(styleId)}`, {method:'DELETE'});
+            if(canvasStyleDetailId === styleId) canvasStyleDetailId = '';
+            toast('已删除风格');
+        }
+    } catch(err) {
+        toast(err.message || '操作失败');
+    }
+    await reloadCanvasStyles();
+}
 function renderAssetLibrary(){
     if(!assetPanel || !assetGrid || !assetCategorySelect) return;
     document.querySelectorAll('[data-asset-tab]').forEach(btn => btn.classList.toggle('active', btn.dataset.assetTab === assetTab));
@@ -6739,6 +7131,32 @@ function renderAssetLibrary(){
             btn.classList.toggle('active', on);
             btn.setAttribute('aria-pressed', on ? 'true' : 'false');
         });
+    }
+    if(assetPanelTabs){
+        assetPanelTabs.querySelectorAll('[data-asset-panel-tab]').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.assetPanelTab === assetPanelTab);
+        });
+    }
+    const stylesTab = assetPanelTab === 'styles';
+    // 风格库走单列，跟双列排布的素材网格一眼区分开
+    assetGrid.classList.toggle('is-styles', stylesTab);
+    if(assetStyleBar) assetStyleBar.style.display = stylesTab ? 'flex' : 'none';
+    if(assetLibrarySelect) assetLibrarySelect.style.display = stylesTab ? 'none' : '';
+    if(assetCategoryRow) assetCategoryRow.style.display = stylesTab ? 'none' : '';
+    if(stylesTab){
+        // 风格库视图：范围（个人/团队）照旧，库/分类下拉和拖入保存都跟风格无关，直接收起来
+        assetImageControls.style.display = 'block';
+        assetDropZone.style.display = 'none';
+        assetGrid.style.display = 'grid';
+        workflowEmpty.style.display = 'none';
+        if(canvasStyleLoadedScope === canvasAssetScope()){
+            renderCanvasStyleLibrary();
+        } else {
+            assetGrid.innerHTML = '<div class="asset-empty">加载中…</div>';
+            refreshIcons();
+            fetchCanvasStyles().then(() => { if(assetPanelTab === 'styles') renderCanvasStyleLibrary(); });
+        }
+        return;
     }
     assetImageControls.style.display = (imageMode || workflowMode) ? 'block' : 'none';
     const localMode = assetLibraryIsLocal();
@@ -19355,6 +19773,94 @@ function scheduleComposerUpdate(delay=120){
         updateComposer();
     }, Math.max(0, Number(delay) || 0));
 }
+/* ============ 节点「风格」（2026-11-02 老板）============
+   需求：风格 Skill 只在**手动指定**时生效（风格会越来越多，自动注入会互相混淆），
+   并且要能从节点的文本输入栏（composer）里快捷挑一个。
+   节点上的绑定存 `node.styleSkill = {skillId,name,urls,scope}`，跟画布一起保存；
+   生图时由前端强行并进 reference_images + prompt 前缀，不靠模型自觉。 */
+const NODE_STYLE_REF_LIMIT = 3;
+let composerStyleList = null;
+let composerStyleLoading = false;
+
+function nodeStyleUrls(node){
+    const list = node && node.styleSkill && Array.isArray(node.styleSkill.urls) ? node.styleSkill.urls : [];
+    return list.filter(url => typeof url === 'string' && url).slice(0, NODE_STYLE_REF_LIMIT);
+}
+function nodeStylePromptPrefix(node){
+    const name = node && node.styleSkill ? String(node.styleSkill.name || '') : '';
+    return `风格要求${name ? `（${name}）` : ''}：严格参照所附参考图的配色、光线、材质、笔触与整体氛围；主体与场景按下述提示词绘制，不要把参考图里的人物或场景照搬进来。`;
+}
+async function loadComposerStyleList(force){
+    if(composerStyleList && !force) return composerStyleList;
+    composerStyleLoading = true;
+    const out = [];
+    for(const scope of ['personal', 'team']){
+        try{
+            const data = await canvasStyleRequest(`/api/style-library?scope=${scope}`);
+            for(const style of (data?.styles || [])){
+                if(!style || !style.skill_id) continue;
+                if(style.status !== 'ready' && style.status !== 'shared') continue;
+                const urls = (style.images || []).map(img => img && img.url).filter(Boolean).slice(0, NODE_STYLE_REF_LIMIT);
+                if(!urls.length) continue;
+                out.push({skillId:String(style.skill_id), name:String(style.name || '未命名风格'), urls, scope});
+            }
+        }catch(err){}
+    }
+    composerStyleList = out;
+    composerStyleLoading = false;
+    return out;
+}
+function renderComposerStylePanel(styles, node){
+    if(!composerStylePanel) return;
+    const current = node && node.styleSkill ? String(node.styleSkill.skillId || '') : '';
+    if(!styles.length){
+        composerStylePanel.innerHTML = '<div class="composer-style-hint">还没有可用的风格：先到右侧「资产库 → 风格库」传够 3 张参考图并创建</div>';
+    }else{
+        const rows = [`<button type="button" class="composer-style-row${current ? '' : ' active'}" data-style-pick=""><span class="composer-style-none"><i data-lucide="ban"></i></span><span class="composer-style-name">不使用风格</span></button>`];
+        for(const style of styles){
+            rows.push(`<button type="button" class="composer-style-row${current === style.skillId ? ' active' : ''}" data-style-pick="${escapeHtml(style.skillId)}"><img class="composer-style-thumb" src="${escapeHtml(style.urls[0])}" alt=""><span class="composer-style-name">${escapeHtml(style.name)}<em>${style.urls.length} 张参考图 · ${style.scope === 'team' ? '团队' : '个人'}</em></span></button>`);
+        }
+        composerStylePanel.innerHTML = rows.join('');
+    }
+    try{ if(window.lucide) lucide.createIcons(); }catch(err){}
+}
+function renderComposerStyle(node){
+    if(!composerStyleBtn) return;
+    const has = !!(node && node.styleSkill && node.styleSkill.name);
+    composerStyleBtn.classList.toggle('active', has);
+    const label = composerStyleBtn.querySelector('span');
+    if(label) label.textContent = has ? String(node.styleSkill.name) : '风格';
+}
+function setNodeStyle(node, style){
+    if(!node) return;
+    if(!style){
+        delete node.styleSkill;
+        toast('已取消该节点的风格');
+    }else{
+        node.styleSkill = {skillId:style.skillId, name:style.name, urls:style.urls.slice(), scope:style.scope};
+        toast(`该节点已挂上风格「${style.name}」，生图会自动带 ${style.urls.length} 张参考图`);
+    }
+    renderComposerStyle(node);
+    scheduleSave();
+}
+async function toggleComposerStylePanel(){
+    if(!composerStylePanel) return;
+    if(composerStylePanel.style.display !== 'none'){
+        composerStylePanel.style.display = 'none';
+        return;
+    }
+    const node = activeComposerNode() || selectedNode();
+    if(!node) return;
+    if(!composerStyleList){
+        composerStylePanel.innerHTML = '<div class="composer-style-hint">加载中…</div>';
+        composerStylePanel.style.display = 'block';
+        await loadComposerStyleList();
+    }
+    renderComposerStylePanel(composerStyleList || [], node);
+    composerStylePanel.style.display = 'block';
+    positionComposerForNode(node);
+}
+
 function updateComposer(){
     if(composerUpdateTimer){
         clearTimeout(composerUpdateTimer);
@@ -19400,6 +19906,8 @@ function updateComposer(){
     if(switchedNode) savePromptDraftForCurrent();
     lastComposerNodeId = composerKey;
     activeComposerSubject = subject;
+    renderComposerStyle(subject);
+    if(switchedNode && composerStylePanel) composerStylePanel.style.display = 'none';
     const hasPromptInput = promptInputNodesFor(node).length > 0;
     if(switchedNode){
         settings = smartSettingsForNode(subject);
@@ -22573,6 +23081,18 @@ async function runGeneration(){
     // 遮罩局部重绘：refs 保持原样（用于待生成占位框 / 运行日志缩略图，
     // 输出是整图，占位框应当跟原图同比例），真正送上游的参考图在 runApiGeneration 里换掉。
     const inpaintMeta = validNodeInpaint(node);
+    /* 节点级风格（2026-11-02 老板）：composer 里手动挑过风格就把参考图强行并进本次生图，
+       不依赖模型自觉；局部重绘不带（基准图必须是遮罩裁切图）。 */
+    const _nodeStyleUrls = inpaintMeta ? [] : nodeStyleUrls(node);
+    if(_nodeStyleUrls.length){
+        const _seenRefs = new Set(refs.map(ref => String(ref && ref.url || '')));
+        for(const _styleUrl of _nodeStyleUrls){
+            if(_seenRefs.has(_styleUrl)) continue;
+            _seenRefs.add(_styleUrl);
+            refs.push({url:_styleUrl, name:'style-ref.png', kind:'image'});
+        }
+        prompt = `${nodeStylePromptPrefix(node)}\n${prompt}`;
+    }
     const previousSettings = cloneSmartSettings(settings);
     const runSettings = smartSettingsForNode(node);
     settings = {...settings, ...cloneSmartSettings(runSettings || {})};
@@ -25643,6 +26163,27 @@ if(composerHistoryBtn) composerHistoryBtn.onclick = event => {
     event.stopPropagation();
     toggleComposerHistoryPanel();
 };
+if(composerStyleBtn) composerStyleBtn.onclick = event => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeComposerHistoryPanel();
+    toggleComposerStylePanel();
+};
+if(composerStylePanel) composerStylePanel.onclick = event => {
+    const row = event.target.closest('[data-style-pick]');
+    if(!row) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const node = activeComposerNode() || selectedNode();
+    const skillId = row.getAttribute('data-style-pick') || '';
+    if(!skillId){
+        setNodeStyle(node, null);
+    }else{
+        const hit = (composerStyleList || []).find(style => style.skillId === skillId);
+        if(hit) setNodeStyle(node, hit);
+    }
+    if(composerStylePanel) composerStylePanel.style.display = 'none';
+};
 if(composerLlmToggleBtn) composerLlmToggleBtn.onclick = event => {
     event.preventDefault();
     event.stopPropagation();
@@ -25803,6 +26344,82 @@ document.querySelectorAll('[data-asset-tab]').forEach(btn => {
         renderAssetLibrary();
     };
 });
+// 资产库面板页签：素材 / 风格库（2026-11-02）
+if(assetPanelTabs){
+    assetPanelTabs.addEventListener('click', event => {
+        const btn = event.target.closest('[data-asset-panel-tab]');
+        if(!btn) return;
+        event.preventDefault();
+        event.stopPropagation();
+        assetPanelTab = btn.dataset.assetPanelTab === 'styles' ? 'styles' : 'assets';
+        renderAssetLibrary();
+    });
+}
+if(assetStyleNewBtn) assetStyleNewBtn.onclick = () => runCanvasStyleAction('new', '');
+if(assetStyleUploadInput) assetStyleUploadInput.onchange = event => {
+    const files = [...(event.target.files || [])];
+    event.target.value = '';
+    if(canvasStyleComposer){
+        canvasStyleComposer.files = files;
+        renderCanvasStyleBar();
+        return;
+    }
+    uploadCanvasStyleImages(files);
+};
+if(assetStylePickBtn) assetStylePickBtn.onclick = () => {
+    if(!assetStyleUploadInput) return;
+    assetStyleUploadInput.value = '';
+    assetStyleUploadInput.click();
+};
+if(assetStyleNameInput) assetStyleNameInput.addEventListener('input', () => {
+    if(!canvasStyleComposer) return;
+    canvasStyleComposer.name = assetStyleNameInput.value;
+    if(assetStyleComposerCreate) assetStyleComposerCreate.disabled = !assetStyleNameInput.value.trim() || !canvasStyleComposer.files.length;
+});
+if(assetStyleNameInput) assetStyleNameInput.addEventListener('keydown', event => {
+    if(event.key !== 'Enter') return;
+    event.preventDefault();
+    createCanvasStyleFromComposer();
+});
+if(assetStyleComposerCancel) assetStyleComposerCancel.onclick = () => closeCanvasStyleComposer();
+if(assetStyleComposerCreate) assetStyleComposerCreate.onclick = () => createCanvasStyleFromComposer();
+if(assetPanel) assetPanel.addEventListener('click', event => {
+    const delBtn = event.target.closest('[data-style-image-del]');
+    if(delBtn){
+        event.preventDefault();
+        event.stopPropagation();
+        deleteCanvasStyleImage(delBtn.dataset.styleImageOf || canvasStyleDetailId, delBtn.dataset.styleImageDel);
+        return;
+    }
+    if(event.target.closest('[data-style-detail-back]')){
+        event.preventDefault();
+        canvasStyleDetailId = '';
+        renderCanvasStyleLibrary();
+        return;
+    }
+    const btn = event.target.closest('[data-style-upload],[data-style-build],[data-style-rename],[data-style-promote],[data-style-delete]');
+    if(btn){
+        event.preventDefault();
+        event.stopPropagation();
+        const action = btn.dataset.styleUpload ? 'upload'
+            : btn.dataset.styleBuild ? 'build'
+            : btn.dataset.styleRename ? 'rename'
+            : btn.dataset.stylePromote ? 'promote'
+            : 'delete';
+        const styleId = btn.dataset.styleUpload || btn.dataset.styleBuild || btn.dataset.styleRename
+            || btn.dataset.stylePromote || btn.dataset.styleDelete || '';
+        if(btn.disabled) return;
+        runCanvasStyleAction(action, styleId);
+        return;
+    }
+    // 卡片本身：进入详情看/删/加参考图
+    const card = event.target.closest('#assetGrid [data-style-id]');
+    if(card && assetPanelTab === 'styles'){
+        event.preventDefault();
+        canvasStyleDetailId = card.dataset.styleId || '';
+        renderCanvasStyleLibrary();
+    }
+});
 if(assetLibrarySelect) assetLibrarySelect.onchange = () => {
     activeAssetLibraryId = assetLibrarySelect.value || '';
     activeAssetCategoryId = '';
@@ -25947,6 +26564,9 @@ const AGENT_LLM_IMAGE_MAX = 8;
 const AGENT_DOC_MAX = 8;
 // 画布节点引用上限（Ctrl+C 复制节点 → 粘贴进输入框）
 const AGENT_NODE_REF_MAX = 8;
+/* 风格库风格一次最多带几张参考图（2026-11-02）。
+   3 张够表达配色/光线/材质，再多只会把参考图里的主体和场景一起搬进新图。 */
+const AGENT_STYLE_REF_LIMIT = 3;
 // 复制节点时写进系统剪贴板的文本前缀。
 // 🚨 这个前缀是「粘贴时该走节点引用还是普通文本」的唯一判据 ——
 //    只看 nodeClipboard 会误判：用户复制完节点又去别处复制了文字，粘贴就会插错东西。
@@ -26146,7 +26766,7 @@ let agentSaveTimer = null;
 let agentState = null;
 let agentMentionIdx = -1;
 function agentDefaultState(){
-    return {skills:[], attachments:[], documents:[], nodeRefs:[], messages:[], conversations:[], activeConversationId:'', chatProvider:'', chatModel:'', genProvider:'', genModel:'', genRatio:'square', genResolution:'4k', genCount:'auto', genQuality:'high', autoContext:true, devMode:true, thinkingMode:true, reasoningEffort:'auto'};
+    return {skills:[], activeStyle:null, attachments:[], documents:[], nodeRefs:[], messages:[], conversations:[], activeConversationId:'', chatProvider:'', chatModel:'', genProvider:'', genModel:'', genRatio:'square', genResolution:'4k', genCount:'auto', genQuality:'high', autoContext:true, devMode:true, thinkingMode:true, reasoningEffort:'auto'};
 }
 // 🚨 模型经常把 options 写成字符串数组（["方向1：温馨居家", …]）。渲染层要 opt.label/opt.value，
 //    字符串会渲染成一排**空白按钮**（点了还没值）。这里统一归一化成 {label,value}，去空、截 6 个。
@@ -26304,6 +26924,11 @@ function loadAgentState(){
     }
     delete agentState.skill;
     if(!Array.isArray(agentState.skills)) agentState.skills = [];
+    /* 风格库挂载（2026-11-02）：只有真拿到参考图 URL 才算生效 ——
+       否则「已激活风格」只是界面上的一句话，出图照样跟风格无关。 */
+    if(!(agentState.activeStyle && Array.isArray(agentState.activeStyle.urls) && agentState.activeStyle.urls.length)){
+        agentState.activeStyle = null;
+    }
     /* 🚨 张数默认值迁移（2026-10-26 老板：取消图片数量强规则，改由理解模型判断）。
        老 localStorage 里 `genCount: 1` 是**旧默认值**，不是用户的选择 —— 不迁移的话
        存量用户永远被「1 张」管着，改默认值救不了他们（BH.27 同一个坑）。
@@ -26814,6 +27439,10 @@ function applyAgentDockSize(){
 function toggleAgentChatDrawer(force){
     if(!agentState) return;
     agentState.chatDrawerOpen = force === undefined ? !agentState.chatDrawerOpen : Boolean(force);
+    /* 🚨 展开时必须把面板本身叫回来：点「资产库」「灵感库」会 toggleAgentPanel(false) 把 `.open` 摘掉，
+       只改 chatDrawerOpen 的话面板仍是隐藏态 —— 胶囊变成死按钮，点了没反应，
+       用户以为「小抽AI 窗口消失了」（老板 2026-11-02 反馈第二轮）。 */
+    if(agentState.chatDrawerOpen && !agentOpen) toggleAgentPanel(true);
     applyAgentDockSize();
     renderAgentMessages();
     saveAgentState();
@@ -27105,7 +27734,7 @@ function toggleInspirePanel(open=!inspireOpen){
     const toggle = document.getElementById('inspireToggle');
     if(!panel || !toggle) return;
     inspireOpen = !!open;
-    if(inspireOpen){ toggleAgentPanel(false); toggleAssetLibrary(false); }
+    if(inspireOpen){ toggleAssetLibrary(false); }
     panel.classList.toggle('open', inspireOpen);
     toggle.classList.toggle('active', inspireOpen);
     if(inspireOpen){
@@ -27567,6 +28196,26 @@ function agentUserHasGenAction(text){
    于是把老板定的「默认 4K」覆盖掉了 —— 界面早就不显示参数了，他连改都改不了。
    规则跟 BH.7 的比例覆盖同一个思路：**用户没说，就别让模型替他决定**。
    ⚠️ 只认明确说法（4K/2K/高清…），别把「大图」这种模糊词也算进来。 */
+/* 🚨 用户在参数面板选了比例就必须按他的来（2026-11-02 老板：挂了风格 skill 后出图还是 3:2）。
+   病因：`_genRatio = gen.ratio || agentState.genRatio` —— 模型爱在 generation 里自作主张写
+   "ratio":"landscape"，把面板里选的 2:3 顶掉，于是 4K 规格按 3:2 出了 3504×2336。
+   现在的优先级：用户原话里明说的比例 > 参数面板 > 模型判断。 */
+function agentExplicitRatio(text){
+    const t = String(text || '');
+    const map = {
+        '1:1':'square', '16:9':'wide', '9:16':'story', '4:3':'landscape43', '3:4':'portrait43',
+        '3:2':'landscape', '2:3':'portrait', '21:9':'ultrawide', '9:21':'ultratall'
+    };
+    const m = t.match(/(^|[^0-9])(1|2|3|4|9|16|21)\s*[:：]\s*(1|2|3|4|9|16|21)(?![0-9])/);
+    if(m){
+        const hit = map[`${m[2]}:${m[3]}`];
+        if(hit) return hit;
+    }
+    if(/方图|正方形|正方向/.test(t)) return 'square';
+    if(/竖版|竖向|竖图|竖构图|竖屏|portrait/i.test(t)) return 'portrait';
+    if(/横版|横向|横图|横构图|横屏|宽幅|landscape/i.test(t)) return 'landscape';
+    return '';
+}
 function agentExplicitResolution(text){
     const t = String(text || '');
     if(/(^|[^0-9])8\s*k/i.test(t)) return '8k';
@@ -27922,8 +28571,21 @@ function renderAgentAttachments(){
     //    这里只负责技能标签，其余交给 syncAgentInlineChips() 与状态对账。
     agentAttachRow.innerHTML = skills.map((skill, i) =>
         `<div class="agent-attach-skill"><i data-lucide="file-text"></i><span class="agent-attach-skill-name">${escapeHtml(skill.name || 'skill.md')}</span><button type="button" data-agent-skill-remove="${i}"><i data-lucide="x"></i></button></div>`
-    ).join('');
+    ).join('') + (agentState.activeStyle
+        // 风格库挂上来的风格：以胶囊形式留在输入栏上方，点 × 就取消（老板要看得见自己在用什么风格）
+        ? `<div class="agent-attach-skill agent-attach-style"><i data-lucide="palette"></i><span class="agent-attach-skill-name">风格：${escapeHtml(agentState.activeStyle.name || '')}</span><span class="agent-attach-style-count">${(agentState.activeStyle.urls || []).length} 张参考图</span><button type="button" data-agent-style-remove="1" title="取消这个风格"><i data-lucide="x"></i></button></div>`
+        : '');
     if(window.lucide) lucide.createIcons();
+    const styleRemoveBtn = agentAttachRow.querySelector('[data-agent-style-remove]');
+    if(styleRemoveBtn){
+        styleRemoveBtn.onclick = e => {
+            e.stopPropagation();
+            agentState.activeStyle = null;
+            renderAgentAttachments();
+            saveAgentState();
+            toast('已取消风格');
+        };
+    }
     agentAttachRow.querySelectorAll('[data-agent-skill-remove]').forEach(btn => {
         btn.onclick = e => {
             e.stopPropagation();
@@ -31217,16 +31879,26 @@ async function sendAgentMessage(){
         if(agentInput) agentInput.value = '';
         closeAgentSlashPalette();
         const skillArg = text.replace(/^\/skill\s*/, '').trim();
+        /* 🚨 关掉的时候要把「风格胶囊」一起摘掉（2026-11-02）：
+           只清 skills[] 的话，风格参考图还在生成时被带上，用户以为关掉了其实还在用。 */
         if(!skillArg || skillArg === 'off' || skillArg === 'clear' || skillArg === 'exit' || skillArg === '关闭'){
             agentState.skills = [];
+            agentState.activeStyle = null;
             renderAgentAttachments();
             saveAgentState();
-            toast('已清除手动挂载的自定义 Skill');
+            toast('已清除手动挂载的自定义 Skill 与风格');
             return;
         }
-        const skills = agentSlashSkillsCache || [];
+        /* 🚨 必须 await 拉一次：`agentSlashSkillsCache` 只在打开 `/` 面板时才被填，
+           直接手打 `/skill xxx` 时缓存是 null → 找不到 skill → 只会弹「已激活」的假提示。 */
+        const skills = await loadAgentSlashSkills();
         const found = skills.find(s => s.id === skillArg || s.name === skillArg || s.title === skillArg);
         const name = found ? (found.title || found.name || found.id) : skillArg;
+        // 风格库建出来的 Skill（id = style-xxxx）→ 真的挂成「风格」胶囊，生图时自动带参考图
+        if(found && String(found.id || '').startsWith('style-')){
+            await agentActivateStyleSkill(String(found.id), name);
+            return;
+        }
         toast(`Skill [${name}] 已激活（所有已安装 Skill 均由系统提示词自动注入）`);
         return;
     }
@@ -32210,6 +32882,16 @@ async function runAgentGenerations(assistantMsg, userMsg){
                 const extra = nodeRefRefs.filter(r => !nowUrls.has(r.url));
                 if(extra.length) refs = extra.concat(refs);
             }
+            /* 🚨 风格库风格（2026-11-02 老板：「生成的图片与风格关联不大」）：
+               以前「激活风格」只是往系统提示词里写了一段 SKILL.md，模型不照做就白搭。
+               现在挂着的风格参考图**由前端强制并进 reference_images** —— 上游真的看得见风格。
+               局部重绘除外：那时基准图必须是遮罩裁切图，塞风格图会让上游分不清要改哪块。 */
+            const _styleRefs = agentStyleRefImages();
+            if(_styleRefs.length && !gen.inpaint){
+                const _styleUrls = new Set(imageRefsOnly(refs).map(r => r?.url).filter(Boolean));
+                const _styleExtra = _styleRefs.filter(r => !_styleUrls.has(r.url));
+                if(_styleExtra.length) refs = refs.concat(_styleExtra);
+            }
             // 逐条通道/模型：模型编排时可以给这条图单独指定通道（已在 normalizePrompts 校验过存在性）。
             // 没指定就回落到界面选中的通道；指定的通道里没有那个模型时，退到该通道的默认模型。
             const genProviderId = (gen.provider && genProviders.some(p => p.id === gen.provider)) ? gen.provider : providerId;
@@ -32225,6 +32907,10 @@ async function runAgentGenerations(assistantMsg, userMsg){
             refs = _allImageRefs.slice(0, _agentRefMax).map(r => ({url:r.url, name:r.name || 'ref'}));
             // ★ 编号翻译层：将 prompt 中的"图N/图一"替换为"第X张参考图"，注入角色说明
             let _finalPrompt = gen.prompt;
+            {   // 挂着的风格 → 提示词最前面写清「只用它的风格，别搬主体」
+                const _stylePrefix = gen.inpaint ? '' : agentStylePromptPrefix();
+                if(_stylePrefix) _finalPrompt = `${_stylePrefix}\n${_finalPrompt}`;
+            }
             if(Array.isArray(gen.direct_refs) && gen.direct_refs.length > 0){
                 // 先做中文数字→阿拉伯转换（与 parseImageRefTasks 一致）
                 const _cnMap = {'一':'1','二':'2','三':'3','四':'4','五':'5','六':'6','七':'7','八':'8','九':'9','十':'10'};
@@ -32249,7 +32935,7 @@ async function runAgentGenerations(assistantMsg, userMsg){
             // 🚨 模型的 gen.resolution / gen.quality **不再参与**（2026-10-22）：它会自作主张写 '1k'，
             //    把老板定的默认 4K 覆盖掉，而界面上根本没有参数选择器让他改回来。
             const _userText = String(userMsg?.text || '');
-            const _genRatio = gen.ratio || agentState.genRatio || 'square';
+            const _genRatio = agentExplicitRatio(_userText) || agentState.genRatio || gen.ratio || 'square';
             const _genRes = agentExplicitResolution(_userText) || agentState.genResolution || '4k';
             /* 🚨 gpt-image-2 家族**先查官方尺寸表**（2026-10-21）：
                它们的 4K 规格是 2880×2880 而不是通用的 4096×4096，3:2/4:3 的 2K、4K 取值也和通用表不同。
@@ -32276,7 +32962,7 @@ async function runAgentGenerations(assistantMsg, userMsg){
                 }
             }
             const genQuality = agentExplicitQuality(_userText) || agentState.genQuality || 'high';
-            let payload = {prompt:_finalPrompt, provider_id:genProviderId, model:genModel, size:genSize, quality:genQuality, n:1, reference_images:refs};
+            let payload = {prompt:_finalPrompt, provider_id:genProviderId, model:genModel, size:genSize, aspect_ratio:API_RATIO_VALUES[_genRatio] || '', quality:genQuality, n:1, reference_images:refs};
             // 局部重绘：请求体换成「裁切局部图 + 对齐遮罩」，尺寸/比例跟裁切走，结果由后端回贴成整图
             const _ipNode = gen._inpaintNodeId ? (nodes.find(n => n.id === gen._inpaintNodeId) || null) : null;
             const _ipMeta = _ipNode ? validNodeInpaint(_ipNode) : null;
@@ -32554,6 +33240,50 @@ async function loadAgentSlashSkills(){
     }
     return agentSlashSkillsCache;
 }
+/* 风格库的风格 Skill → 「风格」胶囊（2026-11-02 老板：/skill 只弹个提示，输入栏里没有胶囊、
+   出的图也跟风格没关）。真因：风格之前只写在 SKILL.md 里靠模型自觉，
+   模型不把 6 张参考图塞进 reference_images，上游就完全照文字自由发挥。
+   现在把参考图 URL 存进 agentState.activeStyle，生图时**由前端强制带上**。 */
+async function agentStyleBySkillId(skillId){
+    for(const scope of ['personal', 'team']){
+        try{
+            const data = await canvasStyleRequest(`/api/style-library?scope=${scope}`);
+            const hit = (data?.styles || []).find(style => String(style.skill_id || '') === skillId);
+            if(hit) return hit;
+        }catch(err) {}
+    }
+    return null;
+}
+async function agentActivateStyleSkill(skillId, title){
+    const style = await agentStyleBySkillId(skillId);
+    if(!style){
+        toast(`「${title}」还没建好参考图，先在风格库里补够 3 张并创建`);
+        return;
+    }
+    const urls = (style.images || []).map(image => image?.url).filter(Boolean);
+    if(!urls.length){ toast('这个风格还没有参考图'); return; }
+    agentState.activeStyle = {
+        id: style.id,
+        skillId,
+        name: style.name || title,
+        urls: urls.slice(0, AGENT_STYLE_REF_LIMIT)
+    };
+    renderAgentAttachments();
+    saveAgentState();
+    toast(`已挂上风格「${agentState.activeStyle.name}」：生图会自动带 ${agentState.activeStyle.urls.length} 张风格参考图`);
+}
+// 当前挂着的风格 → 参考图数组（生成时并进 reference_images）
+function agentStyleRefImages(){
+    const style = agentState?.activeStyle;
+    if(!style || !Array.isArray(style.urls)) return [];
+    return style.urls.filter(Boolean).map((url, i) => ({url, name: `${style.name || 'style'}-${i + 1}.png`}));
+}
+// 当前挂着的风格 → 提示词前缀（说清「只要风格，不搬主体」）
+function agentStylePromptPrefix(){
+    const style = agentState?.activeStyle;
+    if(!style || !Array.isArray(style.urls) || !style.urls.length) return '';
+    return `风格要求：严格参照所附参考图的配色、光线、材质、笔触与整体氛围；画面主体和场景按下述提示词绘制，不要把参考图里的具体人物或场景照搬进来。`;
+}
 function agentSlashMatched(s, q){
     return ((s.title || '') + ' ' + (s.name || '') + ' ' + (s.id || '') + ' ' + (s.category || '') + ' ' + ((s.tags || []).join(' '))).toLowerCase().indexOf(q) >= 0;
 }
@@ -32627,15 +33357,23 @@ async function renderAgentSlashPalette(queryRaw){
         pal.innerHTML = html;
         if(window.lucide && window.lucide.createIcons) window.lucide.createIcons();
         pal.querySelectorAll('.agent-slash-item').forEach(node => {
-            node.addEventListener('click', () => {
+            /* 🚨 用 pointerdown 立即选中，不要等 click（老板 2026-11-02 反馈「只能回车选，鼠标点没反应」）。
+               根因两条：① 按下瞬间 contenteditable 失焦 → blur 兜底定时器 200ms 后关面板，
+               慢一点的点击等不到 click；② 悬停高亮里的 scrollIntoView 会让列表在按下与抬起之间滚动，
+               mousedown/mouseup 落在不同元素上，浏览器就不给 click 了。
+               preventDefault 用来保住输入框焦点，也顺手避免抬起时再触发一次 click 造成双发。 */
+            node.addEventListener('pointerdown', ev => {
+                ev.preventDefault();
+                ev.stopPropagation();
                 agentSlashIndex = parseInt(node.getAttribute('data-slash'), 10) || 0;
                 chooseAgentSlash();
             });
+            node.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); });
             node.addEventListener('mousemove', () => {
                 const idx = parseInt(node.getAttribute('data-slash'), 10);
                 if(idx !== agentSlashIndex){
                     agentSlashIndex = idx;
-                    highlightAgentSlash();
+                    highlightAgentSlash(false);   // 悬停只高亮，不滚动（滚动会让指针下的项跑掉）
                 }
             });
         });
@@ -32660,19 +33398,20 @@ function positionAgentSlashPalette(){
     const top = Math.max(12, Math.min(rect.top - box.height - 8, viewportH - box.height - 12));
     pal.style.setProperty('--slash-top', `${Math.round(top)}px`);
 }
-function highlightAgentSlash(){
+function highlightAgentSlash(scroll = true){
     const pal = document.getElementById('agentSlashPalette');
     if(!pal) return;
     pal.querySelectorAll('.agent-slash-item').forEach((node, i) => {
         const isActive = (i === agentSlashIndex);
         node.classList.toggle('active', isActive);
-        if(isActive) node.scrollIntoView({ block: 'nearest' });
+        // 只有键盘上下键才滚动；鼠标悬停滚动会让指针底下的项跑掉，点不中
+        if(isActive && scroll) node.scrollIntoView({ block: 'nearest' });
     });
 }
 function moveAgentSlash(delta){
     if(!agentSlashItems.length) return;
     agentSlashIndex = (agentSlashIndex + delta + agentSlashItems.length) % agentSlashItems.length;
-    highlightAgentSlash();
+    highlightAgentSlash(true);
 }
 function closeAgentSlashPalette(){
     const pal = document.getElementById('agentSlashPalette');
@@ -33057,6 +33796,13 @@ enforceAgentAlwaysOn();
 document.getElementById('agentChatToggleBtn')?.addEventListener('click', e => {
     e.preventDefault();
     e.stopPropagation();
+    /* 🚨 面板被右上角功能关掉（`.open` 没了）时，这颗胶囊要能把整扇窗口叫回来，
+       而不是只切对话抽屉 —— 否则胶囊点了「什么都没发生」（老板 2026-11-02 第二轮反馈）。 */
+    if(!agentOpen){
+        toggleAgentPanel(true);
+        if(agentState && !agentState.chatDrawerOpen) toggleAgentChatDrawer(true);
+        return;
+    }
     toggleAgentChatDrawer();
 });
 bindAgentDockResize();
@@ -33258,6 +34004,10 @@ document.addEventListener('click', event => {
     if(!event.target.closest('.prompt-preset-panel') && !event.target.closest('.prompt-preset-edit') && !event.target.closest('.prompt-preset-save')) closePromptPresetPanel();
     if(!event.target.closest('.prompt-template-panel') && !event.target.closest('.prompt-preset-edit') && !event.target.closest('#composerTemplateBtn')) closePromptTemplatePanel();
     if(!event.target.closest('.composer-history-panel') && !event.target.closest('#composerHistoryBtn')) closeComposerHistoryPanel();
+    if(composerStylePanel && composerStylePanel.style.display !== 'none'
+        && !event.target.closest('#composerStylePanel') && !event.target.closest('#composerStyleBtn')){
+        composerStylePanel.style.display = 'none';
+    }
 });
 document.addEventListener('keydown', event => {
     if(event.key === 'Escape') { closeSmartLogLightbox(); closeAllSmartPopovers(); closeCreateMenu(); closeSmartCanvasLog(); closeSmartCanvasShortcuts(); closePromptPresetPanel(); closePromptTemplatePanel(); closeComposerHistoryPanel(); }
