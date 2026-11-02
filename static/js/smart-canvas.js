@@ -28616,6 +28616,32 @@ function agentGenCardHtml(gen, numOffset){
         : '';
     return `<div class="agent-gen-card">${promptHtml}<div class="agent-gen-status ${status === 'error' ? 'error' : status === 'done' ? 'done' : ''}">${status === 'running' ? '<span class="agent-gen-spinner"></span>' : ''}<span>${escapeHtml(statusText)}${fullRefTags ? ' · ' + escapeHtml(fullRefTags) : ''}${methodTag ? ' · ' + escapeHtml(methodTag) : ''}</span></div>${modelNoteHtml}${sizeNoteHtml}${status === 'error' && gen.error ? `<div class="agent-gen-prompt agent-gen-error-text">${escapeHtml(String(gen.error).slice(0, 400))}</div>` : ''}${askFixHtml ? `<div class="agent-gen-quick-actions">${askFixHtml}</div>` : ''}${thumbs ? `<div class="agent-msg-thumbs">${thumbs}</div>` : ''}${quickActions}</div>`;
 }
+/* Agent 产物交付兜底（2026-11-02）。
+   模型经常把文件写进 output/agent/ 却在回复里只贴一个 markdown 链接，canvas_ops 忘了给
+   create_file_node —— 用户那边就是「既没在对话里收到文件，画布上也没有节点」。
+   这里统一从回复正文里认出 /output/agent/<文件>，两处都用它：气泡里的下载胶囊 + 补画布节点。 */
+function agentDeliverableFilesFromText(text){
+    const raw = String(text || '');
+    if(!raw || raw.indexOf('/output/agent/') < 0) return [];
+    const out = [];
+    const seen = new Set();
+    const re = /\/output\/agent\/([^)"'\s>\\]+)/g;
+    let m;
+    while((m = re.exec(raw))){
+        let name = m[1];
+        try { name = decodeURIComponent(name); } catch(e) { /* 编码坏了就按原样用 */ }
+        name = name.split('?')[0].split('#')[0];
+        if(!name || seen.has(name)) continue;
+        seen.add(name);
+        out.push({url: `/output/agent/${encodeURI(name)}`, name});
+    }
+    return out;
+}
+function agentDeliverableFilesFor(msg){
+    if(!msg) return [];
+    if(Array.isArray(msg.files) && msg.files.length) return msg.files.filter(f => f && f.url);
+    return agentDeliverableFilesFromText(msg.text);
+}
 function agentMessageHtml(msg){
     /* 附件形态与输入框一致（2026-10-20 老板要求）：
        用户消息正文里的 `[图:x]`/`[文件:x]`/`[节点:x]` token 还原成同样的胶囊，
@@ -28632,6 +28658,11 @@ function agentMessageHtml(msg){
         ...(Array.isArray(msg.nodeRefs) ? msg.nodeRefs : []).filter(e => !_rich.used.has(agentChipKeyOf('ref', e))).map(e => _msgChip('ref', e))
     ];
     const docsWrap = _leftChips.length ? `<div class="agent-msg-chips">${_leftChips.join('')}</div>` : '';
+    // Agent 产出的文件：气泡下方给一张可点的下载胶囊（历史消息同样能点，直接读正文里的路径）
+    const _files = msg.role === 'user' ? [] : agentDeliverableFilesFor(msg);
+    const filesWrap = _files.length
+        ? `<div class="agent-msg-files">${_files.map(f => `<a class="agent-file-chip" href="${escapeAttr(f.url)}" download="${escapeAttr(f.name)}" target="_blank" rel="noopener" title="下载 ${escapeAttr(f.name)}"><i data-lucide="file-down"></i><span>${escapeHtml(f.name)}</span></a>`).join('')}</div>`
+        : '';
     let _genNumOffset = 0;
     const gens = (msg.generations || []).map(g => { const html = agentGenCardHtml(g, _genNumOffset); _genNumOffset += (g.results || []).filter(r => r?.url).length; return html; }).join('');
     // 本机工具调用记录：可折叠卡片（默认收起，点开看参数与输出）
@@ -28725,7 +28756,7 @@ function agentMessageHtml(msg){
     const planHtml = _plan.length > 1
         ? `<div class="agent-plan">${_plan.map((s, i) => `<div class="agent-plan-step"><span class="agent-plan-num">${i + 1}</span><span class="agent-plan-text">${escapeHtml(s)}</span></div>`).join('')}</div>`
         : '';
-    return `<div class="agent-msg ${msg.role === 'user' ? 'user' : 'assistant'}${toolWrap ? ' has-tools' : ''}${_editing ? ' is-editing' : ''}">${bubbleHtml}${editHtml}${cardHtml}${planHtml}${docsWrap}${toolWrap}${gens}${promptCardHtml}${optionsHtml}${actions}</div>`;
+    return `<div class="agent-msg ${msg.role === 'user' ? 'user' : 'assistant'}${toolWrap ? ' has-tools' : ''}${_editing ? ' is-editing' : ''}">${bubbleHtml}${filesWrap}${editHtml}${cardHtml}${planHtml}${docsWrap}${toolWrap}${gens}${promptCardHtml}${optionsHtml}${actions}</div>`;
 }
 function renderAgentMessages(){
     if(!agentMessages || !agentState) return;
@@ -31355,6 +31386,26 @@ async function sendAgentMessage(){
 
             // 解析意图路由 JSON
             const routed = parseAgentIntentRoute(llmResult.text || '', text);
+
+            /* Agent 产物兜底交付（2026-11-02）：模型常把文件写进 output/agent/ 却忘了在
+               canvas_ops 里给 create_file_node，用户结果就是「文件写了、对话里没有、画布也没有」。
+               这里从回复正文里认出 /output/agent/<文件>，缺的补成附件节点（已有同 url 节点就跳过）。 */
+            const _agentFiles = agentDeliverableFilesFromText(`${routed.reply || ''}\n${routed.analysis || ''}`);
+            if(_agentFiles.length){
+                routed.canvas_ops = Array.isArray(routed.canvas_ops) ? routed.canvas_ops : [];
+                const _normUrl = u => { try { return decodeURIComponent(String(u || '')); } catch(e) { return String(u || ''); } };
+                const _onCanvas = new Set();
+                nodes.forEach(n => (n.images || []).forEach(img => { if(img && img.url) _onCanvas.add(_normUrl(img.url)); }));
+                routed.canvas_ops.filter(isAgentFileOp).forEach(op => {
+                    const u = op.url || op.path || op.src;
+                    if(u) _onCanvas.add(_normUrl(u));
+                });
+                _agentFiles.forEach(f => {
+                    if(_onCanvas.has(_normUrl(f.url))) return;
+                    _onCanvas.add(_normUrl(f.url));
+                    routed.canvas_ops.push({op:'create_file_node', url:f.url, name:f.name, title:f.name});
+                });
+            }
 
             // 最小安全网：剥离@mention后，如果文本以分析动词开头且无生图动词，强制 text_only
             // （仅针对 LLM 反复误判的最明显场景，不是旧的多层正则）
