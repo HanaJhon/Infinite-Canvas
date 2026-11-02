@@ -6175,7 +6175,9 @@ def codex_permission_payload():
 # 权限档位**复用** CODEX_PERMISSION_LEVELS 的四档语义（同一份 data/codex_permissions.json），
 # 避免出现「两套权限、两处配置」。
 AGENT_TOOLS_FILE = os.path.join(DATA_DIR, "agent_tools.json")
-AGENT_TOOLS_DEFAULT_ENABLED = False
+# 老板要求：本机工具默认开启（否则 agent 只能说"我改不了文件"，用户得自己去翻设置）。
+# 关掉的办法：data/agent_tools.json 写 {"enabled": false}，或 POST /api/agent/tools {"enabled": false}。
+AGENT_TOOLS_DEFAULT_ENABLED = True
 AGENT_TOOLS_DEFAULT_MAX_ROUNDS = 8
 AGENT_TOOLS_MAX_ROUNDS_LIMIT = 20
 AGENT_TOOL_READ_BYTES = 200_000          # read_file 单次最多读取的字节数
