@@ -497,6 +497,10 @@ GLOBAL_CONFIG_FILE = os.path.join(BASE_DIR, "global_config.json")
 CANVAS_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 PROJECT_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 LOCAL_IMAGE_IMPORT_MAX_BYTES = int(os.getenv("LOCAL_IMAGE_IMPORT_MAX_BYTES", str(50 * 1024 * 1024)))
+# 附件上传体积上限：默认 1GB。原来写死 50MB，正常业务文件（季度产出 Excel 等）会被拦在门外。
+# ponytail: 整个文件读进内存再落盘，1GB 级上传会占同等内存；真要放 5GB 级文件，改成流式分块写盘。
+UPLOAD_MAX_BYTES = int(os.getenv("UPLOAD_MAX_BYTES", str(1024 * 1024 * 1024)))
+UPLOAD_MAX_MB = UPLOAD_MAX_BYTES // (1024 * 1024)
 LOCAL_IMAGE_IMPORT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 RUNNINGHUB_THUMBNAIL_EXTS = (".jpg",)
 STORAGE_SETTINGS_FILE = os.path.join(DATA_DIR, "storage_settings.json")
@@ -17211,13 +17215,13 @@ async def upload_ai_reference(files: List[UploadFile] = File(...)):
     video_exts = {".mp4", ".webm", ".mov", ".m4v", ".flv"}
     audio_exts = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
     doc_exts = {".pdf", ".txt", ".md", ".markdown", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".json", ".zip", ".yaml", ".yml", ".log"}
-    max_upload_bytes = 50 * 1024 * 1024
+    max_upload_bytes = UPLOAD_MAX_BYTES
     for file in files:
         content = await file.read()
         if not content:
             continue
         if len(content) > max_upload_bytes:
-            raise HTTPException(status_code=413, detail=f"{file.filename or '文件'} 超过 50MB，无法上传")
+            raise HTTPException(status_code=413, detail=f"{file.filename or '文件'} 超过 {UPLOAD_MAX_MB}MB，无法上传")
         ext = os.path.splitext(file.filename or "")[1].lower()
         content_type = (file.content_type or "").lower()
         kind = "image"
@@ -17272,8 +17276,8 @@ async def upload_ai_base64(payload: Base64UploadRequest):
         raise HTTPException(status_code=400, detail="数据无法解码")
     if not content:
         raise HTTPException(status_code=400, detail="内容为空")
-    if len(content) > 50 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="超过 50MB")
+    if len(content) > UPLOAD_MAX_BYTES:
+        raise HTTPException(status_code=413, detail=f"超过 {UPLOAD_MAX_MB}MB")
     kind, ext = _local_upload_kind_ext(payload.name or "", ct or "image/png")
     if kind is None:
         kind, ext = "image", ".png"
