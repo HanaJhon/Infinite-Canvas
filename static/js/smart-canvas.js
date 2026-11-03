@@ -27099,15 +27099,43 @@ let agentServerPushTimer = 0;
 function agentConvNewestTs(convs){
     return (Array.isArray(convs) ? convs : []).reduce((m, c) => Math.max(m, Number(c && c.ts) || 0), 0);
 }
+/* 并集合并：本地顺序在前，服务端独有的追加到末尾；同一 id 取「消息更多」的那份。
+   🚨 绝不能用「少的覆盖多的」——另一个浏览器只留 1 条对话就推上去，
+      主浏览器照抄一次就把历史全抹了（老板 m09499「发布版本好像会把 agent 记录清空」）。 */
+function agentMergeConversations(localConvs, serverConvs){
+    const out = (Array.isArray(localConvs) ? localConvs : []).filter(c => c && c.id).slice();
+    (Array.isArray(serverConvs) ? serverConvs : []).forEach(c => {
+        if(!c || !c.id) return;
+        const i = out.findIndex(x => x && x.id === c.id);
+        if(i < 0){ out.push(c); return; }
+        const have = (out[i].messages || []).length;
+        const take = (c.messages || []).length;
+        if(take > have){
+            out[i] = {...c, ts: Math.max(Number(c.ts) || 0, Number(out[i].ts) || 0)};
+        }
+    });
+    return out;
+}
 function agentPushServerState(){
     if(!canvasId) return;
     clearTimeout(agentServerPushTimer);
-    agentServerPushTimer = setTimeout(() => {
+    agentServerPushTimer = setTimeout(async () => {
         try {
             // 🚨 本地一条对话都没有时绝不上推：新浏览器 / 清过缓存 / 还没拉完服务端那份，
             //    这时候推上去等于用空状态盖掉服务端的历史记录（老板要求「记录不能丢」）。
             if(!(Array.isArray(agentState.conversations) && agentState.conversations.length)) return;
-            const body = JSON.stringify({state: {...agentState, messages:(agentState.messages || []).slice(-AGENT_MSG_MAX)}});
+            // 推之前先读一次服务端，只推「合并后」的并集：别的浏览器/画布页写进去的对话不能被这次推覆盖掉。
+            let merged = agentState.conversations;
+            try {
+                const res = await fetch(`/api/agent/state/${encodeURIComponent(canvasId)}`);
+                if(res.ok){
+                    const server = (await res.json()).state || null;
+                    if(server && typeof server === 'object'){
+                        merged = agentMergeConversations(agentState.conversations, server.conversations);
+                    }
+                }
+            } catch(e) { /* 读不到就按本地那份推，至少不丢本机的 */ }
+            const body = JSON.stringify({state: {...agentState, conversations: merged, messages:(agentState.messages || []).slice(-AGENT_MSG_MAX)}});
             fetch(`/api/agent/state/${encodeURIComponent(canvasId)}`, {
                 method: 'PUT',
                 headers: {'Content-Type': 'application/json'},
@@ -27129,16 +27157,21 @@ async function agentPullServerState(){
     const localConvs = Array.isArray(agentState.conversations) ? agentState.conversations : [];
     const serverConvs = Array.isArray(server.conversations) ? server.conversations : [];
     if(!serverConvs.length){ if(localConvs.length) agentPushServerState(); return; }
-    if(localConvs.length && agentConvNewestTs(localConvs) >= agentConvNewestTs(serverConvs)){
+    const merged = agentMergeConversations(localConvs, serverConvs);
+    if(merged.length > serverConvs.length){
+        // 服务端缺了本地独有的对话 → 先把并集推上去，别让下次从别的环境拉取又只剩服务端那几条
         agentPushServerState();
+    }
+    if(localConvs.length && agentConvNewestTs(localConvs) >= agentConvNewestTs(serverConvs)){
         return;
     }
-    // 服务端更新（或本地压根没有）→ 采用服务端这份对话，并写回本地
-    agentState.conversations = serverConvs;
-    agentState.activeConversationId = serverConvs.some(c => c.id === server.activeConversationId)
-        ? server.activeConversationId
-        : serverConvs[0].id;
-    const conv = agentState.conversations.find(c => c.id === agentState.activeConversationId);
+    // 服务端那条更新（或本地压根没有）→ 界面上切到服务端当前那条，但**对话列表取并集**
+    const keepId = merged.some(c => c.id === agentState.activeConversationId)
+        ? agentState.activeConversationId
+        : (merged.some(c => c.id === server.activeConversationId) ? server.activeConversationId : merged[0].id);
+    agentState.conversations = merged;
+    agentState.activeConversationId = keepId;
+    const conv = merged.find(c => c.id === keepId);
     agentState.messages = conv ? (conv.messages || []).slice(-AGENT_MSG_MAX) : [];
     renderAgentMessages();
     renderAgentChatList();
