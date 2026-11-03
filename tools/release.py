@@ -123,6 +123,9 @@ PROGRAM_DIRS = [
     # 内置 Skill（只读，随包分发）：main.py 的 BUILTIN_SKILLS_DIR 指这里。
     # 不能放 data/agent_skills/ —— data/ 是用户数据目录，被 DENY_PREFIXES 整目录排除。
     "skills",
+    # 浏览器采集插件（MV3，全静态）：main.py 的 EXTENSION_DIR 指这里，
+    # 画布里的「下载插件包」是按这个目录实时打 zip，目录不在包里就等于功能 404。
+    "extension",
 ]
 
 # data/ 是「混装目录」：里面既有用户数据（api_providers.json 含 API 密钥、
@@ -157,6 +160,8 @@ EXCLUDE_PREFIXES = [
     #    踩过（2026-09-18）：重编 exe 后打包，包体积从 111 MB 虚涨到 175 MB。
     "dist/InfiniteCanvasLauncher.",
     "dist/Microsoft.Web.WebView2.",
+    # 采集插件打包时用的假后台页面（截图素材用），不随包分发。
+    "extension/__store/",
 ]
 
 # ---------------------------------------------------------------------------

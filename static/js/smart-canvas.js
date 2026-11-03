@@ -77,6 +77,20 @@ const assetStyleProgress = document.getElementById('assetStyleProgress');
 const assetStyleComposerCancel = document.getElementById('assetStyleComposerCancel');
 const assetStyleComposerCreate = document.getElementById('assetStyleComposerCreate');
 const assetCategoryRow = document.querySelector('#assetImageControls .asset-category-row');
+const assetPickModeBtn = document.getElementById('assetPickModeBtn');
+const assetPickBar = document.getElementById('assetPickBar');
+const assetPickHint = document.getElementById('assetPickHint');
+const assetPickCancelBtn = document.getElementById('assetPickCancelBtn');
+const assetPickCreateBtn = document.getElementById('assetPickCreateBtn');
+// 采集插件安装入口（2026-11-03 老板：装插件功能放进资产库页面）
+const assetExtInstallBtn = document.getElementById('assetExtInstallBtn');
+const assetExtInstallText = document.getElementById('assetExtInstallText');
+const extInstallBackdrop = document.getElementById('extInstallBackdrop');
+const extInstallStatus = document.getElementById('extInstallStatus');
+const extInstallClose = document.getElementById('extInstallClose');
+const extInstallDone = document.getElementById('extInstallDone');
+const extInstallCopy = document.getElementById('extInstallCopy');
+const extInstallDownload = document.getElementById('extInstallDownload');
 // 视角模式把生成参数条（通道/模型/尺寸/质量/张数）临时搬进弹窗底部左侧，关掉再搬回去。
 const imageAngleParams = document.getElementById('imageAngleParams');
 let dynamicParamsHome = null;
@@ -7114,6 +7128,61 @@ async function runCanvasStyleAction(action, styleId){
     }
     await reloadCanvasStyles();
 }
+// 素材页签多选建风格（2026-11-03）：勾 3~6 张现成素材，直接建一个风格类型（参考图是复制过来的）。
+let assetPickMode = false;
+let assetPickIds = [];
+function assetPickLimit(){ return 6; }
+function exitAssetPickMode(){ assetPickMode = false; assetPickIds = []; }
+function renderAssetPickBar(){
+    if(!assetPickBar) return;
+    assetPickBar.style.display = assetPickMode ? 'flex' : 'none';
+    if(!assetPickMode) return;
+    if(assetPickModeBtn) assetPickModeBtn.classList.add('active');
+    const total = assetPickIds.length;
+    if(assetPickHint){
+        assetPickHint.textContent = total < 3
+            ? `已选 ${total} 张 · 至少 3 张才能建风格`
+            : `已选 ${total} 张（最多 ${assetPickLimit()} 张）`;
+    }
+    if(assetPickCreateBtn){
+        assetPickCreateBtn.disabled = total < 3;
+        assetPickCreateBtn.textContent = total < 3 ? '创建风格' : `用这 ${total} 张创建风格`;
+    }
+    if(assetPickModeBtn) assetPickModeBtn.classList.toggle('active', assetPickMode);
+}
+function toggleAssetPick(itemId){
+    const id = String(itemId || '');
+    if(!id) return;
+    const at = assetPickIds.indexOf(id);
+    if(at >= 0) assetPickIds.splice(at, 1);
+    else if(assetPickIds.length >= assetPickLimit()) { toast(`最多选 ${assetPickLimit()} 张`); return; }
+    else assetPickIds.push(id);
+    renderAssetLibrary();
+}
+async function createStyleFromPickedAssets(){
+    if(assetPickIds.length < 3){ toast('至少选 3 张图片'); return; }
+    const name = await openAssetNameDialog({title:'新建风格', value:'', placeholder:'风格名称，例如：儿童户外活动'});
+    if(!name) return;
+    if(assetPickCreateBtn) assetPickCreateBtn.disabled = true;
+    try{
+        const res = await fetch('/api/style-library/from-items', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({name, item_ids:assetPickIds.slice(0, assetPickLimit())})
+        });
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok) throw new Error(data.detail || '创建失败');
+        const styleId = data.style?.id || '';
+        exitAssetPickMode();
+        assetPanelTab = 'styles';
+        canvasStyleDetailId = styleId;
+        await reloadCanvasStyles();
+        toast(`风格「${name}」已创建`);
+    }catch(err){
+        toast(err?.message || '创建风格失败');
+    }finally{
+        renderAssetLibrary();
+    }
+}
 function renderAssetLibrary(){
     if(!assetPanel || !assetGrid || !assetCategorySelect) return;
     document.querySelectorAll('[data-asset-tab]').forEach(btn => btn.classList.toggle('active', btn.dataset.assetTab === assetTab));
@@ -7145,6 +7214,9 @@ function renderAssetLibrary(){
     if(assetCategoryRow) assetCategoryRow.style.display = stylesTab ? 'none' : '';
     if(stylesTab){
         // 风格库视图：范围（个人/团队）照旧，库/分类下拉和拖入保存都跟风格无关，直接收起来
+        // 多选建风格是素材页签的操作，切到风格库要收掉多选条，免得残留在上面
+        exitAssetPickMode();
+        renderAssetPickBar();
         assetImageControls.style.display = 'block';
         assetDropZone.style.display = 'none';
         assetGrid.style.display = 'grid';
@@ -7164,7 +7236,7 @@ function renderAssetLibrary(){
     assetDropZone.style.display = (imageMode && !teamView) ? 'flex' : 'none';
     assetGrid.style.display = (imageMode || workflowMode) ? 'grid' : 'none';
     workflowEmpty.style.display = 'none';
-    if(!imageMode && !workflowMode){ refreshIcons(); return; }
+    if(!imageMode && !workflowMode){ exitAssetPickMode(); renderAssetPickBar(); refreshIcons(); return; }
     const baseCats = workflowMode ? workflowAssetCategories() : assetCategories('image');
     const smartClassCats = imageMode && !localMode ? assetSmartClassEntries().map(entry => ({
         ...entry,
@@ -7181,11 +7253,16 @@ function renderAssetLibrary(){
     assetCategorySelect.innerHTML = cats.map(cat => `<option value="${escapeHtml(cat.id)}" ${cat.id === (workflowMode ? activeWorkflowAssetCategoryId : activeAssetCategoryId) ? 'selected' : ''}>${escapeHtml(cat.name || (workflowMode ? '工作流' : tr('smart.assetFolder')))}</option>`).join('');
     const cat = workflowMode ? activeWorkflowAssetCategory() : activeAssetCategory();
     const smartClass = imageMode ? parseAssetSmartClassId(activeAssetCategoryId) : null;
+    // 多选建风格只在「个人 + 图片 + 具体分类」下有意义（团队只读、智能分类是虚拟列表）
+    const pickable = imageMode && !teamView && !smartClass;
+    if(!pickable) exitAssetPickMode();
+    if(assetPickModeBtn) assetPickModeBtn.disabled = !pickable;
+    renderAssetPickBar();
     const items = smartClass ? itemsForAssetSmartClass(activeAssetCategoryId) : (cat?.items || []);
     if(assetAddCategoryBtn) assetAddCategoryBtn.disabled = Boolean(smartClass) || teamView;
     if(assetRenameCategoryBtn) assetRenameCategoryBtn.disabled = !cat || Boolean(smartClass) || teamView || (localMode && (cat.id === '__root__' || !cat.id));
     assetGrid.innerHTML = items.length ? items.map(item => `
-        <div class="asset-item ${workflowMode ? 'workflow-asset-item' : ''}" draggable="${workflowMode ? 'false' : 'true'}" data-asset-id="${escapeHtml(item.id)}" data-url="${escapeHtml(item.url)}" data-name="${escapeHtml(item.name || 'asset')}" data-kind="${escapeHtml(assetMediaKind(item))}">
+        <div class="asset-item ${workflowMode ? 'workflow-asset-item' : ''}${assetPickMode ? ' pickable' : ''}${assetPickMode && assetPickIds.includes(item.id) ? ' picked' : ''}" draggable="${workflowMode || assetPickMode ? 'false' : 'true'}" data-asset-id="${escapeHtml(item.id)}" data-url="${escapeHtml(item.url)}" data-name="${escapeHtml(item.name || 'asset')}" data-kind="${escapeHtml(assetMediaKind(item))}">
             ${assetThumbHtml(item)}
             <div class="asset-meta">
                 <span class="asset-name" ${localMode ? `data-rename-local-asset="${escapeHtml(item.id)}"` : ''} title="${escapeHtml(item.name || '')}">${escapeHtml(item.name || 'asset')}</span>
@@ -25101,14 +25178,16 @@ shell.onmousedown = e => {
         updateSelectionBox(e);
         return;
     }
-    if(e.button === 0 && (e.ctrlKey || e.metaKey)){
+    /* 2026-11-03 老板：左键拖空白 = 框选（跟 Ctrl+拖、R+拖 一样），平移只留给鼠标中键。
+       原来左键是平移，手势跟别的画布工具反着来。 */
+    if(e.button === 0){
         e.preventDefault();
         didPan = false;
         selectionState = {startScreen:{x:e.clientX, y:e.clientY}, startWorld:screenToWorld(e)};
         updateSelectionBox(e);
         return;
     }
-    if(e.button !== 0 && e.button !== 1) return;
+    if(e.button !== 1) return;
     e.preventDefault();
     didPan = false;
     panState = {button:e.button, startX:e.clientX, startY:e.clientY, ox:viewport.x, oy:viewport.y};
@@ -25363,8 +25442,21 @@ window.onmousemove = e => {
             updateNodeElementDuringResize(node);
             return;
         }
-        node.w = Math.max(minW, Math.round(resizeState.startW + dx));
-        node.h = Math.max(minH, Math.round(resizeState.startH + dy));
+        let nextW = Math.max(minW, Math.round(resizeState.startW + dx));
+        let nextH = Math.max(minH, Math.round(resizeState.startH + dy));
+        // 2026-11-03 老板：图片节点拖角要按原比例缩放，别再任意拉。按住 Shift 才自由拉伸。
+        if(node.type === 'smart-image' && !e.shiftKey && resizeState.startW > 0 && resizeState.startH > 0){
+            const ratio = resizeState.startW / resizeState.startH;
+            if(Math.abs(nextW - resizeState.startW) >= Math.abs(nextH - resizeState.startH)){
+                nextH = Math.max(minH, Math.round(nextW / ratio));
+                nextW = Math.max(minW, Math.round(nextH * ratio));
+            } else {
+                nextW = Math.max(minW, Math.round(nextH * ratio));
+                nextH = Math.max(minH, Math.round(nextW / ratio));
+            }
+        }
+        node.w = nextW;
+        node.h = nextH;
         node.scale = 1;
         updateNodeElementDuringResize(node);
         return;
@@ -26355,6 +26447,25 @@ if(assetPanelTabs){
         renderAssetLibrary();
     });
 }
+if(assetPickModeBtn) assetPickModeBtn.onclick = () => {
+    assetPickMode = !assetPickMode;
+    assetPickIds = [];
+    renderAssetLibrary();
+};
+if(assetPickCancelBtn) assetPickCancelBtn.onclick = () => {
+    exitAssetPickMode();
+    renderAssetLibrary();
+};
+if(assetPickCreateBtn) assetPickCreateBtn.onclick = () => { createStyleFromPickedAssets(); };
+// 多选态下点卡片 = 勾选（抢占捕获阶段，避免触发拖拽/双击插入节点的老逻辑）
+if(assetGrid) assetGrid.addEventListener('pointerdown', event => {
+    if(!assetPickMode) return;
+    const card = event.target.closest('[data-asset-id]');
+    if(!card) return;
+    event.preventDefault();
+    event.stopPropagation();
+    toggleAssetPick(card.dataset.assetId);
+}, true);
 if(assetStyleNewBtn) assetStyleNewBtn.onclick = () => runCanvasStyleAction('new', '');
 if(assetStyleUploadInput) assetStyleUploadInput.onchange = event => {
     const files = [...(event.target.files || [])];
@@ -26376,6 +26487,82 @@ if(assetStyleNameInput) assetStyleNameInput.addEventListener('input', () => {
     canvasStyleComposer.name = assetStyleNameInput.value;
     if(assetStyleComposerCreate) assetStyleComposerCreate.disabled = !assetStyleNameInput.value.trim() || !canvasStyleComposer.files.length;
 });
+
+// ---------------------------------------------------------------------------
+// 采集插件安装引导（2026-11-03 老板：点击安装 → 装进浏览器并启用）
+//
+// 🚨 网页没有「直接装扩展」的能力：chrome.webstore.install 早已移除，非商店 .crx
+//    也被浏览器拦掉。唯一能自动化的只有「把插件包下载下来」，加载那一步必须用户
+//    自己点一次（开发者模式 → 加载解压缩的扩展）。所以这里做的是：一键下载 +
+//    三步图文 + 装好后自动识别「已安装」（content.js 往 html 打 dataset.icCaptureExt）。
+// ---------------------------------------------------------------------------
+function captureExtVersion(){
+    try{
+        return String(document.documentElement.dataset.icCaptureExt || '').trim();
+    }catch(_){ return ''; }
+}
+
+function renderExtInstallEntry(){
+    const version = captureExtVersion();
+    if(assetExtInstallText) assetExtInstallText.textContent = version ? `采集插件已安装 · v${version}` : '安装图片采集插件';
+    if(assetExtInstallBtn) assetExtInstallBtn.classList.toggle('installed', !!version);
+}
+
+async function openExtInstallDialog(){
+    if(!extInstallBackdrop) return;
+    renderExtInstallEntry();
+    extInstallBackdrop.hidden = false;
+    extInstallBackdrop.classList.add('open');
+    const version = captureExtVersion();
+    if(extInstallStatus){
+        extInstallStatus.textContent = version
+            ? `已检测到采集插件 v${version}，可以直接去网页右键或拖图采集了。`
+            : '还没检测到插件。按下面三步装好，回来刷新本页就会显示「已安装」。';
+        extInstallStatus.classList.toggle('ok', !!version);
+    }
+    if(extInstallDownload) extInstallDownload.href = `/api/extension/download?t=${Date.now()}`;
+    try{
+        const resp = await fetch('/api/extension/info', { credentials:'same-origin' });
+        if(resp.ok){
+            const info = await resp.json();
+            if(info && info.version && extInstallDownload){
+                extInstallDownload.setAttribute('download', `infinite-canvas-capture-${info.version}.zip`);
+            }
+            if(info && info.available === false && extInstallStatus){
+                extInstallStatus.textContent = '服务器上没找到 extension/ 目录，无法生成插件包。';
+                extInstallStatus.classList.remove('ok');
+            }
+        }
+    }catch(_){}
+}
+
+function closeExtInstallDialog(){
+    if(!extInstallBackdrop) return;
+    extInstallBackdrop.hidden = true;
+    extInstallBackdrop.classList.remove('open');
+}
+
+if(assetExtInstallBtn) assetExtInstallBtn.onclick = () => { openExtInstallDialog(); };
+if(extInstallClose) extInstallClose.onclick = closeExtInstallDialog;
+if(extInstallDone) extInstallDone.onclick = closeExtInstallDialog;
+if(extInstallBackdrop) extInstallBackdrop.addEventListener('click', event => {
+    if(event.target === extInstallBackdrop) closeExtInstallDialog();
+});
+if(extInstallCopy) extInstallCopy.onclick = async () => {
+    const text = 'edge://extensions';
+    try{
+        await navigator.clipboard.writeText(text);
+        toast('已复制 edge://extensions，粘贴到地址栏打开');
+    }catch(_){
+        toast('复制失败，请手动在地址栏输入 edge://extensions');
+    }
+};
+document.addEventListener('keydown', event => {
+    if(event.key === 'Escape' && extInstallBackdrop && !extInstallBackdrop.hidden) closeExtInstallDialog();
+});
+renderExtInstallEntry();
+// content script 是 document_idle 才注入的，可能晚于本脚本执行 —— 补一次延迟检测
+setTimeout(renderExtInstallEntry, 1500);
 if(assetStyleNameInput) assetStyleNameInput.addEventListener('keydown', event => {
     if(event.key !== 'Enter') return;
     event.preventDefault();
@@ -26902,6 +27089,62 @@ function ensureCurrentPrompt(msg){
     }
 }
 function agentStorageKey(){ return AGENT_STORAGE_PREFIX + (canvasId || 'default'); }
+/* ---------- 对话状态的「服务端镜像」（2026-11-03 老板：记录只存浏览器太脆） ----------
+   localStorage 按「站点 + 画布 id」分开存：换域名（127.0.0.1 ↔ localhost）、换浏览器、
+   清缓存，面板就显示「暂无对话」，而记录其实躺在另一个站点名下。
+   所以本地那份照旧即时读写（同步、不卡 UI），同时再往 data/users/<uid>/agent_states/<画布>.json
+   镜像一份，专门负责「换环境也能把历史捞回来」。
+   合并规则（宁可留旧不丢记录）：服务端那份的对话更新才采用它；本地有、服务端空 → 把本地推上去（老数据自动迁移）。 */
+let agentServerPushTimer = 0;
+function agentConvNewestTs(convs){
+    return (Array.isArray(convs) ? convs : []).reduce((m, c) => Math.max(m, Number(c && c.ts) || 0), 0);
+}
+function agentPushServerState(){
+    if(!canvasId) return;
+    clearTimeout(agentServerPushTimer);
+    agentServerPushTimer = setTimeout(() => {
+        try {
+            // 🚨 本地一条对话都没有时绝不上推：新浏览器 / 清过缓存 / 还没拉完服务端那份，
+            //    这时候推上去等于用空状态盖掉服务端的历史记录（老板要求「记录不能丢」）。
+            if(!(Array.isArray(agentState.conversations) && agentState.conversations.length)) return;
+            const body = JSON.stringify({state: {...agentState, messages:(agentState.messages || []).slice(-AGENT_MSG_MAX)}});
+            fetch(`/api/agent/state/${encodeURIComponent(canvasId)}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body,
+                keepalive: true,   // 关标签页时也尽量把最后一份送出去
+            }).catch(() => {});
+        } catch(e) { /* 送不上去就拉倒，本地那份还在 */ }
+    }, 1200);
+}
+async function agentPullServerState(){
+    if(!canvasId || !agentState) return;
+    let server = null;
+    try {
+        const res = await fetch(`/api/agent/state/${encodeURIComponent(canvasId)}`);
+        if(!res.ok) return;
+        server = (await res.json()).state || null;
+    } catch(e) { return; }
+    if(!server || typeof server !== 'object'){ agentPushServerState(); return; }
+    const localConvs = Array.isArray(agentState.conversations) ? agentState.conversations : [];
+    const serverConvs = Array.isArray(server.conversations) ? server.conversations : [];
+    if(!serverConvs.length){ if(localConvs.length) agentPushServerState(); return; }
+    if(localConvs.length && agentConvNewestTs(localConvs) >= agentConvNewestTs(serverConvs)){
+        agentPushServerState();
+        return;
+    }
+    // 服务端更新（或本地压根没有）→ 采用服务端这份对话，并写回本地
+    agentState.conversations = serverConvs;
+    agentState.activeConversationId = serverConvs.some(c => c.id === server.activeConversationId)
+        ? server.activeConversationId
+        : serverConvs[0].id;
+    const conv = agentState.conversations.find(c => c.id === agentState.activeConversationId);
+    agentState.messages = conv ? (conv.messages || []).slice(-AGENT_MSG_MAX) : [];
+    renderAgentMessages();
+    renderAgentChatList();
+    saveAgentState();
+    toast('已从服务端恢复这张画布的对话记录');
+}
 // 生图 provider 列表：与主画布的 imageProviders() 不同，这里不排除 modelscope/volcengine，
 // 因为后端 /api/canvas-image-tasks 统一支持它们（主画布排除它们仅因专用引擎 UI）。
 function agentGenProviders(){
@@ -27001,6 +27244,8 @@ function loadAgentState(){
     });
     // 恢复中断的操作
     _setupAgentRecovery();
+    // 本地读完了，再看服务端那份（换过浏览器/域名时靠它捞回历史）
+    agentPullServerState();
 }
 // 恢复中断的 Agent 操作（页面刷新后调用）
 let _agentRecoveryInProgress = false;
@@ -27144,6 +27389,9 @@ function saveAgentState(){
                 localStorage.setItem(AGENT_SKILLS_GLOBAL_KEY, JSON.stringify(agentState.skills || []));
             } catch(e) { /* 忽略 */ }
         } catch(e) { /* localStorage 写满时静默忽略 */ }
+        // 再镜像一份到服务端：换浏览器 / 换域名（127.0.0.1 ↔ localhost）也找得回来。
+        // 放在 try 外面 —— 本地写满时服务端这份反而更重要。
+        agentPushServerState();
     }, 200);
 }
 /* ---------- 手动清空 / 压缩上下文（第 8 条） ----------
@@ -30011,15 +30259,27 @@ function startAgentChatRename(itemEl, chatId){
 }
 function agentCopyMessage(text){
     if(!text) return;
-    navigator.clipboard?.writeText(text).then(() => toast('已复制')).catch(() => {
+    /* 2026-11-03：以前先走 navigator.clipboard，失败才在 catch 里 execCommand —— 那时已经脱离用户手势，
+       注定失败却照样 toast「已复制」（老板反馈「点了复制但没复制成功」）。
+       现在反过来：先用同步 execCommand 兜底（点击当下同步执行，最可靠），不行再试 clipboard。 */
+    let ok = false;
+    try{
         const ta = document.createElement('textarea');
         ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
         document.body.appendChild(ta);
         ta.select();
-        document.execCommand('copy');
+        ta.setSelectionRange(0, text.length);
+        ok = document.execCommand('copy');
         document.body.removeChild(ta);
-        toast('已复制');
-    });
+    }catch(e){ ok = false; }
+    if(ok){ toast('已复制'); return; }
+    if(navigator.clipboard?.writeText){
+        navigator.clipboard.writeText(text).then(() => toast('已复制')).catch(() => toast('复制失败，请手动选中文本'));
+        return;
+    }
+    toast('当前环境不支持自动复制');
 }
 /* ── 重编辑历史消息（2026-10-20 老板要求）────────────────────────────────────
    两种语义，正好对应老板说的两个词：
@@ -30050,14 +30310,41 @@ function agentEntriesAfterEdit(msg, text){
         nodeRefs:(Array.isArray(msg?.nodeRefs) ? msg.nodeRefs : []).filter(e => keep('ref', e))
     };
 }
+/* 2026-11-03 老板：编辑要能附带新附件（原来内嵌编辑框只能改文字）。
+   做法 = 「回退 + 填回输入栏」：截断这条及其之后的对话，把它自己的附件/引用恢复成当前附件，
+   正文回填输入框 —— 用户改完直接发送，走的是正常链路，附件、引用、新增上传全都在。
+   🚨 顺序同 agentResendMessage：先写正文（去掉 [图:x] token）、再 renderAgentAttachments()
+      把胶囊按 agentState 补回输入框；反了会看到 token 又冒出来。 */
 function agentBeginEditMessage(id){
-    if(agentSending) return;
-    agentEditingMsgId = String(id || '');
+    if(agentSending || !agentState) return;
+    const msgs = agentState.messages || [];
+    const idx = msgs.findIndex(m => String(m.id) === String(id || ''));
+    if(idx < 0) return;
+    const msg = msgs[idx];
+    const dropped = msgs.length - idx;
+    agentState.messages = msgs.slice(0, idx);
+    agentState.attachments = (msg.images || []).slice();
+    agentState.documents = (Array.isArray(msg.documents) ? msg.documents : []).slice();
+    agentState.nodeRefs = (Array.isArray(msg.nodeRefs) ? msg.nodeRefs : []).slice();
+    agentEditingMsgId = '';
+    if(agentInput){
+        agentInput.value = String(msg.text || '').replace(new RegExp(AGENT_MSG_TOKEN_RE.source, 'g'), ' ')
+            .replace(/[ \t]{2,}/g, ' ').trim();
+    }
+    renderAgentAttachments();
     renderAgentMessages();
-    requestAnimationFrame(() => {
-        const ta = agentMessages?.querySelector('.agent-msg-edit-area');
-        if(ta){ ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
-    });
+    saveAgentState();
+    if(agentInput){
+        agentInput.focus();
+        const r = document.createRange();
+        r.selectNodeContents(agentInput);
+        r.collapse(false);
+        const sel = window.getSelection?.();
+        sel?.removeAllRanges();
+        sel?.addRange(r);
+    }
+    if(!agentOpen) toggleAgentPanel(true);
+    toast(dropped > 1 ? `已回到这条消息（后面 ${dropped - 1} 条已回退），改完直接发送` : '已回到这条消息，改完直接发送');
 }
 function agentCancelEditMessage(){
     agentEditingMsgId = '';

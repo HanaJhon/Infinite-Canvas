@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>采集到无限画布素材库</title>
+  <link rel="stylesheet" href="ui.css">
+  <script src="theme.js"></script>
+</head>
+<body class="page-capture">
+  <header class="bar">
+    <div class="bar-title">采集到素材库</div>
+    <div class="bar-user" id="userLabel">未登录</div>
+  </header>
+
+  <main>
+    <section class="panel" id="loginPanel" hidden>
+      <p class="hint">需要先登录无限画布账号才能采集。</p>
+      <input id="loginName" placeholder="用户名" autocomplete="username">
+      <input id="loginPassword" type="password" placeholder="密码" autocomplete="current-password">
+      <button id="loginBtn" class="btn primary">登录</button>
+      <p class="msg" id="loginMsg"></p>
+    </section>
+
+    <section class="panel" id="mainPanel">
+      <div class="row">
+        <input id="urlInput" placeholder="粘贴图片地址（http/https）">
+        <button id="addUrlBtn" class="btn">添加</button>
+      </div>
+
+      <div class="row">
+        <button id="scanBtn" class="btn tiny">扫描当前网页图片</button>
+        <span class="hint">或从网页把图片拖到页面中间投放区 / 右键图片采集</span>
+      </div>
+
+      <div class="list-head">
+        <span>待采集 <b id="countLabel">0</b> 张</span>
+        <button id="clearBtn" class="btn tiny">清空</button>
+      </div>
+      <div id="thumbList" class="thumbs"></div>
+
+      <div class="row">
+        <label for="librarySelect">素材库</label>
+        <select id="librarySelect"></select>
+      </div>
+
+      <div class="row">
+        <label for="categorySelect">分类</label>
+        <select id="categorySelect"></select>
+        <button id="newCatBtn" class="btn tiny">新建分类</button>
+      </div>
+
+      <div class="row" id="newCatRow" hidden>
+        <input id="newCatName" placeholder="新分类名称">
+        <button id="createCatBtn" class="btn">创建</button>
+      </div>
+
+      <button id="confirmBtn" class="btn primary block">确认采集</button>
+      <p class="msg" id="statusMsg"></p>
+    </section>
+  </main>
+
+  <script src="common.js"></script>
+  <script src="capture.js"></script>
+</body>
+</html>

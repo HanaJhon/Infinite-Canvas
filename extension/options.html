@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>无限画布素材采集 - 设置</title>
+  <link rel="stylesheet" href="ui.css">
+  <script src="theme.js"></script>
+</head>
+<body class="page-options">
+  <header class="bar">
+    <div class="bar-title">采集扩展设置</div>
+    <div class="bar-user">无限画布</div>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>服务地址</h2>
+      <input id="baseUrl" placeholder="http://127.0.0.1:3000" autocomplete="off">
+      <div class="row">
+        <button id="autoBtn" class="btn primary">自动检测地址</button>
+        <button id="saveBaseBtn" class="btn">保存地址</button>
+        <button id="testBtn" class="btn">检测连接</button>
+      </div>
+      <p class="msg" id="baseMsg"></p>
+      <p class="hint">在浏览器里打开一次无限画布，扩展会自动记住它的地址；换了端口就再点一次「自动检测地址」。</p>
+    </section>
+
+    <section class="card">
+      <h2>账号登录</h2>
+      <p class="msg" id="userMsg">检查登录状态…</p>
+      <div id="loginForm">
+        <input id="loginName" placeholder="用户名" autocomplete="username">
+        <input id="loginPassword" type="password" placeholder="密码" autocomplete="current-password" style="margin-top:8px">
+        <button id="loginBtn" class="btn primary" style="margin-top:8px">登录</button>
+        <p class="msg" id="loginMsg"></p>
+      </div>
+      <button id="logoutBtn" class="btn" hidden>退出登录</button>
+      <p class="hint">登录后令牌保存在本机扩展里，只在采集请求时作为 X-IC-Session 头发给上面的服务地址。</p>
+    </section>
+  </main>
+
+  <script src="common.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

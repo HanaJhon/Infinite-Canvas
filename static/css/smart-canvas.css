@@ -16,7 +16,7 @@
 body { margin:0; height:100vh; overflow:hidden; color:var(--text); font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--page); }
 button,input,select,textarea { font:inherit; }
 button { border:0; cursor:pointer; }
-.shell { position:relative; width:100vw; height:100vh; overflow:hidden; background-color:var(--page); background-image:radial-gradient(var(--grid) 1px, transparent 1px), var(--page-grad); background-size:24px 24px, 100% 100%; background-repeat:repeat, no-repeat; cursor:grab; }
+.shell { position:relative; width:100vw; height:100vh; overflow:hidden; background-color:var(--page); background-image:radial-gradient(var(--grid) 1px, transparent 1px), var(--page-grad); background-size:24px 24px, 100% 100%; background-repeat:repeat, no-repeat; cursor:default; }
 html[data-studio-scale="off"].studio-scale-managed .smart-back,
 html[data-studio-scale="off"].studio-scale-managed .smart-title,
 html[data-studio-scale="off"].studio-scale-managed .smart-log-toggle,
@@ -1520,6 +1520,14 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .asset-panel-tab.active { background:var(--strong); color:var(--strong-text); }
 .asset-style-bar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
 .asset-style-hint { flex:1; min-width:0; color:var(--muted); font-size:10.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* 素材多选建风格（2026-11-03）：底部选数字条 + 卡片勾选态 */
+.asset-pick-bar { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:10px; border:1px solid color-mix(in srgb, var(--strong) 40%, var(--line)); background:color-mix(in srgb, var(--strong) 8%, var(--card)); }
+.asset-pick-hint { flex:1; min-width:0; color:var(--text); font-size:10.5px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.asset-pick-create { height:26px; padding:0 10px; border:0; border-radius:8px; background:var(--strong); color:var(--strong-text); font-size:11px; font-weight:650; white-space:nowrap; cursor:pointer; }
+.asset-pick-create:disabled { opacity:.5; cursor:default; }
+.asset-item.pickable { cursor:pointer; }
+.asset-item.picked { position:relative; outline:2px solid var(--strong); outline-offset:-2px; }
+.asset-item.picked::after { content:"✓"; position:absolute; top:4px; right:4px; width:16px; height:16px; border-radius:50%; background:var(--strong); color:var(--strong-text); font-size:10px; font-weight:700; line-height:16px; text-align:center; }
 /* 新建风格：命名 + 选图 + 创建挤在同一块面板里，不再先弹对话框再弹系统选图框 */
 .style-composer { flex:1 1 100%; display:flex; flex-direction:column; gap:6px; padding:8px; border-radius:10px; border:1px dashed var(--line); background:var(--soft); }
 .style-composer[hidden] { display:none; }
@@ -2885,3 +2893,46 @@ a.smart3d-run { text-decoration:none; cursor:pointer; }
 .composer-style-name { display:flex; flex-direction:column; gap:1px; font-size:11px; font-weight:650; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .composer-style-name em { font-style:normal; font-size:9.5px; font-weight:600; color:var(--muted); }
 .composer-style-hint { padding:12px 8px; text-align:center; color:var(--muted); font-size:11px; line-height:1.5; }
+
+/* 采集插件安装入口（资产库底部，2026-11-03） */
+.asset-ext-install {
+    display:flex; align-items:center; justify-content:center; gap:6px;
+    margin:8px 10px 10px; padding:7px 10px;
+    border:1px dashed var(--line); border-radius:10px;
+    background:var(--card); color:var(--muted);
+    font-size:11.5px; font-weight:650; cursor:pointer;
+    transition:border-color .15s ease, color .15s ease;
+}
+.asset-ext-install:hover { border-color:var(--strong); color:var(--text); }
+.asset-ext-install svg { width:14px; height:14px; }
+.asset-ext-install.installed { border-style:solid; border-color:var(--strong); color:var(--strong); }
+.ext-install-backdrop {
+    position:fixed; inset:0; z-index:10050;
+    display:flex; align-items:center; justify-content:center;
+    background:rgba(8,10,16,.55);
+}
+.ext-install-backdrop[hidden] { display:none; }
+.ext-install-card {
+    width:min(430px, calc(100vw - 32px)); max-height:min(80vh, 580px); overflow:auto;
+    padding:16px; border-radius:14px;
+    background:var(--card); border:1px solid var(--line);
+    box-shadow:0 24px 60px var(--shadow);
+}
+.ext-install-head { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:14px; font-weight:700; color:var(--text); margin-bottom:8px; }
+.ext-install-status { margin:0 0 10px; font-size:11.5px; color:var(--muted); }
+.ext-install-status.ok { color:var(--strong); font-weight:650; }
+.ext-install-steps { margin:0 0 12px; padding-left:18px; display:flex; flex-direction:column; gap:7px; font-size:12px; line-height:1.55; color:var(--text); }
+.ext-install-steps code { padding:1px 5px; border-radius:5px; background:var(--soft); border:1px solid var(--line); font-size:11px; }
+.ext-install-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+.ext-install-primary {
+    height:30px; padding:0 14px; border-radius:8px;
+    background:var(--strong); color:var(--strong-text);
+    font-size:12px; font-weight:700; display:inline-flex; align-items:center; text-decoration:none;
+}
+.ext-install-ghost {
+    height:30px; padding:0 10px; border-radius:8px;
+    border:1px solid var(--line); background:var(--card); color:var(--muted);
+    font-size:11.5px; font-weight:650; cursor:pointer;
+}
+.ext-install-ghost:hover { color:var(--text); border-color:var(--strong); }
+.ext-install-note { margin:0; font-size:10.5px; line-height:1.5; color:var(--muted); }

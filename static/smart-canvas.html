@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="/static/images/logo.png?v=1.2.9" type="image/png">
+    <link rel="icon" href="/static/images/logo.png?v=1.3.0" type="image/png">
     <title data-i18n="smart.title">智能画布</title>
     <script>
         (function(){
@@ -16,15 +16,15 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/lucide.js?v=1.2.9.1767196800"></script>
-    <script src="/static/vendor/js/photopea.min.js?v=1.2.9.1767196800"></script>
-    <script src="/static/js/theme.js?v=1.2.9.1767196800"></script>
-    <script src="/static/js/touch-mouse.js?v=1.2.9.1767196800"></script>
-    <script src="/static/js/i18n.js?v=1.2.9.1792550183"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=1.2.9.1793624998">
+    <script src="/static/vendor/js/lucide.js?v=1.3.0.1767196800"></script>
+    <script src="/static/vendor/js/photopea.min.js?v=1.3.0.1767196800"></script>
+    <script src="/static/js/theme.js?v=1.3.0.1793681298"></script>
+    <script src="/static/js/touch-mouse.js?v=1.3.0.1767196800"></script>
+    <script src="/static/js/i18n.js?v=1.3.0.1792550183"></script>
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=1.3.0.1793681999">
     <!-- Skill 市场：浮层样式与逻辑都在共享模块里（gpt-chat 页用同一份），见 static/js/skill-market.js -->
-    <link rel="stylesheet" href="/static/css/skill-market.css?v=1.2.9.1767196800">
-    <link rel="stylesheet" href="/static/css/split-layers.css?v=1.2.9.1792329089">
+    <link rel="stylesheet" href="/static/css/skill-market.css?v=1.3.0.1767196800">
+    <link rel="stylesheet" href="/static/css/split-layers.css?v=1.3.0.1792329089">
 </head>
 <body>
     <div id="shell" class="shell">
@@ -266,9 +266,15 @@
                     <select id="assetCategorySelect" class="asset-category-select"></select>
                     <button id="assetAddCategoryBtn" class="asset-mini-btn" type="button" title="新建文件夹" data-i18n-title="smart.assetNewFolder"><i data-lucide="folder-plus"></i></button>
                     <button id="assetRenameCategoryBtn" class="asset-mini-btn" type="button" title="重命名文件夹" data-i18n-title="smart.assetRenameFolder"><i data-lucide="pencil"></i></button>
+                    <button id="assetPickModeBtn" class="asset-mini-btn" type="button" title="多选图片建风格"><i data-lucide="palette"></i></button>
                 </div>
             </div>
             <div id="assetDropZone" class="asset-drop-zone" data-i18n="smart.assetDropHint">把画布图片拖到这里保存到当前文件夹</div>
+            <div id="assetPickBar" class="asset-pick-bar" style="display:none">
+                <span id="assetPickHint" class="asset-pick-hint"></span>
+                <button id="assetPickCancelBtn" class="asset-mini-btn" type="button" title="取消多选"><i data-lucide="x"></i></button>
+                <button id="assetPickCreateBtn" class="asset-pick-create" type="button">创建风格</button>
+            </div>
             <div id="assetStyleBar" class="asset-style-bar" style="display:none">
                 <span id="assetStyleHint" class="asset-style-hint"></span>
                 <button id="assetStyleNewBtn" class="asset-mini-btn" type="button" title="新建风格类型"><i data-lucide="plus"></i></button>
@@ -291,7 +297,33 @@
             <div id="assetGrid" class="asset-grid"></div>
             <div id="workflowEmpty" class="workflow-empty" style="display:none" data-i18n="smart.assetWorkflowEmpty">工作流资产先预留在这里，后续接入。</div>
             <input id="assetStyleUploadInput" type="file" accept="image/*" multiple hidden>
+            <!-- 2026-11-03 老板：把「安装图片采集插件」放进资产库页面 -->
+            <button id="assetExtInstallBtn" class="asset-ext-install" type="button">
+                <i data-lucide="puzzle"></i>
+                <span id="assetExtInstallText">安装图片采集插件</span>
+            </button>
         </aside>
+        <div id="extInstallBackdrop" class="ext-install-backdrop" hidden>
+            <div class="ext-install-card" role="dialog" aria-modal="true" aria-labelledby="extInstallTitle">
+                <div class="ext-install-head">
+                    <span id="extInstallTitle">安装图片采集插件</span>
+                    <button id="extInstallClose" class="asset-mini-btn" type="button" title="关闭"><i data-lucide="x"></i></button>
+                </div>
+                <p id="extInstallStatus" class="ext-install-status"></p>
+                <ol class="ext-install-steps">
+                    <li>点「下载插件包」，解压到任意文件夹（比如桌面）。</li>
+                    <li>地址栏打开 <code>edge://extensions</code>（Chrome 用 <code>chrome://extensions</code>），打开右上角「开发人员模式」。</li>
+                    <li>点「加载解压缩的扩展」，选中解压出来的 <code>infinite-canvas-capture</code> 文件夹。</li>
+                    <li>回到本页刷新，这里会显示「已安装」。</li>
+                </ol>
+                <div class="ext-install-actions">
+                    <a id="extInstallDownload" class="ext-install-primary" href="/api/extension/download" download>下载插件包</a>
+                    <button id="extInstallCopy" class="ext-install-ghost" type="button">复制 edge://extensions</button>
+                    <button id="extInstallDone" class="ext-install-ghost" type="button">完成</button>
+                </div>
+                <p class="ext-install-note">浏览器不允许网页直接安装扩展（安全策略），所以需要手动加载这一次；装好后采集全程自动。</p>
+            </div>
+        </div>
         <aside id="agentPanel" class="agent-panel">
             <!-- 🚨 顶部「拖动调高」条已移除（2026-10-21 老板：拖动对话记录顶部的展开条会把对话框往下推）。
                  调高度改由面板四角的缩放手柄负责，不需要两条入口。 -->
@@ -974,7 +1006,7 @@
         </div>
     </div>
 
-    <script src="/static/js/skill-market.js?v=1.2.9.1767196800"></script>
-    <script src="/static/js/smart-canvas.js?v=1.2.9.1793626495"></script>
+    <script src="/static/js/skill-market.js?v=1.3.0.1767196800"></script>
+    <script src="/static/js/smart-canvas.js?v=1.3.0.1793692588"></script>
 </body>
 </html>

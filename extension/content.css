@@ -1,0 +1,62 @@
+/* 页面内投放区样式：只在拖拽期间显示，用 !important 压住页面自身样式。
+   位置是**页面正中**（老板要求「在画面中间」），不是右下角。 */
+#ic-capture-dropzone {
+  position: fixed !important;
+  left: 50% !important;
+  top: 50% !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: 320px !important;
+  height: 180px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+  display: none !important;
+  align-items: center !important;
+  justify-content: center !important;
+  z-index: 2147483647 !important;
+  border: 2px dashed rgba(120, 160, 255, 0.9) !important;
+  border-radius: 14px !important;
+  background: rgba(20, 24, 36, 0.9) !important;
+  color: #e8ecff !important;
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif !important;
+  text-align: center !important;
+  pointer-events: auto !important;
+  transform: translate(-50%, -50%) !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35) !important;
+}
+
+#ic-capture-dropzone.ic-visible {
+  display: flex !important;
+}
+
+#ic-capture-dropzone.ic-active {
+  border-color: #6ea8ff !important;
+  background: rgba(40, 70, 140, 0.95) !important;
+  transform: translate(-50%, -50%) scale(1.02) !important;
+}
+
+#ic-capture-dropzone .ic-zone-inner {
+  display: block !important;
+  padding: 8px !important;
+  line-height: 1.5 !important;
+}
+
+#ic-capture-dropzone .ic-zone-icon {
+  font-size: 26px !important;
+  line-height: 1 !important;
+  color: #8fb4ff !important;
+  margin-bottom: 6px !important;
+}
+
+#ic-capture-dropzone .ic-zone-title {
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  color: #e8ecff !important;
+}
+
+#ic-capture-dropzone .ic-zone-sub {
+  font-size: 12px !important;
+  color: #9aa7c7 !important;
+  margin-top: 4px !important;
+}

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>示例图片网站</title>
+<link rel="stylesheet" href="/content.css">
+<script src="/__store/stub.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #ffffff; }
+  body { font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; color: #1b2436; }
+  .site { display: flex; flex-direction: column; height: 100%; }
+  .site-bar { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid #e8ecf4; font-size: 13px; color: #5d6a83; }
+  .site-bar b { font-size: 15px; color: #182238; margin-right: 10px; }
+  .site-bar .nav { display: flex; gap: 16px; }
+  .site-bar .pill { margin-left: auto; padding: 6px 12px; border-radius: 999px; background: #eef3fd; color: #3157f0; font-weight: 700; }
+  .grid { padding: 16px 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; }
+  .tile { border-radius: 12px; overflow: hidden; background: #f3f6fc; border: 1px solid #e9eef7; }
+  .tile img { display: block; width: 100%; height: 96px; object-fit: cover; }
+  .tile span { display: block; padding: 7px 9px; font-size: 11.5px; color: #6a7690; }
+  .hint { margin: 0; padding: 0 18px 14px; font-size: 12px; color: #97a1b8; }
+</style>
+</head>
+<body>
+<div class="site">
+  <div class="site-bar">
+    <b>灵感图库</b>
+    <div class="nav"><span>首页</span><span>人像</span><span>场景</span><span>配色</span></div>
+    <span class="pill">登录</span>
+  </div>
+  <div class="grid">
+    <div class="tile"><img src="/__store/薄荷人像.png" alt=""><span>薄荷色人像</span></div>
+    <div class="tile"><img src="/__store/暖调街景.png" alt=""><span>暖调街景</span></div>
+    <div class="tile"><img src="/__store/冷调静物.png" alt=""><span>冷调静物</span></div>
+    <div class="tile"><img src="/__store/薄荷人像.png" alt=""><span>柔光特写</span></div>
+    <div class="tile"><img src="/__store/暖调街景.png" alt=""><span>黄昏剪影</span></div>
+    <div class="tile"><img src="/__store/冷调静物.png" alt=""><span>灰调产品</span></div>
+    <div class="tile"><img src="/__store/薄荷人像.png" alt=""><span>清透港风</span></div>
+    <div class="tile"><img src="/__store/暖调街景.png" alt=""><span>胶片颗粒</span></div>
+  </div>
+  <p class="hint">把任意图片拖到页面中间，或右键选择「采集到无限画布素材库」。</p>
+</div>
+<script src="/content.js"></script>
+</body>
+</html>

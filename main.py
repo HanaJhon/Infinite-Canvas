@@ -33,7 +33,7 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 from PIL import Image, ImageOps, ImageFilter, ImageDraw, ImageChops
 from io import BytesIO
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Header, Request
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Header, Request, Body
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse, RedirectResponse, HTMLResponse
@@ -183,7 +183,7 @@ async def no_cache_html_middleware(request: Request, call_next):
 
     # ① 管理员专属页面先拦（与是否免鉴权无关）
     if _is_admin_only(path):
-        _u = _auth_store.session_user(request.cookies.get(_auth.SESSION_COOKIE, ""))
+        _u = _auth_store.session_user(_session_token(request))
         if not _u:
             if path.startswith("/api/"):
                 return JSONResponse({"detail": "未登录", "need_login": True}, status_code=401)
@@ -199,7 +199,7 @@ async def no_cache_html_middleware(request: Request, call_next):
 
     # ①' 站点级写接口：成员一律 403（2026-10-28）
     if _is_admin_only_write(request.method, path):
-        _wu = _auth_store.session_user(request.cookies.get(_auth.SESSION_COOKIE, ""))
+        _wu = _auth_store.session_user(_session_token(request))
         if not _wu:
             return JSONResponse({"detail": "未登录", "need_login": True}, status_code=401)
         if _wu.get("role") != "admin":
@@ -209,7 +209,7 @@ async def no_cache_html_middleware(request: Request, call_next):
             )
 
     if _auth_required(path):
-        token = request.cookies.get(_auth.SESSION_COOKIE, "")
+        token = _session_token(request)
         user = _auth_store.session_user(token)
         if not user:
             if path.startswith("/api/"):
@@ -1819,8 +1819,14 @@ def _set_session_cookie(response, token: str) -> None:
     )
 
 
+def _session_token(request: Request) -> str:
+    """会话令牌：浏览器走 cookie；浏览器扩展/脚本跨站带不上 Lax cookie，改走 X-IC-Session 头。"""
+    return (request.cookies.get(_auth.SESSION_COOKIE, "")
+            or request.headers.get("x-ic-session", "").strip())
+
+
 def _current_user_or_401(request: Request):
-    token = request.cookies.get(_auth.SESSION_COOKIE, "")
+    token = _session_token(request)
     user = _auth_store.session_user(token)
     if not user:
         raise HTTPException(status_code=401, detail="未登录")
@@ -1831,7 +1837,7 @@ def _current_user_or_401(request: Request):
 async def auth_status(request: Request):
     """登录页用：判断是「首次初始化」还是「正常登录」。"""
     has_users = _auth_store.has_any_user()
-    token = request.cookies.get(_auth.SESSION_COOKIE, "")
+    token = _session_token(request)
     user = _auth_store.session_user(token)
     return {
         "has_users": has_users,
@@ -1865,6 +1871,8 @@ async def auth_register(payload: dict):
         "user": _auth_user_payload(user),
         "first_user": first,
         "migrated": migrated,
+        # 浏览器扩展跨站带不上 Lax cookie，登录响应里把令牌直接给出来（走 X-IC-Session 头）
+        "token": token,
     })
     _set_session_cookie(response, token)
     return response
@@ -1878,14 +1886,14 @@ async def auth_login(payload: dict):
     if not user or not _auth.verify_password(password, user.get("pw", "")):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     token = _auth_store.create_session(user["id"])
-    response = JSONResponse({"ok": True, "user": _auth_user_payload(user)})
+    response = JSONResponse({"ok": True, "user": _auth_user_payload(user), "token": token})
     _set_session_cookie(response, token)
     return response
 
 
 @app.post("/api/auth/logout")
 async def auth_logout(request: Request):
-    token = request.cookies.get(_auth.SESSION_COOKIE, "")
+    token = _session_token(request)
     _auth_store.drop_session(token)
     response = JSONResponse({"ok": True})
     response.delete_cookie(_auth.SESSION_COOKIE, path="/")
@@ -2691,6 +2699,61 @@ def _root_fingerprint() -> str:
             return hashlib.sha1(os.path.normcase(BASE_DIR).encode("utf-8", "replace")).hexdigest()[:16]
         except Exception:
             return ""
+
+
+# ---------------------------------------------------------------------------
+# 浏览器图片采集插件（extension/）—— 2026-11-03
+#
+# 老板要「点一下就自动装进浏览器并启用」。浏览器不给网页这个权限
+# （chrome.webstore.install 早已移除，非商店 .crx 也会被拦），所以这里只能做
+# 「下载插件包 + 引导手动加载一次」。下载的 zip 解压后就是可「加载解压缩的扩展」
+# 的目录；装完扩展会往页面 html 打 dataset.icCaptureExt 标记，画布页据此显示「已安装」。
+# ---------------------------------------------------------------------------
+EXTENSION_DIR = os.path.join(BASE_DIR, "extension")
+
+
+def _extension_version() -> str:
+    try:
+        with open(os.path.join(EXTENSION_DIR, "manifest.json"), "r", encoding="utf-8") as fp:
+            return str(json.load(fp).get("version") or "1.0.0")
+    except Exception:
+        return "1.0.0"
+
+
+@app.get("/api/extension/info")
+def extension_info():
+    return {
+        "available": os.path.isdir(EXTENSION_DIR),
+        "version": _extension_version(),
+        "download_url": "/api/extension/download",
+    }
+
+
+@app.get("/api/extension/download")
+def extension_download():
+    if not os.path.isdir(EXTENSION_DIR):
+        raise HTTPException(status_code=404, detail="插件目录不存在")
+    version = _extension_version()
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(EXTENSION_DIR):
+            dirs[:] = sorted(d for d in dirs if not d.startswith("__") and d != "node_modules")
+            for name in sorted(files):
+                if name.startswith("__"):
+                    continue
+                full = os.path.join(root, name)
+                rel = os.path.relpath(full, EXTENSION_DIR).replace("\\", "/")
+                zf.write(full, f"infinite-canvas-capture/{rel}")
+    data = buf.getvalue()
+    filename = f"infinite-canvas-capture-{version}.zip"
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(data)),
+        },
+    )
 
 
 @app.get("/api/app-info")
@@ -7031,6 +7094,11 @@ def save_agent_tools_settings(enabled=None, max_rounds=None):
 # ⚠️ 旧的 6 个 key（nickname/occupation/industry/platform/category/audience）**必须保留**，
 #    老板已经填过，改 key 等于清空他的资料。toolset 已废弃，老数据里的值下次保存会被丢掉。
 AGENT_PROFILE_FILE = UserScopedPath("agent_profile.json")
+# 智能画布 Agent 对话的**服务端镜像**（2026-11-03 老板：记录只存浏览器太脆）。
+# 前端 localStorage 仍是即时读写的那一份，这里只负责「换浏览器 / 换域名 / 清缓存也能捞回来」。
+AGENT_STATE_DIR = UserScopedPath("agent_states")
+#: 单张画布对话状态上限 —— 纯文本 + 引用 url，正常几十 KB，8MB 只当防滥用闸门。
+AGENT_STATE_MAX_BYTES = 8 * 1024 * 1024
 AGENT_PROFILE_GROUPS = (
     ("基础信息", (
         ("nickname", "称呼"),
@@ -7060,6 +7128,14 @@ AGENT_PROFILE_FIELDS = tuple(
     field for _, fields in AGENT_PROFILE_GROUPS for field in fields
 )
 AGENT_PROFILE_VALUE_MAX = 200
+
+
+def _agent_state_path(canvas_id: str) -> str:
+    """画布 id → 服务端镜像文件路径。消毒后只允许落在 agent_states/ 直接子文件。"""
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]", "", str(canvas_id or ""))[:64]
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="无效的画布 ID")
+    return os.path.join(AGENT_STATE_DIR, f"{cleaned}.json")
 
 
 def load_agent_profile():
@@ -18408,6 +18484,38 @@ async def agent_tools_set(payload: AgentToolsRequest):
     data["saved"] = True
     return data
 
+@app.get("/api/agent/state/{canvas_id}")
+async def agent_state_get(canvas_id: str):
+    """读某张画布的 Agent 对话状态（服务端镜像）。没有就返回 state=null，交给前端把本地那份推上来。"""
+    path = _agent_state_path(canvas_id)
+    if not os.path.exists(path):
+        return {"state": None}
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            raw = json.load(f)
+    except Exception:
+        return {"state": None}
+    return {"state": raw if isinstance(raw, dict) else None}
+
+
+@app.put("/api/agent/state/{canvas_id}")
+async def agent_state_put(canvas_id: str, payload: dict = Body(...)):
+    """整份覆盖写入某张画布的 Agent 对话状态。先写临时文件再 os.replace，避免读到写了一半的 JSON。"""
+    state = (payload or {}).get("state") if isinstance(payload, dict) else None
+    if not isinstance(state, dict):
+        raise HTTPException(status_code=400, detail="state 需要是对象")
+    body = json.dumps(state, ensure_ascii=False)
+    if len(body.encode("utf-8")) > AGENT_STATE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail=f"对话状态超过 {AGENT_STATE_MAX_BYTES // (1024 * 1024)}MB，无法保存")
+    path = _agent_state_path(canvas_id)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(body)
+    os.replace(tmp, path)
+    return {"saved": True, "updated_at": now_ms()}
+
+
 @app.get("/api/agent/profile")
 async def agent_profile_get():
     """读取 Agent 基础记忆（5 组）。completed=false 时前端应弹出设置窗口。"""
@@ -23573,6 +23681,51 @@ async def promote_style_library(payload: StyleLibraryPromoteRequest):
         save_asset_library(personal)
     save_asset_library(team, "team")
     return {"added": added, "skipped": skipped, **style_payload(personal)}
+
+@app.post("/api/style-library/from-items")
+async def create_style_from_items(payload: dict):
+    """用素材库里已选中的图片直接建风格：复制图 + 立刻写 Skill（>=3 张就直接 ready）。"""
+    item_ids = [str(x) for x in (payload.get("item_ids") or [])[:STYLE_MAX_REF_IMAGES]]
+    if len(item_ids) < STYLE_MIN_IMAGES:
+        raise HTTPException(status_code=400,
+                            detail=f"至少选 {STYLE_MIN_IMAGES} 张图片才能创建风格（当前 {len(item_ids)} 张）")
+    name = sanitize_asset_name(payload.get("name"), "新风格")
+    lib = load_asset_library()
+    library = {
+        "id": f"style_{uuid.uuid4().hex[:12]}",
+        "name": name,
+        "type": "style",
+        "categories": [],
+        "style": {"status": "draft", "skill_id": "", "built_at": 0, "error": ""},
+        "created_at": now_ms(),
+    }
+    cat = style_image_category(library, create=True)
+    copied = []
+    for item_id in item_ids:
+        source = find_asset_item_in_library(lib, item_id)
+        if not source or str(source.get("kind") or "image") != "image":
+            continue
+        src_path = output_file_from_url(source.get("url"))
+        if not src_path or not os.path.isfile(src_path):
+            continue
+        _, copy_item = make_asset_library_item(src_path, source.get("name") or "style", subdir="")
+        if isinstance(source.get("classification"), dict):
+            copy_item["classification"] = source["classification"]
+        cat.setdefault("items", []).append(copy_item)
+        copied.append(copy_item)
+    if len(copied) < STYLE_MIN_IMAGES:
+        raise HTTPException(status_code=400,
+                            detail=f"选中的图片只有 {len(copied)} 张可用，至少需要 {STYLE_MIN_IMAGES} 张")
+    meta = library.setdefault("style", {})
+    try:
+        skill_id, title = write_style_skill(library, copied)
+        meta.update({"status": "ready", "skill_id": skill_id, "skill_title": title,
+                     "built_at": now_ms(), "error": ""})
+    except Exception as exc:
+        meta.update({"status": "failed", "error": f"写入 Skill 失败：{exc}"})
+    lib.setdefault("libraries", []).append(library)
+    save_asset_library(lib)
+    return {"style": public_style(library), **style_payload(lib)}
 
 
 @app.post("/api/asset-library/categories")

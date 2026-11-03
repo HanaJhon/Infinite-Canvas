@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>shot</title>
+</head>
+<body>
+<script>
+// 把扩展页面原文件取回来，前面插一段 chrome.* 假实现，再写进当前文档 —— 这样截图用的是真实 DOM/CSS。
+(async () => {
+  const q = new URLSearchParams(location.search);
+  const page = q.get('p') || 'capture';
+  const theme = q.get('theme') || 'dark';
+  const dropzone = q.get('dropzone') === '1';
+  const seed = ['/__store/薄荷人像.png', '/__store/暖调街景.png', '/__store/冷调静物.png'];
+  const url = page === 'content' ? '/__store/webpage.html' : '/' + page + '.html';
+  let html = await (await fetch(url)).text();
+  // 原页面里的相对路径在 /__store/ 下会 404，统一改成站点绝对路径
+  html = html.replace(/(href|src)="(?!https?:|\/|data:|#)([^"]+)"/g, (m, attr, value) => attr + '="/' + value + '"');
+  const head = '<script>window.__SHOT__=' + JSON.stringify({ theme, seed, dropzone }) + ';<\/script>'
+    + '<script src="/__store/stub.js"><\/script>';
+  const patched = html.includes('<head>') ? html.replace('<head>', '<head>' + head) : head + html;
+  document.open();
+  document.write(patched);
+  document.close();
+})();
+</script>
+</body>
+</html>

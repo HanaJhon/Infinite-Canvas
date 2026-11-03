@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>frame</title>
+<style>
+  :root {
+    --ink: #eef2ff;
+    --ink-2: #a9b4d0;
+    --acc: #6ea8ff;
+    --card: rgba(255, 255, 255, 0.06);
+    --line: rgba(255, 255, 255, 0.14);
+  }
+  body[data-theme="light"] {
+    --ink: #16203a;
+    --ink-2: #59637d;
+    --acc: #3157f0;
+    --card: rgba(255, 255, 255, 0.72);
+    --line: rgba(20, 30, 60, 0.12);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 1280px; height: 800px; overflow: hidden;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 76px 0 84px; gap: 48px;
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(900px 620px at 12% 18%, rgba(84, 120, 255, 0.22), transparent 62%),
+      radial-gradient(760px 560px at 88% 88%, rgba(120, 90, 255, 0.18), transparent 66%),
+      linear-gradient(150deg, #0d1220 0%, #131a2b 52%, #0b1020 100%);
+  }
+  body[data-theme="light"] {
+    background:
+      radial-gradient(900px 620px at 12% 18%, rgba(86, 122, 255, 0.16), transparent 62%),
+      radial-gradient(760px 560px at 88% 88%, rgba(140, 108, 255, 0.14), transparent 66%),
+      linear-gradient(150deg, #f7f9fe 0%, #eef3fd 52%, #f4f7fe 100%);
+  }
+  .copy { width: 500px; flex: 0 0 auto; }
+  .brand {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-size: 14px; font-weight: 700; letter-spacing: .04em;
+    color: var(--ink-2); padding: 7px 13px; border-radius: 999px;
+    background: var(--card); border: 1px solid var(--line);
+  }
+  .brand i { width: 8px; height: 8px; border-radius: 50%; background: var(--acc); box-shadow: 0 0 12px var(--acc); }
+  h1 { margin: 24px 0 14px; font-size: 40px; line-height: 1.22; font-weight: 800; letter-spacing: -.02em; }
+  p.sub { margin: 0 0 26px; font-size: 17px; line-height: 1.65; color: var(--ink-2); }
+  ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 12px; }
+  li { position: relative; padding-left: 26px; font-size: 15.5px; line-height: 1.5; color: var(--ink); }
+  li::before {
+    content: ""; position: absolute; left: 0; top: 4px;
+    width: 15px; height: 15px; border-radius: 5px;
+    background: var(--acc); opacity: .9;
+    clip-path: polygon(14% 46%, 0 60%, 40% 100%, 100% 26%, 86% 12%, 38% 72%);
+  }
+  .device {
+    flex: 0 0 auto; position: relative; border-radius: 18px; overflow: hidden;
+    background: #10141f; box-shadow: 0 34px 80px rgba(3, 8, 20, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.14);
+  }
+  body[data-theme="light"] .device { box-shadow: 0 30px 70px rgba(30, 50, 90, 0.22), 0 0 0 1px rgba(20, 30, 60, 0.14); }
+  .device iframe { display: block; border: 0; background: #16181f; }
+</style>
+</head>
+<body>
+<div class="copy">
+  <div class="brand"><i></i>无限画布 · 图片采集</div>
+  <h1 id="ttl"></h1>
+  <p class="sub" id="sub"></p>
+  <ul id="pts"></ul>
+</div>
+<div class="device" id="dev"><iframe id="fr" scrolling="no"></iframe></div>
+<script>
+  const q = new URLSearchParams(location.search);
+  document.body.dataset.theme = q.get('theme') || 'dark';
+  document.getElementById('ttl').textContent = q.get('t') || '';
+  document.getElementById('sub').textContent = q.get('s') || '';
+  (q.get('pts') || '').split('|').filter(Boolean).forEach((text) => {
+    const li = document.createElement('li');
+    li.textContent = text;
+    document.getElementById('pts').appendChild(li);
+  });
+  const page = q.get('p') || 'capture';
+  const sizes = { capture: [520, 660], popup: [380, 340], options: [560, 620], content: [560, 620] };
+  const size = sizes[page] || sizes.capture;
+  const frame = document.getElementById('fr');
+  frame.style.width = size[0] + 'px';
+  frame.style.height = size[1] + 'px';
+  frame.src = 'shot.html?p=' + page + '&theme=' + (q.get('theme') || 'dark') + '&dropzone=' + (page === 'content' ? 1 : 0);
+</script>
+</body>
+</html>
