@@ -2250,7 +2250,50 @@ function smartGroupImageRefs(group){
             if(item?.url) refs.push({nodeId:node.id, index, source:img, item});
         });
     });
-    return refs;
+    return smartGroupOrderedRefs(group, refs);
+}
+/* 组内缩略图顺序：默认「本组自带图片 → 成员按画布位置」，用户手动拖过就记在 group.thumbOrder（图片 url 列表）。
+   ponytail: 只按 url 记顺序，同一张图在组里出现多次时两两并列（保持默认相对顺序）——真需要再换成带 occurrence 的键。 */
+function smartGroupThumbKey(ref){ return String(ref?.item?.url || ''); }
+function smartGroupOrderedRefs(group, refs){
+    const order = Array.isArray(group?.thumbOrder) ? group.thumbOrder : null;
+    if(!order || !order.length) return refs;
+    const rank = new Map();
+    order.forEach((k, i) => { if(!rank.has(k)) rank.set(k, i); });
+    return refs
+        .map((ref, i) => {
+            const key = smartGroupThumbKey(ref);
+            return {ref, i, rank: rank.has(key) ? rank.get(key) : Number.MAX_SAFE_INTEGER};
+        })
+        .sort((a, b) => (a.rank - b.rank) || (a.i - b.i))
+        .map(x => x.ref);
+}
+/* 把 fromUrl 那张挪到 toUrl 的位置，记住整组顺序。返回是否真的变了。 */
+function reorderSmartGroupThumbs(group, fromUrl, toUrl){
+    if(!isSmartGroupNode(group) || !fromUrl || !toUrl || fromUrl === toUrl) return false;
+    const urls = smartGroupImageRefs(group).map(smartGroupThumbKey);
+    const from = urls.indexOf(fromUrl);
+    const to = urls.indexOf(toUrl);
+    if(from < 0 || to < 0) return false;
+    urls.splice(to, 0, urls.splice(from, 1)[0]);
+    group.thumbOrder = urls;
+    return true;
+}
+/* 指针下的「同组缩略图」——组内拖曳调顺序的落点判定。
+   用 elementsFromPoint 逐层找：浮层（agent 标签、状态条之类）盖在缩略图上时，
+   elementFromPoint 只会返回浮层，落点就白丢了。 */
+function smartGroupThumbAt(clientX, clientY, groupId){
+    let stack = [];
+    try { stack = document.elementsFromPoint(clientX, clientY) || []; } catch(e) { stack = []; }
+    for(const el of stack){
+        const item = el && el.closest ? el.closest('.smart-group-thumb-grid .thumb-item') : null;
+        if(!item) continue;
+        const grid = item.closest('.image-node[data-id]');
+        if(!grid || grid.dataset.id !== groupId) continue;
+        const sig = item.dataset.mediaSignature || '';
+        return {el:item, url:sig.slice(sig.indexOf(':') + 1)};
+    }
+    return null;
 }
 function smartGroupThumbLayout(node){
     const refs = smartGroupImageRefs(node).filter(ref => ref.item?.url);
@@ -16150,14 +16193,19 @@ function bindNodeEvents(){
                 if(e.detail >= 2) return;
                 const node = nodes.find(n => n.id === id);
                 const refNodeId = item.dataset.refNodeId || '';
-                if(refNodeId && refNodeId !== id) return;
+                const groupNode = isSmartGroupNode(node);
+                // 分组里「成员节点带进来的图」也要能拖：拖到同组别的缩略图上就是调顺序（不拆图）。
+                if(refNodeId && refNodeId !== id && !groupNode) return;
                 if(!node) return;
                 const imgIndex = Number(item.dataset.imageIndex || 0);
-                if(isSmartGroupNode(node)){
-                    if(!node.images?.[imgIndex]) return;
+                const ownsImage = !refNodeId || refNodeId === id;
+                if(groupNode){
+                    if(ownsImage && !node.images?.[imgIndex]) return;
                 } else if((node.images || []).length <= 1) return;
                 e.preventDefault(); e.stopPropagation();
-                thumbDragState = {nodeId:id, imgIndex, startX:e.clientX, startY:e.clientY, detached:false};
+                const sig = item.dataset.mediaSignature || '';
+                thumbDragState = {nodeId:id, imgIndex, startX:e.clientX, startY:e.clientY, detached:false,
+                    own:ownsImage, url:sig.slice(sig.indexOf(':') + 1), reorderUrl:'', reorderEl:null};
                 capturePendingUndo();
             });
         });
@@ -25494,8 +25542,26 @@ window.onmousemove = e => {
         const dx = e.clientX - thumbDragState.startX;
         const dy = e.clientY - thumbDragState.startY;
         const source = nodes.find(n => n.id === thumbDragState.nodeId);
+        // 组内拖曳调顺序：拖到同组另一张缩略图上 → 松手时重排，而不是把图拆出去
+        if(!thumbDragState.detached && isSmartGroupNode(source) && Math.abs(dx) + Math.abs(dy) > 6){
+            const hit = smartGroupThumbAt(e.clientX, e.clientY, source.id);
+            if(hit && hit.url && hit.url !== thumbDragState.url){
+                thumbDragState.reorderUrl = hit.url;
+                if(thumbDragState.reorderEl !== hit.el){
+                    thumbDragState.reorderEl?.classList.remove('reorder-target');
+                    hit.el.classList.add('reorder-target');
+                    thumbDragState.reorderEl = hit.el;
+                }
+                return;
+            }
+            if(thumbDragState.reorderEl){
+                thumbDragState.reorderEl.classList.remove('reorder-target');
+                thumbDragState.reorderEl = null;
+                thumbDragState.reorderUrl = '';
+            }
+        }
         if(!thumbDragState.detached && Math.abs(dx) + Math.abs(dy) > 6){
-            const canDetachThumb = source && (isSmartGroupNode(source) ? (source.images || []).length >= 1 : (source.images || []).length > 1);
+            const canDetachThumb = thumbDragState.own && source && (isSmartGroupNode(source) ? (source.images || []).length >= 1 : (source.images || []).length > 1);
             if(canDetachThumb){
                 const img = source.images[thumbDragState.imgIndex];
                 if(img){
@@ -25633,7 +25699,19 @@ window.onmouseup = e => {
         scheduleSave();
     }
     if(thumbDragState){
-        if(!thumbDragState.detached) discardPendingUndo();
+        const {reorderUrl, reorderEl, nodeId:thumbNodeId, url:thumbUrl} = thumbDragState;
+        reorderEl?.classList.remove('reorder-target');
+        if(reorderUrl){
+            const group = nodes.find(n => n.id === thumbNodeId);
+            if(group && reorderSmartGroupThumbs(group, thumbUrl, reorderUrl)){
+                commitPendingUndo();
+                render();
+                scheduleSave();
+                toast('已调整分组顺序');
+            } else {
+                discardPendingUndo();
+            }
+        } else if(!thumbDragState.detached) discardPendingUndo();
         thumbDragState = null;
     }
     if(panState) {

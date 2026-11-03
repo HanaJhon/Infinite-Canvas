@@ -709,6 +709,8 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .thumb-item { position:relative; width:var(--thumb-size, 96px); height:var(--thumb-size, 96px); display:flex; align-items:center; justify-content:center; overflow:hidden; border:1px solid rgba(148,163,184,.38); border-radius:12px; background:var(--soft); transition:border-color .12s ease, box-shadow .14s ease; cursor:pointer; }
 .thumb-item:hover { z-index:1; }
 .thumb-item.image-selected { z-index:2; }
+/* 组内拖曳调顺序时的落点提示 */
+.thumb-item.reorder-target { outline:2px solid var(--accent, #3b82f6); outline-offset:-2px; box-shadow:0 0 0 3px rgba(59,130,246,.25); }
 .thumb-item img { width:auto; height:auto; max-width:100%; max-height:100%; object-fit:contain; object-position:center; border-radius:0; background:var(--soft); display:block; }
 .image-wrap { border-radius:13px; transition:box-shadow .14s ease; }
 .image-wrap > img:not(.node-mask-overlay), .image-wrap > .media-video-card { border:1px solid rgba(148,163,184,.38); transition:border-color .12s ease; }
