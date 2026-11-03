@@ -2233,11 +2233,19 @@ sealed class LauncherHost : IDisposable
         catch { return false; }
     }
 
-    /// 向系统要一个当前可绑定的端口（让 OS 分配后立刻释放，再用它去启动服务）。
-    /// 有小概率被别的进程抢占，那种情况下服务启动会失败并由超时兜底报错。
+    /// 挑一个当前可绑定的兜底端口。
+    /// 🚨 必须是**确定性**的：以前用 `bind(0)` 让系统随便给一个，结果只要 3000 被
+    /// 别的目录的无限画布占着（比如开发仓库），每次启动就换一个全新端口；
+    /// 浏览器把 localStorage 按「站点」隔离（含端口），于是对话记录、界面设置
+    /// 每次看着都像被清空（老板 m09826「为什么升级到这版本依旧会丢agent记录」）。
+    /// 现在固定按 3001→3009 顺序找，只要条件不变就总是同一个 origin。
     /// </summary>
     private static int PickFreePort()
     {
+        for (var candidate = 3001; candidate <= 3009; candidate++)
+        {
+            if (CanBindPort(candidate)) return candidate;
+        }
         try
         {
             var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Any, 0);
