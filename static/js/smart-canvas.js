@@ -27116,35 +27116,44 @@ function agentMergeConversations(localConvs, serverConvs){
     });
     return out;
 }
+/* 立刻把「本地 ∪ 服务端」那份推到服务端（不等防抖）。关窗 / 切后台时用，keepalive 让请求走完。 */
+async function agentSyncServerStateNow(){
+    if(!canvasId || !agentState) return;
+    // 🚨 本地一条对话都没有时绝不上推：新浏览器 / 清过缓存 / 还没拉完服务端那份，
+    //    这时候推上去等于用空状态盖掉服务端的历史记录（老板要求「记录不能丢」）。
+    if(!(Array.isArray(agentState.conversations) && agentState.conversations.length)) return;
+    // 推之前先读一次服务端，只推「合并后」的并集：别的浏览器/画布页写进去的对话不能被这次推覆盖掉。
+    let merged = agentState.conversations;
+    try {
+        const res = await fetch(`/api/agent/state/${encodeURIComponent(canvasId)}`);
+        if(res.ok){
+            const server = (await res.json()).state || null;
+            if(server && typeof server === 'object'){
+                merged = agentMergeConversations(agentState.conversations, server.conversations);
+            }
+        }
+    } catch(e) { /* 读不到就按本地那份推，至少不丢本机的 */ }
+    const body = JSON.stringify({state: {...agentState, conversations: merged, messages:(agentState.messages || []).slice(-AGENT_MSG_MAX)}});
+    try {
+        return fetch(`/api/agent/state/${encodeURIComponent(canvasId)}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body,
+            keepalive: true,
+        }).catch(() => {});
+    } catch(e) { /* 送不上去就拉倒，本地那份还在 */ }
+}
 function agentPushServerState(){
     if(!canvasId) return;
     clearTimeout(agentServerPushTimer);
-    agentServerPushTimer = setTimeout(async () => {
-        try {
-            // 🚨 本地一条对话都没有时绝不上推：新浏览器 / 清过缓存 / 还没拉完服务端那份，
-            //    这时候推上去等于用空状态盖掉服务端的历史记录（老板要求「记录不能丢」）。
-            if(!(Array.isArray(agentState.conversations) && agentState.conversations.length)) return;
-            // 推之前先读一次服务端，只推「合并后」的并集：别的浏览器/画布页写进去的对话不能被这次推覆盖掉。
-            let merged = agentState.conversations;
-            try {
-                const res = await fetch(`/api/agent/state/${encodeURIComponent(canvasId)}`);
-                if(res.ok){
-                    const server = (await res.json()).state || null;
-                    if(server && typeof server === 'object'){
-                        merged = agentMergeConversations(agentState.conversations, server.conversations);
-                    }
-                }
-            } catch(e) { /* 读不到就按本地那份推，至少不丢本机的 */ }
-            const body = JSON.stringify({state: {...agentState, conversations: merged, messages:(agentState.messages || []).slice(-AGENT_MSG_MAX)}});
-            fetch(`/api/agent/state/${encodeURIComponent(canvasId)}`, {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body,
-                keepalive: true,   // 关标签页时也尽量把最后一份送出去
-            }).catch(() => {});
-        } catch(e) { /* 送不上去就拉倒，本地那份还在 */ }
-    }, 1200);
+    agentServerPushTimer = setTimeout(agentSyncServerStateNow, 1200);
 }
+/* 关窗 / 切后台立刻落盘：1.2s 防抖窗口里被关掉的话，最后一条对话只留在本地那份，
+   换个浏览器（或改过端口）就看不到 —— 记录是「绑账号」的，就必须真的送上去。 */
+window.addEventListener('pagehide', () => { agentSyncServerStateNow(); });
+document.addEventListener('visibilitychange', () => {
+    if(document.visibilityState === 'hidden') agentSyncServerStateNow();
+});
 async function agentPullServerState(){
     if(!canvasId || !agentState) return;
     let server = null;
