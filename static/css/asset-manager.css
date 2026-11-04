@@ -480,8 +480,10 @@ body.theme-dark .asset-card.active { border-color:rgba(248,250,252,.86); box-sha
 .style-badge.failed { border-color:rgba(220,38,38,.42); background:rgba(220,38,38,.1); color:var(--danger); }
 .style-badge.shared { border-color:var(--strong); background:var(--strong); color:var(--strong-text); }
 .style-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(132px, 1fr)); gap:10px; align-content:start; }
-.style-thumb { margin:0; min-width:0; border:1px solid var(--line); border-radius:12px; background:var(--card); overflow:hidden; }
+.style-thumb { position:relative; margin:0; min-width:0; border:1px solid var(--line); border-radius:12px; background:var(--card); overflow:hidden; }
 .style-thumb img { display:block; width:100%; aspect-ratio:1/1; object-fit:cover; background:var(--soft); }
+.style-thumb-x { position:absolute; top:6px; right:6px; width:20px; height:20px; padding:0; border:1px solid rgba(0,0,0,.35); border-radius:50%; background:rgba(0,0,0,.68); color:#fff; font-size:13px; line-height:1; font-weight:700; cursor:pointer; display:grid; place-items:center; }
+.style-thumb-x:hover, .style-thumb-x:focus-visible { background:#e5484d; border-color:#e5484d; }
 .style-thumb figcaption { padding:6px 8px; color:var(--muted); font-size:10px; font-weight:750; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .style-add { min-height:132px; display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center; border:1px dashed var(--line-2); border-radius:12px; background:var(--card); color:var(--muted); font-size:11px; font-weight:900; }
 .style-add:hover { border-color:var(--strong); color:var(--text); }

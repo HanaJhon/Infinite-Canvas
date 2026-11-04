@@ -4,8 +4,46 @@ const el = {
   captureBtn: document.getElementById('captureBtn'),
   openCaptureBtn: document.getElementById('openCaptureBtn'),
   openOptionsBtn: document.getElementById('openOptionsBtn'),
+  siteToggleWrap: document.getElementById('siteToggleWrap'),
+  siteToggle: document.getElementById('siteToggle'),
   msg: document.getElementById('msg'),
 };
+
+// 「在本网站禁用拖拽采集」：状态存 chrome.storage.local.disabledHosts（hostname 数组），
+// content.js 读到就整页不弹投放区；这里改完顺手给当前标签页发消息，不必刷新页面。
+async function setupSiteToggle() {
+  let host = '';
+  let tabId = 0;
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs && tabs[0];
+    tabId = tab && tab.id;
+    host = /^https?:/i.test((tab && tab.url) || '') ? new URL(tab.url).hostname : '';
+  } catch (_) {}
+  if (!host) return;
+  el.siteToggleWrap.hidden = false;
+  const data = await chrome.storage.local.get('disabledHosts');
+  const list = Array.isArray(data.disabledHosts) ? data.disabledHosts : [];
+  el.siteToggle.checked = list.includes(host);
+  el.siteToggle.addEventListener('change', async () => {
+    const next = new Set(list);
+    if (el.siteToggle.checked) next.add(host);
+    else next.delete(host);
+    await chrome.storage.local.set({ disabledHosts: [...next] });
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        type: 'ic.setSiteDisabled',
+        host,
+        disabled: el.siteToggle.checked,
+      });
+    } catch (_) {
+      // 扩展刚装/刚重载时页面里还没有 content script，下次刷新自然生效
+    }
+    IC.showMsg(el.msg, el.siteToggle.checked
+      ? `已在本网站禁用拖拽采集（${host}）`
+      : `已在本网站恢复拖拽采集（${host}）`, 'ok');
+  });
+}
 
 // 地址自动识别在后台的 me() 里统一处理（连不上就先找一次），这里只管显示。
 async function refreshAuth() {
@@ -68,3 +106,4 @@ el.openOptionsBtn.addEventListener('click', () => {
 });
 
 refreshAuth();
+setupSiteToggle();

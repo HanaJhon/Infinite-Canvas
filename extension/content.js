@@ -114,7 +114,26 @@
     if (sub) sub.textContent = text || '松手后打开采集窗口';
   }
 
+  // 2026-11-04 老板：有些网站拖图会误触投放区，给「当前网址禁用拖拽采集」一个开关。
+  // 开关状态存在 chrome.storage.local 的 disabledHosts（hostname 数组），popup 里改。
+  const DISABLED_KEY = 'disabledHosts';
+  const hostName = location.hostname || '';
+  let siteDisabled = false;
+  try {
+    chrome.storage.local.get(DISABLED_KEY, (data) => {
+      const list = (data && data[DISABLED_KEY]) || [];
+      siteDisabled = Array.isArray(list) && list.includes(hostName);
+      if (siteDisabled) hideZone();
+    });
+    chrome.runtime.onMessage.addListener((message) => {
+      if (!message || message.type !== 'ic.setSiteDisabled' || message.host !== hostName) return;
+      siteDisabled = !!message.disabled;
+      if (siteDisabled) hideZone();
+    });
+  } catch (_) {}
+
   function showZone() {
+    if (siteDisabled) return;
     clearTimeout(hideTimer);
     setZoneSub('');
     ensureZone().classList.add('ic-visible');

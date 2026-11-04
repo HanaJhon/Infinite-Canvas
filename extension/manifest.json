@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "无限画布素材采集",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "浏览网页时右键或拖拽图片，采集到本机「无限画布」的个人素材库。",
   "permissions": [
     "contextMenus",

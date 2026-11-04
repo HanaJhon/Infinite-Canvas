@@ -2808,21 +2808,20 @@ function updateSmartSaveWorkflowPosition(){
         smartSaveWorkflowBtn.classList.remove('visible');
         return;
     }
-    const rects = selectedNodes.map(nodeRect);
-    const minX = Math.min(...rects.map(r => r.x));
-    const maxX = Math.max(...rects.map(r => r.x + r.width));
-    const maxY = Math.max(...rects.map(r => r.y + r.height));
-    const centerX = (minX + maxX) / 2;
-    let bottomY = maxY + 16;
-    if(composer && composer.classList.contains('open') && selectedNodes.length === 1 && selectedNodes[0].id === selectedId){
-        const compTop = parseFloat(composer.style.top) || (maxY + 14);
-        const compH = composer.offsetHeight || 280;
-        bottomY = Math.max(bottomY, compTop + compH + 14);
-    }
     smartSaveWorkflowBtn.hidden = false;
     smartSaveWorkflowBtn.classList.add('visible');
-    smartSaveWorkflowBtn.style.left = `${centerX}px`;
-    smartSaveWorkflowBtn.style.top = `${bottomY}px`;
+    // 位置钉在「整理选中」右侧（老板 m11497）：两个按钮都是 #shell 的直接子节点，
+    // 用 shell 坐标系对齐，垂直居中对齐整理选中，跟画布缩放无关。
+    const anchorRect = smartArrangeBtn ? smartArrangeBtn.getBoundingClientRect() : null;
+    const shellRect = shell.getBoundingClientRect();
+    const btnH = smartSaveWorkflowBtn.offsetHeight || 32;
+    if(anchorRect && anchorRect.width){
+        smartSaveWorkflowBtn.style.left = `${Math.round(anchorRect.right - shellRect.left + 8)}px`;
+        smartSaveWorkflowBtn.style.top = `${Math.round(anchorRect.top - shellRect.top + (anchorRect.height - btnH) / 2)}px`;
+    }else{
+        smartSaveWorkflowBtn.style.left = '126px';
+        smartSaveWorkflowBtn.style.top = 'calc(100% - 190px)';
+    }
 }
 function connectedSmartClusterIds(seedId){
     const ids = new Set(nodes.map(n => n.id));
@@ -6874,8 +6873,13 @@ function renderCanvasStyleBar(){
     if(assetStyleNameInput && assetStyleNameInput.value !== canvasStyleComposer.name) assetStyleNameInput.value = canvasStyleComposer.name || '';
     if(assetStyleThumbs){
         releaseCanvasStyleThumbs();
-        assetStyleThumbs.innerHTML = files.slice(0, 6)
-            .map(file => `<img src="${escapeAttr(canvasStyleThumbUrl(file))}" alt="">`).join('');
+        // 小图右上角的小×：选错了直接移除（不用清空重选）
+        assetStyleThumbs.innerHTML = files.slice(0, 8)
+            .map((file, i) => `<span class="style-composer-thumb">
+                <img src="${escapeAttr(canvasStyleThumbUrl(file))}" alt="">
+                <button class="style-composer-thumb-x" type="button" data-style-thumb-del="${i}" title="移除这张参考图" aria-label="移除这张参考图">×</button>
+            </span>`).join('')
+            + (files.length > 8 ? `<span class="style-composer-more">+${files.length - 8}</span>` : '');
     }
     const total = Number(canvasStyleComposer.total) || files.length || 1;
     const done = Number(canvasStyleComposer.done) || 0;
@@ -14759,13 +14763,11 @@ function render(){
     const keepEls = new Set();
     reusableNodes.forEach(el => keepEls.add(el));
     if(composerEl) keepEls.add(composerEl);
-    if(smartSaveWorkflowBtn) keepEls.add(smartSaveWorkflowBtn);
+    // 保存工作流按钮已改成钉在「整理选中」右侧（老板 m11497），它是 #shell 的直接子节点，
+    // 不归 world 管 —— 别再往 world 里挪，否则又会被画布缩放带着走。
     [...world.childNodes].forEach(child => {
         if(!keepEls.has(child)) child.remove();
     });
-    if(smartSaveWorkflowBtn && !world.contains(smartSaveWorkflowBtn)){
-        world.appendChild(smartSaveWorkflowBtn);
-    }
     // 用户正在提示词框输入时不要移动 composer:移动 DOM 会打断输入法合成、中断输入。
     // composer 已在 keepEls 中(未被移除),不重排也不影响显示(z-index 固定)。
     if(composerEl && !promptHadFocus) world.appendChild(composerEl);
@@ -20099,15 +20101,19 @@ function renderInputThumbsRow(node){
     if(!inputThumbsRow) return;
     syncJimengModelPillForRefs();
     syncJimengVideoModelPillForRefs();
-    const dedup = node ? visibleReferenceImagesFor(node) : [];
+    // 被排除的参考图直接从这排里拿掉（老板 m10610：留着灰图会让人分不清这次到底用几张），
+    // 想放回来就在「添加参考图 → 输入图」里点它。
+    const dedup = (node ? visibleReferenceImagesFor(node) : []).filter(img => !isInputRefBlocked(node, img));
     const manualRefKeys = new Set(manualReferenceImagesFor(node).map(img => inputRefKey(img)));
     const addActive = mentionInsertMode === 'manual-ref';
     // 仅当参考图集合/状态真正变化时才重建缩略图 DOM。否则每敲一个字都重建并重新解码所有图片，
     // 参考图多时会让输入框打字明显卡顿。
+    const blockedKeys = [...blockedInputRefKeys(node)];
     const thumbsSignature = JSON.stringify({
         node: node?.id || '',
         items: dedup.map(img => `${inputRefKey(img)}@${img.url || ''}`),
         manual: [...manualRefKeys],
+        blocked: blockedKeys,
         add: addActive,
         mode: node ? smartImageMode(node) : ''
     });
@@ -20146,7 +20152,13 @@ function renderInputThumbsRow(node){
         const sourceUrl = img.originalLocalUrl || img.url || '';
         const key = inputRefKey(img);
         const removable = manualRefKeys.has(key);
-        const removeBtn = removable ? `<button class="input-thumb-remove" type="button" data-input-remove-reference="${escapeHtml(inputRefKey(img))}" title="删除参考图" aria-label="删除参考图">×</button>` : '';
+        // 手动加的图点 × 直接删；上游连进来的图点 × 只是「这次不用它」（blockedInputRefs），
+        // 生成时过滤掉，想放回来去「添加参考图 → 输入图」里点一下。
+        const removeBtn = img.url
+            ? `<button class="input-thumb-remove" type="button" ${removable
+                ? `data-input-remove-reference="${escapeHtml(key)}" title="删除参考图" aria-label="删除参考图"`
+                : `data-input-block-key="${escapeHtml(key)}" title="这次不使用这张图" aria-label="这次不使用这张图"`}>×</button>`
+            : '';
         return `<div class="input-thumb ${isFileish ? 'input-thumb-fileish' : ''} ${isSelf ? 'input-self' : ''} ${removable ? 'input-manual-ref' : ''}" draggable="false" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" data-source-url="${escapeHtml(sourceUrl)}" title="${escapeHtml(`${img.name || tr('smart.inputNum').replace('{n}', String(i + 1))} · ${title}`)}">${inner}${label ? `<span class="input-thumb-label">${escapeHtml(label)}</span>` : ''}${removeBtn}</div>`;
     }).join('');
     inputThumbsRow.innerHTML = `<div class="input-thumb-list">${thumbsHtml}${dedup.length > 1 ? `<span class="input-thumb-count">${escapeHtml(tr('smart.inputCount').replace('{n}', String(dedup.length)))}</span>` : ''}</div><div class="input-thumb-actions">${addButton}</div>`;
@@ -20168,6 +20180,20 @@ function bindInputThumbReferenceActions(){
             event.preventDefault();
             event.stopPropagation();
             removeManualReferenceFromSelectedNode(btn.dataset.inputRemoveReference || '');
+        });
+    });
+    inputThumbsRow?.querySelectorAll('[data-input-block-key]').forEach(btn => {
+        btn.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const node = selectedNode();
+            const key = btn.dataset.inputBlockKey || '';
+            if(!node || !key) return;
+            const img = visibleReferenceImagesFor(node).find(item => inputRefKey(item) === key);
+            if(!img) return;
+            // 自己/同组的图 → 真删（连组里那张一起），真正上游来的图才记「这次不用」
+            if(deleteOwnedReferenceImage(node, img)) return;
+            toggleInputRefBlocked(node, img);
         });
     });
 }
@@ -21228,6 +21254,38 @@ function isInputRefBlocked(node, img){
     if(!node || !img?.url) return false;
     return blockedInputRefKeys(node).has(inputRefKey(img));
 }
+function smartGroupOfNode(nodeId){
+    if(!nodeId) return null;
+    return nodes.find(n => isSmartGroupNode(n) && Array.isArray(n.items) && n.items.includes(nodeId)) || null;
+}
+/* 「删小图」= 连原图一起删（老板 m10721：删掉小图后组里那张还留着）。
+   只对自己节点的图、同组成员的图、分组自带的图生效；真正来自其它上游节点的图返回 false，仍按「这次不用」处理。 */
+function deleteOwnedReferenceImage(node, img){
+    if(!node || !img?.url) return false;
+    const owner = img.nodeId ? nodes.find(n => n.id === img.nodeId) : null;
+    const index = Number(img.imageIndex);
+    if(!owner || !Number.isFinite(index) || owner.images?.[index]?.url !== img.url) return false;
+    const group = isSmartGroupNode(node) ? node : smartGroupOfNode(node.id);
+    const sameNode = owner.id === node.id;
+    const sameGroup = Boolean(group && (owner.id === group.id || (group.items || []).includes(owner.id)));
+    if(!sameNode && !sameGroup) return false;
+    deleteImage(owner.id, index);
+    // 同组里如果还留着同一张的副本（分组自带 images / 成员手抄），一并清掉，否则组里那张又冒出来
+    let changed = false;
+    nodes.forEach(n => {
+        if(!isSmartGroupNode(n) || !group || n.id !== group.id) return;
+        if(Array.isArray(n.images) && n.images.some(item => item?.url === img.url)){
+            n.images = n.images.filter(item => item?.url !== img.url);
+            changed = true;
+        }
+        if(Array.isArray(n.thumbOrder) && n.thumbOrder.includes(img.url)){
+            n.thumbOrder = n.thumbOrder.filter(url => url !== img.url);
+            changed = true;
+        }
+    });
+    if(changed){ render(); scheduleSave(); }
+    return true;
+}
 function activeInputImagesFor(node, consume=false, ctx=smartLoopContext){
     return inputImagesFor(node, consume, ctx).filter(img => img?.url && !isInputRefBlocked(node, img));
 }
@@ -21427,15 +21485,16 @@ function renderMentionPicker(source){
     }
     if(mentionSource === 'input' && !hasInput && hasAssets) mentionSource = 'asset';
     if(mentionSource === 'asset' && !hasAssets && hasInput) mentionSource = 'input';
-    if(!hasInput && !hasAssets){ closeMentionPicker(); return; }
+    // 一个候选都没有也**不关面板**：老板 m10804 要求面板里常留「上传本地图片」入口
     const nextAssetCats = assetCategories('image');
     const currentAssetCat = assetCategoryForMention();
     const assetItems = assetMentionCandidateImages(currentAssetCat?.id || '');
     const candidates = (mentionSource === 'asset' ? assetItems : inputItems).slice(0, 36);
     const body = candidates.length ? `<div class="mention-option-grid">${candidates.map((img, i) => `
-            <button class="mention-option" type="button" data-mention-index="${i}">
+            <button class="mention-option${mentionSource === 'input' && isInputRefBlocked(node, img) ? ' is-off' : ''}" type="button" data-mention-index="${i}">
                 ${mentionOptionMediaHtml(img)}
                 <span>${escapeHtml(img.alias)}</span>
+                ${mentionSource === 'input' ? `<i class="mention-option-x" data-mention-del="${i}" title="删除这张参考图" aria-label="删除这张参考图">×</i>` : ''}
             </button>
         `).join('')}</div>` : `<div class="mention-empty">${escapeHtml(tr('smart.mentionEmpty'))}</div>`;
     const librarySelect = (mentionSource === 'asset' && assetLibs.length)
@@ -21464,6 +21523,9 @@ function renderMentionPicker(source){
             <div class="mention-content">
                 ${body}
             </div>
+            <button class="mention-upload-row" type="button" data-mention-upload title="从本地上传图片">
+                <i data-lucide="upload"></i><span>${escapeHtml('上传本地图片')}</span>
+            </button>
         </div>
     `;
     mentionPicker._items = candidates;
@@ -21501,12 +21563,38 @@ function renderMentionPicker(source){
             renderMentionPicker('asset');
         });
     });
+    mentionPicker.querySelectorAll('[data-mention-upload]').forEach(btn => {
+        btn.addEventListener('mousedown', e => {
+            e.preventDefault(); e.stopPropagation();
+            pickLocalReferenceFiles();
+        });
+    });
+    mentionPicker.querySelectorAll('[data-mention-del]').forEach(el => {
+        el.addEventListener('mousedown', e => {
+            e.preventDefault(); e.stopPropagation();
+            const img = (mentionPicker._items || [])[Number(el.dataset.mentionDel)];
+            const node = selectedNode();
+            if(!img || !node) return;
+            if(img.manualAdded){
+                removeManualReferenceFromSelectedNode(inputRefKey(img));
+            }else if(isInputRefBlocked(node, img)){
+                toggleInputRefBlocked(node, img);
+            }else if(!deleteOwnedReferenceImage(node, img)){
+                toggleInputRefBlocked(node, img);
+            }
+            renderMentionPicker('input');
+        });
+    });
     mentionPicker.querySelectorAll('[data-mention-index]').forEach(btn => {
         btn.addEventListener('mousedown', e => {
             e.preventDefault(); e.stopPropagation();
             const item = mentionPicker._items[Number(btn.dataset.mentionIndex)];
-            if(mentionInsertMode === 'manual-ref') addManualReferenceToSelectedNode(item);
-            else insertMentionToken(item);
+            if(mentionInsertMode === 'manual-ref'){
+                // 已经被 × 排除掉的图，在这里点一下等于放回来（否则它会一直被过滤）
+                const node = selectedNode();
+                if(node && item && isInputRefBlocked(node, item)){ toggleInputRefBlocked(node, item); closeMentionPicker(); }
+                else addManualReferenceToSelectedNode(item);
+            } else insertMentionToken(item);
         });
     });
     refreshIcons();
@@ -21541,6 +21629,30 @@ function toggleAssetMentionPickerFromThumbs(){
     renderInputThumbsRow(selectedNode());
     mentionAnchorEl = inputThumbsRow?.querySelector('[data-input-add-reference]') || inputThumbsRow;
     renderMentionPicker('asset');
+}
+/* 「添加参考图」面板里常驻的「上传本地图片」（老板 m10804）：选完文件直接进参考图，不走节点上传流程。 */
+let refUploadInput = null;
+function pickLocalReferenceFiles(){
+    const node = selectedNode();
+    if(!node){ return; }
+    if(!refUploadInput){
+        refUploadInput = document.createElement('input');
+        refUploadInput.type = 'file';
+        refUploadInput.accept = 'image/*,video/*';
+        refUploadInput.multiple = true;
+        refUploadInput.hidden = true;
+        refUploadInput.addEventListener('change', async () => {
+            const files = [...(refUploadInput.files || [])];
+            refUploadInput.value = '';
+            if(!files.length) return;
+            closeMentionPicker();
+            // 上传就是往画布上「加图」：进当前节点（多张自动成组），和拖拽上传走同一条路，
+            // 这样小图行/组内缩略图/节点图三处天然同步（老板 m11379）。
+            await handleFiles(files, selectedNode()?.id || node.id);
+        });
+        document.body.appendChild(refUploadInput);
+    }
+    refUploadInput.click();
 }
 function addManualReferenceToSelectedNode(img){
     const node = selectedNode();
@@ -21603,7 +21715,10 @@ function positionMentionPickerAtCaret(){
         const baseRect = base.getBoundingClientRect();
         const baseLogicalWidth = baseRect.width / safeScale;
         const rawLeft = (anchorRect.right - baseRect.left) / safeScale - pickerWidth;
-        const rawTop = (anchorRect.bottom - baseRect.top) / safeScale + 2;
+        // 从「添加参考图」按钮下沿和整排缩略图下沿中更靠下的那个位置弹出 —— 否则浮层会压住小图
+        const thumbsRect = inputThumbsRow ? inputThumbsRow.getBoundingClientRect() : null;
+        const anchorBottom = Math.max(anchorRect.bottom, thumbsRect ? thumbsRect.bottom : 0);
+        const rawTop = (anchorBottom - baseRect.top) / safeScale + 2;
         const left = Math.max(4, Math.min(rawLeft, Math.max(4, baseLogicalWidth - pickerWidth - 4)));
         mentionPicker.style.left = `${left}px`;
         mentionPicker.style.top = `${Math.max(2, rawTop)}px`;
@@ -26649,6 +26764,17 @@ if(assetStyleNameInput) assetStyleNameInput.addEventListener('keydown', event =>
 if(assetStyleComposerCancel) assetStyleComposerCancel.onclick = () => closeCanvasStyleComposer();
 if(assetStyleComposerCreate) assetStyleComposerCreate.onclick = () => createCanvasStyleFromComposer();
 if(assetPanel) assetPanel.addEventListener('click', event => {
+    const thumbDel = event.target.closest('[data-style-thumb-del]');
+    if(thumbDel){
+        event.preventDefault();
+        event.stopPropagation();
+        const idx = Number(thumbDel.dataset.styleThumbDel || -1);
+        if(canvasStyleComposer && Array.isArray(canvasStyleComposer.files) && idx >= 0){
+            canvasStyleComposer.files.splice(idx, 1);
+            renderCanvasStyleBar();
+        }
+        return;
+    }
     const delBtn = event.target.closest('[data-style-image-del]');
     if(delBtn){
         event.preventDefault();

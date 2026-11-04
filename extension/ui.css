@@ -259,6 +259,28 @@ input::placeholder {
   color: var(--muted-2);
 }
 
+.site-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 2px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--field);
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.site-toggle input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--text-2);
+  cursor: pointer;
+}
+
 .msg {
   margin: 0;
   font-size: 12px;

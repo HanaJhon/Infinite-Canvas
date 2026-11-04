@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="/static/images/logo.png?v=1.3.1" type="image/png">
+    <link rel="icon" href="/static/images/logo.png?v=1.3.2" type="image/png">
     <title data-i18n="smart.title">智能画布</title>
     <script>
         (function(){
@@ -16,20 +16,19 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/lucide.js?v=1.3.1.1767196800"></script>
-    <script src="/static/vendor/js/photopea.min.js?v=1.3.1.1767196800"></script>
-    <script src="/static/js/theme.js?v=1.3.1.1793681298"></script>
-    <script src="/static/js/touch-mouse.js?v=1.3.1.1767196800"></script>
-    <script src="/static/js/i18n.js?v=1.3.1.1792550183"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=1.3.1.1793716474">
+    <script src="/static/vendor/js/lucide.js?v=1.3.2.1767196800"></script>
+    <script src="/static/vendor/js/photopea.min.js?v=1.3.2.1767196800"></script>
+    <script src="/static/js/theme.js?v=1.3.2.1793681298"></script>
+    <script src="/static/js/touch-mouse.js?v=1.3.2.1767196800"></script>
+    <script src="/static/js/i18n.js?v=1.3.2.1792550183"></script>
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=1.3.2.1793764706">
     <!-- Skill 市场：浮层样式与逻辑都在共享模块里（gpt-chat 页用同一份），见 static/js/skill-market.js -->
-    <link rel="stylesheet" href="/static/css/skill-market.css?v=1.3.1.1767196800">
-    <link rel="stylesheet" href="/static/css/split-layers.css?v=1.3.1.1792329089">
+    <link rel="stylesheet" href="/static/css/skill-market.css?v=1.3.2.1767196800">
+    <link rel="stylesheet" href="/static/css/split-layers.css?v=1.3.2.1792329089">
 </head>
 <body>
     <div id="shell" class="shell">
         <div id="world" class="world">
-            <button id="smartSaveWorkflowBtn" class="smart-save-workflow-btn" type="button" title="保存选中为工作流" aria-label="保存工作流" hidden><i data-lucide="bookmark-plus"></i><span>保存工作流</span></button>
             <div id="composer" class="composer">
                 <div class="composer-card">
                     <div class="composer-head">
@@ -192,6 +191,7 @@
             <div id="promptTemplateBody" class="prompt-template-body"></div>
         </div>
         <button id="smartArrangeBtn" class="minimap-arrange-btn" type="button" title="整理选中节点" aria-label="整理选中节点"><i data-lucide="layout-grid"></i><span>整理选中</span></button>
+            <button id="smartSaveWorkflowBtn" class="smart-save-workflow-btn" type="button" title="保存选中为工作流" aria-label="保存工作流" hidden><i data-lucide="bookmark-plus"></i><span>保存工作流</span></button>
         <button id="smartSendAgentBtn" class="minimap-arrange-btn" type="button" title="发送至Agent" aria-label="发送至Agent" hidden><i data-lucide="bot"></i><span>发送至Agent</span></button>
         <div id="minimap" class="smart-minimap" aria-hidden="true">
             <div id="minimapContent" class="smart-minimap-content">
@@ -1006,7 +1006,7 @@
         </div>
     </div>
 
-    <script src="/static/js/skill-market.js?v=1.3.1.1767196800"></script>
-    <script src="/static/js/smart-canvas.js?v=1.3.1.1793717102"></script>
+    <script src="/static/js/skill-market.js?v=1.3.2.1767196800"></script>
+    <script src="/static/js/smart-canvas.js?v=1.3.2.1793764715"></script>
 </body>
 </html>

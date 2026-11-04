@@ -2000,6 +2000,13 @@ function bindStyleManagerEvents(){
     if(bindStyleManagerEvents.done) return;
     bindStyleManagerEvents.done = true;
     root.addEventListener('click', event => {
+        const imageDel = event.target.closest('[data-style-image-del]');
+        if(imageDel){
+            event.preventDefault();
+            event.stopPropagation();
+            deleteStyleImage(imageDel.dataset.styleImageOf, imageDel.dataset.styleImageDel);
+            return;
+        }
         const select = event.target.closest('[data-style-select]');
         if(select){
             activeStyleId = select.dataset.styleSelect;
@@ -2096,7 +2103,11 @@ async function renderStyleManager(){
             </div>
             <div class="content-scroll">
                 ${current ? `<div class="style-grid">
-                    ${images.map(img => `<figure class="style-thumb" title="${escapeAttr(img.name)}"><img src="${escapeAttr(img.url)}" alt="" loading="lazy"><figcaption>${escapeHtml(img.name)}</figcaption></figure>`).join('')}
+                    ${images.map(img => `<figure class="style-thumb" title="${escapeAttr(img.name)}">
+                        <img src="${escapeAttr(img.url)}" alt="" loading="lazy">
+                        <figcaption>${escapeHtml(img.name)}</figcaption>
+                        ${teamView || !img.id ? '' : `<button class="style-thumb-x" type="button" data-style-image-del="${escapeAttr(img.id)}" data-style-image-of="${escapeAttr(current.id)}" title="移除这张参考图" aria-label="移除这张参考图">×</button>`}
+                    </figure>`).join('')}
                     ${teamView ? '' : '<button class="style-add" type="button" data-style-action="upload"><i data-lucide="plus"></i><span>添加参考图</span></button>'}
                 </div>` : '<div class="style-empty"><i data-lucide="palette"></i><span>新建一个风格类型，上传至少 3 张参考图，然后点「开始创建」</span></div>'}
             </div>
@@ -2204,6 +2215,32 @@ async function handleStyleUpload(files){
     }catch(err){
         setStatus(`上传失败：${err?.message || err}`);
         await ensureStyleLibrary(true);
+    }
+    render();
+}
+// 小×移除单张参考图：够 3 张就顺手重建 Skill，不够就退回 draft 提示
+async function deleteStyleImage(styleId, itemId){
+    if(!styleId || !itemId) return;
+    if(styleTeamView()){ setStatus('团队风格库当前为只读视图，切回「个人」再操作'); return; }
+    try{
+        await apiJson('/api/asset-library/items/' + encodeURIComponent(itemId), {method:'DELETE'});
+    }catch(err){
+        setStatus(`删除失败：${err?.message || err}`);
+        return;
+    }
+    await ensureStyleLibrary(true);
+    const fresh = (styleLibraryData.styles || []).find(item => item.id === styleId);
+    const min = Number(styleLibraryData.min_images) || 3;
+    if(fresh && Number(fresh.image_count) >= min){
+        try{
+            await apiJson(`/api/style-library/styles/${encodeURIComponent(styleId)}/build`, {method:'POST'});
+            await ensureStyleLibrary(true);
+            setStatus('参考图已更新，风格 Skill 已重新生成');
+        }catch(err){
+            setStatus(`Skill 更新失败：${err?.message || err}`);
+        }
+    } else {
+        setStatus('已移除这张参考图');
     }
     render();
 }
