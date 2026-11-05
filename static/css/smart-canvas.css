@@ -1186,6 +1186,13 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .run-btn span { white-space:nowrap; }
 .run-btn i,.run-btn svg { width:var(--ctrl-icon) !important; height:var(--ctrl-icon) !important; stroke-width:2; flex:0 0 auto; }
 .run-btn:disabled { opacity:.55; cursor:wait; }
+/* 积分徽标：模型配了单价才出现，跟在「运行 / 生成」文字后面 */
+.run-credit-badge { display:inline-flex; align-items:center; gap:2px; margin-left:2px; padding:0 5px; height:16px; border-radius:999px;
+    background:rgba(183,121,31,.16); color:#a15c00; font-size:9.5px; font-weight:800; line-height:1; letter-spacing:.01em; white-space:nowrap; }
+.run-credit-badge[hidden] { display:none !important; }
+.run-btn .run-credit-badge { background:rgba(255,255,255,.22); color:inherit; height:15px; padding:0 4px; font-size:9px; }
+.prompt-node-run .run-credit-badge, .smart-llm-run .run-credit-badge { background:rgba(255,255,255,.22); color:inherit; }
+html.studio-theme-dark .run-credit-badge { background:rgba(224,178,102,.18); color:#e0b266; }
 .cascade-run-btn { width:76px; background:var(--card); color:var(--text); border:1px solid var(--line); }
 .cascade-run-btn:hover:not(:disabled) { border-color:var(--text); }
 .param-row { grid-area:params; min-width:0; margin-top:0; display:flex; align-items:center; gap:var(--ctrl-gap); overflow:visible; flex-wrap:wrap; row-gap:4px; }

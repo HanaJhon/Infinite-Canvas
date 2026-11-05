@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="/static/images/logo.png?v=1.3.4" type="image/png">
+    <link rel="icon" href="/static/images/logo.png?v=1.3.5" type="image/png">
     <title>Infinite Canvas for Lochou</title>
     <style>
         html.studio-route-booting body {
@@ -23,11 +23,11 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/tailwindcss-cdn.js?v=1.3.4.1767196800"></script>
-    <script src="/static/js/theme.js?v=1.3.4.1793681298"></script>
-    <script src="/static/js/i18n.js?v=1.3.4.1793841646"></script>
+    <script src="/static/vendor/js/tailwindcss-cdn.js?v=1.3.5.1767196800"></script>
+    <script src="/static/js/theme.js?v=1.3.5.1793681298"></script>
+    <script src="/static/js/i18n.js?v=1.3.5.1793841646"></script>
     <style>
-        @import url('/static/vendor/css/fonts.css?v=1.3.4.1767196800');
+        @import url('/static/vendor/css/fonts.css?v=1.3.5.1767196800');
 
         /* 本地 Tailwind 工具类兜底：CDN 慢/未就绪时也能立刻给图标尺寸，避免首屏左侧栏空白 */
         .w-1\.5 { width: 0.375rem; }
@@ -1486,7 +1486,7 @@
             max-width: 42px;
         }
     </style>
-    <link rel="stylesheet" href="/static/css/liquid-glass.css?v=1.3.4.1793776698">
+    <link rel="stylesheet" href="/static/css/liquid-glass.css?v=1.3.5.1793776698">
 </head>
 
 <body>
@@ -1494,7 +1494,7 @@
     <div class="app-shell">
         <aside class="sidebar" id="studioSidebar">
             <button class="logo-ring mb-12" id="sidebarLogoToggle" type="button" onclick="toggleSidebarPinned(event)" aria-pressed="false" title="固定导航栏">
-                <img class="logo-mark" src="/static/images/logo.png?v=1.3.4" alt="" aria-hidden="true" draggable="false">
+                <img class="logo-mark" src="/static/images/logo.png?v=1.3.5" alt="" aria-hidden="true" draggable="false">
                 <span id="logo-dot" style="background:var(--text)"></span>
             </button>
 
@@ -1593,10 +1593,10 @@
         </script>
 
         <main class="stage">
-            <iframe id="frame-online" data-src="/static/online.html?v=1.3.4.1793855024" scrolling="yes"></iframe>
-            <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=1.3.4.1793862210" scrolling="yes"></iframe>
-            <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=1.3.4.1793862210" scrolling="yes"></iframe>
-            <iframe id="frame-canvas" class="active" src="/static/canvas-list.html?v=1.3.4.1793862210" scrolling="yes"></iframe>
+            <iframe id="frame-online" data-src="/static/online.html?v=1.3.5.1793862210" scrolling="yes"></iframe>
+            <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=1.3.5.1793885297" scrolling="yes"></iframe>
+            <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=1.3.5.1793885297" scrolling="yes"></iframe>
+            <iframe id="frame-canvas" class="active" src="/static/canvas-list.html?v=1.3.5.1793885297" scrolling="yes"></iframe>
 
         </main>
     </div>
@@ -2758,6 +2758,7 @@
     <div class="acc-name" id="accPopName">…</div>
     <div class="acc-role" id="accPopRole"></div>
   </div>
+  <button type="button" id="accPopCredits">我的积分</button>
   <button type="button" id="accPopManage">账号管理</button>
   <button type="button" id="accPopApi">API 设置</button>
   <button type="button" class="danger" id="accPopLogout">退出登录</button>
@@ -2779,7 +2780,10 @@
   function fill(user) {
     me = user;
     document.getElementById('accPopName').textContent = user.name || '未登录';
-    document.getElementById('accPopRole').textContent = user.role === 'admin' ? '管理员' : '成员';
+    var roleText = user.role === 'admin' ? '管理员' : '成员';
+    if (user.seq) roleText = '#' + user.seq + ' · ' + roleText;
+    if (typeof user.credits === 'number') roleText += ' · ' + (Math.round(user.credits * 100) / 100) + ' 积分';
+    document.getElementById('accPopRole').textContent = roleText;
     var txt = document.getElementById('accountPillText');
     if (txt) txt.textContent = user.name || '账号';
     // 2026-10-27：账号管理 与 API 设置 只给管理员
@@ -2803,6 +2807,10 @@
 
   document.getElementById('accPopManage').addEventListener('click', function () {
     location.href = '/accounts.html';
+  });
+
+  document.getElementById('accPopCredits').addEventListener('click', function () {
+    location.href = '/credits.html';
   });
 
   // API 设置：复用页面原有的 switchUI（就是原来那个 pill 干的事）

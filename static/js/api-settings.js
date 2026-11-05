@@ -3414,16 +3414,18 @@ function renderModels(kind){
     list.innerHTML = models.map((model, index) => {
         const label = modelDisplayName(model, item);
         return `
-            <div class="model-row${showProtocol ? ' has-protocol' : ''}">
+            <div class="model-row has-credit${showProtocol ? ' has-protocol' : ''}">
                 <div class="model-id-field">
                     ${label && label !== model ? `<div class="model-display-name">${escapeHtml(label)}</div>` : ''}
                     <input value="${escapeAttr(model)}" oninput="updateModel('${kind}', ${index}, this.value)">
                 </div>
+                ${modelCreditCellHtml(kind, model)}
                 ${modelProtocolSelectHtml(kind, index, model, item)}
                 <button class="icon-btn" type="button" onclick="removeModel('${kind}', ${index})" title="删除"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
             </div>
         `;
     }).join('');
+    bindModelCreditInputs(list, kind);
     refreshIcons();
 }
 function msLoraTargetOptions(selected){
@@ -3666,6 +3668,16 @@ function updateModel(kind, index, value){
             if(newName && label && label !== newName) item.model_names[newName] = label;
         }
     }
+    // 重命名时迁移该模型的积分单价（m16485：单价按模型名存在 data/credits_settings.json）
+    if(oldName && newName && oldName !== newName && typeof modelCreditsMap === 'function'){
+        const credits = modelCreditsMap();
+        if(credits[oldName] && !credits[newName]){
+            const entry = credits[oldName];
+            delete credits[oldName];
+            credits[newName] = entry;
+            scheduleModelCreditSave();
+        }
+    }
     if(kind === 'image') renderMsLoras();
 }
 function updateModelProtocol(kind, index, value){
@@ -3704,7 +3716,8 @@ async function loadProviders(){
         syncGrsaiPresetFromSaved();
         selectedId = sortedProviders()[0]?.id || '';
         renderEditor();
-        openRecommendApi();
+        // 2026-11-05 老板 m16157「移除推荐API」：不再自动打开推荐面板，
+        // 否则 #settingsContent 会被隐藏、#recommendContent 顶到侧栏下方（表现为侧栏重复/消失）。
         setStatus('');
     } catch(err) {
         setStatus(tr('api.loadFailed'));
@@ -3909,3 +3922,138 @@ window.onload = () => {
         });
     });
 };
+
+// ===== 模型积分单价（2026-11-05 老板 m16485：积分的相关设置直接加在 API 的对应模型后）=====
+// 数据存 data/credits_settings.json 的 models（GET/PUT /api/credits/settings）；
+// 汇率 / 注册限制 / 充值套餐 / 收款方式仍在 /credits-admin.html。
+const modelCredits = { models: null, loading: false, saving: false, timer: 0, error: '' };
+
+function modelCreditsMap(){
+    if(!modelCredits.models || typeof modelCredits.models !== 'object') modelCredits.models = {};
+    return modelCredits.models;
+}
+function modelCreditKindForList(kind){
+    return kind === 'image' ? 'image' : kind === 'video' ? 'video' : 'llm';
+}
+function modelCreditEntry(model){
+    const name = String(model || '').trim();
+    if(!name) return null;
+    const map = modelCreditsMap();
+    if(map[name]) return map[name];
+    const tail = name.split('::').pop();
+    return tail && map[tail] ? map[tail] : null;
+}
+function modelCreditFieldsOf(kind){
+    const k = modelCreditKindForList(kind);
+    if(k === 'image') return [{key: 'per_image', sub: '', label: '积分/张'}];
+    if(k === 'video') return [
+        {key: 'per_second', sub: '1080p', label: '1080P/秒'},
+        {key: 'per_second', sub: '720p', label: '720P/秒'},
+        {key: 'per_second', sub: '480p', label: '480P/秒'}
+    ];
+    return [
+        {key: 'input', sub: '', label: '输入/1M'},
+        {key: 'output', sub: '', label: '输出/1M'},
+        {key: 'cache', sub: '', label: '缓存/1M'}
+    ];
+}
+function modelCreditReading(entry, field){
+    if(!entry) return '';
+    if(field.sub){
+        const per = entry.per_second;
+        if(!per || typeof per !== 'object') return '';
+        const v = per[field.sub];
+        return v === undefined || v === null ? '' : v;
+    }
+    const v = entry[field.key];
+    return v === undefined || v === null ? '' : v;
+}
+function modelCreditCellHtml(kind, model){
+    const entry = modelCreditEntry(model);
+    const fields = modelCreditFieldsOf(kind).map(field => `
+        <label class="mc-field">
+            <span>${escapeHtml(field.label)}</span>
+            <input type="number" min="0" step="0.0001" placeholder="未设置"
+                data-mc-model="${escapeAttr(model)}"
+                data-mc-key="${escapeAttr(field.key)}"
+                data-mc-sub="${escapeAttr(field.sub)}"
+                value="${escapeAttr(modelCreditReading(entry, field))}">
+        </label>`).join('');
+    return `<div class="model-credit${entry ? '' : ' is-unset'}">${fields}</div>`;
+}
+function ensureModelCreditEntry(model, kind){
+    const map = modelCreditsMap();
+    const name = String(model || '').trim();
+    if(!map[name] || typeof map[name] !== 'object') map[name] = { kind: modelCreditKindForList(kind) };
+    if(!map[name].kind) map[name].kind = modelCreditKindForList(kind);
+    return map[name];
+}
+function bindModelCreditInputs(root, kind){
+    if(!root) return;
+    root.querySelectorAll('input[data-mc-key]').forEach(input => {
+        if(input.dataset.mcBound === '1') return;
+        input.dataset.mcBound = '1';
+        input.addEventListener('input', () => {
+            const model = String(input.dataset.mcModel || '').trim();
+            if(!model) return;
+            const entry = ensureModelCreditEntry(model, kind);
+            const key = input.dataset.mcKey;
+            const sub = input.dataset.mcSub;
+            const raw = String(input.value || '').trim();
+            const value = raw === '' ? null : Math.max(0, Number(raw) || 0);
+            if(sub){
+                entry.per_second = (entry.per_second && typeof entry.per_second === 'object') ? entry.per_second : {};
+                if(value === null) delete entry.per_second[sub];
+                else entry.per_second[sub] = value;
+            }else if(value === null){
+                delete entry[key];
+            }else{
+                entry[key] = value;
+            }
+            const cell = input.closest('.model-credit');
+            if(cell) cell.classList.remove('is-unset');
+            scheduleModelCreditSave();
+        });
+    });
+}
+function scheduleModelCreditSave(){
+    if(modelCredits.timer) clearTimeout(modelCredits.timer);
+    modelCredits.timer = setTimeout(() => { modelCredits.timer = 0; saveModelCredits(); }, 700);
+}
+function saveModelCredits(){
+    if(modelCredits.saving){ scheduleModelCreditSave(); return; }
+    modelCredits.saving = true;
+    setStatus('积分单价保存中…');
+    fetch('/api/credits/settings', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ models: modelCreditsMap() })
+    }).then(r => r.json().catch(() => ({})).then(data => {
+        if(!r.ok) throw new Error(data.detail || ('保存失败 ' + r.status));
+        const settings = (data && data.settings) || data || {};
+        if(settings.models && typeof settings.models === 'object') modelCredits.models = settings.models;
+        setStatus('积分单价已保存');
+        setTimeout(() => { if(!modelCredits.timer) setStatus(''); }, 1600);
+    })).catch(err => {
+        setStatus('积分单价保存失败：' + (err && err.message ? err.message : err));
+    }).finally(() => { modelCredits.saving = false; });
+}
+function loadModelCredits(){
+    if(modelCredits.loading) return;
+    modelCredits.loading = true;
+    fetch('/api/credits/settings', { credentials: 'same-origin' })
+        .then(r => r.json().catch(() => ({})).then(data => {
+            if(!r.ok) throw new Error(data.detail || ('读取失败 ' + r.status));
+            const settings = (data && data.settings) || data || {};
+            modelCredits.models = settings.models && typeof settings.models === 'object' ? settings.models : {};
+        }))
+        .catch(err => { modelCredits.error = String(err && err.message ? err.message : err); })
+        .finally(() => {
+            modelCredits.loading = false;
+            renderModels('image'); renderModels('chat'); renderModels('video');
+        });
+}
+if(document.getElementById('providerList')){
+    loadModelCredits();
+}

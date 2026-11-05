@@ -133,7 +133,9 @@ def _is_admin_only(path: str) -> bool:
     """管理员专属页面。🚨 必须在鉴权分支之前独立判断 ——
     `/static/*` 是免鉴权前缀，写在 `if _auth_required(path):` 里面永远不会执行。"""
     low = path.lower()
-    return low.startswith("/static/api-settings") or low == "/accounts.html"
+    return (low.startswith("/static/api-settings")
+            or low == "/accounts.html"
+            or low == "/credits-admin.html")
 
 
 # ---------------------------------------------------------------- 角色隔离（2026-10-28）
@@ -152,6 +154,8 @@ _ADMIN_ONLY_WRITES_EXACT = {
     ("POST", "/api/codex/permissions"),
     ("POST", "/api/workflows"),               # 新建 ComfyUI 工作流（/run 不拦）
     ("PATCH", "/api/asset-classification-prompt"),  # 全站智能分类提示词
+    ("PUT", "/api/credits/settings"),         # 积分规则 / 模型单价 / 充值套餐（全站）
+    ("POST", "/api/credits/payments/upload"), # 上传收款二维码
 }
 
 #: 站点级写操作的**前缀**（方法, 前缀）—— 带 id 的路径用这个。
@@ -160,17 +164,28 @@ _ADMIN_ONLY_WRITES_PREFIX = (
     ("DELETE", "/api/workflows/"),            # 删 ComfyUI 工作流
     ("POST", "/api/shared-folders"),          # 把宿主机任意目录注册给全员读
     ("DELETE", "/api/shared-folders/"),
+    ("POST", "/api/credits/users/"),          # 管理员给用户加减积分
+    ("POST", "/api/credits/topups/"),         # 管理员批准 / 驳回充值申请
 )
 
 
 def _is_admin_only_write(method: str, path: str) -> bool:
     """成员能不能打这个写接口。🚨 必须在鉴权分支之前判断（同 `_is_admin_only`）。"""
     m = str(method or "").upper()
-    low = str(path or "").lower().rstrip("/") or "/"
+    raw = str(path or "").lower()
+    low = raw.rstrip("/") or "/"
     if (m, low) in _ADMIN_ONLY_WRITES_EXACT:
         return True
     for pref in _ADMIN_ONLY_WRITES_PREFIX:
-        if m == pref[0] and low.startswith(pref[1].rstrip("/")):
+        if m != pref[0]:
+            continue
+        p = pref[1].lower()
+        # 🚨 前缀带末尾斜杠时按「子路径」匹配，别把 `/api/credits/topups` 本体也吞掉
+        #    （成员提交充值申请就是 POST 这个精确路径）
+        if p.endswith("/"):
+            if low.startswith(p):
+                return True
+        elif low == p or low.startswith(p + "/"):
             return True
     return False
 
@@ -403,6 +418,11 @@ async def startup_event():
         await asyncio.to_thread(migrate_mislabeled_image_extensions)
     except Exception as exc:
         print(f"纠正图片扩展名失败: {exc}")
+    # 积分（2026-11-05）：给老账号补齐「独立序号 + 余额」字段，幂等
+    try:
+        await asyncio.to_thread(_credits_store.ensure_user_fields)
+    except Exception as exc:
+        print(f"积分字段初始化失败: {exc}")
 
 @app.websocket("/ws/stats")
 async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
@@ -482,6 +502,10 @@ CANVAS_DIR = UserScopedPath("canvases")
 
 # 用户/会话存储（依赖 DATA_DIR，必须放在它之后）
 _auth_store = _auth.AuthStore(DATA_DIR)
+
+# 积分与计费（2026-11-05 新增；靠 _auth_store 读写 users.json 里的余额字段）
+import credits as _credits
+_credits_store = _credits.CreditsStore(DATA_DIR, _auth_store)
 
 #: 团队资产库（所有账号共享，不随 current_uid 变化）
 TEAM_ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library_team.json")
@@ -1805,6 +1829,11 @@ def _auth_user_payload(user: dict) -> dict:
         "id": user.get("id"),
         "name": user.get("name"),
         "role": user.get("role", "member"),
+        # 独立序号（1、2、3…）与积分余额（2026-11-05 新增）
+        "seq": user.get("seq"),
+        "credits": round(float(user.get("credits") or 0), 4),
+        "email": user.get("email") or "",
+        "phone": user.get("phone") or "",
     }
 
 
@@ -1843,6 +1872,8 @@ async def auth_status(request: Request):
         "has_users": has_users,
         "need_setup": not has_users,
         "user": _auth_user_payload(user) if user else None,
+        # 注册页据此显示「邮箱 / 手机号」必填项（管理员在积分与计费里配置）
+        "signup": (_credits_store.settings().get("signup") or {}),
     }
 
 
@@ -1851,9 +1882,37 @@ async def auth_register(payload: dict):
     """注册。首个账号自动为 admin 并接管存量数据。"""
     name = str(payload.get("name", "")).strip()
     password = str(payload.get("password", ""))
+    email = str(payload.get("email", "") or "").strip()
+    phone = str(payload.get("phone", "") or "").strip()
     first = not _auth_store.has_any_user()
+
+    # 注册限制（管理员在「积分与计费」里配：是否必须邮箱 / 手机）
+    signup = _credits_store.settings().get("signup") or {}
+    if not first:
+        if signup.get("require_email"):
+            if not email:
+                raise HTTPException(status_code=400, detail="本站要求填写邮箱后才能注册")
+            if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+                raise HTTPException(status_code=400, detail="邮箱格式不正确")
+        if signup.get("require_phone"):
+            if not phone:
+                raise HTTPException(status_code=400, detail="本站要求填写手机号后才能注册")
+            if not re.match(r"^[0-9+\-\s()]{5,20}$", phone):
+                raise HTTPException(status_code=400, detail="手机号格式不正确")
+        # 范围限制：邮箱域名白/黑名单、非主流邮箱、手机国家码白/黑名单、虚拟号段
+        _email_reason = _credits.check_email_policy(signup, email)
+        if _email_reason:
+            raise HTTPException(status_code=400, detail=_email_reason)
+        _phone_reason = _credits.check_phone_policy(signup, phone)
+        if _phone_reason:
+            raise HTTPException(status_code=400, detail=_phone_reason)
+    initial_credits = 0.0 if first else float(signup.get("initial_credits") or 0)
+
     try:
-        user = _auth_store.create_user(name, password, role="admin" if first else "member")
+        user = _auth_store.create_user(name, password,
+                                       role="admin" if first else "member",
+                                       email=email, phone=phone,
+                                       credits=initial_credits)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1958,6 +2017,176 @@ async def auth_reset_password(uid: str, payload: dict, request: Request):
     _auth_store.drop_user_sessions(uid)
     return {"ok": True}
 
+
+# ---------------------------------------------------------------- 积分与计费（2026-11-05）
+# 老板 m15737：积分制度（管理员设余额 / 汇率 / 模型单价 / 充值套餐 / 收款方式 / 注册限制）。
+
+def _credits_admin_or_403(request: Request) -> dict:
+    me = _current_user_or_401(request)
+    if me.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    return me
+
+
+@app.get("/api/credits/settings")
+async def credits_get_settings(request: Request):
+    """管理员：读取完整积分设置（含模型单价、充值套餐、收款方式）。"""
+    _credits_admin_or_403(request)
+    return {"settings": _credits_store.settings()}
+
+
+@app.put("/api/credits/settings")
+async def credits_put_settings(payload: dict, request: Request):
+    """管理员：整份保存积分设置（汇率 / 注册限制 / 套餐 / 收款方式 / 模型单价）。"""
+    _credits_admin_or_403(request)
+    try:
+        saved = _credits_store.save_settings(payload or {})
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"保存失败：{exc}")
+    return {"ok": True, "settings": saved}
+
+
+@app.get("/api/credits/me")
+async def credits_me(request: Request):
+    """成员：我的序号 / 余额 / 流水 / 充值记录 + 站点积分规则（汇率、套餐、收款方式）。"""
+    me = _current_user_or_401(request)
+    uid = me.get("id", "")
+    return {
+        "user": _auth_user_payload(me),
+        "balance": _credits_store.balance(uid),
+        "ledger": _credits_store.ledger(uid, 100),
+        "topups": _credits_store.topup_list(uid, 50),
+        "public": _credits_store.public_settings(),
+    }
+
+
+@app.post("/api/credits/estimate")
+async def credits_estimate(payload: dict, request: Request):
+    """给前端按钮用：估算一次调用要多少积分。没配该模型时 configured=False。"""
+    _current_user_or_401(request)
+    return _credits_store.estimate(payload or {})
+
+
+@app.post("/api/credits/spend")
+async def credits_spend(payload: dict, request: Request):
+    """按实际用量扣费。默认只记账不拦截（余额不足返回 charged=False）。"""
+    me = _current_user_or_401(request)
+    return _credits_store.spend(me.get("id", ""), payload or {})
+
+
+@app.post("/api/credits/users/{uid}/adjust")
+async def credits_adjust_user(uid: str, payload: dict, request: Request):
+    """管理员：给某个账号加 / 减 / 设定积分余额。"""
+    me = _credits_admin_or_403(request)
+    target = _auth_store.find_by_id(uid)
+    if not target:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    mode = str(payload.get("mode") or "delta").strip().lower()
+    amount = float(payload.get("amount") or 0)
+    reason = str(payload.get("reason") or "").strip()[:120]
+    if mode == "set":
+        current = _credits_store.balance(uid)
+        delta = round(amount - current, 4)
+        reason = reason or "管理员设定余额"
+    elif mode == "add":
+        delta = abs(amount)
+        reason = reason or "管理员充值"
+    elif mode == "sub":
+        delta = -abs(amount)
+        reason = reason or "管理员扣减"
+    else:
+        delta = amount
+        reason = reason or "管理员调整"
+    if abs(delta) < 0.0001:
+        return {"ok": True, "balance": _credits_store.balance(uid), "delta": 0}
+    result = _credits_store.adjust(uid, delta, reason=reason, actor=me.get("name", ""), kind="admin")
+    return {"ok": True, **result}
+
+
+@app.post("/api/credits/topups")
+async def credits_topup_create(payload: dict, request: Request):
+    """成员：提交一笔充值申请（管理员批准后才到账）。"""
+    me = _current_user_or_401(request)
+    try:
+        entry = _credits_store.topup_create(me.get("id", ""), payload or {})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "request": entry}
+
+
+@app.get("/api/credits/topups")
+async def credits_topup_list(request: Request):
+    """管理员看全部申请；成员只看自己的。"""
+    me = _current_user_or_401(request)
+    uid = None if me.get("role") == "admin" else me.get("id", "")
+    return {"requests": _credits_store.topup_list(uid, 200)}
+
+
+@app.post("/api/credits/topups/{request_id}/approve")
+async def credits_topup_approve(request_id: str, payload: dict, request: Request):
+    me = _credits_admin_or_403(request)
+    try:
+        result = _credits_store.topup_decide(request_id, True, actor=me.get("name", ""),
+                                             note=str((payload or {}).get("note") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, **result}
+
+
+@app.post("/api/credits/topups/{request_id}/reject")
+async def credits_topup_reject(request_id: str, payload: dict, request: Request):
+    me = _credits_admin_or_403(request)
+    try:
+        result = _credits_store.topup_decide(request_id, False, actor=me.get("name", ""),
+                                             note=str((payload or {}).get("note") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, **result}
+
+
+@app.post("/api/credits/payments/upload")
+async def credits_payment_upload(files: List[UploadFile] = File(...)):
+    """管理员：上传收款二维码，返回可直接放进设置里的 URL。"""
+    pay_dir = os.path.join(ASSETS_DIR, "pay")
+    os.makedirs(pay_dir, exist_ok=True)
+    saved = []
+    for file in files:
+        content = await file.read()
+        if not content:
+            continue
+        if len(content) > 8 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="二维码图片不能超过 8MB")
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        if ext not in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+            ext = ".png"
+        name = "qr_" + uuid.uuid4().hex[:16] + ext
+        with open(os.path.join(pay_dir, name), "wb") as f:
+            f.write(content)
+        saved.append({"url": f"/assets/pay/{name}"})
+    if not saved:
+        raise HTTPException(status_code=400, detail="没有收到文件")
+    return {"ok": True, "files": saved}
+
+
+@app.post("/api/auth/users")
+async def auth_create_user(payload: dict, request: Request):
+    """管理员：直接创建账号（可指定初始积分，不受注册限制影响）。"""
+    me = _credits_admin_or_403(request)
+    name = str(payload.get("name", "")).strip()
+    password = str(payload.get("password", ""))
+    email = str(payload.get("email", "") or "").strip()
+    phone = str(payload.get("phone", "") or "").strip()
+    credits_value = float(payload.get("credits") or 0)
+    try:
+        user = _auth_store.create_user(name, password, role="member",
+                                       email=email, phone=phone, credits=credits_value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        _auth.ensure_user_dirs(DATA_DIR, user["id"])
+    except Exception:
+        pass
+    return {"ok": True, "user": _auth_user_payload(user), "created_by": me.get("name", "")}
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -2129,7 +2358,7 @@ def versioned_static_html(html: str) -> str:
     if not version:
         return html
     safe_version = urllib.parse.quote(version, safe="._-")
-    pattern = re.compile(r'(?P<prefix>(?:src|href)=["\']|@import\s+url\(["\'])(?P<url>/static/[^"\')?#]+(?:\.(?:js|css|html)))(?:\?v=[^"\')#]*)?', re.I)
+    pattern = re.compile(r'(?P<prefix>(?:src|href)=["\']|@import\s+url\(["\'])(?P<url>/static/[^"\')?#]+(?:\.(?:js|css|html)))(?:\?v=[^"\')#]*)?(?P<hash>#[^"\')]*)?', re.I)
     def replace(match):
         url = match.group("url")
         cache_version = safe_version
@@ -2141,7 +2370,7 @@ def versioned_static_html(html: str) -> str:
                 cache_version = f"{safe_version}.{int(static_asset_mtime(path))}"
         except Exception:
             pass
-        return f"{match.group('prefix')}{url}?v={cache_version}"
+        return f"{match.group('prefix')}{url}?v={cache_version}{match.group('hash') or ''}"
     return pattern.sub(replace, html)
 
 def sync_static_html_versions():
@@ -2164,7 +2393,7 @@ def sync_static_html_versions():
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     old = f.read()
-                new = versioned_static_html(re.sub(r'([?&]v=)[^"\'`\s<>)]*', rf'\g<1>{safe_version}', old))
+                new = versioned_static_html(re.sub(r'([?&]v=)[^"\'`\s<>)#]*', rf'\g<1>{safe_version}', old))
                 if new != old:
                     with open(path, "w", encoding="utf-8", newline="") as f:
                         f.write(new)
@@ -16849,6 +17078,18 @@ async def login_page():
 async def accounts_page():
     """账号管理页（仅管理员，权限在接口层校验）。"""
     return static_html_response("accounts.html")
+
+
+@app.get("/credits.html")
+async def credits_page():
+    """我的积分：余额 / 充值套餐 / 收款二维码 / 提交申请 / 流水（所有登录成员）。"""
+    return static_html_response("credits.html")
+
+
+@app.get("/credits-admin.html")
+async def credits_admin_page():
+    """积分与计费设置页（仅管理员，`_is_admin_only()` 已拦截非管理员）。"""
+    return static_html_response("credits-admin.html")
 
 @app.get("/api/view")
 def view_image(filename: str, type: str = "input", subfolder: str = ""):

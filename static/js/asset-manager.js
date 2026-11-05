@@ -1972,6 +1972,10 @@ let styleLibraryData = {styles:[], min_images:3};
 let styleLibraryLoadedScope = '';
 let activeStyleId = '';
 let pendingStyleDeleteId = '';
+let styleComposer = null;            // 新建风格草稿：{name, files, busy, phase, done, total, touched}
+let styleComposerThumbUrls = [];     // 待创建参考图的本地预览 URL
+// 素材多选直接建风格（2026-11-05）：批量管理里勾 3~6 张现成素材，命名后立刻生成风格 Skill
+let styleFromPick = null;            // {ids:[...], name:'', busy:false, touched:false}
 const STYLE_STATUS_TEXT = {draft:'未创建', building:'构建中', ready:'构建完成', failed:'创建失败', shared:'团队共享'};
 function styleStatusText(style){ return STYLE_STATUS_TEXT[style?.status] || '未创建'; }
 function styleScopeName(){ return assetScope === 'team' ? 'team' : 'personal'; }
@@ -2001,6 +2005,23 @@ function bindStyleManagerEvents(){
     if(bindStyleManagerEvents.done) return;
     bindStyleManagerEvents.done = true;
     root.addEventListener('click', event => {
+        const thumbDel = event.target.closest('[data-style-thumb-del]');
+        if(thumbDel){
+            event.preventDefault();
+            event.stopPropagation();
+            if(!styleComposer) return;
+            styleComposer.touched = true;
+            styleComposer.files.splice(Number(thumbDel.dataset.styleThumbDel) || 0, 1);
+            updateStyleComposerUI();
+            return;
+        }
+        if(event.target.closest('#styleComposerPick')){
+            if(styleComposer) styleComposer.touched = true;
+            document.getElementById('styleComposerInput')?.click();
+            return;
+        }
+        if(event.target.closest('#styleComposerCancel')){ closeStyleComposer(); return; }
+        if(event.target.closest('#styleComposerCreate')){ createStyleFromComposer(); return; }
         const imageDel = event.target.closest('[data-style-image-del]');
         if(imageDel){
             event.preventDefault();
@@ -2018,7 +2039,30 @@ function bindStyleManagerEvents(){
         const trigger = event.target.closest('[data-style-action]');
         if(trigger) handleStyleAction(trigger.dataset.styleAction);
     });
+    root.addEventListener('input', event => {
+        if(event.target?.id === 'stylePickName'){
+            if(!styleFromPick) return;
+            styleFromPick.name = event.target.value;
+            styleFromPick.touched = true;
+            // 只改按钮可用状态，别整块重渲染，否则输入框会丢焦点
+            const createBtn = root.querySelector('[data-style-pick-create]');
+            if(createBtn) createBtn.disabled = !!styleFromPick.busy || !styleFromPick.name.trim();
+            return;
+        }
+        if(event.target?.id !== 'styleComposerName' || !styleComposer) return;
+        styleComposer.name = event.target.value;
+        styleComposer.touched = true;
+        updateStyleComposerUI();
+    });
     root.addEventListener('change', event => {
+        if(event.target?.id === 'styleComposerInput'){
+            const files = [...(event.target.files || [])];
+            event.target.value = '';
+            if(!styleComposer || !files.length) return;
+            styleComposer.files = (styleComposer.files || []).concat(files);
+            updateStyleComposerUI();
+            return;
+        }
         if(event.target?.id === 'styleUploadInput'){
             const files = [...(event.target.files || [])];
             event.target.value = '';
@@ -2058,6 +2102,170 @@ function renderStyleDetail(style, opts){
         </div>
     `;
 }
+/* 新建风格：和画布内「资产库 → 风格库」完全同一套交互——命名 + 选参考图 + 进度条
+   都长在同一块面板里，点「创建」后原地显示「上传 n/total → 生成 Skill」，一步到底。 */
+function releaseStyleComposerThumbs(){
+    styleComposerThumbUrls.forEach(url => { try { URL.revokeObjectURL(url); } catch(e) {} });
+    styleComposerThumbUrls = [];
+}
+function styleComposerThumbUrl(file){
+    const url = URL.createObjectURL(file);
+    styleComposerThumbUrls.push(url);
+    return url;
+}
+function styleComposerHtml(){
+    return `
+        <div class="style-composer" id="styleComposer">
+            <input id="styleComposerName" class="style-composer-name" type="text" placeholder="风格名称" maxlength="40" autocomplete="off" value="${escapeAttr(styleComposer?.name || '')}">
+            <button id="styleComposerPick" class="style-composer-pick" type="button">
+                <i data-lucide="image-plus"></i><span id="styleComposerPickText">选择参考图</span>
+            </button>
+            <div id="styleComposerThumbs" class="style-composer-thumbs"></div>
+            <div id="styleComposerProgress" class="style-progress" hidden>
+                <div class="style-progress-track"><i></i></div>
+                <span class="style-progress-text"></span>
+            </div>
+            <p class="style-composer-tip">至少 ${styleMinImages()} 张同画风的参考图，点「创建」后系统会自动生成 Skill，Agent 生图时会调用它。</p>
+            <div class="style-composer-actions">
+                <button id="styleComposerCancel" class="style-composer-cancel" type="button">取消</button>
+                <button id="styleComposerCreate" class="style-composer-create" type="button" disabled>创建</button>
+            </div>
+        </div>
+        <input id="styleComposerInput" type="file" accept="image/*" multiple hidden>
+    `;
+}
+function openStyleComposer(){
+    if(styleTeamView()){ setStatus('团队风格库当前为只读视图，切回「个人」再操作'); return; }
+    styleComposer = {name:'', files:[], busy:false, phase:'', done:0, total:0, touched:false};
+    pendingStyleDeleteId = '';
+    render();
+    setTimeout(() => focusStyleComposerName(), 40);
+}
+// 面板会被异步 render 重建，命名框被换掉就补一次焦点；用户一动过面板就不再抢焦点
+function focusStyleComposerName(tries){
+    if(!styleComposer || styleComposer.touched) return;
+    const el = document.getElementById('styleComposerName');
+    if(el){
+        el.focus();
+        if(document.activeElement === el) return;
+    }
+    const round = (tries || 0) + 1;
+    if(round <= 8) setTimeout(() => focusStyleComposerName(round), 80);
+}
+function closeStyleComposer(){
+    if(styleComposer?.busy) return;
+    styleComposer = null;
+    releaseStyleComposerThumbs();
+    render();
+}
+// 只刷新面板里的局部 DOM（小图/进度/按钮），不动命名输入框，免得打字时丢焦点
+function updateStyleComposerUI(){
+    if(!styleComposer) return;
+    const files = styleComposer.files || [];
+    const busy = !!styleComposer.busy;
+    const pickText = document.getElementById('styleComposerPickText');
+    if(pickText) pickText.textContent = files.length ? `已选 ${files.length} 张` : '选择参考图';
+    const thumbs = document.getElementById('styleComposerThumbs');
+    if(thumbs){
+        releaseStyleComposerThumbs();
+        // 小图右上角的小×：选错了直接移除，不用清空重选
+        thumbs.innerHTML = files.slice(0, 8)
+            .map((file, i) => `<span class="style-composer-thumb">
+                <img src="${escapeAttr(styleComposerThumbUrl(file))}" alt="">
+                <button class="style-composer-thumb-x" type="button" data-style-thumb-del="${i}" title="移除这张参考图" aria-label="移除这张参考图">×</button>
+            </span>`).join('')
+            + (files.length > 8 ? `<span class="style-composer-more">+${files.length - 8}</span>` : '');
+    }
+    const progress = document.getElementById('styleComposerProgress');
+    if(progress){
+        const phase = styleComposer.phase || '';
+        progress.hidden = !phase;
+        const total = Number(styleComposer.total) || files.length || 1;
+        const done = Number(styleComposer.done) || 0;
+        const percent = phase === '构建中' ? 100 : Math.round(Math.min(done, total) / Math.max(total, 1) * 100);
+        const bar = progress.querySelector('.style-progress-track i');
+        const text = progress.querySelector('.style-progress-text');
+        if(bar) bar.style.width = percent + '%';
+        if(text) text.textContent = phase === '构建中'
+            ? '正在生成风格 Skill…'
+            : `上传参考图 ${Math.min(done + (busy ? 1 : 0), total)}/${total}`;
+    }
+    const nameInput = document.getElementById('styleComposerName');
+    const pickBtn = document.getElementById('styleComposerPick');
+    const cancelBtn = document.getElementById('styleComposerCancel');
+    const createBtn = document.getElementById('styleComposerCreate');
+    if(nameInput) nameInput.disabled = busy;
+    if(pickBtn) pickBtn.disabled = busy;
+    if(cancelBtn) cancelBtn.disabled = busy;
+    if(createBtn) createBtn.disabled = busy || (!(styleComposer.name || '').trim() || !files.length);
+}
+async function createStyleFromComposer(){
+    if(!styleComposer || styleComposer.busy) return;
+    const name = (styleComposer.name || '').trim();
+    const files = (styleComposer.files || []).slice();
+    if(!name){ setStatus('先给风格起个名字'); document.getElementById('styleComposerName')?.focus(); return; }
+    if(!files.length){ setStatus('先选参考图'); return; }
+    const min = styleMinImages();
+    // 创建期间面板不关，进度条就长在这块面板里
+    styleComposer.busy = true;
+    styleComposer.phase = '上传中';
+    styleComposer.done = 0;
+    styleComposer.total = files.length;
+    updateStyleComposerUI();
+    let styleId = '';
+    let categoryId = '';
+    let added = 0;
+    try{
+        const created = await apiJson('/api/style-library/styles', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})
+        });
+        styleId = created?.style?.id || '';
+        categoryId = created?.style?.category_id || '';
+        if(!styleId) throw new Error('创建失败');
+        // 一张一张传：进度条能看见 n/total，也不会让一批图全压在一个长请求里
+        for(let i = 0; i < files.length; i++){
+            const form = new FormData();
+            form.append('files', files[i]);
+            const uploaded = await apiJson('/api/ai/upload', {method:'POST', body:form});
+            const items = (uploaded?.files || []).filter(file => file && file.url)
+                .map(file => ({library_id: styleId, category_id: categoryId, url: file.url, name: file.name || 'style'}));
+            if(!items.length) throw new Error('没有可用的图片');
+            await apiJson('/api/asset-library/items/batch', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({library_id: styleId, category_id: categoryId, items})
+            });
+            added += items.length;
+            if(styleComposer){ styleComposer.done = i + 1; styleComposer.total = files.length; updateStyleComposerUI(); }
+        }
+        activeStyleId = styleId;
+        if(files.length >= min){
+            styleComposer.phase = '构建中';
+            updateStyleComposerUI();
+            await apiJson(`/api/style-library/styles/${encodeURIComponent(styleId)}/build`, {
+                method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'
+            });
+            setStatus(`风格「${name}」已创建完成，Agent 生图时会自动调用`);
+        } else {
+            setStatus(`已新建风格类型：${name}，还差 ${min - files.length} 张参考图，够了再点「开始创建」`);
+        }
+        styleComposer = null;
+        releaseStyleComposerThumbs();
+    }catch(err){
+        setStatus(`创建失败：${err?.message || err}`);
+        if(styleId){
+            // 风格本体已经建出来了，就停在这条风格的详情上，别让用户以为啥都没发生
+            activeStyleId = styleId;
+            styleComposer = null;
+            releaseStyleComposerThumbs();
+        } else if(styleComposer){
+            styleComposer.busy = false;
+            styleComposer.phase = '';
+            updateStyleComposerUI();
+        }
+    }
+    await ensureStyleLibrary(true);
+    render();
+}
 async function renderStyleManager(){
     bindStyleManagerEvents();
     const data = await ensureStyleLibrary();
@@ -2066,6 +2274,7 @@ async function renderStyleManager(){
     const current = currentStyleEntry();
     if(current) activeStyleId = current.id;
     const teamView = styleTeamView();
+    if(teamView && styleComposer){ styleComposer = null; releaseStyleComposerThumbs(); }
     const min = styleMinImages();
     const images = current?.images || [];
     const canBuild = !!current && !teamView && current.image_count >= min && current.status !== 'building';
@@ -2091,26 +2300,26 @@ async function renderStyleManager(){
         <section class="asset-panel asset-content">
             <div class="content-toolbar">
                 <div class="content-heading">
-                    <strong>${current ? escapeHtml(current.name) : '风格库'}</strong>
-                    <span>${current ? `${current.image_count} 张参考图（至少 ${min} 张）` : '先在左侧新建一个风格类型'}</span>
+                    <strong>${styleComposer ? '新建风格' : (current ? escapeHtml(current.name) : '风格库')}</strong>
+                    <span>${styleComposer ? `命名 + 选参考图，至少 ${min} 张` : (current ? `${current.image_count} 张参考图（至少 ${min} 张）` : '先在左侧新建一个风格类型')}</span>
                 </div>
                 <div class="asset-tools">
                     <div class="asset-scope-switch" role="group" aria-label="风格库范围">
                         <button class="asset-scope-btn ${teamView ? '' : 'active'}" type="button" data-asset-scope="personal" aria-pressed="${teamView ? 'false' : 'true'}"><i data-lucide="user"></i><span>个人</span></button>
                         <button class="asset-scope-btn ${teamView ? 'active' : ''}" type="button" data-asset-scope="team" aria-pressed="${teamView ? 'true' : 'false'}"><i data-lucide="users"></i><span>团队</span></button>
                     </div>
-                    ${current && !teamView ? `<button class="asset-btn primary" type="button" data-style-action="upload"><i data-lucide="upload"></i><span>上传参考图</span></button>` : ''}
+                    ${current && !teamView && !styleComposer ? `<button class="asset-btn primary" type="button" data-style-action="upload"><i data-lucide="upload"></i><span>上传参考图</span></button>` : ''}
                 </div>
             </div>
             <div class="content-scroll">
-                ${current ? `<div class="style-grid">
+                ${styleComposer ? styleComposerHtml() : (current ? `<div class="style-grid">
                     ${images.map(img => `<figure class="style-thumb" title="${escapeAttr(img.name)}">
                         <img src="${escapeAttr(img.url)}" alt="" loading="lazy">
                         <figcaption>${escapeHtml(img.name)}</figcaption>
                         ${teamView || !img.id ? '' : `<button class="style-thumb-x" type="button" data-style-image-del="${escapeAttr(img.id)}" data-style-image-of="${escapeAttr(current.id)}" title="移除这张参考图" aria-label="移除这张参考图">×</button>`}
                     </figure>`).join('')}
                     ${teamView ? '' : '<button class="style-add" type="button" data-style-action="upload"><i data-lucide="plus"></i><span>添加参考图</span></button>'}
-                </div>` : '<div class="style-empty"><i data-lucide="palette"></i><span>新建一个风格类型，上传至少 3 张参考图，然后点「开始创建」</span></div>'}
+                </div>` : '<div class="style-empty"><i data-lucide="palette"></i><span>新建一个风格类型，上传至少 3 张参考图，然后点「开始创建」</span></div>')}
             </div>
             <input id="styleUploadInput" type="file" accept="image/*" multiple hidden>
         </section>
@@ -2121,30 +2330,21 @@ async function renderStyleManager(){
         </aside>
     `;
     refreshIcons();
+    if(styleComposer) updateStyleComposerUI();
+    if(styleComposer && !styleComposer.touched) focusStyleComposerName();
 }
 async function handleStyleAction(action){
+    // 新建不再弹系统 prompt：走和画布内风格库同一块「命名 + 选图 + 进度」面板
+    if(action === 'new'){ openStyleComposer(); return; }
     if(action === 'upload'){ document.getElementById('styleUploadInput')?.click(); return; }
     const style = currentStyleEntry();
     if(!style) return;
-    if(styleTeamView() && action !== 'new'){
+    if(styleTeamView()){
         setStatus('团队风格库当前为只读视图，切回「个人」再操作');
         return;
     }
     try{
-        if(action === 'new'){
-            const name = (window.prompt('新风格类型名称', '') || '').trim();
-            if(!name) return;
-            const created = await apiJson('/api/style-library/styles', {
-                method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})
-            });
-            await ensureStyleLibrary(true);
-            const styleId = created?.style?.id || (styleLibraryData.styles || [])[0]?.id || '';
-            if(styleId) activeStyleId = styleId;
-            render();
-            // 建完直接弹选图：命名 → 选图 → 够张数自动生成 Skill，一步到底
-            if(styleId) document.getElementById('styleUploadInput')?.click();
-            setStatus(`已新建风格类型：${name}，选至少 ${Number(styleLibraryData.min_images) || 3} 张参考图即可完成`);
-        } else if(action === 'rename'){
+        if(action === 'rename'){
             const name = (window.prompt('重命名风格类型', style.name) || '').trim();
             if(!name || name === style.name) return;
             await apiJson(`/api/style-library/styles/${encodeURIComponent(style.id)}`, {
@@ -2245,6 +2445,87 @@ async function deleteStyleImage(styleId, itemId){
     }
     render();
 }
+// ===== 素材多选直接建风格（2026-11-05）=====
+function stylePickLimit(){ return 6; }
+function stylePickCandidateIds(){
+    const ids = [];
+    for(const item of selectedAssetImageItems()){
+        if(ids.length >= stylePickLimit()) break;
+        if(item?.id) ids.push(String(item.id));
+    }
+    return ids;
+}
+function openStyleFromPick(){
+    if(assetScope === 'team'){ setStatus('团队资产库是只读视图，切回「个人」再构建风格'); return; }
+    const min = styleMinImages();
+    const ids = stylePickCandidateIds();
+    if(ids.length < min){
+        setStatus(`至少选 ${min} 张图片才能构建风格（当前 ${ids.length} 张）`);
+        return;
+    }
+    styleFromPick = {ids, name:'', busy:false, touched:false};
+    render();
+    setTimeout(() => focusStylePickName(), 40);
+}
+// 面板会被异步 render 重建，命名框被换掉就补一次焦点；用户一动过输入框就不再抢焦点
+function focusStylePickName(tries){
+    if(!styleFromPick || styleFromPick.touched) return;
+    const el = document.getElementById('stylePickName');
+    if(el){
+        el.focus();
+        if(document.activeElement === el) return;
+    }
+    const round = (tries || 0) + 1;
+    if(round <= 8) setTimeout(() => focusStylePickName(round), 80);
+}
+function closeStyleFromPick(){
+    if(styleFromPick?.busy) return;
+    styleFromPick = null;
+    render();
+}
+function styleFromPickHtml(){
+    if(!styleFromPick) return '';
+    const total = styleFromPick.ids.length;
+    const name = styleFromPick.name || '';
+    const busy = !!styleFromPick.busy;
+    return `
+        <div class="style-pick-bar ${busy ? 'busy' : ''}">
+            <span class="style-pick-hint"><i data-lucide="palette"></i><span>用选中的 ${total} 张图片构建风格 Skill${busy ? '：正在生成…' : ''}</span></span>
+            <input id="stylePickName" class="style-pick-name" type="text" maxlength="40" autocomplete="off"
+                value="${escapeAttr(name)}" placeholder="风格名称，例如：儿童户外活动" ${busy ? 'disabled' : ''}>
+            <button class="asset-btn" type="button" data-style-pick-cancel ${busy ? 'disabled' : ''}>取消</button>
+            <button class="asset-btn primary" type="button" data-style-pick-create ${busy || !name.trim() ? 'disabled' : ''}>
+                <i data-lucide="${busy ? 'loader-2' : 'sparkles'}"></i><span>${busy ? '生成中' : '构建风格'}</span>
+            </button>
+        </div>`;
+}
+async function createStyleFromPick(){
+    if(!styleFromPick || styleFromPick.busy) return;
+    const name = String(styleFromPick.name || '').trim();
+    if(!name){ setStatus('先给风格起个名字'); focusStylePickName(); return; }
+    styleFromPick.busy = true;
+    render();
+    let styleId = '';
+    try{
+        const data = await apiJson('/api/style-library/from-items', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({name, item_ids: styleFromPick.ids})
+        });
+        styleId = data?.style?.id || '';
+        styleFromPick = null;
+        selectedAssetIds.clear();
+        assetManageMode = false;
+        activeStyleId = styleId;
+        activeTab = 'styles';
+        setStatus(`风格「${name}」已构建完成`);
+    }catch(err){
+        if(styleFromPick) styleFromPick.busy = false;
+        setStatus(err?.message || '构建风格失败');
+    }
+    render();
+}
+
 function renderAssetManager(){
     normalizeAssetState();
     const libs = assetLibraries();
@@ -2288,6 +2569,7 @@ function renderAssetManager(){
             ${teamView ? '<div class="asset-scope-hint"><i data-lucide="users"></i><span>团队资产库对所有人可见；加入团队请到「个人」里选中素材后点「加入团队」。</span></div>' : ''}
             ${renderAssetClipboardBar()}
             ${renderLocalClipboardBar()}
+            ${styleFromPickHtml()}
             <div class="manage-tools">
                 <div class="manage-group manage-select-group">
                     <span class="manage-group-title">管理</span>
@@ -2303,6 +2585,11 @@ function renderAssetManager(){
                         ${teamView ? '' : `<button class="asset-btn danger" type="button" data-asset-delete-selected ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="trash-2"></i><span>删除所选</span></button>`}
                     </div>
                 </div>
+                ${teamView ? '' : `<div class="manage-group manage-style-group">
+                    <span class="manage-group-title">风格</span>
+                    <button class="asset-btn" type="button" data-asset-build-style ${imageCount >= styleMinImages() && !styleFromPick ? '' : 'disabled'} title="勾选 3~6 张图片，命名后直接生成风格 Skill"><i data-lucide="palette"></i><span>构建风格 Skill</span></button>
+                    <span class="manage-summary">${imageCount >= styleMinImages() ? `可用 ${Math.min(imageCount, stylePickLimit())} 张` : `需 ${styleMinImages()} 张以上`}</span>
+                </div>`}
                 ${teamView ? '' : `<div class="manage-group manage-ai-group">
                     <span class="manage-group-title">AI 处理</span>
                     <button class="asset-btn" type="button" data-asset-classify-selected ${imageCount && !assetClassifyBusy ? '' : 'disabled'}><i data-lucide="${assetClassifyBusy ? 'loader-2' : 'tags'}"></i><span>${assetClassifyBusy ? '分类中' : '智能分类'}</span></button>
@@ -2322,6 +2609,21 @@ function renderAssetManager(){
             ${renderAssetDetail(detail)}
         </aside>
     `;
+    bindStylePickEvents();
+    if(styleFromPick && !styleFromPick.touched) focusStylePickName();
+}
+// 命名条的输入监听要自己绑：bindStyleManagerEvents 只在「风格库」页签渲染时才跑
+function bindStylePickEvents(){
+    if(bindStylePickEvents.done) return;
+    bindStylePickEvents.done = true;
+    root.addEventListener('input', event => {
+        if(event.target?.id !== 'stylePickName' || !styleFromPick) return;
+        styleFromPick.name = event.target.value;
+        styleFromPick.touched = true;
+        // 只改按钮可用状态，别整块重渲染，否则输入框会丢焦点
+        const btn = root.querySelector('[data-style-pick-create]');
+        if(btn) btn.disabled = !!styleFromPick.busy || !styleFromPick.name.trim();
+    });
 }
 function renderWorkflowManager(){
     normalizeWorkflowState();
@@ -3973,6 +4275,7 @@ async function handleClick(event){
         assetManageMode = !assetManageMode;
         pendingBatchDelete = '';
         if(!assetManageMode) selectedAssetIds.clear();
+        styleFromPick = null;
         render();
         return;
     }
@@ -4005,6 +4308,9 @@ async function handleClick(event){
     if(target.closest?.('[data-asset-download-selected]')){ await downloadSelectedAssets(); return; }
     if(target.closest?.('[data-asset-copy-to-canvas]')){ copySelectedAssetsToCanvas(); return; }
     if(target.closest?.('[data-asset-delete-selected]')){ await deleteSelectedAssets(); return; }
+    if(target.closest?.('[data-asset-build-style]')){ openStyleFromPick(); return; }
+    if(target.closest?.('[data-style-pick-cancel]')){ closeStyleFromPick(); return; }
+    if(target.closest?.('[data-style-pick-create]')){ await createStyleFromPick(); return; }
     if(target.closest?.('[data-asset-upload]')){
         if(uploadInput) uploadInput.accept = 'image/*,video/*,audio/*';
         uploadInput?.click();

@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>积分与计费 · Infinite Canvas</title>
+<style>
+  :root{--bg:#f7f8fb;--card:#fff;--text:#141821;--dim:#6b7280;--line:#e6e8ef;--accent:#141821;--soft:#f1f3f8;--danger:#e5484d;--gold:#b7791f;--ok:#1a7f4b}
+  @media (prefers-color-scheme:dark){:root{--bg:#0b0d12;--card:#151922;--text:#e8ecf4;--dim:#8b94a6;--line:#252b38;--accent:#e8ecf4;--soft:#1b202b;--gold:#e0b266;--ok:#4ade80}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:"Microsoft YaHei UI","PingFang SC",system-ui,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:32px 20px 80px}
+  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;gap:12px}
+  h1{font-size:19px;margin:0}
+  .back{font-size:12.5px;color:var(--dim);text-decoration:none;padding:6px 12px;border-radius:8px;border:1px solid var(--line)}
+  .back:hover{background:var(--soft)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-bottom:16px}
+  .card h2{font-size:13px;margin:0 0 4px;font-weight:800;display:flex;align-items:center;gap:8px}
+  .card .sub{font-size:12px;color:var(--dim);margin:0 0 14px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  input,select{height:36px;padding:0 10px;border-radius:9px;border:1px solid var(--line);background:var(--soft);color:var(--text);font-size:13px;outline:none;min-width:90px}
+  input:focus,select:focus{border-color:var(--accent)}
+  input.grow{flex:1}
+  button{height:36px;padding:0 15px;border:0;border-radius:9px;background:var(--accent);color:var(--bg);font-size:13px;font-weight:700;cursor:pointer}
+  button:hover{opacity:.88}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--text);font-weight:600;height:32px;padding:0 12px;font-size:12.5px}
+  button.danger{background:transparent;border:1px solid var(--line);color:var(--danger);font-weight:600;height:32px;padding:0 12px;font-size:12.5px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+  .field{display:flex;flex-direction:column;gap:5px}
+  .field label{font-size:11.5px;color:var(--dim);font-weight:700;letter-spacing:.03em}
+  .hint{font-size:11.5px;color:var(--dim);margin-top:8px;line-height:1.6}
+  .switch{display:flex;align-items:center;gap:8px;font-size:13px}
+  textarea{padding:8px 10px;border-radius:9px;border:1px solid var(--line);background:var(--soft);color:var(--text);font-size:12.5px;line-height:1.5;resize:vertical;outline:none;font-family:inherit}
+  textarea:focus{border-color:var(--accent)}
+  .split{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:16px;padding-top:14px;border-top:1px dashed var(--line)}
+  .split-col{display:flex;flex-direction:column;gap:10px}
+  .split-title{font-size:12px;font-weight:800;color:var(--text)}
+  .list-item{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:9px 0;border-bottom:1px dashed var(--line)}
+  .list-item:last-child{border-bottom:0}
+  .mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--dim)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{padding:9px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
+  th{font-size:11px;color:var(--dim);letter-spacing:.04em}
+  td input,td select{height:32px;font-size:12.5px}
+  .price-cell{display:flex;gap:6px;flex-wrap:wrap}
+  .price-cell input{width:84px}
+  .msg{font-size:12.5px;min-height:18px;margin-top:10px}
+  .msg.ok{color:var(--ok)}.msg.err{color:var(--danger)}
+  .toolbar{display:flex;gap:10px;align-items:center;justify-content:flex-end;padding:10px 0 0;background:none;box-shadow:none}
+  .thumb{width:54px;height:54px;border-radius:8px;border:1px solid var(--line);object-fit:cover;background:var(--soft)}
+  .tag{font-size:10.5px;padding:2px 7px;border-radius:999px;background:var(--soft);color:var(--dim);font-weight:700}
+</style>
+<link rel="stylesheet" href="/static/css/liquid-glass.css?v=1.3.5.1793776698" />
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <h1>积分与计费</h1>
+      <div class="sub" style="color:#6b7280;font-size:12px;margin-top:4px">模型单价、汇率、注册限制、充值套餐与收款方式。只有管理员能看到这个页面。</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <a class="back" href="/accounts.html">账号管理</a>
+      <a class="back" href="/static/api-settings.html?v=1.3.5.1793885297">API 设置</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>汇率与记账</h2>
+    <p class="sub">1 积分值多少钱，只影响「充值套餐」的换算提示；模型单价仍是「积分」。</p>
+    <div class="grid">
+      <div class="field"><label>1 积分 = 多少人民币（￥）</label><input id="rateCny" type="number" step="0.01" /></div>
+      <div class="field"><label>1 积分 = 多少美元（$）</label><input id="rateUsd" type="number" step="0.01" /></div>
+      <div class="field"><label>汇率备注（可空）</label><input id="rateNote" placeholder="例如：按 1:1 内部结算" /></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <label class="switch"><input id="autoDeduct" type="checkbox" style="width:16px;height:16px;min-width:0" /> 运行模型时自动扣积分</label>
+      <label class="switch"><input id="enforceBalance" type="checkbox" style="width:16px;height:16px;min-width:0" /> 余额不足时阻止运行</label>
+    </div>
+    <div class="hint">默认「只记账不拦截」：即使余额为 0，模型照常运行，流水里记负数。想强制收费再勾第二项。</div>
+  </div>
+
+  <div class="card">
+    <h2>注册限制</h2>
+    <p class="sub">注册页会按这里的设置显示必填项；管理员账号与第一个账号不受限制。</p>
+    <div class="grid">
+      <div class="field"><label>新用户初始积分</label><input id="initialCredits" type="number" step="0.01" /></div>
+      <div class="field"><label>注册需要邮箱</label><select id="reqEmail"><option value="0">不需要</option><option value="1">必填</option></select></div>
+      <div class="field"><label>注册需要手机号</label><select id="reqPhone"><option value="0">不需要</option><option value="1">必填</option></select></div>
+    </div>
+    <div class="split">
+      <div class="split-col">
+        <div class="split-title">邮箱范围限制</div>
+        <div class="field"><label>只允许这些邮箱 / 域名（逗号或换行分隔，留空=不限制）</label>
+          <textarea id="emailAllow" rows="2" placeholder="例如 qq.com, 163.com, hr@corp.com"></textarea></div>
+        <div class="field"><label>不允许这些邮箱 / 域名</label>
+          <textarea id="emailDeny" rows="2" placeholder="例如 temp-mail.org, spam.com"></textarea></div>
+        <label class="switch"><input id="emailBlockFree" type="checkbox" style="width:16px;height:16px;min-width:0" /> 不允许非主流邮箱（临时邮箱 / 小众域名）</label>
+      </div>
+      <div class="split-col">
+        <div class="split-title">手机号范围限制</div>
+        <div class="field"><label>只允许这些国家码（留空=不限制）</label>
+          <textarea id="phoneAllow" rows="2" placeholder="例如 86, 852, 1"></textarea></div>
+        <div class="field"><label>不允许这些国家码</label>
+          <textarea id="phoneDeny" rows="2" placeholder="例如 1, 44"></textarea></div>
+        <label class="switch"><input id="phoneBlockVirtual" type="checkbox" style="width:16px;height:16px;min-width:0" /> 禁止虚拟运营商号段（170 / 171 / 162 / 165 / 167 等）</label>
+      </div>
+    </div>
+    <div class="hint">邮箱白名单 / 黑名单可写「完整邮箱」或「域名」；手机号按国家码（+86、0086、86 都认）。管理员账号不受限制。</div>
+  </div>
+
+  <div class="card">
+    <h2>模型积分额度</h2>
+    <p class="sub">模型单价已经搬到 <a href="/static/api-settings.html?v=1.3.5.1793885297#creditsBillingCard">API 设置 · 模型积分额度</a>（2026-11-05 起在那里统一维护）。这里只保留汇率、注册限制、充值套餐和收款方式。</p>
+  </div>
+
+  <div class="card">
+    <h2>充值套餐</h2>
+    <p class="sub">成员在「我的积分」里看到的可选额度。价格只用于展示和收款核对。</p>
+    <div id="presetList"></div>
+    <div class="row" style="margin-top:12px">
+      <input id="presetLabel" placeholder="标签（例如 100 积分）" style="width:180px" />
+      <input id="presetCredits" type="number" step="0.01" placeholder="积分数" style="width:110px" />
+      <input id="presetCny" type="number" step="0.01" placeholder="价格￥" style="width:110px" />
+      <input id="presetUsd" type="number" step="0.01" placeholder="价格$（可空）" style="width:110px" />
+      <button class="ghost" id="addPreset">添加套餐</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>收款方式</h2>
+    <p class="sub">上传收款二维码，或填一个收款链接（PayPal.me 等）。成员提交充值申请时会看到这些。</p>
+    <div id="paymentList"></div>
+    <div class="row" style="margin-top:12px">
+      <select id="payMethod"><option value="wechat">微信</option><option value="alipay">支付宝</option><option value="paypal">PayPal</option><option value="bank">银行卡</option><option value="other">其它</option></select>
+      <input id="payLabel" placeholder="显示名（例如 微信收款码）" style="width:170px" />
+      <input id="payValue" class="grow" placeholder="二维码图片地址 / 收款链接" />
+      <button class="ghost" id="payUploadBtn">上传二维码</button>
+      <input id="payUploadInput" type="file" accept="image/*" hidden />
+      <button class="ghost" id="addPayment">添加</button>
+    </div>
+    <div class="hint">二维码上传后会存到服务器的 <span class="mono">assets/pay/</span> 目录，返回的地址自动填进左边的输入框。</div>
+  </div>
+
+  <div class="toolbar">
+    <span class="msg" id="saveMsg"></span>
+    <button id="saveAll">保存全部设置</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var settings = null;
+
+  function api(path, opts) {
+    return fetch(path, Object.assign({ credentials: 'same-origin' }, opts || {})).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        if (!r.ok) throw new Error(d.detail || ('请求失败 ' + r.status));
+        return d;
+      });
+    });
+  }
+
+  function msg(text, kind) {
+    var n = $('saveMsg');
+    n.textContent = text || '';
+    n.className = 'msg' + (kind ? ' ' + kind : '');
+  }
+
+  var METHOD_LABEL = { wechat: '微信', alipay: '支付宝', paypal: 'PayPal', bank: '银行卡', other: '其它' };
+
+  function input(value, type, width, step) {
+    var el = document.createElement('input');
+    el.type = type || 'text';
+    if (width) el.style.width = width + 'px';
+    if (step) el.step = step;
+    el.value = value === undefined || value === null ? '' : value;
+    return el;
+  }
+
+  function button(text, cls, onclick) {
+    var b = document.createElement('button');
+    b.className = cls || 'ghost';
+    b.type = 'button';
+    b.textContent = text;
+    if (onclick) b.onclick = onclick;
+    return b;
+  }
+
+  // -------- 模型额度表
+  function priceCell(entry) {
+    var box = document.createElement('div');
+    box.className = 'price-cell';
+    function num(ph, val, key, sub) {
+      var holder = document.createElement('label');
+      holder.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:11px;color:#6b7280';
+      var e = input(val, 'number', 78, 0.0001);
+      e.oninput = function () {
+        if (sub) { entry.per_second = entry.per_second || {}; entry.per_second[sub] = Number(e.value || 0); }
+        else entry[key] = Number(e.value || 0);
+      };
+      holder.appendChild(document.createTextNode(ph));
+      holder.appendChild(e);
+      return holder;
+    }
+    if (entry.kind === 'llm') {
+      box.appendChild(num('输入/1M', entry.input, 'input'));
+      box.appendChild(num('输出/1M', entry.output, 'output'));
+      box.appendChild(num('缓存/1M', entry.cache, 'cache'));
+    } else if (entry.kind === 'image') {
+      box.appendChild(num('积分/张', entry.per_image, 'per_image'));
+    } else {
+      entry.per_second = entry.per_second || { '1080p': 0, '720p': 0, '480p': 0 };
+      box.appendChild(num('1080P/秒', entry.per_second['1080p'], null, '1080p'));
+      box.appendChild(num('720P/秒', entry.per_second['720p'], null, '720p'));
+      box.appendChild(num('480P/秒', entry.per_second['480p'], null, '480p'));
+    }
+    return box;
+  }
+
+  function renderModels() {
+    var tb = $('modelRows');
+    if (!tb) return; // 模型单价已搬到 API 设置页（m16157）
+    tb.innerHTML = '';
+    var names = Object.keys(settings.models || {}).sort();
+    if (!names.length) {
+      tb.innerHTML = '<tr><td colspan="4" style="color:#6b7280">还没有配置任何模型，未配置的模型不会显示积分。</td></tr>';
+      return;
+    }
+    names.forEach(function (name) {
+      var entry = settings.models[name];
+      var tr = document.createElement('tr');
+
+      var tdName = document.createElement('td');
+      var nameInput = input(name, 'text', 200);
+      nameInput.onchange = function () {
+        var next = nameInput.value.trim();
+        if (!next || next === name) { nameInput.value = name; return; }
+        settings.models[next] = entry;
+        delete settings.models[name];
+        renderModels();
+      };
+      tdName.appendChild(nameInput);
+      tr.appendChild(tdName);
+
+      var tdKind = document.createElement('td');
+      var sel = document.createElement('select');
+      [['llm', '语言'], ['image', '图片'], ['video', '视频']].forEach(function (pair) {
+        var o = document.createElement('option');
+        o.value = pair[0];
+        o.textContent = pair[1];
+        sel.appendChild(o);
+      });
+      sel.value = entry.kind || 'llm';
+      sel.onchange = function () {
+        entry.kind = sel.value;
+        renderModels();
+      };
+      tdKind.appendChild(sel);
+      tr.appendChild(tdKind);
+
+      var tdPrice = document.createElement('td');
+      tdPrice.appendChild(priceCell(entry));
+      tr.appendChild(tdPrice);
+
+      var tdOps = document.createElement('td');
+      tdOps.appendChild(button('删除', 'danger', function () {
+        delete settings.models[name];
+        renderModels();
+      }));
+      tr.appendChild(tdOps);
+
+      tb.appendChild(tr);
+    });
+  }
+
+  // -------- 充值套餐
+  function renderPresets() {
+    var box = $('presetList');
+    box.innerHTML = '';
+    var presets = settings.topup.presets || [];
+    if (!presets.length) {
+      box.innerHTML = '<div class="hint">还没有套餐。成员将无法提交充值申请。</div>';
+      return;
+    }
+    presets.forEach(function (p, index) {
+      var row = document.createElement('div');
+      row.className = 'list-item';
+      var label = input(p.label, 'text', 170);
+      label.oninput = function () { p.label = label.value; };
+      var credits = input(p.credits, 'number', 100, 0.01);
+      credits.oninput = function () { p.credits = Number(credits.value || 0); };
+      var cny = input(p.price_cny, 'number', 100, 0.01);
+      cny.oninput = function () { p.price_cny = Number(cny.value || 0); };
+      var usd = input(p.price_usd, 'number', 100, 0.01);
+      usd.oninput = function () { p.price_usd = Number(usd.value || 0); };
+      row.appendChild(label);
+      row.appendChild(document.createTextNode('积分'));
+      row.appendChild(credits);
+      row.appendChild(document.createTextNode('￥'));
+      row.appendChild(cny);
+      row.appendChild(document.createTextNode('$'));
+      row.appendChild(usd);
+      row.appendChild(button('删除', 'danger', function () {
+        settings.topup.presets.splice(index, 1);
+        renderPresets();
+      }));
+      box.appendChild(row);
+    });
+  }
+
+  // -------- 收款方式
+  function renderPayments() {
+    var box = $('paymentList');
+    box.innerHTML = '';
+    var payments = settings.topup.payments || [];
+    if (!payments.length) {
+      box.innerHTML = '<div class="hint">还没有收款方式。成员提交充值申请时会看到「请联系管理员」。</div>';
+      return;
+    }
+    payments.forEach(function (m, index) {
+      var row = document.createElement('div');
+      row.className = 'list-item';
+
+      if (m.kind === 'qr' && m.value) {
+        var img = document.createElement('img');
+        img.className = 'thumb';
+        img.src = m.value;
+        img.alt = m.label || '';
+        row.appendChild(img);
+      }
+
+      var tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = METHOD_LABEL[m.method] || m.method;
+      row.appendChild(tag);
+
+      var label = input(m.label, 'text', 150);
+      label.oninput = function () { m.label = label.value; };
+      row.appendChild(label);
+
+      var methodSelect = document.createElement('select');
+      Object.keys(METHOD_LABEL).forEach(function (key) {
+        var o = document.createElement('option');
+        o.value = key;
+        o.textContent = METHOD_LABEL[key];
+        methodSelect.appendChild(o);
+      });
+      methodSelect.value = m.method;
+      methodSelect.onchange = function () { m.method = methodSelect.value; renderPayments(); };
+      row.appendChild(methodSelect);
+
+      var kindSelect = document.createElement('select');
+      [['qr', '二维码'], ['link', '链接']].forEach(function (pair) {
+        var o = document.createElement('option');
+        o.value = pair[0];
+        o.textContent = pair[1];
+        kindSelect.appendChild(o);
+      });
+      kindSelect.value = m.kind;
+      kindSelect.onchange = function () { m.kind = kindSelect.value; renderPayments(); };
+      row.appendChild(kindSelect);
+
+      var value = input(m.value, 'text', 240);
+      value.oninput = function () { m.value = value.value; };
+      row.appendChild(value);
+
+      row.appendChild(button('删除', 'danger', function () {
+        settings.topup.payments.splice(index, 1);
+        renderPayments();
+      }));
+      box.appendChild(row);
+    });
+  }
+
+  function splitList(text) {
+    return String(text || '').split(/[\s,，;；]+/).map(function (x) { return x.trim(); }).filter(Boolean);
+  }
+
+  function joinList(list) {
+    return (list || []).join(', ');
+  }
+
+  function fill() {
+    $('rateCny').value = settings.rate.credit_per_cny;
+    $('rateUsd').value = settings.rate.credit_per_usd;
+    $('rateNote').value = settings.rate.note || '';
+    $('autoDeduct').checked = !!settings.auto_deduct;
+    $('enforceBalance').checked = !!settings.enforce_balance;
+    $('initialCredits').value = settings.signup.initial_credits;
+    $('reqEmail').value = settings.signup.require_email ? '1' : '0';
+    $('reqPhone').value = settings.signup.require_phone ? '1' : '0';
+    var emailPolicy = (settings.signup && settings.signup.email) || {};
+    var phonePolicy = (settings.signup && settings.signup.phone) || {};
+    $('emailAllow').value = joinList(emailPolicy.allow);
+    $('emailDeny').value = joinList(emailPolicy.deny);
+    $('emailBlockFree').checked = !!emailPolicy.block_free;
+    $('phoneAllow').value = joinList(phonePolicy.allow);
+    $('phoneDeny').value = joinList(phonePolicy.deny);
+    $('phoneBlockVirtual').checked = !!phonePolicy.block_virtual;
+    renderModels();
+    renderPresets();
+    renderPayments();
+  }
+
+  function collect() {
+    settings.rate.credit_per_cny = Number($('rateCny').value || 0);
+    settings.rate.credit_per_usd = Number($('rateUsd').value || 0);
+    settings.rate.note = $('rateNote').value.trim();
+    settings.auto_deduct = $('autoDeduct').checked;
+    settings.enforce_balance = $('enforceBalance').checked;
+    settings.signup.initial_credits = Number($('initialCredits').value || 0);
+    settings.signup.require_email = $('reqEmail').value === '1';
+    settings.signup.require_phone = $('reqPhone').value === '1';
+    settings.signup.email = settings.signup.email || {};
+    settings.signup.phone = settings.signup.phone || {};
+    settings.signup.email.allow = splitList($('emailAllow').value);
+    settings.signup.email.deny = splitList($('emailDeny').value);
+    settings.signup.email.block_free = $('emailBlockFree').checked;
+    settings.signup.phone.allow = splitList($('phoneAllow').value);
+    settings.signup.phone.deny = splitList($('phoneDeny').value);
+    settings.signup.phone.block_virtual = $('phoneBlockVirtual').checked;
+    return settings;
+  }
+
+  if ($('addModel')) $('addModel').onclick = function () {
+    var name = $('newModel').value.trim();
+    if (!name) return;
+    var kind = $('newModelKind').value;
+    settings.models[name] = kind === 'llm' ? { kind: 'llm', input: 0, output: 0, cache: 0 }
+      : kind === 'image' ? { kind: 'image', per_image: 0 }
+      : { kind: 'video', per_second: { '1080p': 0, '720p': 0, '480p': 0 } };
+    $('newModel').value = '';
+    renderModels();
+  };
+
+  $('addPreset').onclick = function () {
+    var credits = Number($('presetCredits').value || 0);
+    if (!credits) { alert('请填积分数'); return; }
+    var label = $('presetLabel').value.trim() || (credits + ' 积分');
+    settings.topup.presets.push({
+      id: 'p_' + Math.random().toString(16).slice(2, 10),
+      label: label,
+      credits: credits,
+      price_cny: Number($('presetCny').value || 0),
+      price_usd: Number($('presetUsd').value || 0)
+    });
+    $('presetLabel').value = ''; $('presetCredits').value = ''; $('presetCny').value = ''; $('presetUsd').value = '';
+    renderPresets();
+  };
+
+  $('addPayment').onclick = function () {
+    var value = $('payValue').value.trim();
+    if (!value) { alert('请填二维码地址或收款链接'); return; }
+    settings.topup.payments.push({
+      id: 'm_' + Math.random().toString(16).slice(2, 10),
+      method: $('payMethod').value,
+      label: $('payLabel').value.trim() || METHOD_LABEL[$('payMethod').value],
+      kind: /^https?:\/\//.test(value) && !/\.(png|jpe?g|webp|gif)$/i.test(value) ? 'link' : 'qr',
+      value: value,
+      note: ''
+    });
+    $('payValue').value = ''; $('payLabel').value = '';
+    renderPayments();
+  };
+
+  $('payUploadBtn').onclick = function () { $('payUploadInput').click(); };
+  $('payUploadInput').onchange = function () {
+    var file = this.files && this.files[0];
+    if (!file) return;
+    var form = new FormData();
+    form.append('file', file);
+    msg('上传中…');
+    api('/api/credits/payments/upload', { method: 'POST', body: form }).then(function (d) {
+      $('payValue').value = d.url;
+      msg('二维码已上传，点「添加」保存到收款方式', 'ok');
+    }).catch(function (e) { msg(e.message, 'err'); });
+    this.value = '';
+  };
+
+  $('saveAll').onclick = function () {
+    msg('保存中…');
+    api('/api/credits/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(collect())
+    }).then(function (d) {
+      settings = d.settings || settings;
+      fill();
+      msg('已保存', 'ok');
+    }).catch(function (e) { msg(e.message, 'err'); });
+  };
+
+  api('/api/auth/me').then(function (d) {
+    if (!d.user || d.user.role !== 'admin') {
+      document.querySelector('.wrap').innerHTML = '<p style="color:#e5484d">只有管理员可以访问这个页面。</p>';
+      return;
+    }
+    return api('/api/credits/settings').then(function (res) {
+      settings = res.settings;
+      fill();
+    });
+  }).catch(function () { location.replace('/login.html'); });
+})();
+</script>
+</body>
+</html>

@@ -85,6 +85,7 @@ ROOT_FILES = [
     "hunyuan3d_client.py",
     # 多账号：用户/会话/鉴权（main.py 启动时直接 import，缺了服务起不来）
     "auth.py",
+    "credits.py",
     "VERSION",
     "requirements.txt",
     "README.md",

@@ -494,3 +494,41 @@ body.theme-dark .asset-card.active { border-color:rgba(248,250,252,.86); box-sha
 .style-error { color:var(--danger); }
 .theme-dark .style-nav-item.active { border-color:rgba(232,232,234,.36); }
 @media (max-width:1100px){ .style-grid { grid-template-columns:repeat(auto-fill, minmax(112px, 1fr)); } }
+
+/* 新建风格：和画布内「资产库 → 风格库」同一套「命名 + 选图 + 进度」面板 */
+.style-composer { display:flex; flex-direction:column; gap:10px; max-width:540px; padding:14px; border:1px dashed var(--line-2); border-radius:14px; background:var(--card); }
+.style-composer-name { width:100%; height:32px; padding:0 10px; border-radius:9px; border:1px solid var(--line); background:var(--soft); color:var(--text); font-size:12.5px; font-weight:700; outline:none; }
+.style-composer-name:focus { border-color:var(--strong); }
+.style-composer-name:disabled { opacity:.65; }
+.style-composer-pick { align-self:flex-start; display:inline-flex; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 12px; border-radius:9px; border:1px dashed var(--line-2); background:transparent; color:var(--muted); font-size:11.5px; font-weight:800; cursor:pointer; }
+.style-composer-pick:hover { color:var(--text); border-color:var(--strong); }
+.style-composer-pick:disabled { opacity:.55; cursor:not-allowed; }
+.style-composer-pick i, .style-composer-pick svg { width:14px; height:14px; }
+.style-composer-thumbs { display:flex; flex-wrap:wrap; gap:8px; }
+.style-composer-thumb { position:relative; display:inline-flex; }
+.style-composer-thumbs img { display:block; width:52px; height:52px; border-radius:9px; object-fit:cover; border:1px solid var(--line); background:var(--soft); }
+.style-composer-thumb-x { position:absolute; top:-5px; right:-5px; width:16px; height:16px; padding:0; border:1px solid rgba(0,0,0,.35); border-radius:50%; background:rgba(0,0,0,.68); color:#fff; font-size:11px; line-height:1; font-weight:700; cursor:pointer; display:grid; place-items:center; }
+.style-composer-thumb-x:hover, .style-composer-thumb-x:focus-visible { background:#e5484d; border-color:#e5484d; }
+.style-composer-more { display:inline-flex; align-items:center; justify-content:center; width:52px; height:52px; border-radius:9px; border:1px dashed var(--line-2); color:var(--muted); font-size:11px; font-weight:800; }
+.style-composer-tip { margin:0; color:var(--muted); font-size:11px; font-weight:700; line-height:1.5; }
+.style-composer-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; }
+.style-composer-cancel { height:32px; padding:0 12px; border:0; border-radius:9px; background:transparent; color:var(--muted); font-size:11.5px; font-weight:800; cursor:pointer; }
+.style-composer-cancel:hover { color:var(--text); background:var(--soft); }
+.style-composer-cancel:disabled { opacity:.55; cursor:not-allowed; }
+.style-composer-create { height:32px; padding:0 16px; border:0; border-radius:9px; background:var(--strong); color:var(--strong-text); font-size:11.5px; font-weight:900; cursor:pointer; }
+.style-composer-create:disabled { opacity:.5; cursor:not-allowed; }
+.style-progress { display:flex; flex-direction:column; gap:5px; }
+.style-progress[hidden] { display:none; }
+.style-progress-track { height:5px; border-radius:999px; background:var(--soft-2, var(--soft)); overflow:hidden; }
+.style-progress-track i { display:block; height:100%; width:0; border-radius:999px; background:var(--strong); transition:width .2s ease; }
+.style-progress-text { color:var(--muted); font-size:11px; font-weight:750; }
+
+/* 素材多选直接建风格：批量管理里选好图后出现的命名条 */
+.style-pick-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 10px; padding:10px 12px; border:1px dashed var(--line-2); border-radius:12px; background:var(--card); }
+.style-pick-bar.busy { opacity:.9; }
+.style-pick-hint { display:inline-flex; align-items:center; gap:6px; color:var(--text); font-size:11.5px; font-weight:850; }
+.style-pick-hint i, .style-pick-hint svg { width:14px; height:14px; }
+.style-pick-name { flex:1 1 220px; min-width:180px; height:32px; padding:0 10px; border-radius:9px; border:1px solid var(--line); background:var(--soft); color:var(--text); font-size:12.5px; font-weight:700; outline:none; }
+.style-pick-name:focus { border-color:var(--strong); }
+.style-pick-name:disabled { opacity:.65; }
+.style-pick-bar .asset-btn { height:32px; }

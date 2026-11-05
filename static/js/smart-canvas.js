@@ -6599,11 +6599,97 @@ function completeSmartNodeWithImages(node, images){
     if(smartNodeHasDisplayResult(copy)) markSmartNodeComplete(copy);
     return copy;
 }
+// ============ 积分徽标（模型单价 → 「运行 / 生成」按钮后面的金币数值）
+// 没配置单价的模型一律不显示（老板要求）；数据来自 GET /api/credits/me 的 public.models。
+let creditsPublic = null;
+let creditsPublicLoading = false;
+function creditsNumber(value){
+    const n = Number(value || 0);
+    return isFinite(n) ? n : 0;
+}
+function creditsFormat(value){
+    const n = creditsNumber(value);
+    if(!n) return '';
+    if(n < 0.01) return '<0.01';
+    return String(Math.round(n * 100) / 100);
+}
+function loadCreditsPublic(force=false){
+    if(creditsPublicLoading) return;
+    if(creditsPublic && !force) return;
+    creditsPublicLoading = true;
+    fetch('/api/credits/me', {credentials:'same-origin'})
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => { if(d && d.public) creditsPublic = d.public; })
+        .catch(() => {})
+        .then(() => {
+            creditsPublicLoading = false;
+            if(typeof syncRunButtonState === 'function') syncRunButtonState();
+            if(typeof render === 'function') render();
+        });
+}
+function creditsEntryFor(model){
+    if(!creditsPublic || !creditsPublic.models) return null;
+    const key = String(model || '').trim();
+    if(!key) return null;
+    const models = creditsPublic.models;
+    if(models[key]) return models[key];
+    const short = key.split('::').pop();
+    if(short && models[short]) return models[short];
+    return null;
+}
+function creditsNodeCost(node){
+    if(!node) return null;
+    let model = '';
+    try { model = String(smartSettingsForNode(node)?.model || ''); } catch(e) { model = ''; }
+    const entry = creditsEntryFor(model);
+    if(!entry) return null;
+    const kind = String(entry.kind || 'image').toLowerCase();
+    let credits = 0;
+    let settings = {};
+    try { settings = smartSettingsForNode(node) || {}; } catch(e) { settings = {}; }
+    if(kind === 'image'){
+        const count = Math.max(1, creditsNumber(settings.count || settings.batch || 1));
+        credits = creditsNumber(entry.per_image) * count;
+    } else if(kind === 'video'){
+        const seconds = Math.max(1, creditsNumber(settings.duration || settings.seconds || 5));
+        const table = entry.per_second || {};
+        const res = String(settings.resolution || '720p').toLowerCase().replace(/p$/, '') + 'p';
+        let perSecond = creditsNumber(table[res]);
+        if(!perSecond && table) perSecond = creditsNumber(Object.values(table)[0]);
+        credits = perSecond * seconds;
+    } else {
+        // 语言模型：按输入字符粗估 token（中文约 1 字 1 token），输出按输入的 1/3 估
+        const text = String(promptInput?.textContent || '');
+        const inputTokens = Math.max(1, Math.round(text.length / 2));
+        const outputTokens = Math.max(1, Math.round(inputTokens / 3));
+        credits = inputTokens / 1e6 * creditsNumber(entry.input) + outputTokens / 1e6 * creditsNumber(entry.output);
+    }
+    if(!credits) return null;
+    return {credits, kind, model};
+}
+function creditsBadgeText(node){
+    const cost = creditsNodeCost(node);
+    const text = cost ? creditsFormat(cost.credits) : '';
+    return text ? text + ' 积分' : '';
+}
+function creditsBadgeInlineHtml(node){
+    const text = creditsBadgeText(node);
+    return text ? `<span class="run-credit-badge">${escapeHtml(text)}</span>` : '';
+}
+function updateRunCreditsBadge(node=selectedNode()){
+    const badge = document.getElementById('runCreditBadge');
+    if(!badge) return;
+    const text = creditsBadgeText(node);
+    badge.textContent = text;
+    badge.hidden = !text;
+}
 function syncRunButtonState(node=selectedNode()){
     if(!runBtn) return;
     // 只在“当前选中节点自己”忙时禁用运行：节点正在生成/排队，或它本身是正在跑的循环。
     // 不再因为“画布上有任意循环/级联在跑”就全局禁用——跑循环时仍可对其他节点点生成。
     runBtn.disabled = !isSmartRunnableNode(node) || smartNodeInFlight(node) || smartCascadeIsLoopRunning(node?.id);
+    updateRunCreditsBadge(node);
+    loadCreditsPublic();
 }
 function mergeSmartNode(local, remote){
     const images = mergeSmartImageLists(local.images, remote.images);
@@ -8013,7 +8099,7 @@ function smartLlmBodyHtml(node){
         <div class="prompt-node-section-title">输出${out ? '' : ' · 可直接编辑'}</div>
         <textarea class="smart-llm-output" placeholder="运行后输出文本，可连到生图节点；也可以直接在这里改">${escapeHtml(out)}</textarea>
         <div class="prompt-node-llm-actions">
-            <button class="prompt-node-run prompt-node-control smart-llm-run" type="button" ${node.running ? 'disabled' : ''}><i data-lucide="${node.running ? 'loader-2' : 'play'}"></i><span>${node.running ? '生成中…' : '生成文本'}</span></button>
+            <button class="prompt-node-run prompt-node-control smart-llm-run" type="button" ${node.running ? 'disabled' : ''}><i data-lucide="${node.running ? 'loader-2' : 'play'}"></i><span>${node.running ? '生成中…' : '生成文本'}</span>${creditsBadgeInlineHtml(node)}</button>
             <button class="prompt-node-pill prompt-node-control smart-llm-copy" type="button" ${out ? '' : 'disabled'}><i data-lucide="copy"></i><span>复制</span></button>
             <button class="prompt-node-pill prompt-node-control smart-llm-clear" type="button"><i data-lucide="eraser"></i><span>清空</span></button>
         </div>
@@ -9581,7 +9667,7 @@ function promptNodeBodyHtml(node){
             <button class="prompt-node-pill prompt-node-control prompt-split-toggle ${node.promptSplitEnabled ? 'active' : ''}" type="button"><i data-lucide="split"></i><span>分隔符</span></button>
             <button class="prompt-node-pill prompt-node-control prompt-desc-insert${llmEnabled ? '' : ' is-llm-off'}" type="button" title="${llmEnabled ? '填入「图片描述」预设提示词' : '填入「图片描述」预设提示词并启用 LLM'}"><i data-lucide="image"></i><span>图片描述</span></button>
             ${llmBlocked ? '' : `<button class="prompt-node-pill prompt-llm-toggle ${node.llmEnabled ? 'active' : ''}" type="button"><i data-lucide="sparkles"></i><span>LLM</span></button>`}
-            ${llmEnabled ? `<button class="prompt-node-pill prompt-node-control prompt-node-run" type="button" ${node.running ? 'disabled' : ''}><i data-lucide="${node.running ? 'loader-2' : 'play'}"></i><span>${node.running ? escapeHtml(tr('common.running')) : escapeHtml(tr('common.run'))}</span></button>` : ''}
+            ${llmEnabled ? `<button class="prompt-node-pill prompt-node-control prompt-node-run" type="button" ${node.running ? 'disabled' : ''}><i data-lucide="${node.running ? 'loader-2' : 'play'}"></i><span>${node.running ? escapeHtml(tr('common.running')) : escapeHtml(tr('common.run'))}</span>${creditsBadgeInlineHtml(node)}</button>` : ''}
         </div>
         ${node.promptSplitEnabled ? `<div class="prompt-node-split-row">
             <label class="prompt-node-split-control prompt-node-control"><span>分隔符</span><input class="prompt-node-separator" type="text" value="${escapeHtml(node.promptSeparator)}" maxlength="8" placeholder=";"></label>

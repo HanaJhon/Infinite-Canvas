@@ -112,7 +112,8 @@ class AuthStore:
                 return u
         return None
 
-    def create_user(self, name: str, password: str, role: str = "member") -> Dict[str, Any]:
+    def create_user(self, name: str, password: str, role: str = "member",
+                    email: str = "", phone: str = "", credits: float = 0.0) -> Dict[str, Any]:
         name = (name or "").strip()
         if not USERNAME_RE.match(name):
             raise ValueError("用户名只能包含中英文、数字、下划线和短横线，长度 2-24")
@@ -123,16 +124,47 @@ class AuthStore:
             users = data.setdefault("users", [])
             if any(str(u.get("name", "")).lower() == name.lower() for u in users):
                 raise ValueError("用户名已存在")
+            seq = 0
+            for u in users:
+                try:
+                    seq = max(seq, int(u.get("seq") or 0))
+                except (TypeError, ValueError):
+                    continue
             user = {
                 "id": "u_" + secrets.token_hex(8),
                 "name": name,
                 "pw": hash_password(password),
                 "role": role,
                 "created_at": int(time.time()),
+                # 独立序号（1、2、3…），管理员在账号列表里按序号搜索
+                "seq": seq + 1,
+                # 积分余额（2026-11-05 新增）
+                "credits": float(credits or 0),
             }
+            if email:
+                user["email"] = email
+            if phone:
+                user["phone"] = phone
             users.append(user)
             self._write_json(self.users_file, data)
             return user
+
+    def update_user(self, uid: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """原地更新一个账号的部分字段（积分、序号、邮箱等），返回更新后的记录。"""
+        if not uid or not isinstance(patch, dict):
+            return None
+        with self._lock:
+            data = self._read_json(self.users_file, {"users": []})
+            hit = None
+            for u in data.get("users", []):
+                if u.get("id") == uid:
+                    u.update(patch)
+                    hit = dict(u)
+                    break
+            if hit is None:
+                return None
+            self._write_json(self.users_file, data)
+            return hit
 
     def delete_user(self, uid: str) -> bool:
         with self._lock:
