@@ -186,6 +186,8 @@ let dragState = null;
 let loopInsertPreview = null;
 let selectionState = null;
 let isRKeyDown = false;
+// 空格 + 左键 = 平移画布（跟 Photoshop / Figma 一致）；中键平移保留
+let isSpaceDown = false;
 let selectionJustFinished = false;
 let resizeState = null;
 let promptSplitResizeState = null;
@@ -16343,6 +16345,7 @@ function bindNodeEvents(){
             capturePendingUndo();
         });
         const beginNodeDrag = e => {
+            if(isSpaceDown) return; // 按住空格时左键一律交给画布平移，别拖节点
             if(e.button !== 0 || e.target.closest('.mini-x, .smart-node-floating-menu, .node-resize-handle, .thumb-item, .node-port, .prompt-node-control, .prompt-node-output, .smart3d-stage, .smart3d-bar, .smart3d-raw, select, input, textarea, button')) return;
             if(e.target.closest('.prompt-node-pill, textarea:not(.prompt-node-text)')) return;
             e.preventDefault(); e.stopPropagation();
@@ -25587,6 +25590,16 @@ function startPanGlide(velocity){
 }
 shell.onmousedown = e => {
     stopPanGlide();
+    /* 2026-11-05 老板：空格 + 左键 = 移动画布（中键平移保留）。放在最前面，
+       这样即使光标落在节点上也是平移而不是拖节点/框选。 */
+    if(e.button === 0 && isSpaceDown && !e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.agent-panel,.agent-toggle,.inspire-panel,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')){
+        e.preventDefault();
+        didPan = false;
+        panState = {button:e.button, startX:e.clientX, startY:e.clientY, ox:viewport.x, oy:viewport.y};
+        panSamples = [{t:performance.now(), x:viewport.x, y:viewport.y}];
+        shell.classList.add('panning');
+        return;
+    }
     if(zoomPreviewState && e.button === 0 && !e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.agent-panel,.agent-toggle,.inspire-panel,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
     if(e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.agent-panel,.agent-toggle,.inspire-panel,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.create-menu,.smart-minimap')) return;
     closeCreateMenu();
@@ -26412,6 +26425,14 @@ window.addEventListener('keydown', e => {
             }
         }
     }
+    if((e.code === 'Space' || e.key === ' ') && !e.ctrlKey && !e.metaKey && !e.altKey && !isEditableTarget(e.target)){
+        e.preventDefault(); // 空格默认会滚动页面，按住空格是「平移画布」装饰键
+        if(!isSpaceDown){
+            isSpaceDown = true;
+            shell.classList.add('space-pan');
+        }
+        return;
+    }
     if(key === 'r' && !isEditableTarget(e.target)) isRKeyDown = true;
     if(imageEditModal.classList.contains('open') && imageEditMode === 'preview' && !isEditableTarget(e.target)){
         if(e.key === 'ArrowLeft' || e.key === 'ArrowRight'){
@@ -26481,9 +26502,15 @@ window.addEventListener('keydown', e => {
 });
 window.addEventListener('keyup', e => {
     if(String(e.key || '').toLowerCase() === 'r') isRKeyDown = false;
+    if(e.code === 'Space' || e.key === ' ' || e.key === 'Spacebar'){
+        isSpaceDown = false;
+        shell.classList.remove('space-pan');
+    }
 });
 window.addEventListener('blur', () => {
     isRKeyDown = false;
+    isSpaceDown = false;
+    shell.classList.remove('space-pan');
 });
 engineSelect.onchange = () => {
     settings.engine = engineSelect.value;

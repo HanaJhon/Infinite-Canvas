@@ -42,6 +42,13 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
     zoom: var(--studio-ui-scale, 1);
 }
 .shell.panning { cursor:grabbing; }
+/* 按住空格：整块画布变成「抓手」，提示左键可平移（中键平移的老手势保留） */
+.shell.space-pan,
+.shell.space-pan .world,
+.shell.space-pan .image-node { cursor:grab; }
+.shell.space-pan.panning,
+.shell.space-pan.panning .world,
+.shell.space-pan.panning .image-node { cursor:grabbing; }
 .shell.pan-gliding { cursor:grabbing; }   /* 惯性滑行期间保持抓取光标 */
 .shell.zoom-preview { cursor:crosshair; }
 .world { position:absolute; left:0; top:0; width:6000px; height:4000px; transform-origin:0 0; }
