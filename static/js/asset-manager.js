@@ -26,6 +26,7 @@ function writeLocalCaptionSettings(){
 const savedLocalCaptionSettings = readLocalCaptionSettings();
 
 let activeTab = 'assets';
+
 let assetLibrary = {libraries:[], categories:[]};
 // 🚨 2026-10-28：团队资产库**单独缓存**，绝不覆盖 assetLibrary。
 //    原因：「工作流管理」「提示词库」等页签都读 assetLibrary，如果按范围覆盖它，

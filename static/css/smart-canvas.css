@@ -48,9 +48,8 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
 /* 画布缩放（非 1:1）时，关闭 world 内卡片的 backdrop-filter，避免合成层位图被缩放导致“参数设置”等组件发虚。
    底色本身接近不透明，关闭毛玻璃后观感几乎无差，但能在各浏览器下保持清晰。 */
 .world.canvas-scaled .image-node,
-.world.canvas-scaled .image-node *,
-.world.canvas-scaled .composer-card,
-.world.canvas-scaled .composer-card * { backdrop-filter:none !important; -webkit-backdrop-filter:none !important; }
+.world.canvas-scaled .image-node * { backdrop-filter:none !important; -webkit-backdrop-filter:none !important; }
+/* .composer-card 不走上面这条：生成器浮窗要保留玻璃材质（老板 2026-11-04） */
 .smart-back { position:absolute; left:22px; top:22px; z-index:20; height:40px; padding:0 14px; border-radius:999px; display:flex; align-items:center; gap:8px; color:var(--text); background:var(--panel); border:1px solid var(--line); box-shadow:0 16px 40px var(--shadow); backdrop-filter:blur(16px); font-size:12px; font-weight:850; cursor:pointer; }
 .smart-back:hover { transform:translateY(-1px); }
 .smart-back i { width:16px; height:16px; }
@@ -148,7 +147,15 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity:0 !impo
 .image-node.smart-group-member-node .node-hint { display:none !important; }
 .image-node.smart-group-member-node .loop-smart-card::before { content:"Loop"; width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:10px; font-weight:900; background:var(--soft); }
 .prompt-node-card { width:100%; height:100%; min-height:0; display:flex; flex-direction:column; gap:7px; }
-.prompt-node-text { flex:1; min-height:72px; width:100%; resize:none; overflow:auto; white-space:pre-wrap; overflow-wrap:break-word; border:1px solid rgba(148,163,184,.32); border-radius:13px; background:rgba(255,255,255,.74); color:var(--text); outline:none; padding:10px; font-size:11.2px; line-height:1.45; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent; box-shadow:inset 0 1px 0 rgba(255,255,255,.55); }
+.prompt-node-panes { flex:1 1 auto; min-height:0; display:flex; gap:7px; }
+/* 右栏是只读文本，要能选中复制：.image-node 默认 user-select:none + cursor:move，这里必须覆盖 */
+.prompt-node-output { display:none; flex:1 1 0; min-width:0; overflow:auto; white-space:pre-wrap; overflow-wrap:break-word; border:1px solid rgba(148,163,184,.32); border-radius:13px; background:var(--soft); color:var(--text); padding:10px; font-size:11.2px; line-height:1.45; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent; cursor:text; user-select:text; -webkit-user-select:text; }
+.prompt-node-output::selection, .prompt-node-output *::selection { background:rgba(59,130,246,.28); }
+.prompt-node-panes.is-split .prompt-node-output { display:block; }
+.prompt-node-output:empty::before { content:attr(data-placeholder); color:var(--faint); }
+.prompt-node-output:not(:empty) { background:rgba(255,255,255,.74); box-shadow:inset 0 1px 0 rgba(255,255,255,.55); }
+.theme-dark .prompt-node-output { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.24); box-shadow:none; }
+.prompt-node-text { flex:1 1 0; min-height:72px; width:100%; resize:none; overflow:auto; white-space:pre-wrap; overflow-wrap:break-word; border:1px solid rgba(148,163,184,.32); border-radius:13px; background:rgba(255,255,255,.74); color:var(--text); outline:none; padding:10px; font-size:11.2px; line-height:1.45; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent; box-shadow:inset 0 1px 0 rgba(255,255,255,.55); }
 .theme-dark .prompt-node-text { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.24); box-shadow:none; }
 .prompt-node-text::-webkit-scrollbar, .prompt-node-llm textarea::-webkit-scrollbar { width:7px; height:7px; }
 .prompt-node-text::-webkit-scrollbar-track, .prompt-node-llm textarea::-webkit-scrollbar-track { background:transparent; }
@@ -156,7 +163,6 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity:0 !impo
 .prompt-node-text::-webkit-scrollbar-thumb:hover, .prompt-node-llm textarea::-webkit-scrollbar-thumb:hover { background:rgba(100,116,139,.66); background-clip:content-box; }
 .prompt-node-text::-webkit-scrollbar-corner, .prompt-node-llm textarea::-webkit-scrollbar-corner { background:transparent; }
 .prompt-node-text:focus { border-color:var(--strong); background:var(--card); }
-.prompt-node-text[readonly] { cursor:default; color:var(--muted); }
 .prompt-node-split-row { display:flex; align-items:center; justify-content:space-between; gap:7px; min-height:25px; }
 .prompt-node-split-control { height:25px; flex:1 1 auto; min-width:0; display:flex; align-items:center; gap:6px; padding:0 7px; border:1px solid rgba(148,163,184,.32); border-radius:9px; background:rgba(255,255,255,.58); color:var(--muted); font-size:10px; font-weight:750; }
 .theme-dark .prompt-node-split-control { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.24); }
@@ -175,30 +181,19 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity:0 !impo
 .theme-dark .prompt-node-pill { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.26); }
 .prompt-node-pill i,.prompt-node-pill svg { width:12px; height:12px; }
 .prompt-node-pill.active { background:var(--strong); color:var(--strong-text); border-color:var(--strong); }
+/* LLM 关闭时「图片描述」仍可点（点它自动开 LLM），用虚线边提示会顺带打开 LLM */
+.prompt-node-pill.prompt-desc-insert.is-llm-off { border-style:dashed; color:var(--faint); }
 .prompt-llm-toggle { margin-block:3px; }
 .prompt-node-llm { display:grid; grid-template-columns:1fr 1fr; gap:5px; align-items:start; }
 .prompt-node-llm select, .prompt-node-llm textarea { min-width:0; border:1px solid rgba(148,163,184,.32); border-radius:9px; background:rgba(255,255,255,.62); color:var(--text); outline:none; font-size:10px; }
 .theme-dark .prompt-node-llm select, .theme-dark .prompt-node-llm textarea { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.24); }
 .prompt-node-llm select { height:26px; padding:0 7px; }
 .prompt-node-llm textarea { grid-column:1 / -1; height:48px; resize:none; overflow:auto; padding:7px; line-height:1.4; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent; }
-.prompt-node-llm .prompt-llm-instruction { height:58px; }
 .prompt-node-llm .prompt-llm-system { height:52px; }
-.prompt-node-llm .prompt-llm-instruction-wrap { grid-column:1 / -1; display:flex; flex-direction:column; min-width:0; }
-.prompt-node-llm .prompt-llm-instruction-wrap .prompt-llm-instruction { grid-column:auto; width:100%; }
-.prompt-llm-instruction-resize,.prompt-split-preview-resize { height:9px; flex:0 0 auto; cursor:ns-resize; display:flex; align-items:center; justify-content:center; background:none; border:0; }
-.prompt-llm-instruction-resize span,.prompt-split-preview-resize span { width:18px; height:3px; border-radius:999px; background:rgba(148,163,184,.38); transition:background .14s ease, width .14s ease; }
-.prompt-llm-instruction-wrap:hover .prompt-llm-instruction-resize span,.prompt-split-preview-resize:hover span { width:22px; background:rgba(100,116,139,.6); }
-.prompt-llm-instruction-resize:hover span,.prompt-split-preview-resize:hover span { background:rgba(100,116,139,.82); }
-/* 拖动指令框高度时：全局禁选文字、强制 ns-resize 光标，并让文本框暂时不接收指针，
-   避免上拉时光标滑过上方输入框被它抢走（选中/失焦/中断拖动）。 */
-body.smart-llm-instr-resize { cursor:ns-resize !important; }
-body.smart-llm-instr-resize, body.smart-llm-instr-resize * { user-select:none !important; -webkit-user-select:none !important; }
-body.smart-llm-instr-resize .prompt-node-text,
-body.smart-llm-instr-resize .prompt-node-llm textarea,
-body.smart-llm-instr-resize .prompt-node-llm select { pointer-events:none !important; }
-.theme-dark .prompt-llm-instruction-resize span,.theme-dark .prompt-split-preview-resize span { background:rgba(148,163,184,.3); }
-.theme-dark .prompt-llm-instruction-wrap:hover .prompt-llm-instruction-resize span,
-.theme-dark .prompt-llm-instruction-resize:hover span,
+.prompt-split-preview-resize { height:9px; flex:0 0 auto; cursor:ns-resize; display:flex; align-items:center; justify-content:center; background:none; border:0; }
+.prompt-split-preview-resize span { width:18px; height:3px; border-radius:999px; background:rgba(148,163,184,.38); transition:background .14s ease, width .14s ease; }
+.prompt-split-preview-resize:hover span { width:22px; background:rgba(100,116,139,.72); }
+.theme-dark .prompt-split-preview-resize span { background:rgba(148,163,184,.3); }
 .theme-dark .prompt-split-preview-resize:hover span { background:rgba(203,213,225,.58); }
 body.smart-prompt-split-resize { cursor:ns-resize !important; }
 body.smart-prompt-split-resize, body.smart-prompt-split-resize * { user-select:none !important; -webkit-user-select:none !important; }
@@ -791,6 +786,27 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .loading-cell { border-radius:12px; background:linear-gradient(90deg, var(--soft) 0%, var(--card) 50%, var(--soft) 100%); background-size:200% 100%; animation:shimmer 1.5s infinite linear; border:1px solid var(--line); }
 .loading-cell.single { width:260px; height:180px; }
 @keyframes shimmer { 0% { background-position:200% 0; } 100% { background-position:-200% 0; } }
+/* 生图进度卡片（老板 2026-11-04）：阶段 + 已用时 + 任务完成度，数据都来自画布节点本身 */
+.gen-progress-card { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:9px; padding:16px 18px; box-sizing:border-box; border-radius:16px; border:1px solid var(--line); background:linear-gradient(180deg, var(--card) 0%, var(--soft) 100%); overflow:hidden; }
+.gen-progress-spin i { width:22px; height:22px; color:var(--accent, #6366f1); animation:spin 1s linear infinite; }
+.gen-progress-stage { display:flex; align-items:baseline; gap:8px; font-size:12.5px; font-weight:700; color:var(--text); }
+.gen-progress-elapsed { font-size:11px; font-weight:600; color:var(--muted); font-variant-numeric:tabular-nums; }
+.gen-progress-bar { position:relative; width:min(78%, 200px); height:4px; border-radius:999px; background:var(--line); overflow:hidden; }
+.gen-progress-bar::after { content:''; position:absolute; inset:0; background:linear-gradient(90deg, transparent 0%, rgba(99,102,241,.55) 45%, transparent 100%); animation:gen-flow 1.35s linear infinite; }
+.gen-progress-fill { display:block; height:100%; width:0; border-radius:999px; background:var(--accent, #6366f1); transition:width .4s ease; }
+@keyframes gen-flow { 0% { transform:translateX(-100%); } 100% { transform:translateX(100%); } }
+.gen-progress-detail { font-size:11px; color:var(--muted); text-align:center; line-height:1.35; max-width:100%; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+.gen-progress-meta { font-size:10.5px; font-weight:600; color:var(--faint); letter-spacing:.02em; }
+/* 报错卡片：错误原文留在画布上，只能删 */
+.gen-error-card { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px; padding:16px 18px; box-sizing:border-box; border-radius:16px; border:1px solid rgba(229,72,77,.34); background:linear-gradient(180deg, rgba(229,72,77,.07) 0%, var(--card) 100%); overflow:hidden; }
+.gen-error-icon { display:flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:999px; background:rgba(229,72,77,.14); color:#e5484d; }
+.gen-error-icon i { width:17px; height:17px; }
+.gen-error-title { font-size:12.5px; font-weight:800; color:#e5484d; }
+.gen-error-msg { font-size:11px; color:var(--text); text-align:center; line-height:1.4; max-width:100%; overflow:hidden; display:-webkit-box; -webkit-line-clamp:5; -webkit-box-orient:vertical; word-break:break-word; }
+.gen-error-sub { font-size:10px; color:var(--faint); text-align:center; }
+.theme-dark .gen-error-card, .studio-theme-dark .gen-error-card { border-color:rgba(255,99,99,.36); background:linear-gradient(180deg, rgba(229,72,77,.15) 0%, var(--card) 100%); }
+.theme-dark .gen-progress-bar::after, .studio-theme-dark .gen-progress-bar::after { background:linear-gradient(90deg, transparent 0%, rgba(139,143,255,.6) 45%, transparent 100%); }
+.image-node.node-error { border-color:rgba(229,72,77,.34); }
 .jimeng-pending-cell { position:relative; display:flex; align-items:center; justify-content:center; }
 .jimeng-pending-overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; padding:14px; box-sizing:border-box; text-align:center; }
 .jimeng-pending-spinner i { width:26px; height:26px; color:var(--accent, #6366f1); animation:spin 1s linear infinite; }
@@ -873,6 +889,11 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .input-thumb-label { position:absolute; left:0; top:0; z-index:4; height:14px; padding:0 4px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; background:rgba(15,23,42,.84); color:#fff; border:1px solid rgba(255,255,255,.52); box-shadow:0 2px 7px rgba(15,23,42,.18); font-size:7.5px; line-height:1; font-weight:900; white-space:nowrap; pointer-events:none; transform:translate(-28%, -30%); }
 .theme-dark .input-thumb-label { background:rgba(2,6,23,.82); border-color:rgba(226,232,240,.28); color:#f8fafc; }
 .input-thumb:hover { border-color:var(--text); transform:translateY(-1px); box-shadow:0 6px 14px rgba(15,23,42,.1); }
+/* 拖动排序的抓手提示（老板 m13495）：只在悬停时露出，不挡编号徽标和 × */
+.input-thumb-grip { position:absolute; left:50%; bottom:1px; transform:translateX(-50%); z-index:5; width:16px; height:11px; border-radius:4px; display:grid; place-items:center; background:rgba(15,23,42,.62); color:#fff; opacity:0; transition:opacity .14s ease; pointer-events:none; }
+.input-thumb-grip svg { width:10px; height:10px; }
+.input-thumb:hover .input-thumb-grip, .input-thumb.dragging .input-thumb-grip { opacity:1; }
+.theme-dark .input-thumb-grip { background:rgba(2,6,23,.78); }
 .input-thumb-remove { position:absolute; right:-5px; top:-5px; z-index:6; width:17px; height:17px; border-radius:7px; border:1px solid rgba(255,255,255,.24); background:rgba(15,15,15,.86); color:#fff; display:inline-flex; align-items:center; justify-content:center; opacity:.92; pointer-events:auto; font-size:12.5px; line-height:1; font-weight:400; transition:opacity .14s ease, transform .14s ease, background .14s ease, color .14s ease; }
 .input-thumb:hover .input-thumb-remove,.input-thumb-remove:focus-visible { opacity:1; }
 .input-thumb-remove:hover { background:#ef4444; color:#fff; transform:scale(1.04); }
@@ -1378,6 +1399,14 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .comfy-popover .comfy-fields textarea { width:220px; height:60px; border-radius:10px; resize:none; }
 .dynamic-params textarea, .smart-popover textarea, .image-edit-tools textarea { resize:none; }
 .prompt-input { resize:none !important; }
+/* LLM 开启时提示词区左右分栏：左=用户原始提示词，右=LLM 输出的最终提示词（老板 2026-11-05） */
+.prompt-row.llm-split { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:9px; align-items:stretch; }
+.prompt-output-pane { display:none; height:var(--prompt-h, 124px); min-height:60px; max-height:380px; overflow:auto; border:1px solid var(--line); border-radius:13px; padding:10px 12px 36px 12px; background:var(--soft); color:var(--text); font-size:11.5px; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; cursor:default; }
+.prompt-row.llm-split .prompt-output-pane { display:block; }
+.prompt-output-pane:empty::before { content:attr(data-placeholder); color:var(--faint); font-size:11px; font-weight:400; }
+.prompt-output-pane.has-text { background:var(--card); }
+.theme-dark .prompt-output-pane { background:rgba(15,23,42,.42); }
+.theme-dark .prompt-output-pane.has-text { background:var(--card); }
 .ref-line { display:none; }
 .ref-thumb { width:30px; height:30px; border-radius:8px; object-fit:cover; border:1px solid var(--line); background:var(--soft); flex:0 0 auto; }
 .ref-chip { height:20px; max-width:130px; padding:0 7px; border-radius:999px; display:inline-flex; align-items:center; background:var(--soft); border:1px solid var(--line); color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1703,6 +1732,20 @@ body.agent-dock-dragging, body.agent-dock-dragging * { cursor:move !important; u
 /* 🚨 别用 --line：浅色主题下是 rgba(148,163,184,.16)，几乎看不见把手 */
 .agent-dock-resize::after { content:""; width:40px; height:4px; border-radius:999px; background:rgba(148,163,184,.55); transition:background .14s ease, width .14s ease; }
 .agent-dock-resize:hover::after { background:var(--text); width:56px; }
+/* ---------- QQ 电脑端式「贴边收纳」（2026-11-05 老板 m14746/m14747） ----------
+   贴到某条边（.agent-edge-*）后允许 transform 过渡；收纳态（.agent-tucked）只留 12px 在画面内，
+   鼠标进边带由 JS 摘掉 .agent-tucked 滑出来，离开再加回去。
+   🚨 必须写在 `.agent-panel.dragged{transition:none}` 之后，同优先级靠后覆盖，否则没有滑动动画。 */
+.agent-panel.agent-edge-left, .agent-panel.agent-edge-right,
+.agent-panel.agent-edge-top, .agent-panel.agent-edge-bottom {
+    transition: transform .2s cubic-bezier(.22,.61,.36,1), opacity .16s ease, visibility .16s ease;
+}
+/* 拖拽/缩放过程中要跟手，不能有过渡 */
+body.agent-dock-dragging .agent-panel { transition: none !important; }
+.agent-panel.agent-edge-left.agent-tucked   { transform: translateX(calc(-100% + 12px)); }
+.agent-panel.agent-edge-right.agent-tucked  { transform: translateX(calc(100% - 12px)); }
+.agent-panel.agent-edge-top.agent-tucked    { transform: translateY(calc(-100% + 12px)); }
+.agent-panel.agent-edge-bottom.agent-tucked { transform: translateY(calc(100% - 12px)); }
 /* 折叠/展开对话的胶囊按钮：悬在悬浮框**外侧**正上方（bottom:100% + 间距），不压住框内任何内容 */
 .agent-chat-toggle { position:absolute; left:50%; bottom:calc(100% + 8px); transform:translateX(-50%); height:26px; padding:0 12px; border-radius:999px; border:1px solid var(--line); background:var(--panel); color:var(--text); font-size:11px; font-weight:700; display:flex; align-items:center; gap:6px; cursor:pointer; box-shadow:0 8px 22px var(--shadow); white-space:nowrap; }
 .agent-chat-toggle:hover { border-color:var(--text); }
@@ -2512,23 +2555,96 @@ html.studio-theme-dark .agent-gen-error-text { color:#ff8a80; }
 .theme-dark .image-edit-tools input[type="range"]::-webkit-slider-runnable-track { background:#334155; }
 .theme-dark .image-edit-tools input[type="range"]::-moz-range-track { background:#334155; }
 @media (max-width:760px) { .composer { width:min(540px, calc(100vw - 28px)); } .composer-card { grid-template-columns:minmax(0, 1fr) auto; } .smart-minimap { width:148px; height:98px; } }
-/* 分组外框：不论是空态摘要还是图片缩略图网格，都由容器统一提供边框/背景/内边距。
-   内边距 16px 与图片网格布局里预留的 PAD=32（每边 16px）一致。 */
-.smart-group-node { box-sizing:border-box; padding:16px; border-radius:16px; background:rgba(255,255,255,.46); border:1px solid rgba(148,163,184,.35); box-shadow:0 10px 30px rgba(15,23,42,.06); backdrop-filter:blur(12px); pointer-events:auto; }
-.theme-dark .smart-group-node { background:rgba(15,23,42,.28); border-color:rgba(148,163,184,.28); }
-.smart-group-node:hover { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
-.smart-group-node.selected { border-color:var(--strong); box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow); }
+/* 分组外框：老板 2026-11-04「隐藏底部的组卡片，仅显示堆叠的卡片」——外框不再画边框/背景，
+   视觉主体就是那叠缩略图；外框只保留一块透明的可拖动热区。 */
+.smart-group-node { box-sizing:border-box; padding:0; border-radius:16px; background:transparent; border:1px solid transparent; box-shadow:none; backdrop-filter:none; pointer-events:auto; }
+.theme-dark .smart-group-node { background:transparent; border-color:transparent; }
+.smart-group-node:hover { border-color:rgba(148,163,184,.22); }
+/* 悬停/展开时必须浮到最上层，否则展开出来的一排会被旁边更靠后的节点盖住（老板 2026-11-04） */
+.smart-group-node:hover,
+.smart-group-node:has(.smart-group-thumb-grid.is-expanded),
+.smart-group-node.dragging { z-index:30; }
+/* 选中态用一圈外发光表示（没有底色了，边框看不出来） */
+.smart-group-node.selected { border-color:transparent; box-shadow:0 0 0 2px rgba(99,102,241,.35), 0 14px 36px var(--shadow); }
 .smart-group-node .node-body { width:100%; height:100%; min-height:0; padding:0; align-items:stretch; justify-content:stretch; }
 /* 图片网格/单图不要被 node-body 的 stretch 纵向拉满——否则高度恰好等于内容时也会触发滚动条。
    让它们按内容自适应（由 thumb-grid 的 max-height 决定是否滚动），只有超过 4 排才出现下拉条。 */
 .smart-group-node .node-body > .thumb-grid,
 .smart-group-node .node-body > .image-wrap { align-self:center; }
-.smart-group-card { width:100%; height:100%; min-height:0; box-sizing:border-box; display:flex; flex-direction:column; gap:8px; }
-.smart-group-card.has-thumbs { overflow:hidden; }
-.smart-group-card .smart-group-thumb-grid { flex:0 1 auto; align-self:center; max-width:100%; min-height:0; }
+.smart-group-card { position:relative; width:100%; height:100%; min-height:0; box-sizing:border-box; display:flex; flex-direction:column; gap:8px; }
+/* 分组里的缩略图要能排出卡片外（展开时横向铺开），所以不能裁切 */
+.smart-group-card.has-thumbs { overflow:visible; }
+/* 多图分组的视觉（老板 2026-11-04 图1）：静态就是「一叠照片」——第一张铺满卡片，后面的依次往右下错
+   5px 各露一条窄边；鼠标悬停（或按住缩略图拖排序）时横向展开成一行。只作用于分组内的
+   .smart-group-thumb-grid，普通图片节点的 .thumb-grid 仍是网格，不受影响。
+   展开后会溢出到卡片外，所以 `.has-thumbs` 不能 overflow:hidden。 */
+/* 整组移动手柄：组卡左上角的移动图标，按住它拖的是整个分组的位置
+   （卡片本身按住拖是"把这张图拖出去"，两者要分开，老板 2026-11-04） */
+.smart-group-move {
+    position:absolute; left:10px; top:10px; z-index:60;
+    display:flex; align-items:center; justify-content:center;
+    width:26px; height:26px; border-radius:9px;
+    border:1px solid rgba(255,255,255,.34); background:rgba(15,23,42,.58); color:#fff;
+    backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+    cursor:grab; opacity:.55; transition:opacity .16s ease, background .16s ease;
+}
+.smart-group-node:hover .smart-group-move,
+.smart-group-node.selected .smart-group-move,
+.smart-group-move:hover { opacity:1; }
+.smart-group-move:hover { background:rgba(15,23,42,.74); }
+.smart-group-move:active { cursor:grabbing; }
+.smart-group-move svg { width:14px; height:14px; }
+
+.smart-group-node .smart-group-thumb-grid {
+    position:absolute; inset:0; display:block;
+    width:auto; height:auto; max-width:none; max-height:none; gap:0; padding:0; overflow:visible;
+}
+/* 卡片和节点框严格重合（框已按图片原始比例收过，照片既不裁也不留白）：
+   连线端点、命中区、拖拽都按节点框算，视觉上不能比框小。 */
+.smart-group-node { overflow: visible; }
+.smart-group-node .smart-group-thumb-grid .thumb-item {
+    position:absolute; inset:0; width:auto; height:auto; margin:0;
+    border-radius:14px; overflow:hidden; border:1px solid rgba(148,163,184,.3);
+    box-shadow:0 10px 24px rgba(15,23,42,.22);
+    /* 扑克牌式扇形卡堆：第一张正立，后面几张往右上小步偏移并顺时针微转，只露右侧一条边 */
+    transform-origin: 50% 92%;
+    transform:translate(calc(min(var(--i, 0), 3) * 13px), calc(min(var(--i, 0), 3) * -7px))
+              rotate(calc(min(var(--i, 0), 3) * 5deg));
+    z-index:calc(40 - var(--i, 0));
+    transition: transform .26s cubic-bezier(.22,1,.36,1);
+}
+/* 卡片铺满节点框（连线/命中区跟照片对齐），照片按 cover 铺满卡片本身——
+   contain 会在两侧留白边，老板 2026-11-04 要求去掉。 */
+.smart-group-node .smart-group-thumb-grid .thumb-item img,
+.smart-group-node .smart-group-thumb-grid .thumb-item video {
+    display:block; width:100%; height:100%; max-width:none; max-height:none; object-fit:cover; border-radius:14px;
+}
+.smart-group-node .smart-group-thumb-grid .thumb-item > .node-mask-overlay { border-radius:14px; }
+/* 展开：一字排开。每张按自己图片的原始比例定宽（--ar 由渲染时写进 style），
+   高度统一取分组框的高度，所以方图/宽图/竖图的卡宽各不相同（老板 2026-11-04）。 */
+.smart-group-node:hover .smart-group-thumb-grid,
+.smart-group-node .smart-group-thumb-grid.is-expanded {
+    display:flex; flex-wrap:nowrap; align-items:center; justify-content:flex-start; gap:10px;
+}
+.smart-group-node:hover .smart-group-thumb-grid .thumb-item,
+.smart-group-node .smart-group-thumb-grid.is-expanded .thumb-item {
+    position:relative; inset:auto; width:auto; height:100%; flex:0 0 auto;
+    aspect-ratio:var(--ar, 1); transform:none; z-index:6;
+}
+/* 堆叠态不显示文件名/分辨率角标（太吵），展开后再出现 */
+.smart-group-node .smart-group-thumb-grid .thumb-item .image-name-badge,
+.smart-group-node .smart-group-thumb-grid .thumb-item .image-resolution-badge { opacity:0; }
+.smart-group-node:hover .smart-group-thumb-grid .thumb-item .image-name-badge,
+.smart-group-node:hover .smart-group-thumb-grid .thumb-item .image-resolution-badge,
+.smart-group-node .smart-group-thumb-grid.is-expanded .thumb-item .image-name-badge,
+.smart-group-node .smart-group-thumb-grid.is-expanded .thumb-item .image-resolution-badge { opacity:1; }
 .smart-group-card .smart-group-single-thumb { flex:0 1 auto; align-self:center; max-width:100%; min-height:0; }
-.smart-group-summary { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:10px; font-weight:800; }
-.smart-group-summary i,.smart-group-summary svg { width:13px; height:13px; }
+/* 张数摘要做成浮在卡片右上角的小胶囊（外框已隐藏，摘要不能占一行把叠卡推下去） */
+.smart-group-summary { position:absolute; right:10px; top:10px; z-index:50; display:inline-flex; align-items:center; gap:5px;
+    height:24px; padding:0 10px; border-radius:999px; background:rgba(15,23,42,.66); color:#fff;
+    box-shadow:0 4px 14px rgba(15,23,42,.2); backdrop-filter:blur(8px); pointer-events:none;
+    font-size:11px; font-weight:800; }
+.smart-group-summary i,.smart-group-summary svg { width:12px; height:12px; }
 .smart-group-empty { flex:1 1 auto; min-height:74px; display:flex; align-items:center; justify-content:center; gap:6px; color:var(--faint); font-size:10px; font-weight:700; text-align:center; border-radius:10px; border:1px dashed var(--line); background:var(--soft); }
 .smart-group-empty i,.smart-group-empty svg { width:14px; height:14px; }
 
@@ -2897,6 +3013,8 @@ a.smart3d-run { text-decoration:none; cursor:pointer; }
 /* ===== 节点「风格」选择（2026-11-02）：composer 里的风格 Skill 入口 ===== */
 .composer-style-btn { height:28px; padding:0 8px; gap:4px; border-radius:9px; display:inline-flex; align-items:center; justify-content:center; background:var(--soft); border:1px solid var(--line); color:var(--muted); font-size:10.5px; font-weight:700; cursor:pointer; box-shadow:0 4px 10px rgba(15,23,42,.04); transition:background .14s ease, color .14s ease, border-color .14s ease; }
 .composer-style-btn span { max-width:96px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* 图标跟同排其它按钮一致：lucide 默认 24px 会把「风格」按钮撑得比邻居大一圈（老板 2026-11-05） */
+.composer-style-btn i, .composer-style-btn svg { width:12px !important; height:12px !important; stroke-width:2.2; }
 .composer-style-btn:hover, .composer-style-btn.active { color:var(--text); border-color:var(--strong); }
 .composer-style-btn.active { background:color-mix(in srgb, var(--strong) 10%, var(--card)); }
 .prompt-row:focus-within .composer-style-btn { color:var(--text); }

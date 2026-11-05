@@ -167,6 +167,8 @@ const composerLlmToggleBtn = document.getElementById('composerLlmToggleBtn');
 const composerStyleBtn = document.getElementById('composerStyleBtn');
 const composerStylePanel = document.getElementById('composerStylePanel');
 const composerLlmSection = document.getElementById('composerLlmSection');
+const promptRow = document.querySelector('.prompt-row');
+const promptOutputPane = document.getElementById('promptOutputPane');
 const composerLlmProvider = document.getElementById('composerLlmProvider');
 const composerLlmModel = document.getElementById('composerLlmModel');
 const composerLlmInstruction = document.getElementById('composerLlmInstruction');
@@ -186,7 +188,6 @@ let selectionState = null;
 let isRKeyDown = false;
 let selectionJustFinished = false;
 let resizeState = null;
-let llmInstructionResizeState = null;
 let promptSplitResizeState = null;
 let thumbDragState = null;
 let uploadTargetId = '';
@@ -2359,6 +2360,34 @@ function smartGroupThumbLayout(node){
         height:Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(gridH + outerPad + summarySpace))
     };
 }
+/* 分组卡片按「第一张图的原始比例」定框：照片既不裁切也不留白边
+   （老板 2026-11-04：卡片尺寸要自适应图片原始尺寸）。面积保持不变，只改长宽比。 */
+function smartGroupCoverAspect(group){
+    const refs = smartGroupOrderedRefs(group, smartGroupImageRefs(group)) || [];
+    for(const ref of refs){
+        const img = ref?.item || {};
+        const w = Number(img.natural_w || img.width || 0);
+        const h = Number(img.natural_h || img.height || 0);
+        if(w > 0 && h > 0) return w / h;
+    }
+    return 0;
+}
+function fitSmartGroupBoxToImage(group){
+    if(!isSmartGroupNode(group)) return false;
+    const ar = smartGroupCoverAspect(group);
+    if(!ar) return false;
+    const w0 = Number(group.w) || SMART_GROUP_DEFAULT_WIDTH;
+    const h0 = Number(group.h) || SMART_GROUP_MIN_HEIGHT;
+    const area = Math.max(SMART_GROUP_MIN_WIDTH * SMART_GROUP_MIN_HEIGHT, w0 * h0);
+    let w = Math.round(Math.sqrt(area * ar));
+    let h = Math.round(w / ar);
+    if(w < SMART_GROUP_MIN_WIDTH){ w = SMART_GROUP_MIN_WIDTH; h = Math.round(w / ar); }
+    if(h < SMART_GROUP_MIN_HEIGHT){ h = SMART_GROUP_MIN_HEIGHT; w = Math.round(h * ar); }
+    if(w === w0 && h === h0) return false;
+    group.w = w;
+    group.h = h;
+    return true;
+}
 const SMART_GROUP_ARRANGE_PADDING = 18;
 const SMART_GROUP_ARRANGE_GAP = 16;
 const SMART_GROUP_ARRANGE_HEADER = 44;
@@ -2399,6 +2428,7 @@ function arrangeSmartGroupMembers(group, options={}){
             member.scale = 1;
         });
         if(group._memberZoom !== undefined) group._memberZoom = 1;
+        fitSmartGroupBoxToImage(group);
         if(options.syncDom) syncSmartGroupMemberElements(group);
         return true;
     }
@@ -2581,11 +2611,6 @@ const PROMPT_SPLIT_PREVIEW_DEFAULT_H = 70;
 const PROMPT_SPLIT_PREVIEW_MIN_H = 40;
 const PROMPT_SPLIT_PREVIEW_MAX_H = 220;
 const PROMPT_SPLIT_RESIZE_BAR_H = 9;
-function promptLlmInstructionHeight(node){
-    const h = Number(node?.llmInstructionHeight);
-    if(!Number.isFinite(h)) return PROMPT_LLM_INSTRUCTION_DEFAULT_H;
-    return Math.max(PROMPT_LLM_INSTRUCTION_MIN_H, Math.min(PROMPT_LLM_INSTRUCTION_MAX_H, Math.round(h)));
-}
 function promptNodeSeparator(node){
     const raw = String(node?.promptSeparator ?? ';');
     return raw === '' ? ';' : raw;
@@ -2598,6 +2623,15 @@ function promptNodePromptItems(node){
     if(!sep) return [text];
     const items = text.split(sep).map(item => item.trim()).filter(Boolean);
     return items.length > 1 ? items : [text];
+}
+/* 提示词节点对下游/外部输出的内容：LLM 开着且有结果就用右栏结果，否则用左栏用户原文。
+   老板 2026-11-05：接了下游的节点没有自动用上 LLM 输出。 */
+function promptNodeOutputText(node){
+    if(node?.type === 'smart-prompt' && promptNodeLlmActive(node)){
+        const out = String(node.llmOutputText || '').trim();
+        if(out) return out;
+    }
+    return promptNodePromptItems(node).join('\n\n');
 }
 function promptNodeSplitExtraHeight(node){
     if(node?.promptSplitEnabled !== true) return 0;
@@ -2623,7 +2657,10 @@ function promptNodeMinHeight(node){
 }
 function promptTextItemsForNode(node, ctx=smartLoopContext){
     if(!node) return [];
-    if(node.type === 'smart-prompt') return promptNodePromptItems(node);
+    if(node.type === 'smart-prompt'){
+        const out = promptNodeOutputText(node);
+        return out ? [out] : [];
+    }
     if(node.type === 'smart-loop'){
         const text = smartLoopPrompt(node, ctx);
         return text ? [text] : [];
@@ -2644,14 +2681,13 @@ function promptNodeUpstreamPromptText(node, ctx=smartLoopContext){
 }
 function promptNodeLLMInputText(node, ctx=smartLoopContext){
     const upstream = promptNodeUpstreamPromptText(node, ctx).trim();
-    const instruction = String(node?.llmInstruction || '').trim() || promptNodePromptItems(node).join('\n\n').trim();
-    return [upstream, instruction].filter(Boolean).join('\n\n');
+    // 指令框已移除：左侧输入框里的提示词（含多段）就是发给 LLM 的内容
+    const own = promptNodePromptItems(node).join('\n\n').trim();
+    return [upstream, own].filter(Boolean).join('\n\n');
 }
 function promptNodeExpandedHeight(node){
-    // 指令文本框（发送给 LLM 的内容）可拖动加高，超出默认高度的部分要叠加进节点高度。
-    const extra = Math.max(0, promptLlmInstructionHeight(node) - PROMPT_LLM_INSTRUCTION_DEFAULT_H);
     const upstreamExtra = promptNodeLlmActive(node) && promptNodeUpstreamPromptItems(node).length ? 74 : 0;
-    return 420 + smartNodeInputThumbsHeight(promptNodeInputImages(node)) + extra + upstreamExtra + promptNodeSplitExtraHeight(node);
+    return 366 + smartNodeInputThumbsHeight(promptNodeInputImages(node)) + upstreamExtra + promptNodeSplitExtraHeight(node);
 }
 function promptNodeLayoutSize(node){
     const oldCollapsedH = 230;
@@ -7727,6 +7763,7 @@ async function loadCanvas(){
         document.getElementById('smartTitle').textContent = canvas.title || tr('canvas.smartCanvas');
         nodes = (Array.isArray(canvas.nodes) ? canvas.nodes : []).map(normalizeLegacySmartNode).filter(Boolean);
         migrateSmartGroupImageMembers();
+        nodes.forEach(n => { if(isSmartGroupNode(n)) fitSmartGroupBoxToImage(n); });
         canvas.connections = Array.isArray(canvas.connections) ? canvas.connections : [];
         nodes.forEach(n => {
             if(n.type === 'smart-minimax') n.timelinePlaying = false;
@@ -9504,7 +9541,6 @@ function promptNodeBodyHtml(node){
     //   只影响渲染，不动 node.llmEnabled —— 撤掉遮罩后 LLM 面板要能原样回来。
     const llmBlocked = llmBlockedByInpaint(node);
     const llmEnabled = Boolean(node.llmEnabled) && !llmBlocked;
-    const readonly = llmEnabled ? 'readonly' : '';
     const systemPrompt = (node.llmSystemPrompt || '').trim();
     const currentMode = node.llmSystemMode || 'custom';
     const inputThumbs = smartNodeInputThumbsHtml(promptNodeInputImages(node));
@@ -9520,14 +9556,7 @@ function promptNodeBodyHtml(node){
         <div class="prompt-node-llm">
             <select class="prompt-node-control prompt-llm-provider">${chatProviderOptions(node.llmProvider)}</select>
             <select class="prompt-node-control prompt-llm-model">${chatModelOptions(node.llmModel, node.llmProvider)}</select>
-            <div class="prompt-llm-instruction-wrap">
-                <textarea class="prompt-node-control prompt-llm-instruction" placeholder="${escapeHtml(tr('smart.promptLlmInstructionPlaceholder'))}" style="height:${promptLlmInstructionHeight(node)}px">${escapeHtml(node.llmInstruction || '')}</textarea>
-                <div class="prompt-llm-instruction-resize prompt-node-control" data-llm-instruction-resize="1" title="拖动调整高度"><span></span></div>
-            </div>
             ${upstreamPromptHtml}
-            <div class="prompt-node-llm-actions">
-                <button class="prompt-node-run prompt-node-control" type="button" ${node.running ? 'disabled' : ''}><i data-lucide="${node.running ? 'loader-2' : 'play'}"></i><span>${node.running ? escapeHtml(tr('common.running')) : escapeHtml(tr('common.run'))}</span></button>
-            </div>
             <div class="prompt-system-preset-group">
                 <button type="button" class="prompt-node-pill prompt-node-control prompt-system-mode-btn ${currentMode === 'custom' ? 'active' : ''}" data-system-mode="custom">${escapeHtml(tr('smart.promptLlmPresetCustom'))}</button>
                 <button type="button" class="prompt-node-pill prompt-node-control prompt-system-mode-btn ${currentMode === 'text2img' ? 'active' : ''}" data-system-mode="text2img">${escapeHtml(tr('smart.promptLlmPresetText2Img'))}</button>
@@ -9537,7 +9566,10 @@ function promptNodeBodyHtml(node){
             <textarea class="prompt-node-control prompt-llm-system" placeholder="${escapeHtml(tr('smart.promptLlmSystemPlaceholder'))}">${escapeHtml(systemPrompt || 'You are a helpful prompt assistant.')}</textarea>
         </div>` : '';
     return `<div class="prompt-node-card">
-        <textarea class="prompt-node-text prompt-node-control ${node.llmProcessing ? 'llm-blur' : ''}" ${readonly} placeholder="${escapeHtml(tr('smart.promptPlaceholderNode'))}">${escapeHtml(node.text || '')}</textarea>
+        <div class="prompt-node-panes ${llmEnabled ? 'is-split' : ''}">
+        <textarea class="prompt-node-text prompt-node-control ${node.llmProcessing ? 'llm-blur' : ''}" placeholder="${escapeHtml(tr('smart.promptPlaceholderNode'))}">${escapeHtml(node.text || '')}</textarea>
+        ${llmEnabled ? `<div class="prompt-node-output" data-placeholder="${escapeHtml(tr('smart.promptOutputPlaceholder'))}">${escapeHtml(String(node.llmOutputText || '').trim())}</div>` : ''}
+        </div>
         <div class="prompt-processing-overlay" style="${node.llmProcessing ? 'display:flex' : 'display:none'}">
             <i data-lucide="loader-2" class="prompt-processing-spinner"></i>
             <span class="prompt-processing-text">运行中</span>
@@ -9545,7 +9577,9 @@ function promptNodeBodyHtml(node){
         <div class="prompt-node-tools">
             <button class="prompt-node-pill prompt-node-control prompt-preset-edit ${templateActive ? 'active' : ''}" type="button"><i data-lucide="library"></i><span>模板库</span></button>
             <button class="prompt-node-pill prompt-node-control prompt-split-toggle ${node.promptSplitEnabled ? 'active' : ''}" type="button"><i data-lucide="split"></i><span>分隔符</span></button>
+            <button class="prompt-node-pill prompt-node-control prompt-desc-insert${llmEnabled ? '' : ' is-llm-off'}" type="button" title="${llmEnabled ? '填入「图片描述」预设提示词' : '填入「图片描述」预设提示词并启用 LLM'}"><i data-lucide="image"></i><span>图片描述</span></button>
             ${llmBlocked ? '' : `<button class="prompt-node-pill prompt-llm-toggle ${node.llmEnabled ? 'active' : ''}" type="button"><i data-lucide="sparkles"></i><span>LLM</span></button>`}
+            ${llmEnabled ? `<button class="prompt-node-pill prompt-node-control prompt-node-run" type="button" ${node.running ? 'disabled' : ''}><i data-lucide="${node.running ? 'loader-2' : 'play'}"></i><span>${node.running ? escapeHtml(tr('common.running')) : escapeHtml(tr('common.run'))}</span></button>` : ''}
         </div>
         ${node.promptSplitEnabled ? `<div class="prompt-node-split-row">
             <label class="prompt-node-split-control prompt-node-control"><span>分隔符</span><input class="prompt-node-separator" type="text" value="${escapeHtml(node.promptSeparator)}" maxlength="8" placeholder=";"></label>
@@ -10185,7 +10219,7 @@ function smartGroupBodyHtml(node){
             const innerH = Math.max(24, Number(groupThumbLayout.innerH || groupThumbLayout.height || SMART_GROUP_DEFAULT_HEIGHT));
             const canDelete = ref.nodeId === node.id;
             return `<div class="smart-group-card has-thumbs">
-                <div class="smart-group-summary"><i data-lucide="group"></i><span>${escapeHtml(summary)}</span></div>
+                <div class="smart-group-summary"><i data-lucide="group"></i><span>${escapeHtml(summary)}</span><i data-lucide="chevron-right"></i></div>
                 <div class="image-wrap smart-group-single-thumb ${selectedImage.nodeId === ref.nodeId && Number(selectedImage.index) === Number(ref.index) ? 'image-selected' : ''}" data-ref-node-id="${escapeAttr(ref.nodeId)}" data-ref-image-index="${ref.index}" data-image-index="${ref.index}" data-media-signature="${escapeAttr(`${mediaKindForItem(ref.item)}:${ref.item?.url || ''}`)}" style="--node-img-w:${innerW}px;--node-img-h:${innerH}px">${singleMediaHtml(ref.item, innerW, innerH)}${imageNameBadgeHtml(ref.item)}${imageResolutionBadgeHtml(ref.item)}${canDelete ? `<button class="mini-x image-delete" type="button" data-image-index="${ref.index}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>` : ''}</div>
             </div>`;
         }
@@ -10193,15 +10227,20 @@ function smartGroupBodyHtml(node){
         const visibleRows = Math.max(1, Math.min(groupMaxVisibleRows, Number(groupThumbLayout.visibleRows || groupThumbLayout.rows || 1)));
         const maxHeight = Math.max(44, visibleRows * Number(groupThumbLayout.thumb || 96) + Math.max(0, visibleRows - 1) * 8);
         return `<div class="smart-group-card has-thumbs">
-            <div class="smart-group-summary"><i data-lucide="group"></i><span>${escapeHtml(summary)}</span></div>
-            <div class="thumb-grid smart-group-thumb-grid" data-thumb-scroll="1" style="--thumb-cols:${groupThumbLayout.cols}; --thumb-size:${groupThumbLayout.thumb}px; --thumb-max-height:${maxHeight}px">${refThumbs.map(ref => {
+            <div class="smart-group-move" data-group-move title="${escapeAttr(tr('smart.dragGroupHint'))}"><i data-lucide="move"></i></div>
+            <div class="smart-group-summary"><i data-lucide="group"></i><span>${escapeHtml(summary)}</span><i data-lucide="chevron-right"></i></div>
+            <div class="thumb-grid smart-group-thumb-grid" data-thumb-scroll="1" style="--thumb-cols:${groupThumbLayout.cols}; --thumb-size:${groupThumbLayout.thumb}px; --thumb-max-height:${maxHeight}px; --n:${refThumbs.length}">${refThumbs.map((ref, idx) => {
                 const canDelete = ref.nodeId === node.id;
-                return `<div class="thumb-item ${selectedImage.nodeId === ref.nodeId && Number(selectedImage.index) === Number(ref.index) ? 'image-selected' : ''}" data-ref-node-id="${escapeAttr(ref.nodeId)}" data-ref-image-index="${ref.index}" data-image-index="${ref.index}" data-media-signature="${escapeAttr(`${mediaKindForItem(ref.item)}:${ref.item?.url || ''}`)}">${thumbMediaHtml(ref.item)}${imageNameBadgeHtml(ref.item)}${imageResolutionBadgeHtml(ref.item)}${canDelete ? `<button class="mini-x image-delete" type="button" data-image-index="${ref.index}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>` : ''}</div>`;
+                // 每张缩略图记下自己图片的原始比例：展开成一行时按各自比例显示（老板 2026-11-04）
+                const refW = Number(ref.item?.natural_w || ref.item?.width || 0);
+                const refH = Number(ref.item?.natural_h || ref.item?.height || 0);
+                const refAr = refW > 0 && refH > 0 ? (refW / refH).toFixed(4) : '';
+                return `<div class="thumb-item ${selectedImage.nodeId === ref.nodeId && Number(selectedImage.index) === Number(ref.index) ? 'image-selected' : ''}" style="--i:${idx}${refAr ? `;--ar:${refAr}` : ''}" data-ref-node-id="${escapeAttr(ref.nodeId)}" data-ref-image-index="${ref.index}" data-image-index="${ref.index}" data-media-signature="${escapeAttr(`${mediaKindForItem(ref.item)}:${ref.item?.url || ''}`)}">${thumbMediaHtml(ref.item)}${imageNameBadgeHtml(ref.item)}${imageResolutionBadgeHtml(ref.item)}${canDelete ? `<button class="mini-x image-delete" type="button" data-image-index="${ref.index}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>` : ''}</div>`;
             }).join('')}</div>
         </div>`;
     }
     return `<div class="smart-group-card">
-        <div class="smart-group-summary"><i data-lucide="group"></i><span>${escapeHtml(summary)}</span></div>
+        <div class="smart-group-summary"><i data-lucide="group"></i><span>${escapeHtml(summary)}</span><i data-lucide="chevron-right"></i></div>
         ${members.length ? '' : `<div class="smart-group-empty"><i data-lucide="plus"></i><span>拖入图片自动收进分组</span></div>`}
     </div>`;
 }
@@ -12189,14 +12228,15 @@ function nodeBodyHtml(node, layout){
         return imageTaskRecoverBodyHtml(node, recoverTask, layout);
     }
     if(node.queued && imgs.length === 0 && !node.pending){
-        return `<div class="loading-cell single queued" style="width:${layout.width}px;height:${layout.height}px"></div>`;
+        return generationProgressBodyHtml(node, layout, 1);
     }
     if(node.pending && imgs.length === 0){
         const count = Math.max(1, Number(node.pending) || 1);
-        if(count <= 1) return `<div class="loading-cell single" style="width:${layout.width}px;height:${layout.height}px"></div>`;
-        const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(count))));
-        const rows = Math.ceil(count / cols);
-        return `<div class="loading-skeleton" style="grid-template-columns:repeat(${cols}, 1fr);grid-template-rows:repeat(${rows}, 1fr);width:${layout.width}px;height:${layout.height}px;padding:8px;box-sizing:border-box">${Array.from({length:count}).map(() => `<div class="loading-cell"></div>`).join('')}</div>`;
+        return generationProgressBodyHtml(node, layout, count);
+    }
+    // 生成失败：把报错留在卡片里（老板 2026-11-04），只保留删除操作，不给上传/重试按钮
+    if(node.runError && imgs.length === 0){
+        return generationErrorBodyHtml(node, layout);
     }
     if(imgs.length > 1){
         const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, Number(layout.visibleRows || layout.rows || 1)));
@@ -12208,6 +12248,41 @@ function nodeBodyHtml(node, layout){
         <span class="upload-node-main"><i data-lucide="upload-cloud"></i></span>
         <span class="upload-node-title">${escapeHtml(tr('smart.createImportNode'))}</span>
         <span class="upload-node-sub">${escapeHtml(tr('smart.nodeDropHint'))}</span>
+    </div>`;
+}
+/* 生图中的进度卡片：把「这一刻到底在干什么」摊在卡片中央（老板 2026-11-04）。
+   这里只用真实拿得到的数据：阶段 + 已用时 + 已完成/总任务数；没有百分比就不假装有百分比，
+   进度条走不定态流光，完成的任务越多实心填充越多。 */
+function generationProgressBodyHtml(node, layout, count = 1){
+    const tasks = smartPendingTasks(node);
+    const total = Math.max(count || 1, Number(node.pendingTotal || 0) || 0, tasks.length);
+    const done = Math.max(0, total - Math.max(0, Number(node.pending || 0) || 0));
+    const pct = total > 1 ? Math.min(100, Math.round(done / total * 100)) : 0;
+    const jp = node.jimengPending || {};
+    const queue = jp && jp.queueInfo ? jimengQueueText(jp.queueInfo) : '';
+    const stage = node.queued && !node.pending
+        ? '排队中'
+        : (jp && jp.submitId ? '排队中' : (node.running ? '提交中' : '生成中'));
+    const detail = queue || (tasks.length ? `${tasks.length} 个任务已提交，等待结果` : (node.running ? '正在向通道提交请求' : '等待通道返回'));
+    const meta = total > 1 ? `${done}/${total} 张` : '';
+    return `<div class="gen-progress-card" data-gen-progress="${escapeAttr(node.id)}" style="width:${layout.width}px;height:${layout.height}px">
+        <div class="gen-progress-spin"><i data-lucide="loader-2"></i></div>
+        <div class="gen-progress-stage">${escapeHtml(stage)}<span class="gen-progress-elapsed">${escapeHtml(formatRunDuration(nodeRunElapsedMs(node)))}</span></div>
+        <div class="gen-progress-bar${total > 1 ? ' is-counted' : ''}"><span class="gen-progress-fill" style="width:${pct}%"></span></div>
+        <div class="gen-progress-detail">${escapeHtml(detail)}</div>
+        ${meta ? `<div class="gen-progress-meta">已完成 ${meta}</div>` : ''}
+    </div>`;
+}
+/* 报错卡片：错误原文留在画布上，卡片只提供删除（老板 2026-11-04）。 */
+function generationErrorBodyHtml(node, layout){
+    const err = node.runError || {};
+    const message = String(err.message || '').trim() || '生成失败';
+    const when = err.at && Number.isFinite(Number(err.at)) ? new Date(Number(err.at)).toLocaleTimeString() : '';
+    return `<div class="gen-error-card" data-gen-error="${escapeAttr(node.id)}" style="width:${layout.width}px;height:${layout.height}px">
+        <div class="gen-error-icon"><i data-lucide="triangle-alert"></i></div>
+        <div class="gen-error-title">生成失败</div>
+        <div class="gen-error-msg">${escapeHtml(message.slice(0, 400))}</div>
+        <div class="gen-error-sub">${when ? escapeHtml(when) + ' · ' : ''}删除这张卡片后重新生成</div>
     </div>`;
 }
 function jimengPendingBodyHtml(node, layout){
@@ -14666,7 +14741,8 @@ function hideRunTimerForNode(node){
     return true;
 }
 function refreshRunTimerPills(){
-    const active = nodes.some(n => n.type !== 'smart-prompt' && !n.runTimerHidden && (n.pending || n.running || n.jimengPending || n.runFinishedAt));
+    const progressCards = world.querySelectorAll('[data-gen-progress]');
+    const active = progressCards.length > 0 || nodes.some(n => n.type !== 'smart-prompt' && !n.runTimerHidden && (n.pending || n.running || n.jimengPending || n.runFinishedAt));
     document.querySelectorAll('[data-run-timer]').forEach(el => {
         const node = nodes.find(n => n.id === el.dataset.runTimer);
         if(!node || node.runTimerHidden || node.type === 'smart-prompt') {
@@ -14675,6 +14751,21 @@ function refreshRunTimerPills(){
         }
         el.textContent = formatRunDuration(nodeRunElapsedMs(node));
         el.classList.toggle('done', Boolean(!node.pending && !node.running && !node.jimengPending && node.runFinishedAt));
+    });
+    // 进度卡片每秒刷新：已用时间秒数 + 已完成任务数（不整页重渲染，避免打断拖拽/输入）
+    progressCards.forEach(el => {
+        const node = nodes.find(n => n.id === el.dataset.genProgress);
+        if(!node) return;
+        const elapsedEl = el.querySelector('.gen-progress-elapsed');
+        if(elapsedEl) elapsedEl.textContent = formatRunDuration(nodeRunElapsedMs(node));
+        const fillEl = el.querySelector('.gen-progress-fill');
+        const total = Math.max(1, Number(node.pendingTotal || 0) || 0, smartPendingTasks(node).length || 0);
+        if(fillEl && total > 1){
+            const done = Math.max(0, total - (Number(node.pending || 0) || 0));
+            fillEl.style.width = `${Math.min(100, Math.round(done / total * 100))}%`;
+            const metaEl = el.querySelector('.gen-progress-meta');
+            if(metaEl) metaEl.textContent = `已完成 ${done}/${total} 张`;
+        }
     });
     if(active && !runTimerInterval) runTimerInterval = setInterval(refreshRunTimerPills, 1000);
     if(!active && runTimerInterval){ clearInterval(runTimerInterval); runTimerInterval = null; }
@@ -14727,7 +14818,9 @@ function render(){
         const isImageNode = node.type === 'smart-image' || !node.type;
         const isJimengPending = Boolean(node.jimengPending && node.jimengPending.submitId && imgs.length === 0);
         const isQueued = Boolean(node.queued && imgs.length === 0 && !node.pending && !isJimengPending);
-        const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isQueued && !isJimengPending;
+        // 报错卡：不是空节点（空节点会有虚线上传区），也保留删除按钮
+        const isError = Boolean(node.runError && imgs.length === 0);
+        const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isQueued && !isJimengPending && !isError;
         const isHistory = isHistoryGroupNode(node);
         const isGroup = isImageNode && imgs.length > 1;
         const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
@@ -14737,8 +14830,8 @@ function render(){
         // 仅在「已有场景」时显示：空场景/生成失败的提示由舞台中央的占位层负责，避免同一句话重复出现，
         // 也避免生成失败时标题栏错误地显示「连接上传后点生成」。
         const headSub = (is3D && smart3DHasScene(node)) ? `<span class="node-head-sub">${escapeHtml(tr('smart.3dDragHint'))}</span>` : (isHy3d && hy3dHasContent(node)) ? `<span class="node-head-sub">${escapeHtml(tr('smart.3dDragHint'))}</span>` : '';
-        const hint = (is3D || isHy3d || isLlm) ? '' : isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLlm ? 'smart-llm-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${(is3D || isHy3d) ? 'smart3d-node' : ''} ${isHy3d ? 'smart-hy3d-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
+        const hint = (is3D || isHy3d || isLlm) ? '' : isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isError ? '只可删除' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isError ? 'node-error' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLlm ? 'smart-llm-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${(is3D || isHy3d) ? 'smart3d-node' : ''} ${isHy3d ? 'smart-hy3d-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
 
             <div class="node-head"><div class="node-title">${title}</div>${headSub}<div class="node-actions">${deleteBtn}</div></div>
             ${!isEmpty && !isGroup && !isMinimax && !is3D && !isHy3d ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
@@ -14943,6 +15036,15 @@ function clearPortDragVisual(){
     world.querySelectorAll('.node-port.is-active').forEach(el => el.classList.remove('is-active'));
     world.querySelectorAll('.image-node.port-hover').forEach(el => el.classList.remove('port-hover'));
 }
+/* 图片描述按钮在 LLM 关闭时也要能点：点它顺手把 LLM 打开（老板 2026-11-05） */
+function enablePromptNodeLlm(node){
+    if(!node || node.llmEnabled) return;
+    node.llmEnabled = true;
+    node.llmProvider = resolveChatProviderId(node.llmProvider || '');
+    node.llmModel = resolveChatModel(node.llmModel || '', node.llmProvider);
+    node.h = Math.max(Number(node.h) || 0, promptNodeExpandedHeight(node));
+    node.w = Math.max(Number(node.w) || 0, 316);
+}
 function bindPromptNodeControls(el, node){
     el.querySelectorAll('.prompt-node-control, .prompt-node-pill').forEach(control => {
         control.addEventListener('mousedown', e => e.stopPropagation());
@@ -15001,13 +15103,10 @@ function bindPromptNodeControls(el, node){
             toast(tr('smart.promptLlmBlockedByInpaint'));
             return;
         }
-        node.llmEnabled = !node.llmEnabled;
-        if(node.llmEnabled){
-            node.llmProvider = resolveChatProviderId(node.llmProvider || '');
-            node.llmModel = resolveChatModel(node.llmModel || '', node.llmProvider);
-            node.h = Math.max(Number(node.h) || 0, promptNodeExpandedHeight(node));
-            node.w = Math.max(Number(node.w) || 0, 316);
+        if(!node.llmEnabled){
+            enablePromptNodeLlm(node);
         } else {
+            node.llmEnabled = false;
             node.h = promptNodeMinHeight(node);
             node.w = Math.max(Number(node.w) || 0, 316);
         }
@@ -15046,17 +15145,17 @@ function bindPromptNodeControls(el, node){
             scheduleSave();
         };
     }
-    const instructionEl = el.querySelector('.prompt-llm-instruction');
-    if(instructionEl) { bindScrollableText(instructionEl); instructionEl.oninput = e => { node.llmInstruction = e.target.value; scheduleSave(); }; }
-    const instructionResizeEl = el.querySelector('[data-llm-instruction-resize]');
-    if(instructionResizeEl) instructionResizeEl.addEventListener('mousedown', e => {
-        if(e.button !== 0) return;
+    const descEl = el.querySelector('.prompt-desc-insert');
+    if(descEl) descEl.onclick = e => {
         e.preventDefault(); e.stopPropagation();
-        llmInstructionResizeState = {id:node.id, startY:e.clientY, startH:promptLlmInstructionHeight(node), startNodeH:promptNodeLayoutSize(node).height};
-        // 拖动期间屏蔽文本框的指针/选区，否则上拉时光标滑到上方输入框会被它抢走（选中文字/失焦）。
-        document.body.classList.add('smart-node-resize', 'smart-llm-instr-resize');
-        capturePendingUndo();
-    });
+        // LLM 没开就先开（老板 m14058），开了之后左栏会被 render 重建，所以先写 node.text 再渲染
+        enablePromptNodeLlm(node);
+        const cur = String(node.text || '');
+        node.text = cur.trim() ? `${cur}
+${SMART_LLM_IMAGE_DESC_PRESET}` : SMART_LLM_IMAGE_DESC_PRESET;
+        render();
+        scheduleSave();
+    };
     const splitResizeEl = el.querySelector('[data-prompt-split-resize]');
     if(splitResizeEl) splitResizeEl.addEventListener('mousedown', e => {
         if(e.button !== 0) return;
@@ -16203,11 +16302,16 @@ function bindNodeEvents(){
                 const ownsImage = !refNodeId || refNodeId === id;
                 if(groupNode){
                     if(ownsImage && !node.images?.[imgIndex]) return;
+                    // 组已经被选中（框选或点选）时，按住卡片拖的是整组位置，
+                    // 而不是把这张图从组里剥出去（老板 2026-11-04）
+                    if(selectedId === id || selectedIds.includes(id)) return;
                 } else if((node.images || []).length <= 1) return;
                 e.preventDefault(); e.stopPropagation();
                 const sig = item.dataset.mediaSignature || '';
                 thumbDragState = {nodeId:id, imgIndex, startX:e.clientX, startY:e.clientY, detached:false,
                     own:ownsImage, url:sig.slice(sig.indexOf(':') + 1), reorderUrl:'', reorderEl:null};
+                // 分组缩略图按住即展开：拖到同组另一张时落点必须可见、可命中（静态态是叠起来的）
+                item.closest('.smart-group-thumb-grid')?.classList.add('is-expanded');
                 capturePendingUndo();
             });
         });
@@ -16239,7 +16343,7 @@ function bindNodeEvents(){
             capturePendingUndo();
         });
         const beginNodeDrag = e => {
-            if(e.button !== 0 || e.target.closest('.mini-x, .smart-node-floating-menu, .node-resize-handle, .thumb-item, .node-port, .prompt-node-control, .smart3d-stage, .smart3d-bar, .smart3d-raw, select, input, textarea, button')) return;
+            if(e.button !== 0 || e.target.closest('.mini-x, .smart-node-floating-menu, .node-resize-handle, .thumb-item, .node-port, .prompt-node-control, .prompt-node-output, .smart3d-stage, .smart3d-bar, .smart3d-raw, select, input, textarea, button')) return;
             if(e.target.closest('.prompt-node-pill, textarea:not(.prompt-node-text)')) return;
             e.preventDefault(); e.stopPropagation();
             window.getSelection?.()?.removeAllRanges?.();
@@ -16338,11 +16442,14 @@ function pruneSmartGroupMembershipsForNode(node){
     // 节点拖出分组：从所有分组移除自己（保持当前尺寸，不自动放大）。
     // 分组合并已改为“释放被拖分组、只并入其成员”，所以这里只需处理单个节点的退组。
     let changed = false;
+    const touched = new Set();
     nodes.forEach(group => {
         if(!isSmartGroupNode(group) || !Array.isArray(group.items) || !group.items.includes(node.id)) return;
         group.items = group.items.filter(id => id !== node.id);
+        touched.add(group.id);
         changed = true;
     });
+    if(changed) autoDissolveSingleImageGroups(touched, {skipUndo:true});
     return changed;
 }
 function clearDropHighlight(){
@@ -16360,6 +16467,7 @@ function deleteNode(id){
     nodes.forEach(node => {
         if(isHistoryGroupNode(node) && node.historyFor === id) deleteIds.add(node.id);
     });
+    const affectedGroups = new Set(nodes.filter(node => isSmartGroupNode(node) && (deleteIds.has(node.id) || (Array.isArray(node.items) && node.items.some(itemId => deleteIds.has(itemId))))).map(node => node.id));
     nodes = nodes.filter(node => !deleteIds.has(node.id));
     if(canvas) canvas.connections = (canvas.connections || []).filter(c => !deleteIds.has(c.from) && !deleteIds.has(c.to));
     nodes.forEach(node => {
@@ -16369,6 +16477,7 @@ function deleteNode(id){
     if(selectedId === id) selectedId = '';
     selectedIds = selectedIds.filter(selected => !deleteIds.has(selected));
     if(deleteIds.has(selectedImage.nodeId)) selectedImage = {nodeId:'', index:-1};
+    autoDissolveSingleImageGroups(affectedGroups, {skipUndo:true});
     render();
     scheduleSave();
 }
@@ -16594,6 +16703,7 @@ function deleteImage(id, imageIndex){
     else if(_rest.length === 1) node.title = isAttachmentMediaItem(_rest[0]) ? attachmentExtLabel(_rest[0]) : 'Image';
     if(selectedImage.nodeId === id) selectedImage = {nodeId:id, index:Math.min(selectedImage.index, node.images.length - 1)};
     if(selectedImage.index < 0) selectedImage = {nodeId:'', index:-1};
+    if(isSmartGroupNode(node)) autoDissolveSingleImageGroup(node, {skipUndo:true});
     render();
     scheduleSave();
 }
@@ -20045,6 +20155,8 @@ function updateComposer(){
     positionComposerForNode(node);
     const ph = Math.max(60, Math.min(380, Number(settings.promptH) || 124));
     promptInput.style.setProperty('--prompt-h', `${ph}px`);
+    if(promptOutputPane) promptOutputPane.style.setProperty('--prompt-h', `${ph}px`);
+    renderPromptOutputPane(node);
     const isLlmRunning = Boolean(node?.llmProcessing);
     promptInput?.classList.toggle('llm-blur', isLlmRunning);
     if(promptProcessingOverlay){
@@ -20058,6 +20170,15 @@ function updateComposer(){
     syncCascadeRunButton(node);
     scheduleDynamicParamsRefresh(140);
 }
+// 左侧保持用户原始提示词，右侧只展示 LLM 产出的最终提示词（老板 2026-11-05）
+function renderPromptOutputPane(node){
+    if(!promptOutputPane) return;
+    const text = String(node?.llmOutputText || '').trim();
+    promptOutputPane.textContent = text;
+    promptOutputPane.dataset.placeholder = tr('smart.promptOutputPlaceholder');
+    promptOutputPane.classList.toggle('has-text', Boolean(text));
+    promptOutputPane.scrollTop = 0;
+}
 function renderComposerLlmSection(node){
     if(!composerLlmSection || !composerLlmToggleBtn) return;
     // 遮罩（局部重绘）下 LLM 扩写会把「这里改成什么」扩成整图描述，必须关掉并隐藏入口
@@ -20068,6 +20189,9 @@ function renderComposerLlmSection(node){
     composerLlmToggleBtn.classList.toggle('active', isEnabled);
     composerLlmToggleBtn.setAttribute('aria-pressed', isEnabled ? 'true' : 'false');
     composerLlmSection.style.display = isEnabled ? 'grid' : 'none';
+    // LLM 开启时提示词区一分为二：左=原提示词，右=LLM 输出的最终提示词
+    promptRow?.classList.toggle('llm-split', isEnabled);
+    renderPromptOutputPane(node);
     if(!isEnabled) return;
     settings.llmProvider = resolveChatProviderId(settings.llmProvider || '');
     settings.llmModel = resolveChatModel(settings.llmModel || '', settings.llmProvider);
@@ -20090,7 +20214,7 @@ function renderInputPromptPreview(node){
     // 上游文本类附件的正文是懒加载的：先用已有缓存渲染，抓回来后再刷一次。
     // 循环会自然终止 —— 抓取结束后 item.textContent 变成字符串，下次就没有 target 了。
     if(node) ensureUpstreamTextContents(node).then(changed => { if(changed) renderInputPromptPreview(node); });
-    const groupText = isSmartGroupNode(node) ? textForNode(node).trim() : '';
+    const groupText = isSmartGroupNode(node) ? smartGroupMembersText(node).trim() : '';
     const text = node ? [groupText, inputPromptTextFor(node).trim()].filter(Boolean).join('\n\n') : '';
     inputPromptPreview.classList.toggle('has-text', Boolean(text));
     inputPromptPreview.innerHTML = text
@@ -20159,7 +20283,9 @@ function renderInputThumbsRow(node){
                 ? `data-input-remove-reference="${escapeHtml(key)}" title="删除参考图" aria-label="删除参考图"`
                 : `data-input-block-key="${escapeHtml(key)}" title="这次不使用这张图" aria-label="这次不使用这张图"`}>×</button>`
             : '';
-        return `<div class="input-thumb ${isFileish ? 'input-thumb-fileish' : ''} ${isSelf ? 'input-self' : ''} ${removable ? 'input-manual-ref' : ''}" draggable="false" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" data-source-url="${escapeHtml(sourceUrl)}" title="${escapeHtml(`${img.name || tr('smart.inputNum').replace('{n}', String(i + 1))} · ${title}`)}">${inner}${label ? `<span class="input-thumb-label">${escapeHtml(label)}</span>` : ''}${removeBtn}</div>`;
+        // 拖动排序的明确提示（老板 m13495）：≥2 张时每张小图上挂一个抓手图标
+        const grip = dedup.length > 1 ? `<span class="input-thumb-grip" aria-hidden="true"><i data-lucide="grip-vertical"></i></span>` : '';
+        return `<div class="input-thumb ${isFileish ? 'input-thumb-fileish' : ''} ${isSelf ? 'input-self' : ''} ${removable ? 'input-manual-ref' : ''}" draggable="false" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" data-source-url="${escapeHtml(sourceUrl)}" title="${escapeHtml(`${img.name || tr('smart.inputNum').replace('{n}', String(i + 1))} · ${title}`)}">${inner}${label ? `<span class="input-thumb-label">${escapeHtml(label)}</span>` : ''}${removeBtn}${grip}</div>`;
     }).join('');
     inputThumbsRow.innerHTML = `<div class="input-thumb-list">${thumbsHtml}${dedup.length > 1 ? `<span class="input-thumb-count">${escapeHtml(tr('smart.inputCount').replace('{n}', String(dedup.length)))}</span>` : ''}</div><div class="input-thumb-actions">${addButton}</div>`;
     bindSmartPreviewImageFallbacks(inputThumbsRow);
@@ -21190,14 +21316,30 @@ function selfReferenceImagesForNode(node, consume=false, ctx=smartLoopContext){
 }
 function textForNode(node, ctx=smartLoopContext){
     if(!node) return '';
-    if(node.type === 'smart-prompt') return promptNodePromptItems(node).join('\n\n');
+    if(node.type === 'smart-prompt') return promptNodeOutputText(node);
     if(node.type === 'smart-llm') return String(node.outputText || '').trim();
     if(node.type === 'smart-loop') return smartLoopPrompt(node, ctx);
-    if(node.type === 'smart-group') return smartGroupMembers(node).map(member => textForNode(member, ctx)).filter(Boolean).join('\n\n');
+    // 上传/生成节点作为上游时，只交出它自己 LLM 处理出的最终提示词（用户原文留在它自己那栏，
+    // 别把同一句话在下游再拼一遍）；没有最终提示词就当没有文本（老板 2026-11-05）。
+    if(node.type === 'smart-image') return nodeLlmFinalPrompt(node);
+    if(node.type === 'smart-group'){
+        // 分组自己的提示词（优先 LLM 最终输出）也要能被下游/同组节点当成上游输入，
+        // 否则分组里的上传节点永远拿不到「图2的上游输入」（老板 2026-11-05）。
+        const own = String(node.llmOutputText || node.promptDraftText || '').trim();
+        return [own, smartGroupMembersText(node, ctx)].filter(Boolean).join('\n\n');
+    }
     return '';
 }
+// 分组内成员的文本（不含分组自己的提示词：分组运行时自己那段已经在输入框里了）
+function smartGroupMembersText(node, ctx=smartLoopContext){
+    return smartGroupMembers(node).map(member => textForNode(member, ctx)).filter(Boolean).join('\n\n');
+}
 function promptInputNodesFor(node){
-    return inputNodesFor(node).filter(input => input?.type === 'smart-prompt' || input?.type === 'smart-loop' || input?.type === 'smart-group' || input?.type === 'smart-llm');
+    // 自动连线（拖拽生成）默认 kind='flow'，手工端口连线是 'input'；两者都算提示词上游，
+    // 否则从提示词节点拖线接过来的最终输出会被静默丢掉（老板 2026-11-05）。
+    // 上传/生成节点（smart-image）也算提示词上游：它自己 LLM 处理完的最终提示词要能流到下游
+    // 「上游输入」并参与生图（老板 2026-11-05：图2 接了上游却没显示上游输入）。
+    return upstreamNodesForKinds(node, ['input', 'flow']).filter(input => input?.type === 'smart-prompt' || input?.type === 'smart-loop' || input?.type === 'smart-group' || input?.type === 'smart-llm' || input?.type === 'smart-image');
 }
 function inputPromptTextFor(node, ctx=smartLoopContext){
     const directText = promptInputNodesFor(node).map(input => textForNode(input, ctx)).filter(Boolean);
@@ -21876,9 +22018,11 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
         body += `图${refMap.get(part.url)}`;
     });
     body = body.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-    const groupPrompt = isSmartGroupNode(node) ? textForNode(node, ctx).trim() : '';
+    const groupPrompt = isSmartGroupNode(node) ? smartGroupMembersText(node, ctx).trim() : '';
     const inputPrompt = inputPromptTextFor(node, ctx).trim();
-    if(groupPrompt || inputPrompt) body = [groupPrompt, inputPrompt, body].filter(Boolean).join('\n\n');
+    // 输入框可能已包含上游最终输出，此时不要再拼一次
+    const extraPrompt = inputPrompt && !body.includes(inputPrompt) ? inputPrompt : '';
+    if(groupPrompt || extraPrompt) body = [groupPrompt, extraPrompt, body].filter(Boolean).join('\n\n');
     if(!body && settings.engine === 'runninghub'){
         body = rhDefaultPromptSuggestion();
     }
@@ -22098,6 +22242,8 @@ function finalizePendingNode(pendingNode, urls, meta, kind='image'){
         return copyMediaSizeFields(item, {url, name:(typeof item === 'object' && item.name) || `output-${i + 1}.${ext}`, kind:itemKind, generatedResult:true});
     }).filter(img => img.url));
     pendingNode.images = imgs;
+    delete pendingNode.runError;
+    delete pendingNode.pendingTotal;
     markSmartNodeComplete(pendingNode, meta);
     pendingNode.outputKind = kind;
     if(imgs.length > 1) pendingNode.title = kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : 'Group';
@@ -22938,6 +23084,8 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
         outputSlot.queued = false;
         outputSlot.running = true;
         outputSlot.pending = expectedCount;
+        outputSlot.pendingTotal = Math.max(1, Number(expectedCount) || 1);
+        delete outputSlot.runError;
         outputSlot.runStartedAt = nowMs();
         delete outputSlot.runFinishedAt;
         delete outputSlot.runElapsedMs;
@@ -23396,6 +23544,9 @@ async function runGeneration(){
     undoSuppressed = false;
     const pendingNode = branchNode || node;
     if(extracted) pendingNode._runMetaTargetId = extracted.id;
+    // 新一轮开始：清掉上次失败留在卡片上的报错
+    delete pendingNode.runError;
+    pendingNode.pendingTotal = Math.max(1, Number(expectedCount) || 1);
     if(!branchNode){
         pendingNode.pending = Math.max(1, Number(expectedCount) || 1);
         pendingNode.runStartedAt = nowMs();
@@ -23490,17 +23641,19 @@ async function runGeneration(){
             return;
         }
         pendingNode.pending = 0;
-        if(branchNode){
-            nodes = nodes.filter(n => n.id !== branchNode.id);
-            canvas.connections = (canvas.connections || []).filter(c => c.from !== branchNode.id && c.to !== branchNode.id);
-            selectedId = node.id;
-        } else {
-            pendingNode.pending = 0;
-            pendingNode.running = false;
-            if(!(pendingNode.images || []).length){
-                delete pendingNode.w;
-                delete pendingNode.h;
+        pendingNode.running = false;
+        if(!(pendingNode.images || []).length){
+            // 失败不要再把占位节点缩回空壳：把错误原文留在卡片里，用户只能删（老板 2026-11-04）。
+            pendingNode.runError = {message: String(e?.message || e || tr('smart.errRunFailed')).slice(0, 400), at: nowMs()};
+            pendingNode.runFinishedAt = nowMs();
+            if(!Number(pendingNode.w) || !Number(pendingNode.h)){
+                const errBox = pendingBoxSize(1, {sourceNode:node, refs});
+                pendingNode.w = errBox.w;
+                pendingNode.h = errBox.h;
             }
+        }
+        if(branchNode){
+            selectedId = pendingNode.id;
         }
         if(extracted) restoreFromExtraction(node, extracted);
         delete pendingNode._runMetaTargetId;
@@ -23519,7 +23672,6 @@ async function runPromptLLMNode(nodeId){
     if(!node || node.type !== 'smart-prompt') return;
     const message = promptNodeLLMInputText(node).trim();
     if(!message){ toast(tr('smart.promptLlmNeedText')); return; }
-    const originalText = node.text || '';
     const systemPrompt = (node.llmSystemPrompt || '').trim();
     node.llmEnabled = true;
     node.running = true;
@@ -23558,16 +23710,13 @@ async function runPromptLLMNode(nodeId){
             if(!r.ok) throw new Error(await r.text());
             return r.json();
         });
-        node.text = (result.text || '').trim();
+        node.llmOutputText = (result.text || '').trim();
         node.llmProvider = provider;
         node.llmModel = model;
         scheduleSave();
     } catch(e) {
         const errDetail = (e.message || tr('smart.promptLlmFailed')).slice(0, 160);
-        if(nodeTextEl){
-            nodeTextEl.classList.remove('llm-blur');
-            nodeTextEl.value = originalText;
-        }
+        if(nodeTextEl) nodeTextEl.classList.remove('llm-blur');
         window.alert(`LLM 提示词处理失败：${errDetail}`);
     } finally {
         node.running = false;
@@ -23688,11 +23837,28 @@ function applyMinimaxH3Context(message, systemMode, s, mediaRefs){
     const original = String(message || '').trim();
     return `${original}\n\n${block}`;
 }
+// 节点自己 LLM 跑出来的「最终提示词」。草稿被改过就视为过期（等下次运行重跑 LLM）。
+// 老板 2026-11-05：生图要优先按 LLM 处理完的最终提示词来，没有才用用户提示词。
+function nodeLlmFinalPrompt(node){
+    const out = String(node?.llmOutputText || '').trim();
+    if(!out) return '';
+    const source = String(node?.llmOutputSourceDraft || '').trim();
+    const draft = String(node?.promptDraftText || '').trim();
+    if(source && draft && source !== draft) return '';
+    return out;
+}
 async function resolvePromptWithLlmIfNeeded(prompt, refs, node, runSettings=settings){
     const s = runSettings || (node ? smartSettingsForNode(node) : settings) || settings;
-    if(!s?.llmEnabled) return prompt;
     // 遮罩局部重绘一律不扩写：扩成整图描述会把重绘带偏（LLM 入口此时也已隐藏）
     if(llmBlockedByInpaint(node)) return prompt;
+    const readyFinal = nodeLlmFinalPrompt(node);
+    if(!s?.llmEnabled) return readyFinal || prompt;
+    // 只有「这段输入」已经处理出的最终提示词才直接拿来生图；输入/上游变了就必须重新跑 LLM
+    // （老板 2026-11-05：图生图不能跳过 LLM，也不能拿旧输出当上游提示词）
+    const cachedOutput = String(node?.llmOutputText || '').trim();
+    if(cachedOutput && node?.llmOutputForPrompt === String(prompt || '').trim()) return cachedOutput;
+    // 老节点没有 llmOutputForPrompt 也能复用：草稿没变就直接用最终提示词
+    if(readyFinal) return readyFinal;
     const provider = resolveChatProviderId(s.llmProvider || '');
     const model = resolveChatModel(s.llmModel || '', provider);
     if(!provider || !model) return prompt;
@@ -23714,7 +23880,8 @@ async function resolvePromptWithLlmIfNeeded(prompt, refs, node, runSettings=sett
     const syncComposerState = () => {
         if(isCurrentActive()){
             const running = Boolean(node?.llmProcessing);
-            promptInput?.classList.toggle('llm-blur', running);
+            // 分栏时左侧是用户原文，不要糊掉（老板 2026-11-05）
+            promptInput?.classList.toggle('llm-blur', running && !promptRow?.classList.contains('llm-split'));
             if(promptProcessingOverlay){
                 promptProcessingOverlay.style.display = running ? 'flex' : 'none';
                 if(running) refreshIcons();
@@ -23758,20 +23925,16 @@ async function resolvePromptWithLlmIfNeeded(prompt, refs, node, runSettings=sett
         const expanded = (res.text || '').trim();
         const finalPrompt = expanded || prompt;
 
-        // 扩写完成后实时覆盖回填输入框和节点文本
+        // 扩写结果只写右侧输出栏，绝不覆盖用户原始提示词（老板 2026-11-05）
         if(expanded){
-            if(node && isSmartRunnableNode(node)){
-                setPromptDraftForNode(node, expanded);
+            if(node){
+                node.llmOutputText = expanded;
+                node.llmOutputForPrompt = message;
+                node.llmOutputSourceDraft = originalPromptPlainText;
             }
-            if(node && node.type === 'smart-prompt'){
-                node.text = expanded;
-            }
-            if(isCurrentActive() && promptInput){
-                setPromptText(expanded);
-                delete promptInput.dataset.preserveDraftOnce;
-                savePromptDraftForCurrent();
-                renderInputThumbsRow(selectedNode());
-            }
+            renderPromptOutputPane(node || selectedNode());
+            // 右栏刚出结果时，把这段最终提示词立刻显示到「上游输入」区（老板 2026-11-05）
+            if(isCurrentActive()) renderInputPromptPreview(activeComposerNode());
             scheduleSave();
         }
         return finalPrompt;
@@ -24747,6 +24910,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
     });
     node.images = [...existing, ...additions];
     if(additions.length) node.outputKind = kind;
+    if(additions.length){ delete node.runError; delete node.pendingTotal; }
     if(!node.pending && smartPendingTasks(node).length === 0){
         delete node.pendingTasks;
         node.runFinishedAt = nowMs();
@@ -24813,8 +24977,14 @@ async function resumeSmartPendingNode(node, logContext={}){
                 delete node.pendingTasks;
                 node.running = false;
                 if(!(node.images || []).length){
-                    delete node.w;
-                    delete node.h;
+                    // 全部任务都失败：卡片原地变成报错卡，不缩回空壳（老板 2026-11-04）
+                    node.runError = {message: String(e?.message || e || tr('smart.errRunFailed')).slice(0, 400), at: nowMs()};
+                    node.runFinishedAt = nowMs();
+                    if(!Number(node.w) || !Number(node.h)){
+                        const errBox = pendingBoxSize(1, {refs:[]});
+                        node.w = errBox.w;
+                        node.h = errBox.h;
+                    }
                 }
             }
             failures.push(e);
@@ -24863,6 +25033,83 @@ function finishSelection(event){
     syncSelectionUi();
     setTimeout(() => { selectionJustFinished = false; }, 0);
 }
+/* ===== 拖放自动组合（老板 2026-11-04）=====
+   规则：两个图片/上传卡片重叠 ≥25% → 自动组合成一个图片组；图片与图片组互相重叠 ≥25% → 图片并入该组
+   （方向对称，谁拖谁不重要）；两个图片组重叠 ≥25% → 合并成一个组。
+   重叠率按「两者中较小的那块」算面积占比：大组压住小图一点点不会误触发，小图盖住大组 1/4 才算。 */
+const SMART_AUTO_GROUP_RATIO = 0.25;
+const SMART_AUTO_GROUP_TYPES = new Set(['smart-image', 'smart-group']);
+function smartNodeOverlapRatio(a, b){
+    const ra = nodeRect(a), rb = nodeRect(b);
+    const w = Math.min(ra.x + ra.width, rb.x + rb.width) - Math.max(ra.x, rb.x);
+    const h = Math.min(ra.y + ra.height, rb.y + rb.height) - Math.max(ra.y, rb.y);
+    if(!(w > 0) || !(h > 0)) return 0;
+    const minArea = Math.min(ra.width * ra.height, rb.width * rb.height);
+    return minArea > 0 ? (w * h) / minArea : 0;
+}
+// 找与 dragged 重叠率最高的可组合对象（自己所在分组的成员/画布上不可见的成员都不参与）
+function smartAutoGroupPartner(dragged){
+    let best = null, bestRatio = SMART_AUTO_GROUP_RATIO;
+    nodes.forEach(n => {
+        if(n.id === dragged.id || !SMART_AUTO_GROUP_TYPES.has(n.type)) return;
+        if(smartGroupContainingNode(n.id)) return;
+        const ratio = smartNodeOverlapRatio(dragged, n);
+        if(ratio >= bestRatio){ bestRatio = ratio; best = n; }
+    });
+    return best;
+}
+function autoGroupOnDrop(dragged){
+    if(!dragged || !SMART_AUTO_GROUP_TYPES.has(dragged.type)) return false;
+    // 从组里往外拖时不要立刻被自己原来的组重新吸回去
+    const owner = smartGroupContainingNode(dragged.id);
+    const partner = smartAutoGroupPartner(dragged);
+    if(!partner || (owner && owner.id === partner.id)) return false;
+    if(isSmartGroupNode(partner)){
+        if(!addNodeToSmartGroup(partner, dragged)) return false;
+        arrangeSmartGroupMembers(partner, {skipUndo:true});
+        selectedIds = [];
+        selectedId = partner.id;
+        selectedImage = {nodeId:'', index:-1};
+        toast('已自动并入分组');
+        return true;
+    }
+    if(isSmartGroupNode(dragged)){
+        if(!addNodeToSmartGroup(dragged, partner)) return false;
+        arrangeSmartGroupMembers(dragged, {skipUndo:true});
+        selectedIds = [];
+        selectedId = dragged.id;
+        selectedImage = {nodeId:'', index:-1};
+        toast('已自动并入分组');
+        return true;
+    }
+    return combineImagesIntoNewGroup(dragged, partner);
+}
+function combineImagesIntoNewGroup(a, b){
+    const rects = [nodeRect(a), nodeRect(b)];
+    const minX = Math.min(...rects.map(r => r.x));
+    const minY = Math.min(...rects.map(r => r.y));
+    const maxX = Math.max(...rects.map(r => r.x + r.width));
+    const maxY = Math.max(...rects.map(r => r.y + r.height));
+    const group = {
+        id:uid('group'), type:'smart-group',
+        x:Math.round(minX), y:Math.round(minY),
+        w:Math.max(340, Math.round(maxX - minX)), h:Math.max(220, Math.round(maxY - minY)),
+        title:'智能分组', items:[], images:[], created_at:Date.now()
+    };
+    nodes.push(group);
+    let added = false;
+    [a, b].forEach(n => { if(addNodeToSmartGroup(group, n)) added = true; });
+    if(!added){
+        nodes = nodes.filter(n => n.id !== group.id);
+        return false;
+    }
+    arrangeSmartGroupMembers(group, {skipUndo:true});
+    selectedIds = [];
+    selectedId = group.id;
+    selectedImage = {nodeId:'', index:-1};
+    toast('已自动组合');
+    return true;
+}
 function groupSelectedNodes(){
     const ids = selectedIds.length ? selectedIds.slice() : (selectedId ? [selectedId] : []);
     const selected = ids.map(id => nodes.find(n => n.id === id)).filter(n => n && !isSmartGroupNode(n));
@@ -24895,12 +25142,31 @@ function groupSelectedNodes(){
     render();
     scheduleSave();
 }
-function ungroupNode(groupId){
+function smartGroupImageCount(group){
+    return isSmartGroupNode(group) ? smartGroupImageRefs(group).length : 0;
+}
+/* 组里只剩一张图就自动解散：把那张图拆回独立节点，提示词/循环成员原地保留（老板 2026-11-04）。 */
+function autoDissolveSingleImageGroup(group, options){
+    if(!isSmartGroupNode(group) || smartGroupImageCount(group) !== 1) return false;
+    return ungroupNode(group.id, {skipUndo: Boolean(options?.skipUndo)});
+}
+function autoDissolveSingleImageGroups(onlyIds, options){
+    // 只检查这次操作影响到的分组，别把无关的「一张图 + 提示词」组一起拆了。
+    const scope = onlyIds instanceof Set ? onlyIds : (Array.isArray(onlyIds) ? new Set(onlyIds) : null);
+    let changed = false;
+    nodes.filter(isSmartGroupNode).map(g => g.id).forEach(id => {
+        if(scope && !scope.has(id)) return;
+        const group = nodes.find(n => n.id === id);
+        if(group && autoDissolveSingleImageGroup(group, options)) changed = true;
+    });
+    return changed;
+}
+function ungroupNode(groupId, options = {}){
     const group = nodes.find(n => n.id === groupId);
     if(!group) return false;
     // 释放智能分组：把收进卡片的图片重新拆成独立图片节点（平铺在分组原位置），提示词/循环成员原地保留，再删除分组容器。
     if(isSmartGroupNode(group)){
-        pushUndo();
+        if(!options.skipUndo) pushUndo();
         const memberIds = smartGroupMembers(group).map(m => m.id);
         const groupImages = (group.images || []).filter(img => img?.url);
         let created = [];
@@ -25076,7 +25342,6 @@ function createNodeFromMenu(type){
     if(type === 'group') return createSmartGroupNode(p.x - 170, p.y - 110);
     let created = null;
     if(type === 'prompt') created = createPromptNode(p.x - 158, p.y - 97);
-    else if(type === 'llm') created = createLLMNode(p.x - 190, p.y - 220);
     else if(type === 'loop') created = createLoopNode(p.x - 135, p.y - 95);
     else if(type === 'minimax') created = createMinimaxNode(p.x - 520, p.y - 320);
     else if(type === '3d') created = create3DNode(p.x - 280, p.y - 235);
@@ -25624,21 +25889,6 @@ window.onmousemove = e => {
         updateNodeElementDuringResize(node);
         return;
     }
-    if(llmInstructionResizeState){
-        const node = nodes.find(n => n.id === llmInstructionResizeState.id);
-        if(!node) return;
-        const dy = (e.clientY - llmInstructionResizeState.startY) / viewport.scale;
-        const newInstrH = Math.max(PROMPT_LLM_INSTRUCTION_MIN_H, Math.min(PROMPT_LLM_INSTRUCTION_MAX_H, Math.round(llmInstructionResizeState.startH + dy)));
-        node.llmInstructionHeight = newInstrH;
-        // 只把“指令框的高度变化量”叠加到节点总高度上，保留用户手动拉大的上方区域，避免上方被重置变小。
-        node.h = Math.max(promptNodeExpandedHeight(node), Math.round(llmInstructionResizeState.startNodeH + (newInstrH - llmInstructionResizeState.startH)));
-        node.w = Math.max(Number(node.w) || 0, 316);
-        node.scale = 1;
-        updateNodeElementDuringResize(node);
-        const ta = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"] .prompt-llm-instruction`);
-        if(ta) ta.style.height = `${promptLlmInstructionHeight(node)}px`;
-        return;
-    }
     if(promptSplitResizeState){
         const node = nodes.find(n => n.id === promptSplitResizeState.id);
         if(!node) return;
@@ -25676,7 +25926,18 @@ window.onmousemove = e => {
             }
         }
         if(!thumbDragState.detached && Math.abs(dx) + Math.abs(dy) > 6){
-            const canDetachThumb = thumbDragState.own && source && (isSmartGroupNode(source) ? (source.images || []).length >= 1 : (source.images || []).length > 1);
+            // 分组内调顺序：光标还停在分组卡片里时不能把图拆出去——否则刚过 6px 阈值就先把图拽出组，
+            // 永远轮不到上面「拖到同组另一张缩略图上」的落点判定（老板 2026-11-04「组内的图片又不能调整顺序了」）。
+            const stillInGroupCard = isSmartGroupNode(source) && (() => {
+                // 展开后的缩略图会溢出节点盒子，所以「还在组里」不能只看节点矩形：
+                // 已经命中同组另一张落点、或指针还在任意一张缩略图上，都只算调顺序。
+                if(thumbDragState.reorderUrl) return true;
+                if(smartGroupThumbAt(e.clientX, e.clientY, source.id)) return true;
+                const point = screenToWorld(e);
+                const rect = nodeRect(source);
+                return point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height;
+            })();
+            const canDetachThumb = !stillInGroupCard && thumbDragState.own && source && (isSmartGroupNode(source) ? (source.images || []).length >= 1 : (source.images || []).length > 1);
             if(canDetachThumb){
                 const img = source.images[thumbDragState.imgIndex];
                 if(img){
@@ -25685,7 +25946,8 @@ window.onmousemove = e => {
                     applyNodeMetaToImage(img, source);
                     source.images.splice(thumbDragState.imgIndex, 1);
                     if(isSmartGroupNode(source)){
-                        arrangeSmartGroupMembers(source, {skipUndo:true, syncDom:true});
+                        if(smartGroupImageCount(source) === 1) autoDissolveSingleImageGroup(source, {skipUndo:true});
+                        else arrangeSmartGroupMembers(source, {skipUndo:true, syncDom:true});
                     } else if(source.images.length <= 1){
                         source.title = 'Image';
                         delete source.w; delete source.h;
@@ -25795,15 +26057,6 @@ window.onmouseup = e => {
         if(changed) render();
         scheduleSave();
     }
-    if(llmInstructionResizeState){
-        const node = nodes.find(n => n.id === llmInstructionResizeState.id);
-        const changed = node && promptLlmInstructionHeight(node) !== llmInstructionResizeState.startH;
-        document.body.classList.remove('smart-node-resize', 'smart-llm-instr-resize');
-        if(changed) commitPendingUndo(); else discardPendingUndo();
-        llmInstructionResizeState = null;
-        render();
-        scheduleSave();
-    }
     if(promptSplitResizeState){
         const node = nodes.find(n => n.id === promptSplitResizeState.id);
         const changed = node && promptNodeSplitPreviewHeight(node) !== promptSplitResizeState.startH;
@@ -25816,6 +26069,8 @@ window.onmouseup = e => {
     if(thumbDragState){
         const {reorderUrl, reorderEl, nodeId:thumbNodeId, url:thumbUrl} = thumbDragState;
         reorderEl?.classList.remove('reorder-target');
+        // 松手后收回展开态（没触发重排/没 render 的分支尤其需要，否则缩略图一直摊着）
+        world.querySelectorAll('.smart-group-thumb-grid.is-expanded').forEach(grid => grid.classList.remove('is-expanded'));
         if(reorderUrl){
             const group = nodes.find(n => n.id === thumbNodeId);
             if(group && reorderSmartGroupThumbs(group, thumbUrl, reorderUrl)){
@@ -25885,6 +26140,16 @@ window.onmouseup = e => {
             smartGroupTarget &&
             addDraggedNodesToSmartGroup(draggedNodes.length ? draggedNodes : [draggedNode], smartGroupTarget)
         ){
+            stateChanged = true;
+            render();
+        } else if(
+            draggedNode &&
+            (dragState.group || []).length <= 1 &&
+            !dragState.ctrlGroup &&
+            !dragState.thumbDetached &&
+            autoGroupOnDrop(draggedNode)
+        ){
+            // 重叠 ≥25% 自动组合/并组（不按 Ctrl 也生效；按 Ctrl 的手动连线分支在后面各自判断）
             stateChanged = true;
             render();
         } else if(
@@ -27468,6 +27733,13 @@ function loadAgentState(){
         agentState.chatDrawerOpen = true;
         agentState._dockDefaultExpanded = true;
     }
+    /* 🚨 2026-11-05 老板 m14839 移除「收起对话 / 小抽AI」胶囊后，对话抽屉变成常驻：
+       localStorage 里存着 chatDrawerOpen:false 的老用户会看不到任何内容（胶囊没了，没东西可点），
+       用 _dockToggleRemoved 做一次性迁移强开。 */
+    if(!agentState._dockToggleRemoved){
+        agentState.chatDrawerOpen = true;
+        agentState._dockToggleRemoved = true;
+    }
     // 旧数据迁移：prompts string[] → object[]
     (agentState.messages || []).forEach(m => {
         if(m.role === 'assistant' && Array.isArray(m.prompts) && m.prompts.length > 0){
@@ -27884,6 +28156,8 @@ function toggleAgentPanel(open=!agentOpen){
         renderAgentMessages();
         // 打开时至少渲染一次 dock 尺寸（对话抽屉高度 / 宽度可能随窗口变过）
         applyAgentDockSize();
+        // 打开就等于用户要它出现：贴边收纳状态下先滑出来
+        if(typeof agentSetTucked === 'function') agentSetTucked(false);
     }
 }
 /* ---------- 底部悬浮框：展开/收起对话 + 拖拽调高 ----------
@@ -27915,29 +28189,20 @@ function applyAgentDockSize(){
     }
     const w = Number(agentState?.dockW) || 0;
     if(w > 0 && _dockOpen) agentPanel.style.setProperty('--agent-dock-w', `${Math.round(w)}px`);
-    /* 胶囊文案（2026-10-21 老板要求）：
-       收起态 = 名字「小抽AI」（这时面板只剩它一颗胶囊，得能认出来是什么）；
-       展开态 = 「收起对话」（动作）。文案走 i18n，`data-i18n` 同步改，切语言时 apply() 才不会改回旧值。 */
-    const label = document.getElementById('agentChatToggleLabel');
-    if(label){
-        const _key = agentState?.chatDrawerOpen ? 'smart.agentCollapseChat' : 'smart.agentPanel';
-        label.dataset.i18n = _key;
-        label.textContent = window.StudioI18n?.t(_key) || (agentState?.chatDrawerOpen ? '收起对话' : '小抽AI');
-    }
-    const icon = agentPanel.querySelector('.agent-chat-toggle i, .agent-chat-toggle svg');
-    if(icon){
-        icon.setAttribute('data-lucide', agentState?.chatDrawerOpen ? 'chevron-down' : 'chevron-up');
-        if(window.lucide) lucide.createIcons();
-    }
+    // 贴边收纳的 class 跟着尺寸一起刷（chatDrawerOpen / dockEdge 变了都要重算）
+    agentApplyEdgeClasses();
 }
+/* 「收起对话 / 小抽AI」胶囊已移除（2026-11-05 老板 m14839）⇒ 对话抽屉常驻展开，
+   这个函数只保留「确保展开 + 把面板叫回来」的语义，不再能把它收起来。 */
 function toggleAgentChatDrawer(force){
     if(!agentState) return;
-    agentState.chatDrawerOpen = force === undefined ? !agentState.chatDrawerOpen : Boolean(force);
-    /* 🚨 展开时必须把面板本身叫回来：点「资产库」「灵感库」会 toggleAgentPanel(false) 把 `.open` 摘掉，
-       只改 chatDrawerOpen 的话面板仍是隐藏态 —— 胶囊变成死按钮，点了没反应，
-       用户以为「小抽AI 窗口消失了」（老板 2026-11-02 反馈第二轮）。 */
-    if(agentState.chatDrawerOpen && !agentOpen) toggleAgentPanel(true);
+    agentState.chatDrawerOpen = true;
+    /* 🚨 必须把面板本身叫回来：点「资产库」「灵感库」会 toggleAgentPanel(false) 把 `.open` 摘掉，
+       只改 chatDrawerOpen 的话面板仍是隐藏态 —— 用户以为「小抽AI 窗口消失了」（老板 2026-11-02）。 */
+    if(!agentOpen) toggleAgentPanel(true);
     applyAgentDockSize();
+    // 如果正贴着边收着，也要滑出来（否则点了没反应，面板还缩在边上）
+    if(typeof agentSetTucked === 'function') agentSetTucked(false);
     renderAgentMessages();
     saveAgentState();
 }
@@ -28059,6 +28324,8 @@ function bindAgentDockDrag(){
             document.body.classList.remove('agent-dock-dragging');
             window.removeEventListener('pointermove', onMove);
             window.removeEventListener('pointerup', onUp);
+            // 松手时贴边就吸附 + 进入自动收纳（QQ 式）
+            if(typeof agentFinishDockGesture === 'function') agentFinishDockGesture();
             saveAgentState();
         };
         window.addEventListener('pointermove', onMove);
@@ -28106,11 +28373,138 @@ function bindAgentResizeHandles(){
             const onUp = () => {
                 window.removeEventListener('pointermove', onMove);
                 window.removeEventListener('pointerup', onUp);
+                if(typeof agentFinishDockGesture === 'function') agentFinishDockGesture();
                 saveAgentState();
             };
             window.addEventListener('pointermove', onMove);
             window.addEventListener('pointerup', onUp);
         });
+    });
+}
+
+/* ---------- QQ 电脑端式「贴边收纳」（2026-11-05 老板 m14746/m14747） ----------
+   行为：展开态把面板拖到窗口四边附近 → 吸附贴边；鼠标离开面板后自动滑出画面只留窄边；
+        光标移到那条边 → 滑回来；再离开 → 缩回去。
+   🚨 三个坑：
+     ① 面板用 `left/top`（.dragged）的 CSS 坐标，而 rect/指针是屏幕像素，必须除 `agentUiZoom()`；
+     ② `.agent-panel.dragged { transition:none }` 会杀掉滑动动画 —— CSS 里用更具体的
+        `.agent-edge-*` 规则把 transform 过渡加回来；拖拽期间由 body 类再关掉；
+     ③ 收起态（只剩胶囊）不参与贴边，所有判定都带 `chatDrawerOpen`，否则胶囊会被吸到边上不见。 */
+const AGENT_EDGE_SNAP_PX = 26;   // 距边 26px 内算「贴边」
+const AGENT_EDGE_HOT_PX = 26;    // 收纳后光标进入这条边的 26px 带内就滑出
+const AGENT_EDGE_LEAVE_MS = 650; // 离开面板多久后缩回去
+const AGENT_EDGES = ['left', 'right', 'top', 'bottom'];
+let agentEdgeLeaveTimer = 0;
+
+function agentEdgeActive(){
+    return Boolean(agentState && agentState.chatDrawerOpen && agentState.dockEdge && agentPanel);
+}
+function agentApplyEdgeClasses(){
+    if(!agentPanel) return;
+    const edge = agentState?.dockEdge || '';
+    AGENT_EDGES.forEach(name => agentPanel.classList.toggle(`agent-edge-${name}`, edge === name));
+    agentPanel.classList.toggle('agent-tucked', Boolean(edge) && Boolean(agentState?.dockTucked) && Boolean(agentState?.chatDrawerOpen));
+}
+/* 光标是否落在「已收纳那条边」的热区（另一轴还要在面板跨度内，别让整条边都变成陷阱） */
+function agentPointerNearEdge(x, y){
+    const edge = agentState?.dockEdge;
+    if(!edge || !agentPanel) return false;
+    const r = agentPanel.getBoundingClientRect();
+    if(edge === 'left' || edge === 'right'){
+        const nearX = edge === 'left' ? x <= AGENT_EDGE_HOT_PX : x >= window.innerWidth - AGENT_EDGE_HOT_PX;
+        return nearX && y >= r.top - 40 && y <= r.bottom + 40;
+    }
+    const nearY = edge === 'top' ? y <= AGENT_EDGE_HOT_PX : y >= window.innerHeight - AGENT_EDGE_HOT_PX;
+    return nearY && x >= r.left - 40 && x <= r.right + 40;
+}
+function agentSetTucked(tucked){
+    if(!agentState) return;
+    const next = Boolean(tucked) && Boolean(agentState.dockEdge);
+    if(Boolean(agentState.dockTucked) === next) return;
+    agentState.dockTucked = next;
+    agentApplyEdgeClasses();
+}
+/* 按当前矩形判断贴哪条边（都不够近返回 ''） */
+function agentDetectEdge(){
+    if(!agentPanel) return '';
+    const r = agentPanel.getBoundingClientRect();
+    const dists = {
+        left: r.left,
+        right: window.innerWidth - r.right,
+        top: r.top,
+        bottom: window.innerHeight - r.bottom
+    };
+    let best = '', bestD = Infinity;
+    AGENT_EDGES.forEach(name => {
+        if(dists[name] < bestD){ bestD = dists[name]; best = name; }
+    });
+    return bestD <= AGENT_EDGE_SNAP_PX ? best : '';
+}
+/* 吸附到指定边：压到边线上，另一轴夹回可视区 */
+function agentSnapToEdge(edge){
+    if(!agentPanel || !agentState) return;
+    if(!edge){
+        agentState.dockEdge = '';
+        agentState.dockTucked = false;
+        agentApplyEdgeClasses();
+        applyAgentDockSize();
+        return;
+    }
+    const z = agentUiZoom();
+    const r = agentPanel.getBoundingClientRect();
+    let x = r.left / z, y = r.top / z;
+    const w = agentPanel.offsetWidth, h = agentPanel.offsetHeight;
+    if(edge === 'left') x = 0;
+    if(edge === 'right') x = Math.max(0, window.innerWidth / z - w);
+    if(edge === 'top') y = 0;
+    if(edge === 'bottom') y = Math.max(0, window.innerHeight / z - h);
+    x = Math.max(0, Math.min(Math.max(0, window.innerWidth / z - w), x));
+    y = Math.max(0, Math.min(Math.max(0, window.innerHeight / z - h), y));
+    agentState.dockEdge = edge;
+    agentState.dockPos = {x: Math.round(x), y: Math.round(y)};
+    // 吸附后先保持可见，等鼠标离开面板再收进去（QQ 的手感：不是一放手就消失）
+    agentState.dockTucked = false;
+    applyAgentDockSize();
+    agentApplyEdgeClasses();
+}
+/* 拖拽/缩放结束统一调用：够近就吸附，否则退出贴边模式 */
+function agentFinishDockGesture(){
+    if(!agentState?.chatDrawerOpen) return;
+    agentSnapToEdge(agentDetectEdge());
+}
+function bindAgentEdgeAutoHide(){
+    if(!agentPanel) return;
+    window.addEventListener('pointermove', e => {
+        if(!agentEdgeActive()) return;
+        if(document.body.classList.contains('agent-dock-dragging')) return;
+        if(agentState.dockTucked){
+            if(agentPointerNearEdge(e.clientX, e.clientY)){
+                clearTimeout(agentEdgeLeaveTimer);
+                agentEdgeLeaveTimer = 0;
+                agentSetTucked(false);
+            }
+            return;
+        }
+        const r = agentPanel.getBoundingClientRect();
+        const inside = e.clientX >= r.left - 8 && e.clientX <= r.right + 8
+            && e.clientY >= r.top - 8 && e.clientY <= r.bottom + 8;
+        if(inside || agentPointerNearEdge(e.clientX, e.clientY)){
+            clearTimeout(agentEdgeLeaveTimer);
+            agentEdgeLeaveTimer = 0;
+            return;
+        }
+        if(agentEdgeLeaveTimer) return;
+        agentEdgeLeaveTimer = setTimeout(() => {
+            agentEdgeLeaveTimer = 0;
+            if(agentEdgeActive()) agentSetTucked(true);
+        }, AGENT_EDGE_LEAVE_MS);
+    }, {passive: true});
+    // 光标刚好停在收纳条上时 pointermove 可能不触发，补一个 enter
+    agentPanel.addEventListener('pointerenter', () => {
+        if(!agentEdgeActive()) return;
+        clearTimeout(agentEdgeLeaveTimer);
+        agentEdgeLeaveTimer = 0;
+        agentSetTucked(false);
     });
 }
 
@@ -34325,24 +34719,27 @@ function enforceAgentAlwaysOn(){
 }
 enforceAgentAlwaysOn();
 
-// 对话抽屉：展开/收起 + 顶部拖拽调高
-document.getElementById('agentChatToggleBtn')?.addEventListener('click', e => {
-    e.preventDefault();
-    e.stopPropagation();
-    /* 🚨 面板被右上角功能关掉（`.open` 没了）时，这颗胶囊要能把整扇窗口叫回来，
-       而不是只切对话抽屉 —— 否则胶囊点了「什么都没发生」（老板 2026-11-02 第二轮反馈）。 */
-    if(!agentOpen){
-        toggleAgentPanel(true);
-        if(agentState && !agentState.chatDrawerOpen) toggleAgentChatDrawer(true);
-        return;
-    }
-    toggleAgentChatDrawer();
-});
+// 「收起对话 / 小抽AI」胶囊已移除（2026-11-05 老板 m14839）⇒ 对话抽屉常驻展开。
+// 老用户 localStorage 里可能是 false，这里再兜一次（loadAgentState 里的 _dockToggleRemoved 迁移之外）。
+function enforceAgentChatOpen(){
+    if(!agentState) return;
+    if(agentState.chatDrawerOpen === true) return;
+    agentState.chatDrawerOpen = true;
+    applyAgentDockSize();
+    saveAgentState();
+}
+enforceAgentChatOpen();
 bindAgentDockResize();
 // 拖标题栏移动窗口 + 拉四个角缩放（2026-10-21 老板要求）
 bindAgentDockDrag();
 bindAgentResizeHandles();
-window.addEventListener('resize', () => { applyAgentDockSize(); });
+// QQ 式贴边收纳：光标靠近已收纳的边自动滑出，离开后缩回去（2026-11-05 老板要求）
+bindAgentEdgeAutoHide();
+window.addEventListener('resize', () => {
+    applyAgentDockSize();
+    // 窗口尺寸变了，贴边的面板要重新压回边线上
+    if(agentState?.dockEdge && agentState?.chatDrawerOpen) agentSnapToEdge(agentState.dockEdge);
+});
 
     agentInput?.addEventListener('input', () => {
         agentSyncInputEmpty();
@@ -34478,7 +34875,13 @@ composer.addEventListener('click', event => {
 promptInput.addEventListener('input', maybeOpenMentionPicker);
 promptInput.addEventListener('input', () => {
     delete promptInput.dataset.preserveDraftOnce;
+    const typedSubject = activeComposerNode();
+    if(typedSubject){
+        // 输入变了，之前的 LLM 最终提示词就过期了（下次运行重新扩写）
+        delete typedSubject.llmOutputForPrompt;
+    }
     savePromptDraftForCurrent();
+    if(typedSubject) renderInputPromptPreview(typedSubject);
     renderInputThumbsRow(selectedNode());
     scheduleSave();
 });

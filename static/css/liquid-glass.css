@@ -1,0 +1,295 @@
+/* ==========================================================================
+   液态玻璃（Liquid Glass）视觉层
+   --------------------------------------------------------------------------
+   规格参照 Kyant0/AndroidLiquidGlass（Compose Multiplatform 的 Backdrop 库）：
+     · Highlight   ：0.5dp 白色描边、blur = 描边宽/2、45° 环境光、白 alpha≈0.5
+     · Shadow      ：半径 24dp、y 偏移 = 半径/6（≈4dp）、黑 alpha≈0.1
+     · InnerShadow ：半径 24dp、y 偏移 = 半径、黑 alpha≈0.15（面板上沿的“厚度”暗边）
+     · Blur        ：backdrop 高斯模糊 + 提高饱和度（玻璃把透过的光放大彩度）
+   只改观感、不动布局；必须排在所有页面 css 之后加载。
+   结构：
+     1) 亮色/暗色玻璃令牌
+     2) 外壳（浮层/面板/弹窗）配方
+     3) 画布世界内节点配方（模糊更轻，缩放开着 backdrop-filter 时也保持清晰）
+     4) 降级（不支持 backdrop-filter / 系统要求降透明度）
+   ========================================================================== */
+
+/* 1) 令牌 —— 亮色 */
+:root {
+    --glass-tint: rgba(255, 255, 255, .58);
+    --glass-sheen: linear-gradient(150deg, rgba(255, 255, 255, .62), rgba(255, 255, 255, 0) 38%, rgba(255, 255, 255, .26) 100%);
+    --glass-edge: rgba(255, 255, 255, .62);
+    --glass-rim: rgba(255, 255, 255, .9);
+    --glass-inner: rgba(15, 23, 42, .09);
+    --glass-shadow: rgba(15, 23, 42, .16);
+    --glass-blur: blur(20px) saturate(172%) brightness(1.02);
+    --glass-blur-world: blur(14px) saturate(152%);
+    /* 阴影各层拆成变量，好让不同风格换“玻璃边缘”而不只是换颜色 */
+    --glass-cast: 0 18px 44px -16px var(--glass-shadow), 0 2px 6px -2px var(--glass-shadow);
+    --glass-cast-world: 0 14px 34px -14px var(--glass-shadow);
+    --glass-rim-layer: inset 0 1px 0 var(--glass-rim);
+    --glass-edge-layer: inset 0 0 1px var(--glass-rim);
+    --glass-inner-layer: inset 0 -20px 26px -24px var(--glass-inner);
+    --glass-inner-layer-world: inset 0 -18px 24px -22px var(--glass-inner);
+    --glass-fringe-layer: 0 0 0 0 transparent;
+    --glass-tint-weak: rgba(255, 255, 255, .34);
+    --glass-tint-active: rgba(255, 255, 255, .80);
+    --glass-blur-soft: blur(12px) saturate(150%);
+    --glass-blur-active: blur(16px) saturate(172%);
+    /* 面板底色换成玻璃，让 backdrop 能透上来；--card 保持不透明（画布节点里要读图） */
+    --panel: var(--glass-tint);
+    --line: rgba(148, 163, 184, .34);
+}
+
+/* 1) 令牌 —— 暗色（四种主题挂载方式兜底：html/body × theme-dark/studio-theme-dark） */
+html.theme-dark,
+body.theme-dark,
+html.studio-theme-dark,
+body.studio-theme-dark,
+html.studio-theme-dark body {
+    --glass-tint: rgba(24, 31, 45, .60);
+    --glass-sheen: linear-gradient(150deg, rgba(255, 255, 255, .16), rgba(255, 255, 255, 0) 40%, rgba(255, 255, 255, .07) 100%);
+    --glass-edge: rgba(255, 255, 255, .16);
+    --glass-rim: rgba(255, 255, 255, .26);
+    --glass-inner: rgba(0, 0, 0, .34);
+    --glass-shadow: rgba(0, 0, 0, .46);
+    --glass-blur: blur(20px) saturate(160%) brightness(.98);
+    --glass-blur-world: blur(14px) saturate(140%);
+    --panel: var(--glass-tint);
+    --line: rgba(148, 163, 184, .22);
+    --glass-tint-weak: rgba(18, 24, 36, .40);
+    --glass-tint-active: rgba(48, 58, 80, .72);
+}
+
+/* 2) 玻璃背后的“壁纸光”：没有彩色底衬，磨砂面板在近白/近黑的纯色页面上和实心卡片没区别。
+   只加背景图层（不新增叠层元素），画布页的 .shell 自带不透明底，天然不受影响。 */
+body {
+    background-image:
+        radial-gradient(1200px 780px at 10% -12%, rgba(99, 102, 241, .26), transparent 62%),
+        radial-gradient(1000px 700px at 92% -6%, rgba(56, 189, 248, .24), transparent 62%),
+        radial-gradient(960px 900px at 66% 112%, rgba(244, 114, 182, .20), transparent 64%);
+    background-attachment: fixed, fixed, fixed;
+    background-repeat: no-repeat;
+}
+
+html.theme-dark body,
+body.theme-dark,
+html.studio-theme-dark body,
+body.studio-theme-dark {
+    /* theme.css 用 `background: #08090c !important` 把暗色压成纯黑，这里必须 !important 才能盖住 */
+    background-image:
+        radial-gradient(1200px 780px at 10% -12%, rgba(99, 102, 241, .34), transparent 62%),
+        radial-gradient(1000px 700px at 92% -6%, rgba(14, 165, 233, .26), transparent 62%),
+        radial-gradient(960px 900px at 66% 112%, rgba(217, 70, 239, .22), transparent 64%) !important;
+}
+
+/* 2b) 备选风格：在 <html data-glass="..."> 上切换，只换令牌不动配方。
+   A 霜白 = 默认（不写属性）；B 清透；C 彩雾；D 折射；E 哑光。 */
+
+/* B 清透 —— 薄玻璃：几乎不挡背景，靠 1px 白边勾出轮廓（iOS ultraThin / Android 清透材质） */
+html[data-glass="clear"] {
+    --glass-tint: rgba(255, 255, 255, .24);
+    --glass-sheen: linear-gradient(150deg, rgba(255, 255, 255, .40), rgba(255, 255, 255, 0) 46%, rgba(255, 255, 255, .12) 100%);
+    --glass-edge: rgba(255, 255, 255, .72);
+    --glass-rim: rgba(255, 255, 255, .98);
+    --glass-inner: rgba(15, 23, 42, .06);
+    --glass-shadow: rgba(15, 23, 42, .18);
+    --glass-blur: blur(30px) saturate(200%) brightness(1.04);
+    --glass-blur-world: blur(20px) saturate(170%);
+}
+
+html[data-glass="clear"]:is(.theme-dark, .studio-theme-dark),
+html[data-glass="clear"] body:is(.theme-dark, .studio-theme-dark) {
+    --glass-tint: rgba(18, 24, 36, .34);
+    --glass-sheen: linear-gradient(150deg, rgba(255, 255, 255, .20), rgba(255, 255, 255, 0) 46%, rgba(255, 255, 255, .06) 100%);
+    --glass-edge: rgba(255, 255, 255, .24);
+    --glass-rim: rgba(255, 255, 255, .38);
+    --glass-inner: rgba(0, 0, 0, .30);
+    --glass-shadow: rgba(0, 0, 0, .52);
+    --glass-blur: blur(26px) saturate(180%) brightness(1.02);
+    --glass-blur-world: blur(18px) saturate(150%);
+}
+
+/* C 彩雾 —— 玻璃自带色相（Android 12 tinted material：色相渗进材质，不完全透明） */
+html[data-glass="tinted"] {
+    --glass-tint: rgba(214, 222, 255, .60);
+    --glass-sheen: linear-gradient(150deg, rgba(255, 255, 255, .58), rgba(255, 255, 255, 0) 40%, rgba(180, 200, 255, .40) 100%);
+    --glass-edge: rgba(199, 210, 254, .80);
+    --glass-rim: rgba(255, 255, 255, .92);
+    --glass-inner: rgba(49, 46, 129, .12);
+    --glass-shadow: rgba(49, 46, 129, .20);
+    --glass-blur: blur(22px) saturate(155%) hue-rotate(-6deg);
+    --glass-blur-world: blur(16px) saturate(140%) hue-rotate(-6deg);
+}
+
+html[data-glass="tinted"]:is(.theme-dark, .studio-theme-dark),
+html[data-glass="tinted"] body:is(.theme-dark, .studio-theme-dark) {
+    --glass-tint: rgba(40, 34, 78, .62);
+    --glass-sheen: linear-gradient(150deg, rgba(255, 255, 255, .18), rgba(255, 255, 255, 0) 40%, rgba(139, 92, 246, .34) 100%);
+    --glass-edge: rgba(167, 139, 250, .34);
+    --glass-rim: rgba(216, 208, 255, .30);
+    --glass-inner: rgba(0, 0, 0, .34);
+    --glass-shadow: rgba(0, 0, 0, .50);
+    --glass-blur: blur(22px) saturate(150%) hue-rotate(-6deg);
+    --glass-blur-world: blur(16px) saturate(140%) hue-rotate(-6deg);
+}
+
+/* D 折射 —— 参考项目里最像“镜片”的一版：45° 高光扫过、白边更亮、落地阴影更重 */
+html[data-glass="refract"] {
+    --glass-tint: rgba(255, 255, 255, .44);
+    --glass-sheen: linear-gradient(125deg,
+            rgba(255, 255, 255, .88) 0%,
+            rgba(255, 255, 255, .18) 13%,
+            rgba(255, 255, 255, 0) 33%,
+            rgba(255, 255, 255, .06) 72%,
+            rgba(255, 255, 255, .46) 100%);
+    --glass-edge: rgba(255, 255, 255, .90);
+    --glass-rim: rgba(255, 255, 255, 1);
+    --glass-inner: rgba(15, 23, 42, .16);
+    --glass-shadow: rgba(15, 23, 42, .26);
+    --glass-blur: blur(18px) saturate(190%) brightness(1.05);
+    --glass-blur-world: blur(13px) saturate(165%) brightness(1.02);
+}
+
+html[data-glass="refract"]:is(.theme-dark, .studio-theme-dark),
+html[data-glass="refract"] body:is(.theme-dark, .studio-theme-dark) {
+    --glass-tint: rgba(26, 33, 48, .58);
+    --glass-sheen: linear-gradient(125deg,
+            rgba(255, 255, 255, .34) 0%,
+            rgba(255, 255, 255, .06) 15%,
+            rgba(255, 255, 255, 0) 34%,
+            rgba(255, 255, 255, .03) 70%,
+            rgba(255, 255, 255, .20) 100%);
+    --glass-edge: rgba(255, 255, 255, .34);
+    --glass-rim: rgba(255, 255, 255, .46);
+    --glass-inner: rgba(0, 0, 0, .44);
+    --glass-shadow: rgba(0, 0, 0, .62);
+    --glass-blur: blur(18px) saturate(175%) brightness(1.02);
+    --glass-blur-world: blur(13px) saturate(155%);
+}
+
+/* E 哑光 —— 不做背景模糊的“磨砂塑料”，只有半透底色 + 极弱高光：性能最省、文字最清晰 */
+html[data-glass="matte"] {
+    --glass-tint: rgba(255, 255, 255, .88);
+    --glass-sheen: linear-gradient(150deg, rgba(255, 255, 255, .34), rgba(255, 255, 255, 0) 46%, rgba(255, 255, 255, .10) 100%);
+    --glass-edge: rgba(226, 232, 240, .90);
+    --glass-rim: rgba(255, 255, 255, .90);
+    --glass-inner: rgba(15, 23, 42, .05);
+    --glass-shadow: rgba(15, 23, 42, .10);
+    --glass-blur: none;
+    --glass-blur-world: none;
+}
+
+html[data-glass="matte"]:is(.theme-dark, .studio-theme-dark),
+html[data-glass="matte"] body:is(.theme-dark, .studio-theme-dark) {
+    --glass-tint: rgba(26, 30, 42, .90);
+    --glass-sheen: linear-gradient(150deg, rgba(255, 255, 255, .10), rgba(255, 255, 255, 0) 46%, rgba(255, 255, 255, .04) 100%);
+    --glass-edge: rgba(255, 255, 255, .12);
+    --glass-rim: rgba(255, 255, 255, .16);
+    --glass-inner: rgba(0, 0, 0, .24);
+    --glass-shadow: rgba(0, 0, 0, .38);
+    --glass-blur: none;
+    --glass-blur-world: none;
+}
+
+/* 3) 外壳配方：顶栏胶囊 / 侧栏面板 / 弹窗 / 菜单 / 提示层 */
+.rh-workflow-editor-overlay,
+.asset-panel,
+.asset-kind-badge,
+.asset-lightbox,
+.storage-settings-overlay,
+.ws-topbar,
+.ws-trash-head,
+.ws-proj-capsule-btn,
+.panel,
+.canvas-delete-confirm,
+.workflow-transfer-panel,
+.asset-manager-modal,
+.drop-overlay,
+.create-menu,
+.minimap,
+.output-lightbox,
+.log-modal,
+.model-modal,
+.error-modal,
+.image-edit-modal,
+.gate-panel,
+.image-lightbox,
+.smart-back,
+.is-embedded .smart-title,
+.smart-log-toggle,
+.smart-shortcut-toggle,
+.smart-workflow-toggle,
+.mini-x,
+.media-audio-card,
+.media-file-card,
+.image-resolution-badge,
+.compare-thumbs,
+.compare-toggle,
+.mention-picker,
+.smart-popover,
+.smart-minimap,
+.asset-toggle,
+.agent-toggle,
+.agent-panel,
+.composer-card,
+.agent-profile-mask,
+.inspire-toggle,
+.inspire-panel,
+.asset-dialog-backdrop,
+.preview-nav-btn,
+.smart-log-lightbox,
+.smart-save-workflow-btn,
+.minimap-arrange-btn {
+    background-color: var(--glass-tint);
+    background-image: var(--glass-sheen);
+    border-color: var(--glass-edge);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    /* Shadow（落地）/ 色散边 / Highlight（描边 + 顶光）/ InnerShadow（上沿厚度） */
+    box-shadow:
+        var(--glass-cast),
+        var(--glass-fringe-layer),
+        var(--glass-rim-layer),
+        var(--glass-edge-layer),
+        var(--glass-inner-layer);
+}
+
+/* 4) 画布世界内（.world 里的节点卡 / 浮层）——这里一律不再加玻璃配方。
+   节点卡本来就有 smart-canvas.css 自己的底 + backdrop-filter，再叠一层只会互相打架；
+   2026-11-04 那次“节点全变大胶囊”事故的根因是选择器写坏（漏了大括号，把 .smart-back 的
+   999px 圆角串给了节点），不是玻璃本身——别在这里再手改那两条规则。
+   只有生成器浮窗 .composer-card 例外，见下面 4b（文字界面，模糊才有意义）。 */
+
+/* 画布缩放超过 1:1 时项目会主动关掉 world 内的 backdrop-filter（避免合成层被缩放导致发虚）。
+   这条只管图像节点；生成器浮窗保留模糊（老板 2026-11-04 要求）。 */
+.world.canvas-scaled .image-node,
+.world.canvas-scaled .image-node * {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+}
+
+/* 4b) 生成器浮窗：不再单独配色，直接用上面第 3 段与 .agent-panel 同一份玻璃
+   （老板 2026-11-04：「该板块改成高斯模糊处理，参考agent」）。 */
+
+/* 5) 降级：不支持 backdrop-filter，或系统要求减少透明 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    :root { --glass-tint: #fff; --panel: #fff; }
+    html.theme-dark, body.theme-dark, html.studio-theme-dark, body.studio-theme-dark { --glass-tint: #171d29; --panel: #171d29; }
+    .rh-workflow-editor-overlay, .asset-panel, .asset-kind-badge, .asset-lightbox, .storage-settings-overlay,
+    .ws-topbar, .ws-trash-head, .ws-proj-capsule-btn, .panel, .canvas-delete-confirm, .workflow-transfer-panel,
+    .asset-manager-modal, .drop-overlay, .create-menu, .minimap, .output-lightbox, .log-modal, .model-modal,
+    .error-modal, .image-edit-modal, .gate-panel, .image-lightbox, .smart-back, .is-embedded .smart-title,
+    .smart-log-toggle, .smart-shortcut-toggle, .smart-workflow-toggle, .mini-x, .media-audio-card,
+    .media-file-card, .image-resolution-badge, .compare-thumbs, .compare-toggle, .mention-picker, .smart-popover,
+    .smart-minimap, .asset-toggle, .agent-toggle, .agent-panel, .agent-profile-mask, .inspire-toggle,
+    .inspire-panel, .asset-dialog-backdrop, .preview-nav-btn, .smart-log-lightbox, .smart-save-workflow-btn,
+    .minimap-arrange-btn, .composer-card, .smart-node-floating-menu, .composer-history-panel, .prompt-preset-panel {
+        background-image: none;
+    }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+    :root { --glass-tint: #fff; --panel: #fff; --glass-sheen: none; }
+    html.theme-dark, body.theme-dark, html.studio-theme-dark, body.studio-theme-dark { --glass-tint: #171d29; --panel: #171d29; --glass-sheen: none; }
+}
