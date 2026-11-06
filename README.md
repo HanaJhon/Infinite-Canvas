@@ -39,14 +39,5 @@ Windows 用户也可直接双击根目录的 **`Lochou启动器.exe`**：图形�
 升完 commit → push，软件内版本徽章与启动器会自动检测新版本；启动器首页版本胶囊即更新入口，点开即可一键更新。
 ⚠️ 更新只覆盖程序文件，`data/` 与 `assets/` 里的画布、通道与密钥都会保留（更新前会自动备份到 `data/update_backups/`）；目前**没有界面上一键回滚**，需要回退请手动用备份目录里的副本覆盖。
 
-## API 配置
-在软件「API 设置」界面填写 Key / URL，勿写入代码或提交到仓库。
-## 版权
-禁止商业用途；二次开发须保持开源并注明来源作者。
-## 链接
-- 原项目（已停更）：[hero8152/Infinite-Canvas](https://github.com/hero8152/Infinite-Canvas)
-- 教程视频：[YouTube](https://youtu.be/r_y_9ALr7fg)
-- Chrome 采集插件：[Chrome 商店](https://chromewebstore.google.com/detail/infinite-canvas-%E5%9B%BE%E5%83%8F%E8%A7%86%E9%A2%91%E6%96%87%E5%AD%97%E6%8A%93%E5%8F%96%E5%B7%A5/ajfhnbklbmpfaaookhfakohabnpmlcic)
----
-<img width="2079" height="665" alt="image" src="https://github.com/user-attachments/assets/8469923b-f7a2-403c-9c37-e6e789211f28" />
-<img width="1865" height="1503" alt="image" src="https://github.com/user-attachments/assets/f4030201-67c6-4845-b08b-b6fdf304afaa" />
+## 爱发电
+已入驻爱发电：https://afdian.com/a/Infinite-Canvas?utm_source=copylink&utm_medium=link
