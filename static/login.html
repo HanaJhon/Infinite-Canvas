@@ -42,6 +42,15 @@
   }
   input:focus{border-color:var(--accent);background:var(--card)}
   .field{margin-bottom:14px}
+  .code-row{display:flex;gap:8px}
+  .code-row input{flex:1 1 auto;min-width:0;letter-spacing:.22em}
+  .code-btn{
+    flex:0 0 auto;width:auto;height:42px;margin:0;padding:0 14px;border-radius:10px;
+    background:var(--soft);color:var(--text);border:1px solid var(--line);
+    font-size:12.5px;font-weight:600;white-space:nowrap;
+  }
+  .code-btn:hover{opacity:1;border-color:var(--accent)}
+  .code-btn:disabled{opacity:.5;cursor:not-allowed;border-color:var(--line)}
   button{
     width:100%;height:44px;border:0;border-radius:10px;cursor:pointer;
     background:var(--accent);color:var(--bg);font-size:14px;font-weight:700;
@@ -57,7 +66,7 @@
   .tip{margin-top:18px;font-size:11.5px;color:var(--dim);text-align:center;line-height:1.7}
   .hide{display:none !important}
 </style>
-    <link rel="stylesheet" href="/static/css/liquid-glass.css?v=1.3.5.1793776698">
+    <link rel="stylesheet" href="/static/css/liquid-glass.css?v=1.3.6.1793776698">
 </head>
 <body>
 <div class="wrap">
@@ -89,9 +98,13 @@
         <label for="email">邮箱</label>
         <input id="email" type="email" autocomplete="email" placeholder="name@example.com" />
       </div>
-      <div class="field hide" id="phoneField">
-        <label for="phone">手机号</label>
-        <input id="phone" type="tel" autocomplete="tel" placeholder="138 0000 0000" />
+      <div class="field hide" id="emailCodeField">
+        <label for="emailCode">邮箱验证码</label>
+        <div class="code-row">
+          <input id="emailCode" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code"
+                 placeholder="6 位数字" />
+          <button id="sendCode" class="code-btn" type="button">获取验证码</button>
+        </div>
       </div>
       <button id="submit" type="submit">登录</button>
       <div class="err" id="err"></div>
@@ -109,10 +122,11 @@
   var $ = function (id) { return document.getElementById(id); };
   var form = $('form'), nameEl = $('name'), pwEl = $('password'), confirmEl = $('confirm');
   var confirmField = $('confirmField'), errBox = $('err'), submitBtn = $('submit');
-  var emailField = $('emailField'), phoneField = $('phoneField');
-  var emailEl = $('email'), phoneEl = $('phone');
-  // 注册限制（管理员可在「积分与计费」里打开邮箱 / 手机必填）
-  var signupNeed = { email: false, phone: false };
+  var emailField = $('emailField'), codeField = $('emailCodeField');
+  var emailEl = $('email'), codeEl = $('emailCode'), sendCodeBtn = $('sendCode');
+  // 注册限制（管理员可在「积分与计费」里打开邮箱必填 / 邮箱验证码）
+  var signupNeed = { email: false, verify: false, ready: false };
+  var codeCooldown = 0, codeTimer = null;
   var titleEl = $('title'), subtitleEl = $('subtitle'), tipEl = $('tip');
   var isSetup = false;   // 首次初始化（无任何账号）→ 创建管理员
   var isRegister = false; // 手动注册 → 创建普通成员
@@ -153,12 +167,14 @@
 
     confirmField.classList.toggle('hide', !needConfirm);
     confirmEl.required = needConfirm;
-    var emailOn = isRegister && signupNeed.email;
-    var phoneOn = isRegister && signupNeed.phone;
+    var emailOn = isRegister && (signupNeed.email || signupNeed.verify);
+    var codeOn = isRegister && signupNeed.verify;
     emailField.classList.toggle('hide', !emailOn);
-    phoneField.classList.toggle('hide', !phoneOn);
+    codeField.classList.toggle('hide', !codeOn);
     emailEl.required = emailOn;
-    phoneEl.required = phoneOn;
+    codeEl.required = false;   // 由脚本提示，避免浏览器自带气泡挡住按钮
+    sendCodeBtn.disabled = !signupNeed.ready || codeCooldown > 0;
+    if (!codeOn) { codeEl.value = ''; }
     pwEl.setAttribute('autocomplete', needConfirm ? 'new-password' : 'current-password');
   }
 
@@ -190,7 +206,8 @@
       if (d && d.user) { go(); return; }
       if (d && d.signup) {
         signupNeed.email = !!d.signup.require_email;
-        signupNeed.phone = !!d.signup.require_phone;
+        signupNeed.verify = !!d.signup.require_email_verify;
+        signupNeed.ready = !!d.signup.email_verify_ready;
       }
       applyMode(d && d.need_setup ? 'setup' : 'login');
     })
@@ -204,6 +221,44 @@
     nameEl.focus();
   });
 
+  // 获取邮箱验证码（同一邮箱 60 秒内只能发一次，后端也会限频）
+  function startCooldown(sec) {
+    codeCooldown = Math.max(1, sec | 0);
+    sendCodeBtn.disabled = true;
+    sendCodeBtn.textContent = codeCooldown + ' 秒后重发';
+    clearInterval(codeTimer);
+    codeTimer = setInterval(function () {
+      codeCooldown -= 1;
+      if (codeCooldown <= 0) {
+        clearInterval(codeTimer);
+        codeTimer = null;
+        sendCodeBtn.textContent = '重新获取';
+        sendCodeBtn.disabled = !signupNeed.ready;
+        return;
+      }
+      sendCodeBtn.textContent = codeCooldown + ' 秒后重发';
+    }, 1000);
+  }
+
+  sendCodeBtn.addEventListener('click', function () {
+    showErr('');
+    var addr = emailEl.value.trim();
+    if (!addr) { showErr('请先填写邮箱'); emailEl.focus(); return; }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)) { showErr('邮箱格式不正确'); return; }
+    if (!signupNeed.ready) { showErr('管理员尚未配置发信服务器，暂时无法发送验证码'); return; }
+    sendCodeBtn.disabled = true;
+    api('/api/auth/email-code', { email: addr })
+      .then(function (data) {
+        startCooldown(data.retry_after || 60);
+        showErr('');
+        tipEl.textContent = '验证码已发送到 ' + (data.email || addr) + '，请查收（含垃圾邮件箱）。';
+      })
+      .catch(function (err) {
+        showErr(err.message || '验证码发送失败');
+        sendCodeBtn.disabled = false;
+      });
+  });
+
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     showErr('');
@@ -213,14 +268,15 @@
     var creating = isSetup || isRegister;
     if (creating && pw !== confirmEl.value) { showErr('两次输入的密码不一致'); return; }
     if (creating && pw.length < 6) { showErr('密码至少 6 位'); return; }
-    if (isRegister && signupNeed.email && !emailEl.value.trim()) { showErr('请填写邮箱'); return; }
-    if (isRegister && signupNeed.phone && !phoneEl.value.trim()) { showErr('请填写手机号'); return; }
+    var needEmail = isRegister && (signupNeed.email || signupNeed.verify);
+    if (needEmail && !emailEl.value.trim()) { showErr('请填写邮箱'); return; }
+    if (isRegister && signupNeed.verify && !codeEl.value.trim()) { showErr('请填写邮箱验证码'); return; }
 
     submitBtn.disabled = true;
     var payload = { name: name, password: pw };
     if (creating) {
       if (emailEl.value.trim()) payload.email = emailEl.value.trim();
-      if (phoneEl.value.trim()) payload.phone = phoneEl.value.trim();
+      if (isRegister && signupNeed.verify) payload.email_code = codeEl.value.trim();
     }
     var req = creating
       ? api('/api/auth/register', payload)

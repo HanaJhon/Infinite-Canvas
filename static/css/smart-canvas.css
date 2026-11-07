@@ -1191,7 +1191,12 @@ video.node-img { object-fit:cover; background:#0f172a; }
     background:rgba(183,121,31,.16); color:#a15c00; font-size:9.5px; font-weight:800; line-height:1; letter-spacing:.01em; white-space:nowrap; }
 .run-credit-badge[hidden] { display:none !important; }
 .run-btn .run-credit-badge { background:rgba(255,255,255,.22); color:inherit; height:15px; padding:0 4px; font-size:9px; }
+/* 🚨 按钮原本是固定宽度（56px / 76px），塞进「0.02 积分」徽标后右半边被裁掉
+   （老板 2026-11-06 m22132 图1 红框标的就是这个）。有徽标时按内容撑开即可。 */
+.run-btn:has(.run-credit-badge:not([hidden])) { width:auto; min-width:56px; padding:0 10px; }
+.cascade-run-btn:has(.run-credit-badge) { width:auto; min-width:76px; padding:0 10px; }
 .prompt-node-run .run-credit-badge, .smart-llm-run .run-credit-badge { background:rgba(255,255,255,.22); color:inherit; }
+.agent-prompt-btn .run-credit-badge { background:rgba(255,255,255,.24); color:inherit; height:15px; padding:0 5px; font-size:9px; }
 html.studio-theme-dark .run-credit-badge { background:rgba(224,178,102,.18); color:#e0b266; }
 .cascade-run-btn { width:76px; background:var(--card); color:var(--text); border:1px solid var(--line); }
 .cascade-run-btn:hover:not(:disabled) { border-color:var(--text); }
@@ -1710,7 +1715,9 @@ body.agent-dock-dragging, body.agent-dock-dragging * { cursor:move !important; u
 .agent-panel .agent-head .asset-title i,.agent-panel .agent-head .asset-title svg { width:14px; height:14px; }
 .agent-panel .agent-head .asset-mini-btn { position:static; flex:0 0 auto; }
 /* 顶部对话抽屉：默认收起，点「展开对话」才拉起 */
-.agent-panel .agent-chat-drawer { display:none; flex-direction:column; min-height:0; height:var(--agent-chat-h, 320px); flex:0 0 auto; }
+/* 🚨 flex:1 1 auto 而不是 0 0 auto：面板有 max-height，对话区必须能被压缩，
+   否则拖高对话区、或把窗口拖小之后，输入栏会被挤出面板底部（老板 2026-11-06 m22132 图3）。 */
+.agent-panel .agent-chat-drawer { display:none; flex-direction:column; min-height:0; height:var(--agent-chat-h, 320px); flex:1 1 auto; }
 .agent-panel.chat-open .agent-chat-drawer { display:flex; }
 .agent-panel .agent-chat-drawer .agent-messages { flex:1 1 auto; height:auto; min-height:0; }
 /* 收起对话时，消息区不占位（只留输入框） */
@@ -1759,7 +1766,21 @@ body.agent-dock-dragging .agent-panel { transition: none !important; }
 .agent-panel.agent-edge-left.agent-tucked   { transform: translateX(calc(-100% + 12px)); }
 .agent-panel.agent-edge-right.agent-tucked  { transform: translateX(calc(100% - 12px)); }
 .agent-panel.agent-edge-top.agent-tucked    { transform: translateY(calc(-100% + 12px)); }
-.agent-panel.agent-edge-bottom.agent-tucked { transform: translateY(calc(100% - 12px)); }
+/* 底部收纳（2026-11-06 老板 m20916「agent 默认状态改为底部收纳状态」）：
+   不学左右两侧只留 12px —— 那条缝在浅色画布上几乎看不见，用户找不到入口。
+   这里留 54px，正好露出标题行（小抽AI + 三个按钮），当一条可点的「把手」。 */
+.agent-panel.agent-edge-bottom.agent-tucked { transform: translateY(calc(100% - 54px)); }
+.agent-panel.agent-edge-bottom.agent-tucked .agent-head { opacity:1; }
+/* 🚨 没被拖拽过的面板用 `left:50% + translate(-50%,0)` 居中；上面那条 transform 会把居中一起吃掉，
+   面板会整体右移半个宽度（实测 left 从 368 跳到 734）。默认底部收纳就是这种「没拖过」的面板，
+   所以这里补一条保留 -50% 的版本；真正拖拽过（.dragged，left/top 定位）的仍用纯 translateY。 */
+.agent-panel.agent-edge-bottom.agent-tucked:not(.dragged) { transform: translate(-50%, calc(100% - 54px)); }
+.agent-panel.agent-edge-bottom:not(.dragged).agent-tucked::after { left:50%; margin-left:-22px; }
+/* 收起态上面再压一条细把手，暗示「可以拉起来」 */
+.agent-panel.agent-edge-bottom.agent-tucked::after {
+    content:""; position:absolute; left:50%; top:3px; width:44px; height:3px; margin-left:-22px;
+    border-radius:999px; background:rgba(148,163,184,.55); pointer-events:none;
+}
 /* 折叠/展开对话的胶囊按钮：悬在悬浮框**外侧**正上方（bottom:100% + 间距），不压住框内任何内容 */
 .agent-chat-toggle { position:absolute; left:50%; bottom:calc(100% + 8px); transform:translateX(-50%); height:26px; padding:0 12px; border-radius:999px; border:1px solid var(--line); background:var(--panel); color:var(--text); font-size:11px; font-weight:700; display:flex; align-items:center; gap:6px; cursor:pointer; box-shadow:0 8px 22px var(--shadow); white-space:nowrap; }
 .agent-chat-toggle:hover { border-color:var(--text); }
@@ -2103,7 +2124,7 @@ html.studio-theme-dark .agent-gen-error-text { color:#ff8a80; }
 .agent-stream-stop { position:absolute; top:4px; right:4px; width:20px; height:20px; border-radius:5px; border:1px solid var(--line); background:var(--card); color:var(--muted); font-size:9px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .14s ease; }
 .agent-stream-stop:hover { color:#e11d48; border-color:#e11d48; background:#fef2f2; }
 
-.agent-input-area { display:flex; flex-direction:column; gap:0; position:relative; }
+.agent-input-area { display:flex; flex-direction:column; gap:0; position:relative; flex:0 0 auto; min-height:0; }
 .agent-onebox { border:1px solid var(--line); border-radius:16px; background:var(--card); transition:border-color .14s ease; }
 .agent-onebox:focus-within { border-color:var(--strong); }
 .agent-attach-row { display:flex; flex-wrap:wrap; gap:6px; padding:8px 10px 0; }

@@ -38,6 +38,9 @@
   .list-item{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:9px 0;border-bottom:1px dashed var(--line)}
   .list-item:last-child{border-bottom:0}
   .mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--dim)}
+  .qr-preview{display:none;margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--soft);width:max-content}
+  .qr-preview.on{display:block}
+  .qr-preview img{display:block;width:132px;height:132px;object-fit:contain;border-radius:6px;background:#fff}
   table{width:100%;border-collapse:collapse;font-size:12.5px}
   th,td{padding:9px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
   th{font-size:11px;color:var(--dim);letter-spacing:.04em}
@@ -50,7 +53,7 @@
   .thumb{width:54px;height:54px;border-radius:8px;border:1px solid var(--line);object-fit:cover;background:var(--soft)}
   .tag{font-size:10.5px;padding:2px 7px;border-radius:999px;background:var(--soft);color:var(--dim);font-weight:700}
 </style>
-<link rel="stylesheet" href="/static/css/liquid-glass.css?v=1.3.5.1793776698" />
+<link rel="stylesheet" href="/static/css/liquid-glass.css?v=1.3.6.1793776698" />
 </head>
 <body>
 <div class="wrap">
@@ -61,7 +64,7 @@
     </div>
     <div style="display:flex;gap:8px">
       <a class="back" href="/accounts.html">账号管理</a>
-      <a class="back" href="/static/api-settings.html?v=1.3.5.1793885297">API 设置</a>
+      <a class="back" href="/static/api-settings.html?v=1.3.6.1794029865">API 设置</a>
     </div>
   </div>
 
@@ -82,11 +85,11 @@
 
   <div class="card">
     <h2>注册限制</h2>
-    <p class="sub">注册页会按这里的设置显示必填项；管理员账号与第一个账号不受限制。</p>
+    <p class="sub">注册页会按这里的设置显示必填项；管理员账号与第一个账号不受限制。手机号注册已移除，只保留邮箱。</p>
     <div class="grid">
       <div class="field"><label>新用户初始积分</label><input id="initialCredits" type="number" step="0.01" /></div>
       <div class="field"><label>注册需要邮箱</label><select id="reqEmail"><option value="0">不需要</option><option value="1">必填</option></select></div>
-      <div class="field"><label>注册需要手机号</label><select id="reqPhone"><option value="0">不需要</option><option value="1">必填</option></select></div>
+      <div class="field"><label>注册需要邮箱验证码</label><select id="reqEmailVerify"><option value="0">不需要</option><option value="1">必须验证</option></select></div>
     </div>
     <div class="split">
       <div class="split-col">
@@ -97,21 +100,35 @@
           <textarea id="emailDeny" rows="2" placeholder="例如 temp-mail.org, spam.com"></textarea></div>
         <label class="switch"><input id="emailBlockFree" type="checkbox" style="width:16px;height:16px;min-width:0" /> 不允许非主流邮箱（临时邮箱 / 小众域名）</label>
       </div>
-      <div class="split-col">
-        <div class="split-title">手机号范围限制</div>
-        <div class="field"><label>只允许这些国家码（留空=不限制）</label>
-          <textarea id="phoneAllow" rows="2" placeholder="例如 86, 852, 1"></textarea></div>
-        <div class="field"><label>不允许这些国家码</label>
-          <textarea id="phoneDeny" rows="2" placeholder="例如 1, 44"></textarea></div>
-        <label class="switch"><input id="phoneBlockVirtual" type="checkbox" style="width:16px;height:16px;min-width:0" /> 禁止虚拟运营商号段（170 / 171 / 162 / 165 / 167 等）</label>
-      </div>
     </div>
-    <div class="hint">邮箱白名单 / 黑名单可写「完整邮箱」或「域名」；手机号按国家码（+86、0086、86 都认）。管理员账号不受限制。</div>
+    <div class="hint">邮箱白名单 / 黑名单可写「完整邮箱」或「域名」。开启「注册需要邮箱验证码」后，用户必须先在注册页点「获取验证码」，把收到的 6 位数字填回去并通过校验，才能注册成功（需先在下面配好发信服务器）。</div>
+  </div>
+
+  <div class="card" id="mailCard">
+    <h2>邮箱验证码 · 发信服务器</h2>
+    <p class="sub">注册验证码通过 SMTP 发送。QQ 邮箱 / 163 需先在邮箱后台开启 SMTP 并拿到「授权码」（不是登录密码）。</p>
+    <div class="row" style="margin-bottom:10px">
+      <label class="switch"><input id="mailEnabled" type="checkbox" style="width:16px;height:16px;min-width:0" /> 启用发信服务器</label>
+    </div>
+    <div class="grid">
+      <div class="field"><label>SMTP 服务器</label><input id="mailHost" placeholder="例如 smtp.qq.com" /></div>
+      <div class="field"><label>端口</label><input id="mailPort" type="number" placeholder="465" /></div>
+      <div class="field"><label>加密方式</label><select id="mailSecurity"><option value="ssl">SSL（465）</option><option value="starttls">STARTTLS（587）</option><option value="none">不加密（25）</option></select></div>
+      <div class="field"><label>发信账号</label><input id="mailUser" placeholder="例如 noreply@yourdomain.com" /></div>
+      <div class="field"><label>授权码 / 密码</label><input id="mailPassword" type="password" placeholder="SMTP 授权码，留空表示不修改" /></div>
+      <div class="field"><label>发件人地址（留空=发信账号）</label><input id="mailSender" placeholder="例如 noreply@yourdomain.com" /></div>
+      <div class="field"><label>发件人名称</label><input id="mailSenderName" placeholder="无限画布" /></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <input id="mailTestTo" class="grow" placeholder="接收测试邮件的邮箱" />
+      <button class="ghost" id="mailTestBtn">发送测试邮件</button>
+    </div>
+    <div class="hint">测试会使用「当前已保存」的配置：改完服务器信息请先点下面「保存全部设置」再测试。授权码保存在本机 <span class="mono">data/credits_settings.json</span>，不会回显。</div>
   </div>
 
   <div class="card">
     <h2>模型积分额度</h2>
-    <p class="sub">模型单价已经搬到 <a href="/static/api-settings.html?v=1.3.5.1793885297#creditsBillingCard">API 设置 · 模型积分额度</a>（2026-11-05 起在那里统一维护）。这里只保留汇率、注册限制、充值套餐和收款方式。</p>
+    <p class="sub">模型单价已经搬到 <a href="/static/api-settings.html?v=1.3.6.1794029865#creditsBillingCard">API 设置 · 模型积分额度</a>（2026-11-05 起在那里统一维护）。这里只保留汇率、注册限制、充值套餐和收款方式。</p>
   </div>
 
   <div class="card">
@@ -140,6 +157,7 @@
       <button class="ghost" id="addPayment">添加</button>
     </div>
     <div class="hint">二维码上传后会存到服务器的 <span class="mono">assets/pay/</span> 目录，返回的地址自动填进左边的输入框。</div>
+    <div class="qr-preview" id="payPreview"></div>
   </div>
 
   <div class="toolbar">
@@ -156,7 +174,19 @@
   function api(path, opts) {
     return fetch(path, Object.assign({ credentials: 'same-origin' }, opts || {})).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (d) {
-        if (!r.ok) throw new Error(d.detail || ('请求失败 ' + r.status));
+        if (!r.ok) {
+          // FastAPI 校验失败时 detail 是数组，直接弹会变成 [object Object]，这里压成一行可读文字
+          var detail = d.detail;
+          if (Array.isArray(detail)) {
+            detail = detail.map(function (item) {
+              var loc = (item && item.loc) || [];
+              var where = loc.length > 1 ? String(loc[loc.length - 1]) : '';
+              var why = (item && item.msg) || '';
+              return where ? (where + ' ' + why) : why;
+            }).filter(Boolean).join('；');
+          }
+          throw new Error(detail || ('请求失败 ' + r.status));
+        }
         return d;
       });
     });
@@ -390,15 +420,23 @@
     $('enforceBalance').checked = !!settings.enforce_balance;
     $('initialCredits').value = settings.signup.initial_credits;
     $('reqEmail').value = settings.signup.require_email ? '1' : '0';
-    $('reqPhone').value = settings.signup.require_phone ? '1' : '0';
+    $('reqEmailVerify').value = settings.signup.require_email_verify ? '1' : '0';
     var emailPolicy = (settings.signup && settings.signup.email) || {};
-    var phonePolicy = (settings.signup && settings.signup.phone) || {};
     $('emailAllow').value = joinList(emailPolicy.allow);
     $('emailDeny').value = joinList(emailPolicy.deny);
     $('emailBlockFree').checked = !!emailPolicy.block_free;
-    $('phoneAllow').value = joinList(phonePolicy.allow);
-    $('phoneDeny').value = joinList(phonePolicy.deny);
-    $('phoneBlockVirtual').checked = !!phonePolicy.block_virtual;
+
+    var mail = settings.mail || {};
+    $('mailEnabled').checked = !!mail.enabled;
+    $('mailHost').value = mail.host || '';
+    $('mailPort').value = mail.port || 465;
+    $('mailSecurity').value = mail.security || 'ssl';
+    $('mailUser').value = mail.user || '';
+    $('mailPassword').value = '';            // 授权码不回显
+    $('mailPassword').placeholder = mail.password ? '已设置（留空表示不修改）' : 'SMTP 授权码';
+    $('mailSender').value = mail.sender || '';
+    $('mailSenderName').value = mail.sender_name || '无限画布';
+    if (!$('mailTestTo').value && mail.user) $('mailTestTo').value = mail.user;
     renderModels();
     renderPresets();
     renderPayments();
@@ -412,15 +450,23 @@
     settings.enforce_balance = $('enforceBalance').checked;
     settings.signup.initial_credits = Number($('initialCredits').value || 0);
     settings.signup.require_email = $('reqEmail').value === '1';
-    settings.signup.require_phone = $('reqPhone').value === '1';
+    settings.signup.require_email_verify = $('reqEmailVerify').value === '1';
     settings.signup.email = settings.signup.email || {};
-    settings.signup.phone = settings.signup.phone || {};
     settings.signup.email.allow = splitList($('emailAllow').value);
     settings.signup.email.deny = splitList($('emailDeny').value);
     settings.signup.email.block_free = $('emailBlockFree').checked;
-    settings.signup.phone.allow = splitList($('phoneAllow').value);
-    settings.signup.phone.deny = splitList($('phoneDeny').value);
-    settings.signup.phone.block_virtual = $('phoneBlockVirtual').checked;
+
+    settings.mail = settings.mail || {};
+    settings.mail.enabled = $('mailEnabled').checked;
+    settings.mail.host = $('mailHost').value.trim();
+    settings.mail.port = Number($('mailPort').value || 465);
+    settings.mail.security = $('mailSecurity').value;
+    settings.mail.user = $('mailUser').value.trim();
+    var pwInput = $('mailPassword').value;
+    // 留空 = 不改原来的授权码（避免每次保存都清空）
+    if (pwInput) settings.mail.password = pwInput;
+    settings.mail.sender = $('mailSender').value.trim();
+    settings.mail.sender_name = $('mailSenderName').value.trim() || '无限画布';
     return settings;
   }
 
@@ -470,13 +516,38 @@
     var file = this.files && this.files[0];
     if (!file) return;
     var form = new FormData();
-    form.append('file', file);
+    form.append('files', file);
     msg('上传中…');
     api('/api/credits/payments/upload', { method: 'POST', body: form }).then(function (d) {
-      $('payValue').value = d.url;
+      // 后端返回 {ok, files:[{url}]}；旧版前端误读 d.url 导致地址是空的
+      var saved = (d.files && d.files[0]) || {};
+      if (!saved.url) throw new Error('上传成功但没有拿到图片地址');
+      $('payValue').value = saved.url;
+      showPayPreview(saved.url);
       msg('二维码已上传，点「添加」保存到收款方式', 'ok');
     }).catch(function (e) { msg(e.message, 'err'); });
     this.value = '';
+  };
+
+  function showPayPreview(url) {
+    var box = $('payPreview');
+    if (!box) return;
+    box.innerHTML = url ? '<img src="' + url + '" alt="二维码预览" />' : '';
+    box.classList.toggle('on', !!url);
+  }
+  $('payValue').addEventListener('input', function () { showPayPreview(this.value.trim()); });
+
+  $('mailTestBtn').onclick = function () {
+    var to = $('mailTestTo').value.trim();
+    if (!to) { msg('请填写接收测试邮件的邮箱', 'err'); return; }
+    msg('正在发送测试邮件…');
+    api('/api/credits/mail/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to: to })
+    }).then(function (d) {
+      msg('测试邮件已发送到 ' + (d.masked || to), 'ok');
+    }).catch(function (e) { msg(e.message, 'err'); });
   };
 
   $('saveAll').onclick = function () {

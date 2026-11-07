@@ -42,8 +42,41 @@ def _num(value: Any, default: float = 0.0) -> float:
     return out
 
 
+def _video_price_tier(resolution) -> str:
+    """单价表只有 480p / 720p / 1080p 三档，更细的模型档位按就近档计价。
+
+    minimax-h3 的 768p 官方是与 720p 同价档（0.14/秒），若直接查表会落空、
+    再退到「表里第一个值」（1080p = 0.3/秒），预估价翻倍（老板 2026-11-06 反馈）。
+    """
+    raw = str(resolution or "").strip().lower()
+    if not raw:
+        return "720p"
+    if raw == "768p":
+        return "720p"
+    if raw in ("2k", "4k", "2160p"):
+        return "1080p"
+    return raw.replace("p", "") + "p"
+
+
 def _round(value: float) -> float:
     return round(_num(value), 4)
+
+
+#: 中日韩文字/全角符号（这些按「一字一 token」估，其它按 4 字符一 token）
+_WIDE_CHAR_RE = re.compile(r"[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]")
+
+
+def estimate_tokens(text: Any) -> int:
+    """粗略 token 数估算：中文等宽字符 ≈1 token/字，其余 ≈4 字符/token。
+
+    前端 `static/js/credits-badge.js` 的 `estimateTokens()` 用同一套规则，
+    两边算出来的积分预估才对得上（老板 m22656）。
+    """
+    s = str(text or "")
+    if not s:
+        return 0
+    wide = len(_WIDE_CHAR_RE.findall(s))
+    return int(round(wide + (len(s) - wide) / 4.0))
 
 
 #: 「主流邮箱」白名单——勾了「不允许非主流邮箱」时，只放行这些域名（以及管理员手工加入 allow 的域名）。
@@ -54,14 +87,6 @@ FREE_EMAIL_DOMAINS = {
     "mac.com", "yahoo.com", "ymail.com", "proton.me", "protonmail.com", "gmx.com",
     "yandex.com", "zoho.com", "aol.com", "mail.com", "fastmail.com", "hey.com",
 }
-
-#: 中国大陆常见虚拟运营商号段（170/171/162/165/167 等）与特殊号段，勾了「禁止虚拟号」时拦掉。
-VIRTUAL_PHONE_PREFIXES = {
-    "86": ("170", "171", "162", "165", "167", "1349", "1410", "1440", "1740", "1741", "1749"),
-    "852": ("5", "6", "9"),   # 香港：只用来提示，实际由 allow 名单决定，这里留空更宽松
-}
-VIRTUAL_PHONE_PREFIXES["852"] = ()
-
 
 def _str_list(raw: Any, limit: int = 40) -> List[str]:
     """把「多行文本 / 逗号分隔 / 数组」统一成去重后的字符串列表。"""
@@ -116,42 +141,6 @@ def check_email_policy(signup: Dict[str, Any], email: str) -> str:
     return ""
 
 
-def check_phone_policy(signup: Dict[str, Any], phone: str) -> str:
-    """返回空串表示通过。国家码按「+86 / 86 / 0086」都认。"""
-    policy = signup.get("phone") if isinstance(signup.get("phone"), dict) else {}
-    allow = [re.sub(r"\D", "", x) for x in _str_list(policy.get("allow"))]
-    deny = [re.sub(r"\D", "", x) for x in _str_list(policy.get("deny"))]
-    block_virtual = bool(policy.get("block_virtual"))
-    raw = str(phone or "").strip()
-    digits = re.sub(r"\D", "", raw)
-    if not digits:
-        return ""
-    if digits.startswith("00"):
-        digits = digits[2:]
-
-    def country_of(number: str, codes: List[str]) -> str:
-        for code in sorted([c for c in codes if c], key=len, reverse=True):
-            if number.startswith(code):
-                return code
-        return ""
-
-    allow = [c for c in allow if c]
-    deny = [c for c in deny if c]
-    if deny and country_of(digits, deny):
-        return "本站不接受该国家/地区的手机号注册"
-    if allow and not country_of(digits, allow):
-        return "本站只接受指定国家/地区的手机号注册"
-    if block_virtual:
-        code = country_of(digits, allow) or ""
-        for guess in (["86"] if not code else [code]):
-            prefixes = VIRTUAL_PHONE_PREFIXES.get(guess) or ()
-            body = digits[len(guess):] if digits.startswith(guess) else digits
-            for prefix in prefixes:
-                if body.startswith(prefix):
-                    return "不支持虚拟运营商号段注册"
-    return ""
-
-
 def default_settings() -> Dict[str, Any]:
     return {
         "version": 1,
@@ -163,11 +152,21 @@ def default_settings() -> Dict[str, Any]:
         "signup": {
             "initial_credits": 0.0,
             "require_email": False,
-            "require_phone": False,
+            # 邮箱验证码：开启后注册必须先收码并通过 /api/auth/verify-email 校验
+            "require_email_verify": False,
             # 邮箱范围限制：allow / deny 支持「完整邮箱」或「域名」，block_free = 不允许非主流邮箱
             "email": {"allow": [], "deny": [], "block_free": False},
-            # 手机号范围限制：allow / deny 是国家码（86 / 852 …），block_virtual = 禁止虚拟运营商号段
-            "phone": {"allow": [], "deny": [], "block_virtual": False},
+        },
+        # 发信服务器（邮箱验证码用）。password 为 SMTP 授权码，仅存本地 data/credits_settings.json
+        "mail": {
+            "enabled": False,
+            "host": "",
+            "port": 465,
+            "security": "ssl",          # ssl / starttls / none
+            "user": "",
+            "password": "",
+            "sender": "",               # 留空则用 user
+            "sender_name": "无限画布",
         },
         "topup": {
             # 标准额度：{id, label, credits, price_cny, price_usd}
@@ -236,7 +235,7 @@ def normalize_settings(raw: Any) -> Dict[str, Any]:
     signup = raw.get("signup") if isinstance(raw.get("signup"), dict) else {}
     base["signup"]["initial_credits"] = max(0.0, _round(signup.get("initial_credits")))
     base["signup"]["require_email"] = bool(signup.get("require_email"))
-    base["signup"]["require_phone"] = bool(signup.get("require_phone"))
+    base["signup"]["require_email_verify"] = bool(signup.get("require_email_verify"))
 
     email_policy = signup.get("email") if isinstance(signup.get("email"), dict) else {}
     base["signup"]["email"] = {
@@ -244,22 +243,22 @@ def normalize_settings(raw: Any) -> Dict[str, Any]:
         "deny": _str_list(email_policy.get("deny")),
         "block_free": bool(email_policy.get("block_free")),
     }
-    phone_policy = signup.get("phone") if isinstance(signup.get("phone"), dict) else {}
-    def _country_codes(raw_list):
-        codes = []
-        for item in raw_list:
-            code = re.sub(r"\D", "", item)
-            if not code:
-                continue
-            if code.startswith("00"):
-                code = code[2:]
-            if code and code not in codes:
-                codes.append(code)
-        return codes[:40]
 
-    for key in ("allow", "deny"):
-        base["signup"]["phone"][key] = _country_codes(_str_list(phone_policy.get(key)))
-    base["signup"]["phone"]["block_virtual"] = bool(phone_policy.get("block_virtual"))
+    mail = raw.get("mail") if isinstance(raw.get("mail"), dict) else {}
+    security = str(mail.get("security") or "ssl").strip().lower()
+    if security not in ("ssl", "starttls", "none"):
+        security = "ssl"
+    port = int(_num(mail.get("port"), 465)) or 465
+    base["mail"] = {
+        "enabled": bool(mail.get("enabled")),
+        "host": str(mail.get("host") or "").strip(),
+        "port": max(1, min(65535, port)),
+        "security": security,
+        "user": str(mail.get("user") or "").strip(),
+        "password": str(mail.get("password") or ""),
+        "sender": str(mail.get("sender") or "").strip(),
+        "sender_name": str(mail.get("sender_name") or "无限画布").strip() or "无限画布",
+    }
 
     topup = raw.get("topup") if isinstance(raw.get("topup"), dict) else {}
     presets: List[Dict[str, Any]] = []
@@ -353,7 +352,7 @@ class CreditsStore:
             current = self.settings()
             merged = dict(current)
             if isinstance(patch, dict):
-                for key in ("rate", "signup", "topup", "models", "enforce_balance", "auto_deduct"):
+                for key in ("rate", "signup", "topup", "models", "mail", "enforce_balance", "auto_deduct"):
                     if key in patch:
                         merged[key] = patch[key]
             merged["updated_at"] = int(time.time())
@@ -374,46 +373,74 @@ class CreditsStore:
             "enforce_balance": s["enforce_balance"],
             "signup": {
                 "require_email": s["signup"]["require_email"],
-                "require_phone": s["signup"]["require_phone"],
+                "require_email_verify": s["signup"]["require_email_verify"],
+                "email_verify_ready": s["signup"]["require_email_verify"] and bool(
+                    s["mail"]["enabled"] and s["mail"]["host"]
+                ),
             },
         }
 
     # ------------------------------------------------------------ 估算
+    @staticmethod
+    def _pricing_entry(models: Dict[str, Any], provider: str, model: str):
+        """按「供应商::模型」取单价；老数据只有模型名时兼容回退（仅当该模型没配过供应商级单价）。"""
+        model = str(model or "").strip()
+        provider = str(provider or "").strip()
+        if not model:
+            return None
+        if provider:
+            entry = models.get(f"{provider}::{model}")
+            if isinstance(entry, dict):
+                return entry
+            # 该模型已按供应商分别配置 ⇒ 不再共享裸模型名的单价
+            if any(str(k).endswith("::" + model) for k in models):
+                return None
+        entry = models.get(model)
+        return entry if isinstance(entry, dict) else None
+
     def estimate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """按模型单价估算积分。没配置该模型时 configured=False（前端不显示徽标）。"""
         settings = self.settings()
         model = str(payload.get("model") or "").strip()
-        entry = settings["models"].get(model)
-        if entry is None:
-            # 允许只配了「模型名」而前端带的是 "provider::model"
-            short = model.split("::")[-1].strip()
-            entry = settings["models"].get(short)
+        provider = str(payload.get("provider") or payload.get("provider_id") or "").strip()
+        entry = self._pricing_entry(settings["models"], provider, model)
+        if entry is None and not provider and "::" in model:
+            # 前端把 "provider::model" 整串塞进 model 的老写法
+            head, _, tail = model.partition("::")
+            entry = self._pricing_entry(settings["models"], head, tail)
         if not isinstance(entry, dict):
-            return {"configured": False, "credits": 0, "kind": "", "model": model}
+            return {"configured": False, "credits": 0, "kind": "", "model": model, "provider": provider}
 
         kind = str(payload.get("kind") or entry.get("kind") or "").strip().lower()
         credits = 0.0
         detail: Dict[str, Any] = {}
         if kind == "llm":
-            input_tokens = max(0.0, _num(payload.get("input_tokens")))
-            output_tokens = max(0.0, _num(payload.get("output_tokens")))
-            cache_tokens = max(0.0, _num(payload.get("cache_tokens")))
-            credits = (input_tokens / 1_000_000.0 * entry.get("input", 0)
-                       + output_tokens / 1_000_000.0 * entry.get("output", 0)
-                       + cache_tokens / 1_000_000.0 * entry.get("cache", 0))
+            # 输入 / 缓存命中 / 输出 三段各自计价（老板 m22656）：给了 token 数就用真值，
+            # 只给文本时按同一规则估算，绝不「照搬输入那一档」。
+            input_tokens = max(0.0, _num(payload.get("input_tokens"))) or float(estimate_tokens(payload.get("input_text")))
+            cache_tokens = max(0.0, _num(payload.get("cache_tokens"))) or float(estimate_tokens(payload.get("context_text")))
+            output_tokens = (max(0.0, _num(payload.get("output_tokens")))
+                             or max(0.0, _num(payload.get("max_tokens")))
+                             or max(1.0, round(input_tokens / 2)))
+            cache_price = _num(entry.get("cache")) or _num(entry.get("input"))
+            credits = (input_tokens / 1_000_000.0 * _num(entry.get("input"))
+                       + output_tokens / 1_000_000.0 * _num(entry.get("output"))
+                       + cache_tokens / 1_000_000.0 * cache_price)
             detail = {"input_tokens": input_tokens, "output_tokens": output_tokens,
                       "cache_tokens": cache_tokens,
                       "input": entry.get("input", 0), "output": entry.get("output", 0),
-                      "cache": entry.get("cache", 0)}
+                      "cache": cache_price}
         elif kind == "image":
             count = max(1.0, _num(payload.get("count"), 1.0))
             credits = entry.get("per_image", 0) * count
             detail = {"per_image": entry.get("per_image", 0), "count": count}
         elif kind == "video":
             seconds = max(0.0, _num(payload.get("seconds")))
-            resolution = str(payload.get("resolution") or "720p").strip().lower().replace("p", "") + "p"
+            resolution = _video_price_tier(payload.get("resolution"))
             table = entry.get("per_second") or {}
             per_second = _num(table.get(resolution))
+            if not per_second:
+                per_second = _num(table.get("720p"))
             if not per_second and table:
                 per_second = _num(next(iter(table.values())))
             credits = per_second * seconds
@@ -423,6 +450,7 @@ class CreditsStore:
             "configured": True,
             "kind": kind,
             "model": model,
+            "provider": provider,
             "credits": _round(credits),
             "detail": detail,
         }
@@ -495,6 +523,14 @@ class CreditsStore:
         result = self.adjust(uid, -amount, reason=str(payload.get("reason") or "模型调用"),
                              actor=uid, kind="spend")
         return {"charged": True, "credits": amount, "balance": result["balance"], "reason": "ok"}
+
+    def refund(self, uid: str, credits: float, reason: str = "任务失败退款") -> Dict[str, Any]:
+        """把预扣的积分退回去（任务失败时用）。"""
+        amount = _round(credits)
+        if amount <= 0:
+            return {"refunded": False, "credits": 0, "reason": "zero"}
+        result = self.adjust(uid, amount, reason=reason, actor=uid, kind="refund")
+        return {"refunded": True, "credits": amount, "balance": result["balance"], "reason": "ok"}
 
     # ------------------------------------------------------------ 充值申请
     def _topups(self) -> Dict[str, Any]:
@@ -629,3 +665,4 @@ class CreditsStore:
                 self.auth.update_user(user.get("id", ""), patch)
                 changed.append({"id": user.get("id"), **patch})
         return {"changed": changed, "count": len(changed)}
+

@@ -1,0 +1,536 @@
+/* 新人引导（画布新人引导）：遮罩 / 高亮 / 气泡 / ？复习徽标
+   逻辑在 static/js/canvas-tour.js，本文件只管样式。 */
+
+.ct-layer{
+    position:fixed;
+    inset:0;
+    z-index:2147483000;
+    pointer-events:none;
+    font-family:"PingFang SC","Microsoft YaHei",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+    opacity:0;
+    transition:opacity .18s ease;
+}
+.ct-layer.ct-on{ opacity:1; }
+
+/* ── 压暗层：四块拼成一个"洞"，其余部分一律压暗 50% ──
+   用四块而不是 box-shadow 巨阴影，是为了让"洞"能单独提亮（阴影挖不出亮度）。 */
+.ct-dim{
+    position:absolute;
+    left:0; top:0; width:0; height:0;
+    background:rgba(8,12,22,.5);
+    pointer-events:none;
+    transition:left .3s cubic-bezier(.22,.61,.36,1), top .3s cubic-bezier(.22,.61,.36,1),
+               width .3s cubic-bezier(.22,.61,.36,1), height .3s cubic-bezier(.22,.61,.36,1),
+               opacity .18s ease;
+    will-change:left,top,width,height;
+}
+.ct-dim.ct-off{ opacity:0; }
+
+/* 兼容旧缓存：万一浏览器还在用旧版 JS（它找的是 #ctRing），也让聚光灯能亮，
+   否则会出现"整屏不压暗、只剩一张卡"的破图。新版不再生成这个节点。 */
+.ct-ring{
+    position:absolute;
+    left:0; top:0; width:0; height:0;
+    border-radius:16px;
+    pointer-events:none;
+    box-shadow:0 0 0 9999px rgba(8,12,22,.5), 0 0 0 2px rgba(37,99,235,.92);
+    transition:left .3s cubic-bezier(.22,.61,.36,1), top .3s cubic-bezier(.22,.61,.36,1),
+               width .3s cubic-bezier(.22,.61,.36,1), height .3s cubic-bezier(.22,.61,.36,1),
+               opacity .18s ease;
+}
+.ct-ring.ct-ring-off{ opacity:0; }
+
+/* 高亮区：只做"挖洞"和描边，不改亮度 —— 框里的内容保持页面原本的样子 */
+.ct-spot{
+    position:absolute;
+    left:0; top:0; width:0; height:0;
+    border-radius:14px;
+    pointer-events:none;
+    background:transparent;
+    box-shadow:0 0 0 2px rgba(37,99,235,.92), 0 0 0 6px rgba(96,165,250,.34), 0 0 34px 8px rgba(37,99,235,.34);
+    transition:left .3s cubic-bezier(.22,.61,.36,1), top .3s cubic-bezier(.22,.61,.36,1),
+               width .3s cubic-bezier(.22,.61,.36,1), height .3s cubic-bezier(.22,.61,.36,1),
+               border-radius .3s ease, opacity .18s ease;
+    will-change:left,top,width,height;
+}
+.ct-spot.ct-off{ opacity:0; }
+.ct-spot::after{
+    content:"";
+    position:absolute;
+    inset:0;
+    border-radius:inherit;
+    box-shadow:inset 0 0 0 2px rgba(147,197,253,.85);
+    animation:ct-breathe 2.4s ease-in-out infinite;
+}
+@keyframes ct-breathe{
+    0%,100% { opacity:.55; }
+    50%     { opacity:1; }
+}
+
+/* 取景括号：四角"引号框"，比整圈描边更抓眼 */
+.ct-frame{
+    position:absolute;
+    left:0; top:0; width:0; height:0;
+    pointer-events:none;
+    transition:left .3s cubic-bezier(.22,.61,.36,1), top .3s cubic-bezier(.22,.61,.36,1),
+               width .3s cubic-bezier(.22,.61,.36,1), height .3s cubic-bezier(.22,.61,.36,1),
+               opacity .18s ease;
+}
+.ct-frame.ct-off{ opacity:0; }
+.ct-frame i{
+    position:absolute;
+    width:26px; height:26px;
+    border:3px solid #2563eb;
+    filter:drop-shadow(0 0 2px rgba(255,255,255,.95)) drop-shadow(0 0 10px rgba(37,99,235,.9));
+}
+.ct-frame i.tl{ left:-9px;  top:-9px;    border-right:0; border-bottom:0; border-radius:9px 0 0 0; }
+.ct-frame i.tr{ right:-9px; top:-9px;    border-left:0;  border-bottom:0; border-radius:0 9px 0 0; }
+.ct-frame i.bl{ left:-9px;  bottom:-9px; border-right:0; border-top:0;    border-radius:0 0 0 9px; }
+.ct-frame i.br{ right:-9px; bottom:-9px; border-left:0;  border-top:0;    border-radius:0 0 9px 0; }
+
+/* 指示符：从气泡指向高亮区，视线先看它再看字 */
+.ct-arrow{
+    position:absolute;
+    left:0; top:0;
+    width:30px; height:30px;
+    display:flex; align-items:center; justify-content:center;
+    border-radius:50%;
+    background:linear-gradient(180deg,#3b82f6,#2563eb);
+    color:#fff;
+    box-shadow:0 8px 22px -6px rgba(37,99,235,.85), 0 0 0 4px rgba(59,130,246,.16);
+    pointer-events:none;
+    transition:left .3s cubic-bezier(.22,.61,.36,1), top .3s cubic-bezier(.22,.61,.36,1),
+               opacity .18s ease, transform .18s ease;
+}
+.ct-arrow.ct-off{ opacity:0; }
+.ct-arrow svg{ width:16px; height:16px; display:block; }
+.ct-arrow::after{
+    content:"";
+    position:absolute;
+    inset:-5px;
+    border-radius:50%;
+    border:2px solid rgba(147,197,253,.7);
+    animation:ct-beacon 1.8s ease-out infinite;
+}
+@keyframes ct-beacon{
+    0%   { transform:scale(.85); opacity:.9; }
+    75%  { transform:scale(1.45); opacity:0; }
+    100% { transform:scale(1.45); opacity:0; }
+}
+
+/* 气泡卡片 */
+.ct-tip{
+    position:absolute;
+    width:392px;
+    max-width:calc(100vw - 32px);
+    background:rgba(255,255,255,.985);
+    color:#0f172a;
+    border:1px solid rgba(148,163,184,.4);
+    border-radius:16px;
+    box-shadow:0 24px 60px -18px rgba(15,23,42,.55), 0 2px 8px rgba(15,23,42,.12);
+    pointer-events:auto;
+    padding:14px 16px 12px;
+    transition:left .18s ease, top .18s ease, opacity .16s ease;
+    backdrop-filter:blur(6px);
+}
+html.theme-dark .ct-tip{
+    background:rgba(23,30,46,.985);
+    color:#e6edf8;
+    border-color:rgba(96,114,148,.55);
+    box-shadow:0 24px 60px -18px rgba(0,0,0,.8), 0 2px 8px rgba(0,0,0,.4);
+}
+
+.ct-head{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    font-size:11px;
+    font-weight:850;
+    letter-spacing:.03em;
+    color:#2563eb;
+    text-transform:uppercase;
+}
+html.theme-dark .ct-head{ color:#7ea8ff; }
+.ct-head .ct-seg{
+    flex:1;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+.ct-x{
+    flex:none;
+    width:22px;height:22px;
+    display:inline-flex;align-items:center;justify-content:center;
+    border:0;border-radius:7px;background:transparent;cursor:pointer;
+    color:#64748b;font-size:14px;line-height:1;
+}
+.ct-x:hover{ background:rgba(148,163,184,.2); color:#0f172a; }
+html.theme-dark .ct-x:hover{ background:rgba(148,163,184,.22); color:#fff; }
+
+.ct-title{
+    margin:8px 0 6px;
+    font-size:15.5px;
+    font-weight:900;
+    line-height:1.35;
+    letter-spacing:.01em;
+}
+.ct-body{
+    font-size:12.6px;
+    line-height:1.72;
+    color:#334155;
+    white-space:pre-wrap;
+    max-height:min(46vh, 320px);
+    overflow:auto;
+    padding-right:2px;
+}
+html.theme-dark .ct-body{ color:#c3cede; }
+.ct-body b{ color:#0f172a; font-weight:850; }
+html.theme-dark .ct-body b{ color:#fff; }
+.ct-body code{
+    background:rgba(37,99,235,.1);
+    color:#1d4ed8;
+    border-radius:5px;
+    padding:1px 5px;
+    font-size:12px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+html.theme-dark .ct-body code{ background:rgba(96,165,250,.16); color:#a9c8ff; }
+
+/* 引导说明卡里的要点列表 */
+.ct-points{
+    margin:10px 0 0;
+    padding:0;
+    list-style:none;
+    display:grid;
+    gap:6px;
+}
+.ct-points li{
+    position:relative;
+    padding-left:18px;
+    font-size:12.4px;
+    line-height:1.6;
+    color:#334155;
+}
+html.theme-dark .ct-points li{ color:#c3cede; }
+.ct-points li::before{
+    content:"";
+    position:absolute;
+    left:4px; top:8px;
+    width:6px;height:6px;
+    border-radius:2px;
+    background:#3b82f6;
+}
+
+/* 等待操作提示条 */
+.ct-wait{
+    display:none;
+    align-items:flex-start;
+    gap:8px;
+    margin-top:10px;
+    padding:8px 10px;
+    border-radius:10px;
+    background:rgba(59,130,246,.1);
+    border:1px solid rgba(59,130,246,.3);
+    font-size:12px;
+    line-height:1.5;
+    color:#1d4ed8;
+    font-weight:750;
+}
+.ct-wait.is-on{ display:flex; }
+.ct-wait.is-done{
+    background:rgba(16,185,129,.12);
+    border-color:rgba(16,185,129,.35);
+    color:#047857;
+}
+html.theme-dark .ct-wait{ color:#a9c8ff; }
+html.theme-dark .ct-wait.is-done{ color:#6ee7b7; }
+
+/* 说明型步骤（没有强制操作）：灰调，明确"点下一步继续" */
+.ct-wait.is-idle{
+    background:rgba(100,116,139,.09);
+    border-color:rgba(100,116,139,.26);
+    color:#475569;
+    font-weight:700;
+}
+.ct-wait.is-idle .ct-wait-dot{
+    animation:none;
+    border:0;
+    background:currentColor;
+    opacity:.55;
+    width:7px;height:7px;
+    margin-top:6px;
+    margin-left:3px;
+}
+html.theme-dark .ct-wait.is-idle{ color:#cbd5e1; }
+.ct-wait .ct-wait-dot{
+    flex:none;
+    width:14px;height:14px;
+    margin-top:1px;
+    border-radius:50%;
+    border:2px solid currentColor;
+    border-right-color:transparent;
+    animation:ct-spin .9s linear infinite;
+}
+.ct-wait.is-done .ct-wait-dot{
+    border:0;
+    animation:none;
+    background:currentColor;
+    -webkit-mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z'/></svg>") center/12px no-repeat;
+    mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='black' d='M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z'/></svg>") center/12px no-repeat;
+}
+@keyframes ct-spin{ to{ transform:rotate(360deg); } }
+
+/* 底部按钮区 */
+.ct-actions{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    margin-top:12px;
+    flex-wrap:wrap;
+}
+.ct-dots{
+    flex:1;
+    display:flex;
+    align-items:center;
+    gap:4px;
+    min-width:40px;
+}
+.ct-dot{
+    width:5px;height:5px;
+    border-radius:50%;
+    background:rgba(100,116,139,.35);
+}
+.ct-dot.on{ background:#2563eb; width:14px; border-radius:3px; }
+html.theme-dark .ct-dot{ background:rgba(148,163,184,.35); }
+html.theme-dark .ct-dot.on{ background:#7ea8ff; }
+
+.ct-btn{
+    appearance:none;
+    border:1px solid rgba(148,163,184,.5);
+    background:#fff;
+    color:#0f172a;
+    border-radius:9px;
+    height:30px;
+    padding:0 12px;
+    font-size:12px;
+    font-weight:850;
+    cursor:pointer;
+    white-space:nowrap;
+    transition:background .15s ease, border-color .15s ease, opacity .15s ease;
+}
+.ct-btn:hover{ background:#f1f5f9; }
+html.theme-dark .ct-btn{ background:#1b2436; color:#e6edf8; border-color:rgba(96,114,148,.6); }
+html.theme-dark .ct-btn:hover{ background:#232f46; }
+
+.ct-btn.ct-primary{
+    background:#2563eb;
+    border-color:#2563eb;
+    color:#fff;
+    box-shadow:0 6px 16px -8px rgba(37,99,235,.9);
+}
+.ct-btn.ct-primary:hover{ background:#1d4ed8; border-color:#1d4ed8; }
+.ct-btn[disabled]{
+    opacity:.42;
+    cursor:not-allowed;
+    box-shadow:none;
+}
+.ct-btn.ct-ghost{
+    border-color:transparent;
+    background:transparent;
+    color:#64748b;
+    font-weight:750;
+}
+.ct-btn.ct-ghost:hover{ background:rgba(148,163,184,.16); color:#0f172a; }
+html.theme-dark .ct-btn.ct-ghost{ color:#94a3b8; }
+html.theme-dark .ct-btn.ct-ghost:hover{ color:#fff; }
+
+/* 询问条（不再显示） */
+.ct-foot{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    margin-top:8px;
+    font-size:11.5px;
+    color:#64748b;
+}
+.ct-foot label{ display:inline-flex; align-items:center; gap:5px; cursor:pointer; }
+.ct-foot input{ accent-color:#2563eb; }
+
+/* ？复习徽标：贴在每段起始功能的角落 */
+.ct-badge{
+    position:fixed;
+    z-index:2147482500;
+    width:19px;height:19px;
+    padding:0;
+    border-radius:50%;
+    border:1px solid rgba(148,163,184,.62);
+    background:rgba(255,255,255,.92);
+    color:#9aa7b8;
+    font-size:12px;
+    font-weight:900;
+    line-height:1;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    cursor:pointer;
+    box-shadow:0 2px 8px -3px rgba(15,23,42,.32);
+    opacity:0;
+    transform:scale(.85);
+    transition:opacity .18s ease, transform .18s ease, background .15s ease;
+    pointer-events:none;
+}
+.ct-badge.ct-badge-on{ opacity:.9; transform:scale(1); pointer-events:auto; }
+.ct-badge:hover{ background:#eef2f7; color:#64748b; border-color:rgba(100,116,139,.55); transform:scale(1.12); }
+.ct-badge.ct-badge-hide{ display:none; }
+html.theme-dark .ct-badge{ background:rgba(38,48,66,.94); color:#9aa7b8; border-color:rgba(148,163,184,.42); }
+html.theme-dark .ct-badge:hover{ background:#334155; color:#e2e8f0; border-color:rgba(148,163,184,.6); }
+
+/* 引导运行中隐藏徽标，避免和聚光灯抢注意力 */
+body.ct-running .ct-badge{ opacity:0 !important; pointer-events:none !important; }
+
+/* ── 常驻「?」复习中心：整个画布的右下角 ── */
+.ct-hub{
+    position:fixed;
+    right:22px;
+    bottom:18px;
+    z-index:2147482500;
+    font-family:inherit;
+}
+body.ct-running .ct-hub{ opacity:0; pointer-events:none; transition:opacity .18s ease; }
+.ct-hub-btn{
+    width:32px;height:32px;
+    padding:0;
+    border-radius:50%;
+    border:1px solid rgba(148,163,184,.6);
+    background:rgba(255,255,255,.9);
+    color:#9aa7b8;
+    font-size:15px;
+    font-weight:900;
+    line-height:1;
+    cursor:pointer;
+    box-shadow:0 8px 22px -10px rgba(15,23,42,.45);
+    backdrop-filter:blur(10px);
+    transition:transform .14s ease, background .14s ease, color .14s ease;
+}
+.ct-hub-btn:hover{ background:#eef2f7; color:#64748b; transform:scale(1.06); }
+.ct-hub.ct-hub-open .ct-hub-btn{ background:#eef2f7; color:#64748b; }
+.ct-hub-pop{
+    position:absolute;
+    right:0;
+    bottom:40px;
+    width:288px;
+    padding:10px;
+    border-radius:14px;
+    border:1px solid rgba(15,23,42,.1);
+    background:rgba(255,255,255,.98);
+    box-shadow:0 22px 50px -24px rgba(15,23,42,.6), 0 2px 8px -2px rgba(15,23,42,.18);
+    backdrop-filter:blur(18px);
+}
+.ct-hub-head{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:8px;
+    padding:2px 4px 8px;
+    font-size:11.5px;
+    font-weight:850;
+    color:#475569;
+}
+.ct-hub-close{
+    width:20px;height:20px;
+    padding:0;
+    border:0;
+    border-radius:6px;
+    background:transparent;
+    color:#94a3b8;
+    font-size:14px;
+    line-height:1;
+    cursor:pointer;
+}
+.ct-hub-close:hover{ background:rgba(15,23,42,.06); color:#334155; }
+.ct-hub-list{ display:flex; flex-direction:column; gap:4px; }
+.ct-hub-row{
+    display:flex;
+    flex-direction:column;
+    gap:3px;
+    width:100%;
+    padding:8px 9px;
+    border:1px solid transparent;
+    border-radius:10px;
+    background:transparent;
+    text-align:left;
+    cursor:pointer;
+    transition:background .13s ease, border-color .13s ease;
+}
+.ct-hub-row:hover{ background:rgba(37,99,235,.08); border-color:rgba(37,99,235,.28); }
+.ct-hub-row b{ font-size:12px; font-weight:850; color:#1e293b; }
+.ct-hub-row span{ font-size:10.5px; line-height:1.45; color:#64748b; }
+.ct-hub-foot{ padding:8px 2px 2px; }
+.ct-hub-restart{
+    width:100%;
+    padding:8px 10px;
+    border:1px dashed rgba(37,99,235,.45);
+    border-radius:10px;
+    background:rgba(37,99,235,.06);
+    color:#2563eb;
+    font-size:11.5px;
+    font-weight:800;
+    cursor:pointer;
+}
+.ct-hub-restart:hover{ background:rgba(37,99,235,.13); }
+html.theme-dark .ct-hub-btn{ background:rgba(38,48,66,.94); color:#9aa7b8; border-color:rgba(148,163,184,.45); }
+html.theme-dark .ct-hub-btn:hover,
+html.theme-dark .ct-hub.ct-hub-open .ct-hub-btn{ background:#334155; color:#e2e8f0; }
+html.theme-dark .ct-hub-pop{ background:rgba(18,24,38,.98); border-color:rgba(148,163,184,.22); }
+html.theme-dark .ct-hub-head{ color:#94a3b8; }
+html.theme-dark .ct-hub-row b{ color:#e2e8f0; }
+html.theme-dark .ct-hub-row span{ color:#8b9bb4; }
+html.theme-dark .ct-hub-restart{ border-color:rgba(96,165,250,.45); background:rgba(96,165,250,.1); color:#93c5fd; }
+
+/* 快捷键面板底部的「重看新人引导」入口（面板本身样式在 smart-canvas.css） */
+.shortcut-foot{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:10px 12px 12px;
+    border-top:1px solid var(--line);
+    font-size:11px;
+    color:var(--muted);
+}
+.shortcut-foot-hint{
+    flex:1;
+    min-width:0;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+.shortcut-tour-btn{
+    flex:none;
+    height:28px;
+    padding:0 12px;
+    border-radius:9px;
+    border:1px solid rgba(59,130,246,.45);
+    background:rgba(59,130,246,.1);
+    color:#2563eb;
+    font-size:11.5px;
+    font-weight:850;
+    cursor:pointer;
+    white-space:nowrap;
+    transition:background .15s ease, color .15s ease;
+}
+.shortcut-tour-btn:hover{ background:#2563eb; border-color:#2563eb; color:#fff; }
+html.theme-dark .shortcut-tour-btn{ color:#93b7ff; border-color:rgba(96,165,250,.5); background:rgba(96,165,250,.14); }
+html.theme-dark .shortcut-tour-btn:hover{ background:#2563eb; color:#fff; }
+
+/* 小屏：气泡占满底部 */
+@media (max-width:720px){
+    .ct-tip{
+        width:auto;
+        left:12px !important;
+        right:12px;
+        top:auto !important;
+        bottom:12px;
+    }
+    .ct-body{ max-height:38vh; }
+}

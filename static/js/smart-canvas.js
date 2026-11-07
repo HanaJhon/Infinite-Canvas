@@ -941,6 +941,10 @@ function smartMediaPreviewUrl(itemOrUrl, size=512){
     if(!raw || raw.startsWith('data:') || raw.startsWith('blob:')) return displayUrl;
     if(!raw.startsWith('/output/') && !raw.startsWith('/assets/')) return displayUrl;
     if(!/\.(png|jpe?g|webp|gif|bmp|avif|tiff?|mp4|webm|mov|m4v|avi|mkv)(\?|#|$)/i.test(raw)) return displayUrl;
+    // GIF 一律走原图直出：/api/media-preview 会把它压成单帧，动画就没了
+    if(/\.gif(\?|#|$)/i.test(raw)) return displayUrl;
+    // 生图产物（/output/）一律直出原图，不用缩略图代理；视频仍走代理取封面帧
+    if(raw.startsWith('/output/') && !/\.(mp4|webm|mov|m4v|avi|mkv|flv)(\?|#|$)/i.test(raw)) return displayUrl;
     const width = Math.max(64, Math.min(2048, Math.round(Number(size) || 512)));
     return `/api/media-preview?w=${width}&url=${encodeURIComponent(raw)}`;
 }
@@ -3588,8 +3592,10 @@ function renderVideoDurationControl(){
     //    · agnes-video-2.5 → 4~12 秒
     //    · minimax-h3      → 1~15 秒，但**1080p 最多 10 秒**（文档原话「支持1~15秒，1080p最多支持10秒」）
     const name = String(settings.videoModel || '').trim().toLowerCase();
-    const dMin = name.startsWith('agnes-video-') ? 4 : 1;
-    let dMax = name === 'minimax-h3' ? 15 : (name.startsWith('agnes-video-') ? 12 : 60);
+    // wan-3.0 文档写「支持 2~30 秒」（Apifox 531060669e0，2026-11-06 核对）
+    const isWan = name === 'wan-3.0';
+    const dMin = isWan ? 2 : (name.startsWith('agnes-video-') ? 4 : 1);
+    let dMax = name === 'minimax-h3' ? 15 : (name.startsWith('agnes-video-') ? 12 : (isWan ? 30 : 60));
     if(name === 'minimax-h3' && String(settings.videoResolution || '').trim().toLowerCase() === '1080p'){
         dMax = 10;
     }
@@ -3635,11 +3641,14 @@ function renderVideoResolutionControl(){
     const videoModelName = String(settings.videoModel || '').trim().toLowerCase();
     const isMinimax = videoModelName === 'minimax-h3';
     const isAgnesVideo = videoModelName.startsWith('agnes-video-');
+    const isWanVideo = videoModelName === 'wan-3.0';
     const options = isMinimax
         ? [['480p','480P'], ['768p','768P'], ['1080p','1080P']]
         : isAgnesVideo
             ? [['720p','720P'], ['1080p','1080P'], ['2k','2K']]
-            : [['', tr('smart.videoResAuto')], ['480p','480P'], ['720p','720P'], ['1080p','1080P']];
+            : isWanVideo
+                ? [['480p','480P'], ['720p','720P'], ['1080p','1080P']]
+                : [['', tr('smart.videoResAuto')], ['480p','480P'], ['720p','720P'], ['1080p','1080P']];
     let value = settings.videoResolution || '';
     const allowedRes = options.map(([v]) => v);
     if(!allowedRes.includes(value)){
@@ -3704,8 +3713,12 @@ function apiImageSize(ratioValue, resolutionValue, customRatioValue='', customSi
         const longSide = RES_LONG_SIDE[resolutionKey] || 1024;
         if(parsed){
             const pixelLimit = RES_PIXEL_LIMIT[resolutionKey] || (longSide * longSide);
-            const rawWidth = parsed >= 1 ? longSide : Math.min(longSide * parsed, Math.sqrt(pixelLimit * parsed));
-            const rawHeight = parsed >= 1 ? Math.min(longSide / parsed, Math.sqrt(pixelLimit / parsed)) : longSide;
+            /* 🚨 宽和高必须**同时**受「长边」和「像素上限」约束。
+               以前 parsed>=1 时宽度直接取 longSide、只有高度被像素上限压，
+               结果 1:1 被算成 3840×2880（4:3）——2026-11-07 老板报「比例还是不对」就是这么来的
+               （输入 1248×1248 方图，出来 4:3）。竖构图是同一个 bug 的镜像。 */
+            const rawWidth = Math.min(parsed >= 1 ? longSide : longSide * parsed, Math.sqrt(pixelLimit * parsed));
+            const rawHeight = Math.min(parsed >= 1 ? longSide / parsed : longSide, Math.sqrt(pixelLimit / parsed));
             const width = Math.floor(rawWidth / 16) * 16;
             const height = Math.floor(rawHeight / 16) * 16;
             return `${Math.max(64, width)}x${Math.max(64, height)}`;
@@ -3917,6 +3930,7 @@ function renderApiParams(){
         ${renderModelControl(models)}
         ${renderSizePickerControl('', true)}
         ${renderQualityControl()}
+        ${renderOutputFormatControl()}
         ${renderCountVisualControl()}
         ${isJimengProviderId(settings.provider_id) ? renderJimengUpscaleControl() : ''}
     `;
@@ -4460,6 +4474,42 @@ function renderQualityControl(){
             <div class="smart-popover-title">${escapeHtml(tr('smart.quality'))}</div>
             <div class="seg-row">
                 ${Object.entries(labels).map(([k, l]) => `<button type="button" class="${k === value ? 'active' : ''}" data-smart-param="quality" data-smart-value="${escapeHtml(k)}">${escapeHtml(l)}</button>`).join('')}
+            </div>
+        </div>
+    </div>`;
+}
+// 输出格式：auto=不传（跟随上游默认）；png/jpeg/webp/gif 透传给支持的上游
+const OUTPUT_FORMAT_VALUES = ['auto', 'png', 'jpeg', 'webp', 'gif'];
+function normalizeOutputFormat(value){
+    const clean = String(value || '').toLowerCase();
+    if(clean === 'jpg') return 'jpeg';
+    return OUTPUT_FORMAT_VALUES.includes(clean) ? clean : 'auto';
+}
+// 只写「生成gif」在提示词里，上游会回两张 png（静图 + 分镜格），必须真的带 output_format=gif。
+const GIF_CAPABLE_MODEL = /gpt-image-2\.6/i;
+const GIF_PROMPT_HINT = /gif|动图|动态图|循环动画|逐帧|动画/i;
+function outputFormatPayload(runSettings=settings, promptText=''){
+    let value = normalizeOutputFormat(runSettings?.outputFormat);
+    if(value === 'auto' && GIF_CAPABLE_MODEL.test(String(runSettings?.model || '')) && GIF_PROMPT_HINT.test(String(promptText || ''))){
+        value = 'gif';
+    }
+    return value === 'auto' ? '' : value;
+}
+function renderOutputFormatControl(){
+    const value = normalizeOutputFormat(settings.outputFormat);
+    const labels = {
+        auto:tr('smart.formatAuto') || '自动',
+        png:'PNG',
+        jpeg:'JPG',
+        webp:'WEBP',
+        gif:'GIF',
+    };
+    return `<div class="smart-control format-control">
+        <button class="smart-pill" type="button" title="${escapeAttr(tr('smart.outputFormat') || '输出格式')}"><i data-lucide="file-image"></i><span>${escapeHtml(labels[value] || value)}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
+        <div class="smart-popover compact-popover">
+            <div class="smart-popover-title">${escapeHtml(tr('smart.outputFormat') || '输出格式')}</div>
+            <div class="seg-row">
+                ${OUTPUT_FORMAT_VALUES.map(k => `<button type="button" class="${k === value ? 'active' : ''}" data-smart-param="outputFormat" data-smart-value="${escapeHtml(k)}">${escapeHtml(labels[k] || k)}</button>`).join('')}
             </div>
         </div>
     </div>`;
@@ -5110,9 +5160,11 @@ function smartComfyRandomValue(field){
     }
     return Math.floor(value);
 }
+// 影响单价的参数：改了就要重算运行键上的预估积分（老板 m22414）
+const CREDIT_PRICE_KEYS = new Set(['provider_id','model','videoProvider','videoModel','count','duration','videoDuration','resolution','videoResolution','msgenModel','msCustomModel','engine','apiKind']);
 function setDynamicSetting(key, value){
     const numericKeys = new Set(['count','width','height','videoDuration','enhanceStrength','enhanceUpscaleRes','editUpscaleRes','customRatioWidth','customRatioHeight','customWidth','customHeight','msCustomRatioWidth','msCustomRatioHeight','msCustomWidth','msCustomHeight']);
-    const layoutKeys = new Set(['provider_id','model','resolution','ratio','msgenModel','msCustomModel','msResolution','msRatio','videoProvider','videoModel','videoAspect','videoResolution','comfyMode','comfyWorkflow','quality','count','enhanceUpscaleRes','editUpscaleRes','jimengUpscaleRes','rhConfigKey','rhPayment','rhInstanceType']);
+    const layoutKeys = new Set(['provider_id','model','resolution','ratio','msgenModel','msCustomModel','msResolution','msRatio','videoProvider','videoModel','videoAspect','videoResolution','comfyMode','comfyWorkflow','quality','outputFormat','count','enhanceUpscaleRes','editUpscaleRes','jimengUpscaleRes','rhConfigKey','rhPayment','rhInstanceType']);
     settings[key] = numericKeys.has(key) && value !== '' ? Number(value) : value;
     if(key === 'provider_id') settings.model = '';
     if((key === 'provider_id' || key === 'model') && !isNanoBananaProAutoRatioModel(settings.model)) settings.ratio = settings.ratio === 'auto' ? 'square' : settings.ratio;
@@ -5165,6 +5217,12 @@ function setDynamicSetting(key, value){
     persistActiveSmartSettings();
     rememberRecentSmartSettings(settings, activeSettingsSubject());
     if(layoutKeys.has(key)) renderDynamicParams();
+    /* 老板 m22414「预估积分不会根据模型替换而实时变动」：
+       换模型/供应商/张数只重渲染参数条，运行键上的徽标要单独重算（原来要等下次选中或轮询）。 */
+    if(CREDIT_PRICE_KEYS.has(key)){
+        try { updateRunCreditsBadge(selectedNode()); } catch(e) {}
+        try { syncCascadeRunButton(selectedNode()); } catch(e) {}
+    }
     scheduleSave();
 }
 function closeAllSmartPopovers(){
@@ -5204,13 +5262,20 @@ function bindDynamicParams(){
                     ? ['480p', '768p', '1080p']
                     : name.startsWith('agnes-video-')
                         ? ['720p', '1080p', '2k']
-                        : ['', '480p', '720p', '1080p'];
+                        : name === 'wan-3.0'
+                            ? ['480p', '720p', '1080p']
+                            : ['', '480p', '720p', '1080p'];
                 if(!allow.includes(settings.videoResolution || '')){
                     settings.videoResolution = allow[0];
                 }
                 // minimax-h3 选 1080p 时，时长上限从 15 秒降到 10 秒 → 先纠正，避免带着 15 秒提交
                 if(name === 'minimax-h3' && settings.videoResolution === '1080p' && Number(settings.videoDuration) > 10){
                     settings.videoDuration = 10;
+                }
+                // wan-3.0 的时长是 2~30 秒（文档 531060669e0），切过去时把越界值收回
+                if(name === 'wan-3.0'){
+                    const d = Number(settings.videoDuration) || 5;
+                    settings.videoDuration = Math.max(2, Math.min(30, d));
                 }
                 renderDynamicParams();
             }
@@ -6610,8 +6675,10 @@ function creditsNumber(value){
 function creditsFormat(value){
     const n = creditsNumber(value);
     if(!n) return '';
-    if(n < 0.01) return '<0.01';
-    return String(Math.round(n * 100) / 100);
+    // 小额单价（生图 0.015、LLM 0.00008）两位/三位小数会把差别抹平，1 积分以下一律留 4 位有效小数（老板 m22860）
+    if(n >= 1) return String(Math.round(n * 100) / 100);
+    const fixed = n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+    return (fixed && fixed !== '0') ? fixed : '<0.0001';
 }
 function loadCreditsPublic(force=false){
     if(creditsPublicLoading) return;
@@ -6624,48 +6691,129 @@ function loadCreditsPublic(force=false){
         .then(() => {
             creditsPublicLoading = false;
             if(typeof syncRunButtonState === 'function') syncRunButtonState();
+            if(typeof syncCascadeRunButton === 'function') syncCascadeRunButton();
+            if(typeof updateAgentSendCredits === 'function') updateAgentSendCredits();
             if(typeof render === 'function') render();
         });
 }
-function creditsEntryFor(model){
+// 单价按「供应商::模型」隔离：同一个模型名挂在两个 API 上时可以分别计价（老板 m21440 第④项）。
+function creditsEntryFor(model, providerId){
     if(!creditsPublic || !creditsPublic.models) return null;
     const key = String(model || '').trim();
     if(!key) return null;
     const models = creditsPublic.models;
-    if(models[key]) return models[key];
-    const short = key.split('::').pop();
-    if(short && models[short]) return models[short];
+    const pid = String(providerId || '').trim();
+    if(pid && models[pid + '::' + key]) return models[pid + '::' + key];
+    const scoped = Object.keys(models).some(k => k !== key && k.endsWith('::' + key));
+    if(!scoped){
+        if(models[key]) return models[key];
+        const short = key.split('::').pop();
+        if(short && models[short]) return models[short];
+    }
     return null;
+}
+function creditsNodeProviderId(node){
+    try {
+        const s = smartSettingsForNode(node) || {};
+        return String(s.provider_id || s.videoProvider || s.chatProvider || s.provider || '').trim();
+    } catch(e) { return ''; }
+}
+/* 语言模型计费：输入 / 缓存命中 / 输出 三段各自计价（老板 2026-11-06 m22656），
+   与 static/js/credits-badge.js 的 llmCost 同一套规则，那边可用就复用。 */
+function creditsLlmCost(entry, opts){
+    if(!entry) return null;
+    try {
+        if(window.icCredits && typeof window.icCredits.llmCost === 'function'){
+            return window.icCredits.llmCost(entry, opts || {});
+        }
+    } catch(e) {}
+    const est = (s) => {
+        const str = String(s || '');
+        if(!str) return 0;
+        const wide = (str.match(/[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/g) || []).length;
+        return Math.round(wide + (str.length - wide) / 4);
+    };
+    const fresh = est(opts && opts.inputText);
+    const cached = est(opts && opts.contextText);
+    const cachePrice = creditsNumber(entry.cache) || creditsNumber(entry.input);
+    const out = Math.max(1, Math.round(fresh / 2));
+    return {
+        credits: fresh / 1e6 * creditsNumber(entry.input) + cached / 1e6 * cachePrice + out / 1e6 * creditsNumber(entry.output),
+        tokens: {input: fresh, cache: cached, output: out}
+    };
+}
+// 🚨 积分单价表只有 480p / 720p / 1080p 三档，但视频模型的分辨率档更细：
+//    minimax-h3 的 768p 官方按 720p 计价、agnes 的 2k 按 1080p 计价
+//    （老板 2026-11-06 反馈：768P + 10 秒被算成 3 积分，实际应为 1.4）。
+function creditsVideoTier(resolution){
+    const raw = String(resolution || '').trim().toLowerCase();
+    if(!raw) return '720p';
+    if(raw === '768p') return '720p';
+    if(raw === '2k' || raw === '4k' || raw === '2160p') return '1080p';
+    return raw.replace(/p$/, '') + 'p';
+}
+function creditsVideoPerSecond(table, resolution){
+    table = table || {};
+    const tier = creditsVideoTier(resolution);
+    let per = creditsNumber(table[tier]);
+    if(!per) per = creditsNumber(table['720p']);
+    if(!per) per = creditsNumber(Object.values(table)[0]);
+    return per;
 }
 function creditsNodeCost(node){
     if(!node) return null;
-    let model = '';
-    try { model = String(smartSettingsForNode(node)?.model || ''); } catch(e) { model = ''; }
-    const entry = creditsEntryFor(model);
-    if(!entry) return null;
-    const kind = String(entry.kind || 'image').toLowerCase();
-    let credits = 0;
     let settings = {};
     try { settings = smartSettingsForNode(node) || {}; } catch(e) { settings = {}; }
+    // 视频跑的是 videoModel/videoProvider，跟生图的 model/provider_id 不是同一个字段
+    // （老板 2026-11-06「切换到视频模型时积分没有重新计算变化」就是只读了 model）
+    const videoRun = isApiLikeEngine(settings.engine) && settings.apiKind === 'video';
+    const model = String((videoRun ? settings.videoModel : settings.model) || '');
+    const entry = creditsEntryFor(model, videoRun ? String(settings.videoProvider || '').trim() : creditsNodeProviderId(node));
+    if(!entry) return null;
+    const kind = String(entry.kind || (videoRun ? 'video' : 'image')).toLowerCase();
+    let credits = 0;
     if(kind === 'image'){
         const count = Math.max(1, creditsNumber(settings.count || settings.batch || 1));
         credits = creditsNumber(entry.per_image) * count;
     } else if(kind === 'video'){
-        const seconds = Math.max(1, creditsNumber(settings.duration || settings.seconds || 5));
-        const table = entry.per_second || {};
-        const res = String(settings.resolution || '720p').toLowerCase().replace(/p$/, '') + 'p';
-        let perSecond = creditsNumber(table[res]);
-        if(!perSecond && table) perSecond = creditsNumber(Object.values(table)[0]);
+        const seconds = Math.max(1, creditsNumber(settings.duration || settings.seconds || settings.videoDuration || 5));
+        const perSecond = creditsVideoPerSecond(entry.per_second, settings.videoResolution || settings.resolution || '720p');
         credits = perSecond * seconds;
     } else {
-        // 语言模型：按输入字符粗估 token（中文约 1 字 1 token），输出按输入的 1/3 估
-        const text = String(promptInput?.textContent || '');
-        const inputTokens = Math.max(1, Math.round(text.length / 2));
-        const outputTokens = Math.max(1, Math.round(inputTokens / 3));
-        credits = inputTokens / 1e6 * creditsNumber(entry.input) + outputTokens / 1e6 * creditsNumber(entry.output);
+        // 语言模型：输入 / 缓存（上游上下文）/ 输出 分别按单价估（老板 2026-11-06 m22656）
+        let contextText = '';
+        try { contextText = String(inputPromptTextFor(node) || ''); } catch(e) { contextText = ''; }
+        const llm = creditsLlmCost(entry, {
+            inputText: String(promptInput?.textContent || ''),
+            contextText: contextText,
+        });
+        credits = llm ? creditsNumber(llm.credits) : 0;
+    }
+    let llmCredits = 0;
+    // 开了 LLM（提示词优化）就多花一次语言模型的钱：预估 = LLM 费用 + 生图/生视频费用（老板 2026-11-06 m22758）
+    // 生图节点的 LLM 开关存在 runSettings（settings）里，提示词节点才挂在 node 上，两边都认。
+    const llmOn = Boolean(settings.llmEnabled || node.llmEnabled);
+    if(llmOn && kind !== 'llm'){
+        const llmProvider = String(settings.llmProvider || node.llmProvider || '');
+        const llmModel = String(settings.llmModel || node.llmModel || '');
+        const llmEntry = creditsEntryFor(llmModel, llmProvider);
+        if(llmEntry){
+            let userText = '';
+            try { userText = String(node.promptDraftText || promptInput?.textContent || ''); } catch(e) { userText = ''; }
+            let ctxText = '';
+            try { ctxText = String(inputPromptTextFor(node) || ''); } catch(e) { ctxText = ''; }
+            const sysText = String(settings.llmSystemPrompt || node.llmSystemPrompt || '');
+            const llmPart = creditsLlmCost(llmEntry, {
+                inputText: (sysText + '\n' + userText).trim(),
+                contextText: ctxText,
+            });
+            llmCredits = creditsNumber(llmPart ? llmPart.credits : 0);
+            credits += llmCredits;
+        }
     }
     if(!credits) return null;
-    return {credits, kind, model};
+    const base = kind === 'llm' ? credits : Math.max(0, credits - llmCredits);
+    return {credits, kind, model, base, llmCredits};
 }
 function creditsBadgeText(node){
     const cost = creditsNodeCost(node);
@@ -6680,6 +6828,90 @@ function updateRunCreditsBadge(node=selectedNode()){
     const badge = document.getElementById('runCreditBadge');
     if(!badge) return;
     const text = creditsBadgeText(node);
+    badge.textContent = text;
+    badge.hidden = !text;
+    // 鼠标停上去能看到「生图 / LLM 各占多少」，免得小额单价看起来像没生效
+    const parts = text ? creditsCostParts(node) : '';
+    if(parts) badge.title = parts; else badge.removeAttribute('title');
+}
+/* 积分构成：图像/视频 + LLM 两截，用于徽标 hover 明细 */
+function creditsCostParts(node){
+    const cost = creditsNodeCost(node);
+    if(!cost || !cost.llmCredits) return '';
+    return `图像 ${creditsFormat(cost.base)} + LLM ${creditsFormat(cost.llmCredits)} 积分`;
+}
+/* 节点的参数一变（换模型 / 开关 LLM / 改张数）就把运行键和「一键运行」的预估重算一遍 */
+function refreshNodeCreditBadges(node){
+    const target = node || selectedNode();
+    try { updateRunCreditsBadge(target); } catch(e) {}
+    try { syncCascadeRunButton(target); } catch(e) {}
+}
+// Agent「发送」按钮上的积分估算（老板 m21440 第⑤项：运行 / 生成 / 发送都要有）
+// 语言模型的钱取决于实际 token，这里按输入框字符数粗估，只用于让老板心里有数。
+/* 生图任务的预估积分（生图模型 × 张数）——发送键、「提示词确认」卡的确认键共用 */
+function agentGenCreditsText(countOverride){
+    try {
+        const genProviders = typeof agentGenProviders === 'function' ? agentGenProviders() : [];
+        const pid = genProviders.some(p => p.id === agentState?.genProvider)
+            ? agentState.genProvider
+            : (genProviders[0]?.id || '');
+        const entry = creditsEntryFor(String(agentState?.genModel || '').trim(), pid);
+        const count = Math.max(1, Number(countOverride || agentState?.genCount) || 1);
+        const per = entry ? creditsNumber(entry.per_image) * count : 0;
+        return per ? creditsFormat(per) + ' 积分' : '';
+    } catch(e) { return ''; }
+}
+/* 确认键上的积分徽标（老板 2026-11-06 m22279「确认按钮处没有显示积分预估」） */
+function agentGenCreditsBadgeHtml(countOverride){
+    const text = agentGenCreditsText(countOverride);
+    const count = countOverride ? String(Number(countOverride) || '') : '';
+    return ` <span class="run-credit-badge" data-agent-gen-badge="${escapeHtml(count)}"${text ? '' : ' hidden'}>${escapeHtml(text)}</span>`;
+}
+/* 换生图模型后，已渲染出来的确认卡不会重渲染 —— 就地改徽标文字（老板 m22414） */
+function refreshAgentPromptBadges(){
+    document.querySelectorAll('[data-agent-gen-badge]').forEach(el => {
+        const count = Number(el.dataset.agentGenBadge) || 0;
+        const text = agentGenCreditsText(count);
+        el.textContent = text;
+        el.hidden = !text;
+    });
+}
+/* 当前对话里会一起发给模型的历史文本（缓存命中的那部分），只取最近 10 条，够用且不卡输入 */
+function agentContextText(){
+    try {
+        const convs = Array.isArray(agentState?.conversations) ? agentState.conversations : [];
+        if(!convs.length) return '';
+        const latest = convs.reduce((a, b) => ((Number(b?.ts) || 0) >= (Number(a?.ts) || 0) ? b : a), convs[0]);
+        const msgs = Array.isArray(latest?.messages) ? latest.messages.slice(-10) : [];
+        return msgs.map(m => String(m?.text || m?.content || '')).filter(Boolean).join('\n');
+    } catch(e) { return ''; }
+}
+function agentSendCreditsText(){
+    const text = String(agentInputPlainText() || '').trim();
+    if(!text) return '';
+    /* 生图任务先按「生图模型 × 张数」估（老板 2026-11-06 m22132 图2）：
+       输入「生成一只猫」时原实现只按对话 token 算，画面上一分钱也看不到，
+       而实际花钱的大头是那张图。 */
+    try {
+        if(typeof looksLikeGenRequest === 'function' && looksLikeGenRequest(text)){
+            const genText = agentGenCreditsText();
+            if(genText) return genText;
+        }
+    } catch(e) {}
+    const pid = String(agentChatProvider?.value || '').trim();
+    const model = String(agentChatModel?.value || '').trim();
+    const entry = creditsEntryFor(model, pid);
+    if(!entry) return '';
+    const llm = creditsLlmCost(entry, {inputText: text, contextText: agentContextText()});
+    const credits = llm ? creditsNumber(llm.credits) : 0;
+    const label = credits ? creditsFormat(credits) : '';
+    return label ? label + ' 积分' : '';
+}
+function updateAgentSendCredits(){
+    const badge = document.getElementById('agentSendCreditBadge');
+    if(!badge) return;
+    let text = '';
+    try { text = agentSendCreditsText(); } catch(e) { text = ''; }
     badge.textContent = text;
     badge.hidden = !text;
 }
@@ -15199,6 +15431,7 @@ function bindPromptNodeControls(el, node){
             node.w = Math.max(Number(node.w) || 0, 316);
         }
         render();
+        refreshNodeCreditBadges(node);
         scheduleSave();
     };
     const providerEl = el.querySelector('.prompt-llm-provider');
@@ -15207,10 +15440,16 @@ function bindPromptNodeControls(el, node){
         node.llmProvider = resolveChatProviderId(e.target.value);
         node.llmModel = resolveChatModel('', node.llmProvider);
         render();
+        refreshNodeCreditBadges(node);
         scheduleSave();
     };
     const modelEl = el.querySelector('.prompt-llm-model');
-    if(modelEl) modelEl.onchange = e => { e.stopPropagation(); node.llmModel = e.target.value; scheduleSave(); };
+    if(modelEl) modelEl.onchange = e => {
+        e.stopPropagation();
+        node.llmModel = e.target.value;
+        refreshNodeCreditBadges(node);
+        scheduleSave();
+    };
     el.querySelectorAll('.prompt-system-mode-btn').forEach(btn => {
         btn.onclick = e => {
             e.preventDefault();
@@ -22852,6 +23091,18 @@ function appendLoopOutputsToNode(node, additions, kind='image', ctx=smartLoopCon
     }
     return appendOutputsToNode(node, additions, kind, {skipShift:true});
 }
+function cascadeCreditsBadgeText(node=selectedNode()){
+    if(!node) return '';
+    let targets = [];
+    try { targets = [node, ...downstreamCascadeTargetsFor(node)]; } catch(e) { targets = [node]; }
+    let total = 0;
+    targets.forEach(n => {
+        const cost = creditsNodeCost(n);
+        if(cost && cost.credits) total += cost.credits;
+    });
+    const text = total ? creditsFormat(total) : '';
+    return text ? text + ' 积分' : '';
+}
 function syncCascadeRunButton(node=selectedNode()){
     if(!cascadeRunBtn) return;
     const visible = canRunSmartCascade(node);
@@ -22861,9 +23112,10 @@ function syncCascadeRunButton(node=selectedNode()){
     const runningForNode = Boolean(loopRunState);
     cascadeRunBtn.disabled = !visible || (!runningForNode && Boolean(node?.running)) || Boolean(loopRunState?.stopRequested);
     cascadeRunBtn.classList.toggle('is-stop', runningForNode);
+    const costText = runningForNode ? '' : cascadeCreditsBadgeText(node);
     cascadeRunBtn.innerHTML = runningForNode
         ? `<i data-lucide="square"></i><span>${escapeHtml(smartCascadeStopText(Boolean(loopRunState?.stopRequested)))}</span>`
-        : `<i data-lucide="workflow"></i><span>${escapeHtml(tr('smart.loopRunAll'))}</span>`;
+        : `<i data-lucide="workflow"></i><span>${escapeHtml(tr('smart.loopRunAll'))}</span>${costText ? `<span class="run-credit-badge">${escapeHtml(costText)}</span>` : ''}`;
     refreshIcons();
 }
 function loadNodePromptDraftToInput(node){
@@ -23841,6 +24093,7 @@ async function runApiGeneration(prompt, refs, runSettings=settings, options={}){
             : API_RATIO_VALUES[runSettings.ratio] || (runSettings.ratio === 'custom' ? String(runSettings.customRatio || '').trim() : '')),
         resolution:['1k','2k','4k'].includes(runSettings.resolution) ? runSettings.resolution : '',
         quality:runSettings.quality || 'auto',
+        output_format:outputFormatPayload(runSettings, prompt),
         n:1,
         reference_images:inpaint ? inpaintReferenceImages(inpaint, refs, _refMax) : imageRefsOnly(refs).slice(0, _refMax)
     };
@@ -23874,6 +24127,7 @@ function minimaxH3VideoSpecFor(modelName){
     const name = String(modelName || '').trim().toLowerCase();
     if(name === 'minimax-h3') return {aspects:['portrait','landscape'],resolutions:['480p','768p','1080p'],maxSeconds:15,maxSeconds1080:10,maxImages:9};
     if(name.startsWith('agnes-video-')) return {aspects:['16:9','9:16','21:9','4:3','1:1','3:4'],resolutions:['720p','1080p','2k'],maxSeconds:12,maxImages:5};
+    if(name === 'wan-3.0') return {aspects:['16:9','9:16','21:9','4:3','1:1','3:4'],resolutions:['480p','720p','1080p'],maxSeconds:30,maxImages:10};
     return {aspects:['16:9','9:16','1:1','4:3','3:4','21:9'],resolutions:[],maxSeconds:15,maxImages:9};
 }
 function minimaxH3FormatSeconds(value){
@@ -24961,7 +25215,12 @@ async function pollSmartCanvasTask(taskId){
                 if(!r.ok) throw new Error(await r.text());
                 return r.json();
             });
-            if(task.status === 'succeeded') return task.result || {};
+            if(task.status === 'succeeded'){
+                // 后端在入口压过尺寸、或这是 GIF（上游固定出图、尺寸设置不生效）时会给 size_note。
+                // 以前这条只记在任务里没人显示 → 用户以为「4K 生效了」。现在出图后直接说清楚。
+                if(task.size_note) toast(String(task.size_note));
+                return task.result || {};
+            }
             if(task.status === 'jimeng_pending') throw new JimengPendingSignal({submitId:task.submit_id, kind:task.kind, queueInfo:task.queue_info, message:task.message});
             if(task.status === 'failed'){
                 const recoverTaskId = task.upstream_task_id || extractUpstreamTaskId(task.error || '');
@@ -26623,6 +26882,9 @@ if(apiKindToggle){
             syncApiKindToggleVisibility();
             renderDynamicParams();
             persistActiveSmartSettings();
+            // 图片↔视频切换后单价整组换掉（videoModel + per_second），徽标要立刻重算
+            try { updateRunCreditsBadge(selectedNode()); } catch(e) {}
+            try { syncCascadeRunButton(selectedNode()); } catch(e) {}
             scheduleSave();
         };
     });
@@ -26864,6 +27126,7 @@ if(composerLlmToggleBtn) composerLlmToggleBtn.onclick = event => {
     persistActiveSmartSettings();
     renderComposerLlmSection(activeComposerNode() || selectedNode());
     positionComposerForNode(activeComposerNode() || selectedNode());
+    refreshNodeCreditBadges(activeComposerNode() || selectedNode());
     scheduleSave();
 };
 if(composerLlmProvider) composerLlmProvider.onchange = e => {
@@ -26872,12 +27135,14 @@ if(composerLlmProvider) composerLlmProvider.onchange = e => {
     settings.llmModel = resolveChatModel('', settings.llmProvider);
     persistActiveSmartSettings();
     renderComposerLlmSection(activeComposerNode() || selectedNode());
+    refreshNodeCreditBadges(activeComposerNode() || selectedNode());
     scheduleSave();
 };
 if(composerLlmModel) composerLlmModel.onchange = e => {
     e.stopPropagation();
     settings.llmModel = e.target.value;
     persistActiveSmartSettings();
+    refreshNodeCreditBadges(activeComposerNode() || selectedNode());
     scheduleSave();
 };
 if(composerLlmInstruction){
@@ -27853,6 +28118,17 @@ function loadAgentState(){
         agentState.chatDrawerOpen = true;
         agentState._dockToggleRemoved = true;
     }
+    /* 🚨 2026-11-06 老板 m20916「agent 默认状态改为底部收纳状态」：
+       默认把面板贴到底边、只露出标题行，鼠标移到屏幕底部那条边才滑出整扇窗。
+       同样要一次性迁移 —— 老用户 localStorage 里存着 dockEdge:'' / dockPos:{…}，
+       只改默认值对他们无效。用 _dockDefaultBottom 打标记，只做一次，
+       之后用户自己拖走/展开仍然记得住。 */
+    if(!agentState._dockDefaultBottom){
+        agentState.dockEdge = 'bottom';
+        agentState.dockTucked = true;
+        agentState.dockPos = null;      // 交给 agentSnapToEdge('bottom') 现算，避免旧坐标把它钉在半空
+        agentState._dockDefaultBottom = true;
+    }
     // 旧数据迁移：prompts string[] → object[]
     (agentState.messages || []).forEach(m => {
         if(m.role === 'assistant' && Array.isArray(m.prompts) && m.prompts.length > 0){
@@ -28585,11 +28861,21 @@ function agentFinishDockGesture(){
     if(!agentState?.chatDrawerOpen) return;
     agentSnapToEdge(agentDetectEdge());
 }
+/* 默认底部收纳（2026-11-06 老板 m20916）：压到底边、水平居中，然后立刻收起成一条，
+   只在屏幕底部留一条「把手」；光标移到那条边 JS 会摘掉 .agent-tucked 把整扇窗滑出来。 */
+function agentApplyDefaultBottomTuck(){
+    if(!agentPanel || !agentState) return;
+    if(agentState.dockEdge !== 'bottom') return;
+    agentSnapToEdge('bottom');   // 现算底边坐标（同时会把 dockTucked 置回 false）
+    agentSetTucked(true);        // 再收起
+}
 function bindAgentEdgeAutoHide(){
     if(!agentPanel) return;
     window.addEventListener('pointermove', e => {
         if(!agentEdgeActive()) return;
         if(document.body.classList.contains('agent-dock-dragging')) return;
+        // 新人引导期间面板由引导自己控制（讲到它时会临时滑出来），别让自动收纳把高亮区收走
+        if(document.body.classList.contains('ct-running')) return;
         if(agentState.dockTucked){
             if(agentPointerNearEdge(e.clientX, e.clientY)){
                 clearTimeout(agentEdgeLeaveTimer);
@@ -29757,6 +30043,7 @@ function agentSyncInputEmpty(){
     if(!agentInput) return;
     const hasChip = Boolean(agentInput.querySelector('.agent-inline-chip'));
     agentInput.dataset.empty = (!hasChip && !agentInputPlainText().trim()) ? '1' : '0';
+    try { updateAgentSendCredits(); } catch(e) {}
 }
 // 光标所在的 Range（不在输入框里就返回 null）
 function agentCaretRange(){
@@ -30388,7 +30675,7 @@ function agentMessageHtml(msg){
             // 当前项展开操作按钮
             let itemActionsHtml = '';
             if(p.status === 'current'){
-                itemActionsHtml = `<div class="agent-prompt-item-actions"><button class="agent-prompt-btn primary" type="button" data-agent-prompt-action="confirm" data-agent-prompt-id="${escapeHtml(msg.id)}">确认</button><button class="agent-prompt-btn" type="button" data-agent-prompt-action="edit" data-agent-prompt-id="${escapeHtml(msg.id)}">修改</button><button class="agent-prompt-btn" type="button" data-agent-prompt-action="regenerate" data-agent-prompt-id="${escapeHtml(msg.id)}">重新生成</button></div>`;
+                itemActionsHtml = `<div class="agent-prompt-item-actions"><button class="agent-prompt-btn primary" type="button" data-agent-prompt-action="confirm" data-agent-prompt-id="${escapeHtml(msg.id)}">确认${agentGenCreditsBadgeHtml()}</button><button class="agent-prompt-btn" type="button" data-agent-prompt-action="edit" data-agent-prompt-id="${escapeHtml(msg.id)}">修改</button><button class="agent-prompt-btn" type="button" data-agent-prompt-action="regenerate" data-agent-prompt-id="${escapeHtml(msg.id)}">重新生成</button></div>`;
             } else if(p.status === 'editing'){
                 itemActionsHtml = `<div class="agent-prompt-item-actions"><button class="agent-prompt-btn primary" type="button" data-agent-prompt-action="save-edit" data-agent-prompt-id="${escapeHtml(msg.id)}">保存并确认</button><button class="agent-prompt-btn" type="button" data-agent-prompt-action="cancel-edit" data-agent-prompt-id="${escapeHtml(msg.id)}">取消</button></div>`;
             }
@@ -30399,7 +30686,7 @@ function agentMessageHtml(msg){
         }).join('');
         // P1-7: 全部确认快捷按钮（prompts≥2 且有未处理项时显示）
         const showConfirmAll = prompts.length >= 2 && hasUnresolved;
-        const confirmAllHtml = showConfirmAll ? `<button class="agent-prompt-btn primary agent-prompt-confirm-all" type="button" data-agent-prompt-action="confirm-all" data-agent-prompt-id="${escapeHtml(msg.id)}">全部确认并生成</button>` : '';
+        const confirmAllHtml = showConfirmAll ? `<button class="agent-prompt-btn primary agent-prompt-confirm-all" type="button" data-agent-prompt-action="confirm-all" data-agent-prompt-id="${escapeHtml(msg.id)}">全部确认并生成${agentGenCreditsBadgeHtml(prompts.length)}</button>` : '';
         // P2-15: 全部取消按钮（有未处理项时显示）
         const showCancelAll = hasUnresolved;
         const cancelAllHtml = showCancelAll ? `<button class="agent-prompt-btn agent-prompt-cancel-all" type="button" data-agent-prompt-action="cancel-all" data-agent-prompt-id="${escapeHtml(msg.id)}">全部取消</button>` : '';
@@ -34529,6 +34816,9 @@ function initAgentPanel(){
     if(!agentPanel) return;
     // 提前绑定发送按钮事件，确保即使后续初始化出错发送按钮也能用
     agentSendBtn?.addEventListener('click', () => sendAgentMessage());
+    // 切换 Agent 的对话模型后，发送按钮上的积分估算要跟着变（m21440 第⑤项）
+    agentChatProvider?.addEventListener('change', () => { try { updateAgentSendCredits(); } catch(e) {} });
+    agentChatModel?.addEventListener('change', () => { try { updateAgentSendCredits(); } catch(e) {} });
     loadAgentState();
     // 🚨 状态加载后立刻强制常开，再渲染 dock 尺寸（否则老用户存着 false 会被渲染成关闭态）
     enforceAgentAlwaysOn();
@@ -34722,6 +35012,8 @@ window.addEventListener('message', e => {
         agentState.genProvider = agentGenProvider.value;
         agentState.genModel = '';
         renderAgentModelSelectors();
+        updateAgentSendCredits();
+        refreshAgentPromptBadges();
         saveAgentState();
     });
     /* 🚨 换生图模型必须**重建比例列表**（2026-10-22 老板：「缺少 nano-banana 独有的自动比例」）。
@@ -34731,6 +35023,8 @@ window.addEventListener('message', e => {
         agentState.genModel = agentGenModel.value;
         agentSyncParamsPanel();
         agentUpdateToolbarLabels();
+        updateAgentSendCredits();
+        refreshAgentPromptBadges();
         saveAgentState();
     });
     // 参数面板交互
@@ -34759,6 +35053,8 @@ window.addEventListener('message', e => {
             : (Number(btn.dataset.count) || 1);
         agentSyncParamsPanel();
         agentUpdateToolbarLabels();
+        updateAgentSendCredits();
+        refreshAgentPromptBadges();
         saveAgentState();
     });
     document.getElementById('agentQualitySeg')?.addEventListener('click', e => {
@@ -34848,6 +35144,11 @@ bindAgentDockDrag();
 bindAgentResizeHandles();
 // QQ 式贴边收纳：光标靠近已收纳的边自动滑出，离开后缩回去（2026-11-05 老板要求）
 bindAgentEdgeAutoHide();
+// 默认收纳在屏幕底部（2026-11-06 老板 m20916）：等面板拿到尺寸后再贴边收起，
+// 否则 offsetHeight 还是 0，会把面板钉在屏幕最上方。
+requestAnimationFrame(() => requestAnimationFrame(() => {
+    try { agentApplyDefaultBottomTuck(); } catch(e) {}
+}));
 window.addEventListener('resize', () => {
     applyAgentDockSize();
     // 窗口尺寸变了，贴边的面板要重新压回边线上

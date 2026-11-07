@@ -70,6 +70,11 @@ async def run():
         ("minimax-h3", "", 5, "480p", 5),           # 空分辨率回退首档
         ("agnes-video-2.5", "2k", 20, "2k", 12),    # 上限 12
         ("agnes-video-2.5", "720p", 2, "720p", 4),  # 下限 4
+        # wan-3.0（2026-11-06 新增，Apifox 531060669e0：480p/720p/1080p、2~30 秒）
+        ("wan-3.0", "1080p", 30, "1080p", 30),      # 30 秒可到
+        ("wan-3.0", "480p", 1, "480p", 2),          # 下限 2
+        ("wan-3.0", "", 10, "480p", 10),            # 空分辨率回退首档
+        ("wan-3.0", "4k", 10, "480p", 10),          # 不支持的分辨率回退首档
     ]
     ok = True
     for model, res, dur, want_res, want_dur in cases:
@@ -95,6 +100,8 @@ async def run():
         ("agnes-video-2.5", "21:9", "21:9"),
         ("agnes-video-2.5", "9:21", "9:16"),
         ("agnes-video-2.5", "16:9", "16:9"),
+        ("wan-3.0", "9:21", "9:16"),   # wan 没有 9:21 → 回退 9:16
+        ("wan-3.0", "4:3", "4:3"),
     ]:
         spec = app.GRSAI_VIDEO_SPECS[model]
         got = app.grsai_video_aspect(spec, aspect, "")

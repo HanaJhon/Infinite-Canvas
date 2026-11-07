@@ -483,6 +483,7 @@ sealed class LauncherHost : IDisposable
     private readonly string preferencePath;
     private readonly string apiProvidersPath;
     private readonly string apiEnvPath;
+    private readonly string creditsSettingsPath;
     private static readonly HttpClient _pingHttpClient = new HttpClient();
     private Process? server;
 
@@ -503,6 +504,8 @@ sealed class LauncherHost : IDisposable
     private bool disposed;
     private bool keepRunningInBackground = true;
     private bool launchAtStartup = false;
+    /// <summary>更新线路："" = GitHub 直连，其余是国内镜像的 id（老板 2026-11-06 m22896）。</summary>
+    private string updateMirror = "";
 
     [DllImport("user32.dll")]
     private static extern bool ReleaseCapture();
@@ -527,6 +530,7 @@ sealed class LauncherHost : IDisposable
         preferencePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "InfiniteCanvasLauncher", "preferences.json");
         apiProvidersPath = Path.Combine(root, "data", "api_providers.json");
         apiEnvPath = Path.Combine(root, "API", ".env");
+        creditsSettingsPath = Path.Combine(root, "data", "credits_settings.json");
 
         applicationIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? (Icon)SystemIcons.Application.Clone();
 
@@ -763,9 +767,16 @@ sealed class LauncherHost : IDisposable
             if (btnGroup) {
                 const buttons = btnGroup.querySelectorAll('button');
                 if (buttons.length >= 3) {
-                    const minBtn = buttons[0];
-                    const maxBtn = buttons[1];
-                    const closeBtn = buttons[2];
+                    // 按文案认领，不按下标——前端往里加任何按钮都不会把切主题错绑成最小化
+                    const pick = function(title){
+                        for (let i = 0; i < buttons.length; i++) {
+                            if ((buttons[i].getAttribute('title') || '').indexOf(title) === 0) return buttons[i];
+                        }
+                        return null;
+                    };
+                    const minBtn = pick('最小化') || buttons[0];
+                    const maxBtn = pick('最大化') || buttons[1];
+                    const closeBtn = pick('关闭') || buttons[2];
 
                     if (!minBtn.dataset.bound) {
                         minBtn.dataset.bound = 'true';
@@ -963,6 +974,13 @@ sealed class LauncherHost : IDisposable
                         HandleSaveConfig(payload);
                         result = new { saved = true };
                         break;
+                    case "GET_CREDITS":
+                        result = HandleGetCredits();
+                        break;
+                    case "SAVE_CREDITS":
+                        HandleSaveCredits(payload);
+                        result = new { saved = true, path = creditsSettingsPath };
+                        break;
                     case "START_SERVER":
                         result = await HandleStartServerAsync();
                         break;
@@ -1144,9 +1162,79 @@ sealed class LauncherHost : IDisposable
             preferences = new
             {
                 launchAtStartup,
-                keepRunningInBackground
+                keepRunningInBackground,
+                updateMirror,
+                updateMirrors = UpdateMirrorOptions.Select(o => new { id = o.Id, label = o.Label, prefix = o.Prefix })
             }
         };
+    }
+
+    /// <summary>
+    /// 积分单价：直接读写 <c>data/credits_settings.json</c> 的 models 段。
+    /// 后端 credits.py 的 CreditsStore.settings() 每次调用都重新读盘，所以这里写完即时生效，
+    /// 不用重启服务。models 的键是 "&lt;供应商id&gt;::&lt;模型名&gt;"，同一模型挂在不同供应商可以各配各的
+    /// （老板 m22896：不同 API 相同模型独立设置额度）。
+    /// </summary>
+    private object HandleGetCredits()
+    {
+        JsonObject models = new JsonObject();
+        try
+        {
+            if (File.Exists(creditsSettingsPath))
+            {
+                var doc = JsonNode.Parse(File.ReadAllText(creditsSettingsPath, Encoding.UTF8));
+                if (doc?["models"] is JsonObject existing) models = (JsonObject)existing.DeepClone();
+            }
+        }
+        catch (Exception ex)
+        {
+            SendLog($"[积分] 读取单价失败: {ex.Message}");
+        }
+
+        return new
+        {
+            ok = true,
+            models,
+            updateMirror,
+            mirrors = UpdateMirrorOptions.Select(o => new { id = o.Id, label = o.Label, prefix = o.Prefix })
+        };
+    }
+
+    private void HandleSaveCredits(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object) return;
+        if (!payload.TryGetProperty("models", out var modelsElem) || modelsElem.ValueKind != JsonValueKind.Object) return;
+
+        JsonObject rootObj = new JsonObject();
+        try
+        {
+            if (File.Exists(creditsSettingsPath))
+            {
+                var existing = JsonNode.Parse(File.ReadAllText(creditsSettingsPath, Encoding.UTF8));
+                if (existing is JsonObject eo) rootObj = eo;
+            }
+        }
+        catch { }
+
+        // 只换单价表；限流 / 充值 / 邮件 / 余额策略这些保持原样
+        var merged = new JsonObject();
+        foreach (var kv in modelsElem.EnumerateObject())
+        {
+            if (kv.Value.ValueKind != JsonValueKind.Object) continue; // 空值 = 删除该模型单价
+            merged[kv.Name] = JsonNode.Parse(kv.Value.GetRawText());
+        }
+        rootObj["models"] = merged;
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(creditsSettingsPath)!);
+            File.WriteAllText(creditsSettingsPath, rootObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            SendLog($"✅ 已保存 {merged.Count} 个模型的积分单价（后端下次读取即生效）");
+        }
+        catch (Exception ex)
+        {
+            SendLog($"[积分] 写入单价失败: {ex.Message}");
+        }
     }
 
     private void HandleSaveConfig(JsonElement payload)
@@ -1347,44 +1435,44 @@ sealed class LauncherHost : IDisposable
     private static string[] GrsaiCuratedModels() => new[]
     {
         // Video
+        "wan-3.0",
         "minimax-h3",
         "agnes-video-2.5",
-        // Image
+        // Image（17 个，2026-11-06 对齐官方控制台 https://grsai.com/zh/dashboard/models）
+        "gpt-image-2.6",
         "gpt-image-2.5",
         "gpt-image-2.5-sunburst",
         "gpt-image-2.5-flare",
-        "gpt-image-2-vip",
         "gpt-image-2",
-        "nano-banana",
-        "nano-banana-fast",
-        "nano-banana-2",
+        "gpt-image-2-vip",
         "nano-banana-2.1",
+        "nano-banana-2",
         "nano-banana-2-lite",
+        "nano-banana-fast",
         "nano-banana-2-cl",
         "nano-banana-2-2k-cl",
         "nano-banana-2-4k-cl",
         "nano-banana-pro",
-        "nano-banana-pro-vt",
         "nano-banana-pro-cl",
         "nano-banana-pro-vip",
         "nano-banana-pro-4k-vip",
-        // Text / Chat（以下均在 Grsai /v1/chat/completions 实测返回 200）
-        "gemini-3.1-pro",
+        // Text / Chat（2026-11-06 对齐官方控制台模型页，共 15 个）
         "gemini-2.5-pro",
-        "gemini-3-flash",
-        "gemini-3-pro",
         "gemini-2.5-flash",
-        "gemini-3.5-flash",
+        "gemini-3-pro",
+        "gemini-3-flash",
+        "gemini-3.1-pro",
         "gemini-3.1-flash-lite",
+        "gemini-3.5-flash",
         "gemini-3.5-flash-lite",
         "gemini-3.7-flash",
         "gemini-3.8-flash",
-        // GPT 系列（2026-09-20 串行实测 /v1/chat/completions 全部返回 200；与 static/js/api-settings.js 的 grsai 预设保持一致）
+        // GPT 系列（与 static/js/api-settings.js 的 grsai 预设保持一致）
         "gpt-6-astra",
-        "gpt-5.6-terra",
+        "gpt-6.1-sol",
+        "gpt-6.1-terra",
         "gpt-5.6-sol",
-        "gpt-5.5",
-        "gpt-5.4",
+        "gpt-5.6-terra",
     };
 
     // ==================================================================
@@ -2340,6 +2428,11 @@ sealed class LauncherHost : IDisposable
         {
             keepRunningInBackground = bgProp.GetBoolean();
         }
+        if (payload.TryGetProperty("updateMirror", out var mirrorProp) && mirrorProp.ValueKind == JsonValueKind.String)
+        {
+            var wanted = mirrorProp.GetString() ?? "";
+            if (wanted == "" || UpdateMirrorOptions.Any(o => o.Id == wanted)) updateMirror = wanted;
+        }
         SavePreferences();
     }
 
@@ -2373,10 +2466,32 @@ sealed class LauncherHost : IDisposable
     // ------------------------------------------------------------------
 
     private const string UpdateRepoSlug = "HanaJhon/Infinite-Canvas";
-    private const string UpdateManifestUrl =
-        "https://github.com/" + UpdateRepoSlug + "/releases/latest/download/update.json";
-    private const string UpdateAssetBaseUrl =
+    private const string UpdateUpstreamBaseUrl =
         "https://github.com/" + UpdateRepoSlug + "/releases/latest/download/";
+
+    /// <summary>
+    /// 国内加速镜像：镜像站点接受 "https://ghfast.top/https://github.com/..." 这种前缀拼接形式。
+    /// 用户可在启动器「设置 › 更新线路」里切换，选择结果存进 preferences.json（老板 m22896）。
+    /// </summary>
+    private static readonly (string Id, string Label, string Prefix)[] UpdateMirrorOptions =
+    {
+        ("github", "GitHub 直连（官方）", ""),
+        ("ghfast", "国内加速 · ghfast.top", "https://ghfast.top/"),
+        ("ghproxy", "国内加速 · gh-proxy.com", "https://gh-proxy.com/"),
+        ("ghproxy-net", "国内加速 · ghproxy.net", "https://ghproxy.net/"),
+    };
+
+    private string UpdateBaseUrl()
+    {
+        var prefix = "";
+        foreach (var option in UpdateMirrorOptions)
+        {
+            if (option.Id == updateMirror) { prefix = option.Prefix; break; }
+        }
+        return prefix + UpdateUpstreamBaseUrl;
+    }
+
+    private string UpdateManifestUrl() => UpdateBaseUrl() + "update.json";
 
     private static readonly HttpClient _updateHttpClient = new HttpClient
     {
@@ -2404,7 +2519,7 @@ sealed class LauncherHost : IDisposable
         var current = LocalVersion();
         try
         {
-            using var req = new HttpRequestMessage(HttpMethod.Get, UpdateManifestUrl);
+            using var req = new HttpRequestMessage(HttpMethod.Get, UpdateManifestUrl());
             req.Headers.TryAddWithoutValidation("User-Agent", "InfiniteCanvasLauncher/1.0");
             req.Headers.TryAddWithoutValidation("Accept", "application/json");
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
@@ -2494,7 +2609,7 @@ sealed class LauncherHost : IDisposable
                 sha256 = sha,
                 assetName,
                 isDelta,
-                url = UpdateAssetBaseUrl + Uri.EscapeDataString(assetName),
+                url = UpdateBaseUrl() + Uri.EscapeDataString(assetName),
             };
         }
         catch (Exception ex)
@@ -3033,6 +3148,7 @@ sealed class LauncherHost : IDisposable
                 {
                     keepRunningInBackground = doc["keepRunningInBackground"]?.GetValue<bool>() ?? true;
                     launchAtStartup = doc["launchAtStartup"]?.GetValue<bool>() ?? false;
+                    updateMirror = doc["updateMirror"]?.GetValue<string>() ?? "";
                 }
             }
         }
@@ -3047,7 +3163,8 @@ sealed class LauncherHost : IDisposable
             var obj = new JsonObject
             {
                 ["keepRunningInBackground"] = keepRunningInBackground,
-                ["launchAtStartup"] = launchAtStartup
+                ["launchAtStartup"] = launchAtStartup,
+                ["updateMirror"] = updateMirror
             };
             File.WriteAllText(preferencePath, obj.ToJsonString());
         }

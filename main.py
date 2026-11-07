@@ -156,6 +156,7 @@ _ADMIN_ONLY_WRITES_EXACT = {
     ("PATCH", "/api/asset-classification-prompt"),  # 全站智能分类提示词
     ("PUT", "/api/credits/settings"),         # 积分规则 / 模型单价 / 充值套餐（全站）
     ("POST", "/api/credits/payments/upload"), # 上传收款二维码
+    ("POST", "/api/credits/mail/test"),       # 发信服务器测试邮件（带 SMTP 密码）
 }
 
 #: 站点级写操作的**前缀**（方法, 前缀）—— 带 id 的路径用这个。
@@ -190,11 +191,120 @@ def _is_admin_only_write(method: str, path: str) -> bool:
     return False
 
 
+# ---- 生成类接口自动扣积分（2026-11-06 老板反馈「执行任务后积分始终没有被扣除」）----
+# 真因：全仓只有 POST /api/credits/spend 一个扣费入口，而没有任何前端调用它，
+# auto_deduct 于是从来没机会触发。这里在生成请求被受理后按用量扣一次，前端不用改，
+# 也不指望谁记得去调 spend。键是路径，值是没写 kind 时的兜底种类。
+# ponytail: 按「受理成功」扣费，任务后面失败不退款（0.0x 积分的量级）；
+#          要精确到只对成功结果扣费，就把扣费搬到各任务 runner 的成功分支里。
+_GEN_CHARGE_PATHS: Dict[str, str] = {
+    "/api/canvas-image-tasks": "image",
+    "/api/online-image": "image",
+    "/api/generate": "image",
+    "/api/angle/generate": "image",
+    "/api/ms/generate": "image",
+    "/api/split-layers-tasks": "image",
+    "/api/hy3d-tasks": "image",
+    "/api/canvas-comfy-tasks": "image",
+    "/api/canvas-video": "video",
+}
+
+
+async def _charge_spec_for(request: Request, path: str) -> Dict[str, Any]:
+    """从生成请求体里抽「模型 / 供应商 / 张数 / 秒数」；抽不到就不扣。"""
+    kind = _GEN_CHARGE_PATHS.get(path)
+    if not kind:
+        return {}
+    try:
+        raw = await request.body()
+    except Exception:
+        return {}
+    if not raw:
+        return {}
+    try:
+        body = json.loads(raw)
+    except Exception:
+        return {}
+    if not isinstance(body, dict):
+        return {}
+    model = str(body.get("model") or body.get("videoModel") or body.get("image_model") or "").strip()
+    if not model:
+        return {}
+    spec: Dict[str, Any] = {
+        "model": model,
+        "provider": str(body.get("provider_id") or body.get("provider") or "").strip(),
+        "kind": kind,
+    }
+    if kind == "image":
+        try:
+            spec["count"] = max(1, int(body.get("n") or body.get("count") or 1))
+        except Exception:
+            spec["count"] = 1
+    else:
+        try:
+            spec["seconds"] = max(0.0, float(body.get("duration") or body.get("seconds") or 0))
+        except Exception:
+            spec["seconds"] = 0.0
+        spec["resolution"] = str(body.get("resolution") or "")
+    return spec
+
+
+# 任务型生成接口：预扣的积分记在这里，任务失败时原路退回（老板 2026-11-06 要求：先扣款，失败退款）
+_TASK_CHARGE_PATHS = (
+    "/api/canvas-image-tasks",
+    "/api/canvas-comfy-tasks",
+    "/api/canvas-video",
+    "/api/split-layers-tasks",
+    "/api/hy3d-tasks",
+)
+_TASK_CHARGES: Dict[str, Dict[str, Any]] = {}
+
+
+def _refund_usage(uid: str, credits: float, why: str) -> None:
+    if not uid or not credits or credits <= 0:
+        return
+    try:
+        result = _credits_store.refund(uid, credits, why)
+    except Exception as exc:
+        print(f"[credits] 退款失败 {why}: {exc}")
+        return
+    if result.get("refunded"):
+        print(f"[credits] {uid} 退 {result.get('credits')} 积分（{why}）余额 {result.get('balance')}")
+
+
+def _remember_task_charge(task_id: str, uid: str, credits: float, path: str) -> None:
+    if task_id and uid and credits and credits > 0:
+        _TASK_CHARGES[task_id] = {"uid": uid, "credits": credits, "path": path}
+
+
+def _refund_task_charge(task_id: str) -> None:
+    """任务失败：把该任务预扣的积分退回去（幂等，退过就从表里删掉）。"""
+    info = _TASK_CHARGES.pop(str(task_id or ""), None)
+    if not info:
+        return
+    _refund_usage(info.get("uid", ""), float(info.get("credits") or 0),
+                  f"任务失败退款 · {info.get('path', '')}")
+
+
+def _task_id_from_response(response: Any) -> str:
+    try:
+        body = getattr(response, "body", b"") or b""
+        data = json.loads(body.decode("utf-8"))
+    except Exception:
+        return ""
+    if isinstance(data, dict):
+        task = data.get("task") if isinstance(data.get("task"), dict) else {}
+        return str(data.get("task_id") or task.get("id") or "")
+    return ""
+
+
 @app.middleware("http")
 async def no_cache_html_middleware(request: Request, call_next):
     path = request.url.path
     # ---- 多账号鉴权：未登录时 API 返回 401，页面跳登录页 ----
     _token_set = None
+    _charge_uid = ""
+    _charge_spec: Dict[str, Any] = {}
 
     # ① 管理员专属页面先拦（与是否免鉴权无关）
     if _is_admin_only(path):
@@ -238,6 +348,7 @@ async def no_cache_html_middleware(request: Request, call_next):
             return RedirectResponse("/login.html", status_code=302)
         # 用 contextvar 把当前用户传给 UserScopedPath（异步并发下安全）
         _token_set = current_uid.set(user["id"])
+        _charge_uid = user["id"]
         # 🚨 新账号第一次访问时它的 data/users/<uid>/ 还不存在，
         #    canvases/ conversations/ 等直接 listdir 会 500 —— 这里保证目录就位。
         try:
@@ -245,11 +356,35 @@ async def no_cache_html_middleware(request: Request, call_next):
         except Exception:
             pass
         # 2026-10-27：API 设置页 / 账号管理页只给管理员 —— 已在上面 _is_admin_only 分支处理
+    _charge: Dict[str, Any] = {}
+    if _charge_uid and request.method == "POST":
+        _charge_spec = await _charge_spec_for(request, path)
+        if _charge_spec:
+            # 先扣款：一点运行就占额度；受理失败或任务失败再退（老板 2026-11-06 要求）
+            _payload = dict(_charge_spec)
+            _payload["reason"] = f"生成扣费 · {path}"
+            try:
+                _charge = _credits_store.spend(_charge_uid, _payload) or {}
+            except Exception as exc:
+                print(f"[credits] 扣费失败 {path}: {exc}")
+                _charge = {}
+            if _charge.get("charged"):
+                print(f"[credits] {_charge_uid} 预扣 {_charge.get('credits')} 积分（{path}）余额 {_charge.get('balance')}")
     try:
         response = await call_next(request)
+    except Exception:
+        if _charge.get("charged"):
+            _refund_usage(_charge_uid, float(_charge.get("credits") or 0), f"请求异常退款 · {path}")
+        raise
     finally:
         if _token_set is not None:
             current_uid.reset(_token_set)
+    if _charge.get("charged"):
+        if getattr(response, "status_code", 500) >= 400:
+            _refund_usage(_charge_uid, float(_charge.get("credits") or 0), f"受理失败退款 · {path}")
+        elif path in _TASK_CHARGE_PATHS:
+            _remember_task_charge(_task_id_from_response(response), _charge_uid,
+                                  float(_charge.get("credits") or 0), path)
     path = request.url.path.lower()
     if path.endswith(".html"):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -506,6 +641,8 @@ _auth_store = _auth.AuthStore(DATA_DIR)
 # 积分与计费（2026-11-05 新增；靠 _auth_store 读写 users.json 里的余额字段）
 import credits as _credits
 _credits_store = _credits.CreditsStore(DATA_DIR, _auth_store)
+import mailer as _mailer
+_email_codes = _mailer.code_store(DATA_DIR)
 
 #: 团队资产库（所有账号共享，不随 current_uid 变化）
 TEAM_ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library_team.json")
@@ -1868,53 +2005,115 @@ async def auth_status(request: Request):
     has_users = _auth_store.has_any_user()
     token = _session_token(request)
     user = _auth_store.session_user(token)
+    signup = _credits_store.settings().get("signup") or {}
+    mail = _credits_store.settings().get("mail") or {}
     return {
         "has_users": has_users,
         "need_setup": not has_users,
         "user": _auth_user_payload(user) if user else None,
-        # 注册页据此显示「邮箱 / 手机号」必填项（管理员在积分与计费里配置）
-        "signup": (_credits_store.settings().get("signup") or {}),
+        # 注册页据此显示「邮箱必填 / 邮箱验证码」（管理员在积分与计费里配置）
+        "signup": {
+            "require_email": bool(signup.get("require_email")),
+            "require_email_verify": bool(signup.get("require_email_verify")),
+            # 只有填了 SMTP 才能收码；没配置时注册页不给「获取验证码」
+            "email_verify_ready": _mailer.mail_ready(mail),
+        },
+    }
+
+
+@app.post("/api/auth/email-code")
+async def auth_email_code(payload: dict):
+    """注册页「获取验证码」：先过邮箱范围策略，再按 SMTP 配置发信。"""
+    email = str(payload.get("email") or "").strip()
+    _settings = _credits_store.settings()
+    signup = _settings.get("signup") or {}
+    mail_cfg = _settings.get("mail") or {}
+    if not email:
+        raise HTTPException(status_code=400, detail="请填写邮箱")
+    if not _mailer.EMAIL_RE.match(email):
+        raise HTTPException(status_code=400, detail="邮箱格式不正确")
+    _email_reason = _credits.check_email_policy(signup, email)
+    if _email_reason:
+        raise HTTPException(status_code=400, detail=_email_reason)
+    for existing in _auth_store.users():
+        if str(existing.get("email") or "").strip().lower() == email.lower():
+            raise HTTPException(status_code=400, detail="该邮箱已被注册")
+    if not _mailer.mail_ready(mail_cfg):
+        raise HTTPException(status_code=400, detail="管理员尚未配置发信服务器，暂时无法发送验证码")
+    try:
+        issued = _email_codes.issue(email)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    minutes = max(1, int(issued["expires_in"] // 60))
+    body = (
+        "你好：\n\n"
+        f"你正在注册「无限画布」，本次邮箱验证码是 {issued['code']}，{minutes} 分钟内有效。\n"
+        "如果这不是你本人的操作，请忽略这封邮件。\n"
+    )
+    try:
+        await asyncio.to_thread(_mailer.send_mail, mail_cfg, email,
+                                "无限画布 · 邮箱验证码", body)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"验证码邮件发送失败：{exc}")
+    return {
+        "ok": True,
+        "email": _mailer.mask_email(email),
+        "expires_in": issued["expires_in"],
+        "retry_after": issued["retry_after"],
     }
 
 
 @app.post("/api/auth/register")
 async def auth_register(payload: dict):
-    """注册。首个账号自动为 admin 并接管存量数据。"""
+    """注册。首个账号自动为 admin 并接管存量数据。
+
+    只能填邮箱（手机号注册已移除）；管理员可要求「邮箱必填」和「邮箱验证码」，
+    验证码由 /api/auth/email-code 发到邮箱，校验通过才建号。
+    """
     name = str(payload.get("name", "")).strip()
     password = str(payload.get("password", ""))
     email = str(payload.get("email", "") or "").strip()
-    phone = str(payload.get("phone", "") or "").strip()
+    email_code = str(payload.get("email_code") or payload.get("code") or "").strip()
     first = not _auth_store.has_any_user()
 
-    # 注册限制（管理员在「积分与计费」里配：是否必须邮箱 / 手机）
-    signup = _credits_store.settings().get("signup") or {}
+    # 注册限制（管理员在「积分与计费」里配：邮箱必填 / 邮箱验证码 / 邮箱范围）
+    _settings = _credits_store.settings()
+    signup = _settings.get("signup") or {}
+    mail_cfg = _settings.get("mail") or {}
     if not first:
-        if signup.get("require_email"):
+        need_email = bool(signup.get("require_email")) or bool(signup.get("require_email_verify"))
+        if need_email:
             if not email:
                 raise HTTPException(status_code=400, detail="本站要求填写邮箱后才能注册")
-            if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+            if not _mailer.EMAIL_RE.match(email):
                 raise HTTPException(status_code=400, detail="邮箱格式不正确")
-        if signup.get("require_phone"):
-            if not phone:
-                raise HTTPException(status_code=400, detail="本站要求填写手机号后才能注册")
-            if not re.match(r"^[0-9+\-\s()]{5,20}$", phone):
-                raise HTTPException(status_code=400, detail="手机号格式不正确")
-        # 范围限制：邮箱域名白/黑名单、非主流邮箱、手机国家码白/黑名单、虚拟号段
+            for existing in _auth_store.users():
+                if str(existing.get("email") or "").strip().lower() == email.lower():
+                    raise HTTPException(status_code=400, detail="该邮箱已被注册")
+        if signup.get("require_email_verify"):
+            if not _mailer.mail_ready(mail_cfg):
+                raise HTTPException(status_code=400,
+                                    detail="本站要求邮箱验证，但管理员尚未配置发信服务器，请联系管理员")
+            _code_reason = _email_codes.check(email, email_code)
+            if _code_reason:
+                raise HTTPException(status_code=400, detail=_code_reason)
+        # 范围限制：邮箱域名白/黑名单、非主流邮箱
         _email_reason = _credits.check_email_policy(signup, email)
         if _email_reason:
             raise HTTPException(status_code=400, detail=_email_reason)
-        _phone_reason = _credits.check_phone_policy(signup, phone)
-        if _phone_reason:
-            raise HTTPException(status_code=400, detail=_phone_reason)
     initial_credits = 0.0 if first else float(signup.get("initial_credits") or 0)
 
     try:
         user = _auth_store.create_user(name, password,
                                        role="admin" if first else "member",
-                                       email=email, phone=phone,
+                                       email=email,
                                        credits=initial_credits)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    if not first and signup.get("require_email_verify") and email:
+        _email_codes.consume(email)
 
     migrated = None
     if first:
@@ -2060,6 +2259,13 @@ async def credits_me(request: Request):
     }
 
 
+@app.get("/api/credits/balance")
+async def credits_balance(request: Request):
+    """成员：只要余额（侧栏每几秒刷一次，别把 100 条流水一起拉）。"""
+    me = _current_user_or_401(request)
+    return {"balance": _credits_store.balance(me.get("id", ""))}
+
+
 @app.post("/api/credits/estimate")
 async def credits_estimate(payload: dict, request: Request):
     """给前端按钮用：估算一次调用要多少积分。没配该模型时 configured=False。"""
@@ -2168,6 +2374,28 @@ async def credits_payment_upload(files: List[UploadFile] = File(...)):
     return {"ok": True, "files": saved}
 
 
+@app.post("/api/credits/mail/test")
+async def credits_mail_test(payload: dict, request: Request):
+    """管理员：按当前 SMTP 配置发一封测试邮件，验证发信是否可用。"""
+    _credits_admin_or_403(request)
+    to_addr = str((payload or {}).get("to") or "").strip()
+    if not to_addr or not _mailer.EMAIL_RE.match(to_addr):
+        raise HTTPException(status_code=400, detail="请填写用于接收测试邮件的有效邮箱")
+    mail_cfg = _credits_store.settings().get("mail") or {}
+    if not _mailer.mail_ready(mail_cfg):
+        raise HTTPException(status_code=400, detail="请先填写并启用发信服务器配置")
+    body = (
+        "这是一封来自「无限画布」的测试邮件。\n\n"
+        "收到它说明发信服务器配置可用，注册流程中的邮箱验证码可以正常下发。\n"
+    )
+    try:
+        await asyncio.to_thread(_mailer.send_mail, mail_cfg, to_addr,
+                                "无限画布 · 发信测试", body)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"测试邮件发送失败：{exc}")
+    return {"ok": True, "to": to_addr, "masked": _mailer.mask_email(to_addr)}
+
+
 @app.post("/api/auth/users")
 async def auth_create_user(payload: dict, request: Request):
     """管理员：直接创建账号（可指定初始积分，不受注册限制影响）。"""
@@ -2175,11 +2403,10 @@ async def auth_create_user(payload: dict, request: Request):
     name = str(payload.get("name", "")).strip()
     password = str(payload.get("password", ""))
     email = str(payload.get("email", "") or "").strip()
-    phone = str(payload.get("phone", "") or "").strip()
     credits_value = float(payload.get("credits") or 0)
     try:
         user = _auth_store.create_user(name, password, role="member",
-                                       email=email, phone=phone, credits=credits_value)
+                                       email=email, credits=credits_value)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     try:
@@ -4108,6 +4335,8 @@ class OnlineImageRequest(BaseModel):
     reference_images: List[AIReference] = []
     operation: str = ""
     resolution_type: str = ""
+    # 输出格式：留空=跟随上游默认（历史行为）；png/jpeg/webp/gif 会被透传给支持的上游
+    output_format: str = ""
     inpaint: Optional[InpaintMeta] = None
 
 class MidjourneySubmitRequest(BaseModel):
@@ -11823,6 +12052,10 @@ async def media_preview(url: str, w: int = 512):
     if not path or not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="媒体文件不存在")
 
+    # GIF 是动画格式：任何缩略图处理都会把它压成单帧静态图，所以直接回原文件让浏览器自己播放
+    if os.path.splitext(str(path))[1].lower() == ".gif":
+        return FileResponse(path, media_type="image/gif")
+
     width = max(64, min(2048, int(w or 512)))
     webp_path, png_path = media_preview_cache_paths(path, width)
 
@@ -14353,20 +14586,53 @@ async def upload_local_video_to_cloud(ref_url: str, service: str = "auto") -> Di
 async def upload_local_video_to_temp_sh(ref_url: str) -> Dict[str, str]:
     return await upload_local_video_to_cloud(ref_url, "auto")
 
+def image_extension_from_bytes(data) -> str:
+    """按文件头判真实格式。
+
+    上游（Aizzz/中转站）出 GIF 时常把动图挂在 .png 链接、或回 octet-stream，
+    只看 Content-Type 或 URL 后缀就会把动图存成 .png —— 结果是「两张静图」。
+    文件头是唯一可信来源。
+    """
+    head = bytes(data[:16]) if data else b""
+    if head.startswith(b"GIF87a") or head.startswith(b"GIF89a"):
+        return ".gif"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return ".webp"
+    return ""
+
+def image_extension_from_hint(hint) -> str:
+    hint = str(hint or "").lower()
+    for ext, keys in ((".gif", ("gif",)), (".webp", ("webp",)), (".jpg", ("jpeg", "jpg")), (".png", ("png",))):
+        if any(k in hint for k in keys):
+            return ext
+    return ""
+
+def saved_image_digest(url) -> str:
+    """已落盘图片的内容哈希（用于去掉上游重复返回的同一张图）。"""
+    path = output_file_from_url(url)
+    if not path or not os.path.isfile(path):
+        return ""
+    digest = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
 async def save_ai_image_to_output(image_data, prefix="online_", category="output"):
-    filename = f"{prefix}{uuid.uuid4().hex[:10]}.png"
-    path = output_path_for(filename, category)
-    if image_data["type"] == "b64":
-        mime_type = str(image_data.get("mime_type") or "").lower()
-        if "jpeg" in mime_type or "jpg" in mime_type:
-            filename = filename[:-4] + ".jpg"
-            path = output_path_for(filename, category)
-        elif "webp" in mime_type:
-            filename = filename[:-4] + ".webp"
-            path = output_path_for(filename, category)
+    def write_image(data, hint=""):
+        ext = image_extension_from_bytes(data) or image_extension_from_hint(hint) or ".png"
+        filename = f"{prefix}{uuid.uuid4().hex[:10]}{ext}"
+        path = output_path_for(filename, category)
         with open(path, "wb") as f:
-            f.write(base64.b64decode(image_data["value"]))
+            f.write(data)
         return output_url_for(filename, category)
+
+    if image_data["type"] == "b64":
+        return write_image(base64.b64decode(image_data["value"]), image_data.get("mime_type"))
     value = image_data["value"]
     if value.startswith("/output/") or value.startswith("/assets/"):
         return value
@@ -14376,16 +14642,8 @@ async def save_ai_image_to_output(image_data, prefix="online_", category="output
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             response = await client.get(value)
             response.raise_for_status()
-            content_type = response.headers.get("Content-Type", "")
-            if "jpeg" in content_type or "jpg" in content_type:
-                filename = filename[:-4] + ".jpg"
-                path = output_path_for(filename, category)
-            elif "webp" in content_type:
-                filename = filename[:-4] + ".webp"
-                path = output_path_for(filename, category)
-            with open(path, "wb") as f:
-                f.write(response.content)
-            return output_url_for(filename, category)
+            hint = f"{response.headers.get('Content-Type', '')} {str(value).split('?')[0]}"
+            return write_image(response.content, hint)
     except Exception as e:
         print(f"保存上游图片失败: {e}; url={value}")
         return value
@@ -15534,8 +15792,9 @@ def runninghub_aspect_from_size(size, fallback="1:1"):
 # 🚨 必须排除带 "/" 的：RunningHub 的模型名形如 "nano-banana/text-to-image-official-stable"，
 #    前缀相同但走完全不同的通道。
 # Grsai 视频模型：都走 `POST /v1/api/generate`（与图片同一端点），但**参数域不同**。
-# 文档：agnes-video / minimax-h3 各自页面（Apifox，2026-10-19 核对）
+# 文档：agnes-video / minimax-h3 / wan-video 各自页面（Apifox，2026-11-06 核对）
 #   · agnes-video-2.5：aspectRatio 用 16:9 这类；resolution 720p/1080p/2k；duration 4~12；最多 5 张图
+#   · wan-3.0：aspectRatio 16:9 这类；resolution 480p/720p/1080p；duration 2~30；最多 10 张图
 #   · minimax-h3   ：aspectRatio 只认 portrait/landscape；resolution 480p/768p/1080p；duration 1~15；最多 9 张图
 GRSAI_VIDEO_SPECS = {
     "agnes-video-2.5": {
@@ -15543,6 +15802,15 @@ GRSAI_VIDEO_SPECS = {
         "resolutions": ("720p", "1080p", "2k"),
         "duration": (4, 12),
         "max_images": 5,
+    },
+    "wan-3.0": {
+        # 文档：https://qmy27nhsd9.apifox.cn/531060669e0（2026-11-06 核对）
+        #   aspectRatio 16:9/9:16/21:9/4:3/1:1/3:4；resolution 480p/720p/1080p；
+        #   duration 2~30 秒；参考图最多 10 张、参考音频最多 5 段（每段 ≤15s）
+        "aspects": ("16:9", "9:16", "21:9", "4:3", "1:1", "3:4"),
+        "resolutions": ("480p", "720p", "1080p"),
+        "duration": (2, 30),
+        "max_images": 10,
     },
     "minimax-h3": {
         "aspects": ("portrait", "landscape"),
@@ -16362,8 +16630,14 @@ async def generate_runninghub_video(payload, provider):
         local_urls = [await save_remote_video_to_output(url, prefix="rh_video_") for url in urls]
         return {"videos": local_urls, "task_id": task_id, "raw": result}
 
-async def generate_ai_image(prompt, size, quality, model, reference_images=None, provider_id="comfly", aspect_ratio="", resolution=""):
+async def generate_ai_image(prompt, size, quality, model, reference_images=None, provider_id="comfly", aspect_ratio="", resolution="", output_format=""):
     provider = get_api_provider(provider_id)
+    # 输出格式归一化：gif/webp 等动画或无损格式由上游决定是否支持，这里只做透传，不做本地限制
+    output_format = str(output_format or "").strip().lower().lstrip(".")
+    if output_format == "jpg":
+        output_format = "jpeg"
+    if output_format not in {"png", "jpeg", "webp", "gif"}:
+        output_format = ""
     if is_tudou_provider(provider):
         model = tudou_image_model_for_request(model)
     if provider["id"] == "modelscope":
@@ -16408,6 +16682,8 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
             data = {"model": model, "prompt": prompt, "size": size}
             if quality:
                 data["quality"] = quality
+            if output_format:
+                data["output_format"] = output_format
             return await client.post(
                 edit_url,
                 headers=api_headers(json_body=False, provider=provider, model=model),
@@ -16506,6 +16782,8 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
             # 不使用 /images/edits，不传顶层 response_format/n/quality；
             # 文生图只传 extra_body.response_format，图生图把参考图放进 extra_body.image。
             extra_body = {"response_format": "url"}
+            if output_format:
+                extra_body["output_format"] = output_format
             if image_refs:
                 _ojson_refs = image_refs[:ONLINE_IMAGE_REFERENCE_MAX]
                 extra_body["image"] = [reference_to_data_url(ref, max_size=ref_image_max_size(len(_ojson_refs))) for ref in _ojson_refs]
@@ -16523,6 +16801,8 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 "resolution": resolution,
                 "official_fallback": False,
             }
+            if output_format:
+                body["output_format"] = output_format
             if image_refs:
                 _apimart_refs = image_refs[:ONLINE_IMAGE_REFERENCE_MAX]
                 body["image_urls"] = [reference_to_data_url(ref, max_size=ref_image_max_size(len(_apimart_refs))) for ref in _apimart_refs]
@@ -16531,6 +16811,8 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
             body = {"model": model, "prompt": prompt, "size": size}
             if quality:
                 body["quality"] = quality
+            if output_format:
+                body["output_format"] = output_format
             response = await client.post(gen_url, headers=api_headers(provider=provider, model=model), json=body)
             if response.status_code >= 400 and images_api_unsupported(response):
                 response = await post_openai_edits()
@@ -16619,6 +16901,8 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                     )
         else:
             body = {"model": model, "prompt": prompt, "size": size, "response_format": "url", "n": 1}
+            if output_format:
+                body["output_format"] = output_format
             if quality:
                 body["quality"] = quality
             response = await client.post(
@@ -20260,7 +20544,7 @@ async def build_online_image_result(payload: OnlineImageRequest):
                 try:
                     image_data, raw_item = await generate_ai_image(
                         payload.prompt, request_size, payload.quality, model, image_refs, provider["id"],
-                        request_aspect, payload.resolution,
+                        request_aspect, payload.resolution, payload.output_format,
                     )
                     break
                 except httpx.HTTPStatusError:
@@ -20304,9 +20588,31 @@ async def build_online_image_result(payload: OnlineImageRequest):
         log_net_error(f"生图 网络/TLS错误 provider={provider.get('id')} model={model}", exc)
         raise HTTPException(status_code=502, detail=f"请求上游生图接口失败：{exc}") from exc
 
-    local_urls = [url for urls, _items, _raw in generated for url in (urls or []) if url]
-    local_items = [item for _urls, items, _raw in generated for item in (items or []) if item.get("url")]
+    # 上游（Aizzz 中转）出 GIF 时会把同一张动图回两遍（png 海报 + gif + 重复 gif）：
+    # 按内容哈希去重并删掉重复文件，否则画布上会多出一模一样的节点。
+    local_urls, local_items = [], []
+    seen_digests = set()
+    for urls, items, _raw in generated:
+        for url, item in zip(urls or [], items or []):
+            if not url:
+                continue
+            digest = saved_image_digest(url)
+            if digest and digest in seen_digests:
+                path = output_file_from_url(url)
+                if path:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                continue
+            if digest:
+                seen_digests.add(digest)
+            local_urls.append(url)
+            if isinstance(item, dict) and item.get("url"):
+                local_items.append(item)
     raw = generated[0][2] if generated else {}
+    print("[canvas-image] 上游条目=%d 落盘=%s" % (
+        sum(len(urls or []) for urls, _items, _r in generated), local_urls))
     if not local_urls:
         provider_name = provider.get("name") or provider["id"]
         raw_text = json.dumps(raw, ensure_ascii=False)[:800] if isinstance(raw, (dict, list)) else str(raw)[:800]
@@ -20763,15 +21069,18 @@ async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest):
             CANVAS_TASKS[task_id]["updated_at"] = time.time()
     try:
         result = await build_online_image_result(payload)
+        _failed = isinstance(result, dict) and str(result.get("status") or "").lower() == "failed"
         with CANVAS_TASK_LOCK:
             CANVAS_TASKS[task_id].update({
-                "status": "succeeded",
+                "status": "failed" if _failed else "succeeded",
                 "result": result,
-                "error": "",
+                "error": str(result.get("error") or "") if _failed else "",
                 "updated_at": time.time(),
             })
+        if _failed:
+            _refund_task_charge(task_id)
         try:
-            await manager.broadcast_canvas_task_done(task_id, "succeeded")
+            await manager.broadcast_canvas_task_done(task_id, "failed" if _failed else "succeeded")
         except Exception:
             pass
     except JimengPendingError as exc:
@@ -20804,6 +21113,7 @@ async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest):
                 "upstream_task_id": upstream_task_id,
                 "updated_at": time.time(),
             })
+        _refund_task_charge(task_id)
         try:
             await manager.broadcast_canvas_task_done(task_id, "failed")
         except Exception:
@@ -20893,6 +21203,25 @@ async def create_canvas_image_task(payload: OnlineImageRequest):
         except Exception:
             # pydantic 若禁止赋值，就整对象换一份，不能让护栏把请求搞挂
             payload = payload.model_copy(update={"size": _used_size})
+    # 兜底：输出格式留空、模型是 gpt-image-2.6 系列、提示词又要动图时，替前端补上 gif。
+    # 不带这个参数上游只回两张 png（静图 + 把帧画成宫格的那张），提示词里写 gif 没用。
+    if not str(payload.output_format or "").strip() \
+            and re.search(r"gif|动图|动态图|循环动画|逐帧|动画", payload.prompt or "", re.I) \
+            and re.search(r"gpt-image-2\.6", str(payload.model or ""), re.I):
+        payload = payload.model_copy(update={"output_format": "gif"})
+    # GIF 模式：上游按「约 1K」出宫格图（实测 1536×1024 / 1448×1086），再切 4 或 9 帧，
+    # 比例跟着请求走、**分辨率不跟**（4K 设置无效）。
+    # 🚨 2026-11-07 实测（output/_gif_probe*.log）：size 传 1536x1024 / 2304x1536 / 3504x2336
+    #    回来全是 508×337 ⇒ 尺寸设置对 GIF 完全不生效。不说出来，用户只会以为「4K 生效了」
+    #    （老板原话：好像尺寸没有按照设定生成）。
+    # ponytail: 1K / 帧数都是实测值，上游改版就跟着改；真要让 GIF 变大得等上游放开宫格尺寸。
+    if str(payload.output_format or "").strip().lower() == "gif":
+        _gif_note = "GIF 模式下上游按约 1K 出宫格再切帧，比例照设置、分辨率不跟随（4K 无效）"
+        _size_note = f"{_size_note}；{_gif_note}" if _size_note else _gif_note
+    # 留痕：老板报「还是两个静态图」时靠这行日志判断前端到底发了什么
+    print("[canvas-image] model=%s provider=%s size=%s format=%r n=%s refs=%s prompt=%s" % (
+        payload.model, payload.provider_id, payload.size, payload.output_format,
+        payload.n, len(payload.reference_images or []), (payload.prompt or "")[:40]))
     with CANVAS_TASK_LOCK:
         CANVAS_TASKS[task_id] = {
             "id": task_id,
@@ -20945,6 +21274,7 @@ async def run_canvas_comfy_task(task_id: str, payload: GenerateRequest):
                 "status_code": status_code,
                 "updated_at": time.time(),
             })
+        _refund_task_charge(task_id)
 
 @app.post("/api/canvas-comfy-tasks")
 async def create_canvas_comfy_task(payload: GenerateRequest):
@@ -29046,6 +29376,7 @@ async def run_split_layers_task(task_id: str, payload: SplitLayersRequest):
                 "status": "failed", "error": str(detail),
                 "error_detail": error_detail, "updated_at": time.time(),
             })
+        _refund_task_charge(task_id)
 
 
 @app.post("/api/split-layers-tasks")
@@ -29212,6 +29543,7 @@ async def run_hy3d_task(task_id: str, payload: Hunyuan3DTaskRequest):
                 "advice": "混元3D 生成失败。长时间停在「生成中」多为额度/排队；登录态失效时重新「去登录」再试",
             },
         )
+        _refund_task_charge(task_id)
     finally:
         if client is not None:
             try:

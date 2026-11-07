@@ -54,6 +54,8 @@ function canvasMediaPreviewUrl(url, size=512){
     if(!raw || raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
     if(!raw.startsWith('/output/') && !raw.startsWith('/assets/')) return canvasDisplayMediaUrl(raw);
     if(!/\.(png|jpe?g|webp|gif|bmp|avif|tiff?|mp4|webm|mov|m4v|avi|mkv|flv)(\?|#|$)/i.test(raw)) return raw;
+    // 生图产物（/output/）一律直出原图，不用缩略图代理；视频仍走代理取封面帧
+    if(raw.startsWith('/output/') && !/\.(mp4|webm|mov|m4v|avi|mkv|flv)(\?|#|$)/i.test(raw)) return raw;
     const width = Math.max(64, Math.min(2048, Math.round(Number(size) || 512)));
     return `/api/media-preview?w=${width}&url=${encodeURIComponent(raw)}`;
 }

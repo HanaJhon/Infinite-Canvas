@@ -86,6 +86,8 @@ ROOT_FILES = [
     # 多账号：用户/会话/鉴权（main.py 启动时直接 import，缺了服务起不来）
     "auth.py",
     "credits.py",
+    # 邮箱验证码发信（main.py:644 `import mailer as _mailer`，缺了服务起不来）
+    "mailer.py",
     "VERSION",
     "requirements.txt",
     "README.md",

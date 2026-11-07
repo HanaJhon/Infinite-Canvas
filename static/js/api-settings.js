@@ -178,20 +178,21 @@ const RECOMMENDED_APIS = [
   summaryKey: 'Grsai超性价比图像模型，推荐优先使用nano-banana-pro',
   advantages: ['Grsai 性价比生图 + LLM', 'nano-banana 模型直连', '支持 Grsai 生图接口'],
   // Grsai `/v1/api/generate` 支持的完整模型清单。
-  // 🚨 与 `launcher/Program.cs:GrsaiCuratedModels()` 保持同一份清单（2026-10-19 对齐控制台实测）。
+  // 🚨 与 `launcher/Program.cs:GrsaiCuratedModels()` 保持同一份清单（2026-11-06 对齐官方控制台
+  //    https://grsai.com/zh/dashboard/models —— 35 个模型：文本 15 / 图片 17 / 视频 3）。
   // 顺序按「性价比 → 高端」排，2.1 是新增主力档。
   image_models: [
-    'gpt-image-2.5', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst', 'gpt-image-2', 'gpt-image-2-vip',
-    'nano-banana-2.1', 'nano-banana-2', 'nano-banana-2-cl', 'nano-banana-2-2k-cl', 'nano-banana-2-4k-cl',
-    'nano-banana-pro', 'nano-banana-pro-vt', 'nano-banana-pro-cl', 'nano-banana-pro-vip',
-    'nano-banana-pro-4k-vip', 'nano-banana-fast', 'nano-banana', 'nano-banana-2-lite'
+    'gpt-image-2.6', 'gpt-image-2.5', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst', 'gpt-image-2', 'gpt-image-2-vip',
+    'nano-banana-2.1', 'nano-banana-2', 'nano-banana-2-lite', 'nano-banana-fast', 'nano-banana-2-cl',
+    'nano-banana-2-2k-cl', 'nano-banana-2-4k-cl', 'nano-banana-pro', 'nano-banana-pro-cl', 'nano-banana-pro-vip',
+    'nano-banana-pro-4k-vip'
   ],
   chat_models: [
-    'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.5', 'gpt-5.4',
-    'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-pro',
+    'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-5.6-sol', 'gpt-5.6-terra',
+    'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro',
     'gemini-3.1-flash-lite', 'gemini-3-pro', 'gemini-3-flash', 'gemini-2.5-pro', 'gemini-2.5-flash'
   ],
-  video_models: ['minimax-h3', 'agnes-video-2.5']
+  video_models: ['wan-3.0', 'minimax-h3', 'agnes-video-2.5']
 },
 {
   id: 'coder',
@@ -3419,7 +3420,7 @@ function renderModels(kind){
                     ${label && label !== model ? `<div class="model-display-name">${escapeHtml(label)}</div>` : ''}
                     <input value="${escapeAttr(model)}" oninput="updateModel('${kind}', ${index}, this.value)">
                 </div>
-                ${modelCreditCellHtml(kind, model)}
+                ${modelCreditCellHtml(kind, model, item?.id || '')}
                 ${modelProtocolSelectHtml(kind, index, model, item)}
                 <button class="icon-btn" type="button" onclick="removeModel('${kind}', ${index})" title="删除"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
             </div>
@@ -3668,15 +3669,21 @@ function updateModel(kind, index, value){
             if(newName && label && label !== newName) item.model_names[newName] = label;
         }
     }
-    // 重命名时迁移该模型的积分单价（m16485：单价按模型名存在 data/credits_settings.json）
+    // 重命名时迁移该模型的积分单价（m21440：单价按「供应商::模型」存，同名模型在不同 API 下各自独立）
     if(oldName && newName && oldName !== newName && typeof modelCreditsMap === 'function'){
         const credits = modelCreditsMap();
-        if(credits[oldName] && !credits[newName]){
-            const entry = credits[oldName];
-            delete credits[oldName];
-            credits[newName] = entry;
-            scheduleModelCreditSave();
-        }
+        const pid = String((item && item.id) || '').trim();
+        const pairs = [[oldName, newName]];
+        if(pid) pairs.push([`${pid}::${oldName}`, `${pid}::${newName}`]);
+        let migrated = false;
+        pairs.forEach(([from, to]) => {
+            if(credits[from] && !credits[to]){
+                credits[to] = credits[from];
+                delete credits[from];
+                migrated = true;
+            }
+        });
+        if(migrated) scheduleModelCreditSave();
     }
     if(kind === 'image') renderMsLoras();
 }
@@ -3935,13 +3942,29 @@ function modelCreditsMap(){
 function modelCreditKindForList(kind){
     return kind === 'image' ? 'image' : kind === 'video' ? 'video' : 'llm';
 }
-function modelCreditEntry(model){
+function modelCreditKey(providerId, model){
+    const name = String(model || '').trim();
+    if(!name) return '';
+    const pid = String(providerId || '').trim();
+    return pid ? `${pid}::${name}` : name;
+}
+// 该模型是否已经按「供应商::模型」单独配过价（配过就不再回退到裸模型名的旧键，
+// 否则相同模型换一个 API 会共用同一份积分——老板 m21440 第④项要的就是这个隔离）
+function modelCreditScopedExists(model){
+    const name = String(model || '').trim();
+    if(!name) return false;
+    const map = modelCreditsMap();
+    const suffix = '::' + name;
+    return Object.keys(map).some(k => k !== name && k.endsWith(suffix));
+}
+function modelCreditEntry(providerId, model){
     const name = String(model || '').trim();
     if(!name) return null;
     const map = modelCreditsMap();
-    if(map[name]) return map[name];
-    const tail = name.split('::').pop();
-    return tail && map[tail] ? map[tail] : null;
+    const exact = map[modelCreditKey(providerId, name)];
+    if(exact) return exact;
+    if(!modelCreditScopedExists(name) && map[name]) return map[name];
+    return null;
 }
 function modelCreditFieldsOf(kind){
     const k = modelCreditKindForList(kind);
@@ -3968,25 +3991,32 @@ function modelCreditReading(entry, field){
     const v = entry[field.key];
     return v === undefined || v === null ? '' : v;
 }
-function modelCreditCellHtml(kind, model){
-    const entry = modelCreditEntry(model);
+function modelCreditCellHtml(kind, model, providerId){
+    const entry = modelCreditEntry(providerId, model);
     const fields = modelCreditFieldsOf(kind).map(field => `
         <label class="mc-field">
             <span>${escapeHtml(field.label)}</span>
             <input type="number" min="0" step="0.0001" placeholder="未设置"
                 data-mc-model="${escapeAttr(model)}"
+                data-mc-provider="${escapeAttr(providerId || '')}"
                 data-mc-key="${escapeAttr(field.key)}"
                 data-mc-sub="${escapeAttr(field.sub)}"
                 value="${escapeAttr(modelCreditReading(entry, field))}">
         </label>`).join('');
     return `<div class="model-credit${entry ? '' : ' is-unset'}">${fields}</div>`;
 }
-function ensureModelCreditEntry(model, kind){
+function ensureModelCreditEntry(providerId, model, kind){
     const map = modelCreditsMap();
     const name = String(model || '').trim();
-    if(!map[name] || typeof map[name] !== 'object') map[name] = { kind: modelCreditKindForList(kind) };
-    if(!map[name].kind) map[name].kind = modelCreditKindForList(kind);
-    return map[name];
+    const key = modelCreditKey(providerId, name);
+    if(!map[key] || typeof map[key] !== 'object'){
+        // 第一次按供应商配价时，把旧的「裸模型名」单价继承过来一次（之后两者互不影响）
+        const legacy = (!modelCreditScopedExists(name) && map[name] && typeof map[name] === 'object') ? map[name] : null;
+        map[key] = legacy ? Object.assign({}, legacy) : { kind: modelCreditKindForList(kind) };
+        if(legacy) delete map[name];
+    }
+    if(!map[key].kind) map[key].kind = modelCreditKindForList(kind);
+    return map[key];
 }
 function bindModelCreditInputs(root, kind){
     if(!root) return;
@@ -3996,7 +4026,8 @@ function bindModelCreditInputs(root, kind){
         input.addEventListener('input', () => {
             const model = String(input.dataset.mcModel || '').trim();
             if(!model) return;
-            const entry = ensureModelCreditEntry(model, kind);
+            const providerId = String(input.dataset.mcProvider || '').trim();
+            const entry = ensureModelCreditEntry(providerId, model, kind);
             const key = input.dataset.mcKey;
             const sub = input.dataset.mcSub;
             const raw = String(input.value || '').trim();
