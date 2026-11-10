@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="/static/images/logo.png?v=1.3.6" type="image/png">
+    <link rel="icon" href="/static/images/logo.png?v=1.3.7" type="image/png">
     <title>在线生图</title>
     <script>
         (function(){
@@ -16,15 +16,15 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/tailwindcss-cdn.js?v=1.3.6.1767196800"></script>
-    <script src="/static/vendor/js/lucide.js?v=1.3.6.1767196800"></script>
-    <script src="/static/js/theme.js?v=1.3.6.1793681298"></script>
-    <script src="/static/js/i18n.js?v=1.3.6.1794029677"></script>
-    <script src="/static/js/image-preview.js?v=1.3.6.1767196800"></script>
-    <script src="/static/js/history-bulk-manager.js?v=1.3.6.1767196800"></script>
-    <script src="/static/js/credits-badge.js?v=1.3.6.1793976493"></script>
+    <script src="/static/vendor/js/tailwindcss-cdn.js?v=1.3.7.1767196800"></script>
+    <script src="/static/vendor/js/lucide.js?v=1.3.7.1767196800"></script>
+    <script src="/static/js/theme.js?v=1.3.7.1793681298"></script>
+    <script src="/static/js/i18n.js?v=1.3.7.1794291244"></script>
+    <script src="/static/js/image-preview.js?v=1.3.7.1767196800"></script>
+    <script src="/static/js/history-bulk-manager.js?v=1.3.7.1767196800"></script>
+    <script src="/static/js/credits-badge.js?v=1.3.7.1794031306"></script>
     <style>
-        @import url('/static/vendor/css/fonts.css?v=1.3.6.1767196800');
+        @import url('/static/vendor/css/fonts.css?v=1.3.7.1767196800');
         :root { --accent:#111827; --bg:#f9fafb; --card:#fff; --easing:cubic-bezier(0.4,0,0.2,1); }
         body { background:var(--bg); font-family:'Inter',-apple-system,sans-serif; color:var(--accent); -webkit-font-smoothing:antialiased; }
         .container-box { max-width:1280px; margin:0 auto; padding:0 40px; margin-top:50px; }
@@ -33,6 +33,8 @@
         .upload-item { background:var(--card); border:1px dashed #e2e8f0; transition:all .4s var(--easing); position:relative; overflow:hidden; }
         .upload-item:hover,.upload-item.drag-over { border-color:#000; transform:translateY(-2px); }
         .preview-img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; animation:fadeIn .5s var(--easing); }
+        /* 遮罩预览是「涂过=半透明红、没涂=透明」的叠加层，天然不透明（alpha 在图里），不用 fadeIn */
+        .preview-img.ref-mask { animation:none; }
         .glass-btn { background:#111827; transition:all .3s var(--easing); }
         .glass-btn:hover { background:#000; transform:translateY(-1px); box-shadow:0 12px 24px rgba(0,0,0,.1); }
         .result-frame { background:#fff; border-radius:32px; border:1px solid #f1f5f9; box-shadow:0 2px 15px rgba(0,0,0,.02); }
@@ -64,9 +66,157 @@
         .gallery-lightbox { background:rgba(255,255,255,.99); backdrop-filter:blur(22px) saturate(1.05); }
         @keyframes fadeIn { from{opacity:0} to{opacity:1} }
     </style>
-    <link rel="stylesheet" href="/static/css/theme.css?v=1.3.6.1767196800">
-    <link rel="stylesheet" href="/static/css/liquid-glass.css?v=1.3.6.1793776698">
+    <link rel="stylesheet" href="/static/css/theme.css?v=1.3.7.1767196800">
+    <link rel="stylesheet" href="/static/css/liquid-glass.css?v=1.3.7.1793776698">
     <style>
+        /* ── 参考图工具（扩图 / 遮罩 / 视角 / 画笔）与风格选择 2026-11-09 ── */
+        .ref-tools{position:absolute;left:6px;right:6px;bottom:6px;display:flex;gap:4px;justify-content:center;z-index:12;opacity:1;transition:opacity .2s var(--easing)}
+        .upload-item:hover .ref-tools,.upload-item:focus-within .ref-tools{opacity:1}
+        .ref-tools button{width:26px;height:26px;border-radius:999px;background:rgba(17,24,39,.82);color:#fff;display:flex;align-items:center;justify-content:center;border:0;cursor:pointer}
+        .ref-tools button:hover{background:#000}
+        .ref-tools button svg{width:13px;height:13px}
+        .ref-badge{position:absolute;top:6px;left:6px;z-index:12;background:#111827;color:#fff;font-size:9px;font-weight:800;letter-spacing:.04em;padding:2px 7px;border-radius:999px}
+        /* 遮罩预览：涂过的地方泛红、原图仍然看得见。用半透明彩色 mask 图（白=红/黑=透明），
+           不依赖 mask-image —— 后者在部分环境里整个遮罩层会退化成实心矩形，直接盖死原图。 */
+        /* 层级：预览图 < 红色叠加(6) < 删除按钮(10) / 工具条，叠加层不能挡住按钮 */
+        .ref-mask{position:absolute;inset:0;z-index:6;width:100%;height:100%;object-fit:cover;pointer-events:none;border-radius:inherit}
+        .re-cursor{position:fixed;z-index:90;border:1px solid rgba(0,0,0,.8);box-shadow:0 0 0 1px rgba(255,255,255,.95),inset 0 0 0 1px rgba(255,255,255,.6);border-radius:50%;pointer-events:none;display:none;margin:0;box-sizing:border-box}
+        /* 桥接（小抽AI「修改」）时只显示编辑弹窗，页面本体全隐藏 */
+        body.re-solo > *{visibility:hidden}
+        body.re-solo #refEditModal{visibility:visible}
+        body.re-solo{background:#0b0f14}
+        /* theme.js 的全局 UI 缩放会给 body 加 transform:scale，fixed 弹窗跟着缩、顶部还留一条黑边；
+           桥接模式是整窗编辑器，这里必须把缩放彻底关掉 */
+        html.studio-ui-scaled body.re-solo.re-solo{transform:none !important;width:100% !important;min-height:100vh !important;height:100vh !important;margin:0 !important;overflow:hidden !important}
+        body.re-solo #refEditModal{position:fixed;inset:0;width:100vw;height:100vh}
+        /* 桥接时整窗就是编辑器：面板占满，不再留深色底 */
+        body.re-solo .re-overlay{padding:0;background:#fff;backdrop-filter:none}
+        body.re-solo .re-panel{width:100%;max-width:none;height:100%;max-height:none;border-radius:0;box-shadow:none}
+        body.re-solo .re-stage{flex:1 1 auto;min-height:0;max-height:none;margin:0 22px 8px}
+        body.re-solo .re-head{border-bottom:1px solid #eef2f7}
+
+        body.re-open{transform:none !important;width:100% !important;min-height:100vh !important}
+        .re-overlay{position:fixed;inset:0;z-index:60;background:rgba(15,23,42,.55);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:24px}
+        .re-panel{background:#fff;border-radius:26px;width:min(920px,96vw);max-height:92vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 30px 80px rgba(15,23,42,.28)}
+        .re-head{display:flex;align-items:flex-start;gap:12px;padding:18px 22px 10px}
+        .re-head h3{font-size:15px;font-weight:800;margin:0}
+        .re-head p{margin:2px 0 0;font-size:11px;color:#94a3b8}
+        .re-head .re-close{margin-left:auto;width:30px;height:30px;border-radius:999px;border:1px solid #eef2f7;background:#fff;color:#64748b;cursor:pointer}
+        .re-tabs{display:flex;gap:6px;padding:0 22px 10px;flex-wrap:wrap}
+        .re-tabs button{height:30px;padding:0 12px;border-radius:999px;border:1px solid #eef2f7;background:#f8fafc;color:#64748b;font-size:11px;font-weight:700;cursor:pointer}
+        .re-tabs button.active{background:#111827;border-color:#111827;color:#fff}
+        /* flex 纵向容器里 width:auto 会被内容撑窄（视角卡片就居中缩成一小块），所以按容器宽 100% */
+        .re-stage{position:relative;flex:0 0 auto;width:100%;box-sizing:border-box;min-height:240px;max-height:min(62vh,640px);background:#f1f5f9;display:flex;align-items:center;justify-content:center;overflow:hidden;margin:0 22px;border-radius:18px}
+        .re-stage.empty::after{content:'正在载入图片…';font-size:12px;color:#94a3b8}
+        .re-stage.loaded{aspect-ratio:var(--re-ratio,1)}
+        /* 位置由 layoutRefCanvases 写 left/top（px），这里只保留 box-sizing，避免与 CSS 的 50% 冲突 */
+        .re-stage canvas{position:absolute;box-sizing:border-box;touch-action:none}
+        /* 扩图：整块舞台就是扩展后的画布，原图能在里面自由拖动；边框 + 五条手柄与画布一致 */
+        .re-outpaint-frame{position:absolute;inset:0;z-index:4;display:none;border:2px solid #f8fafc;border-radius:14px;box-shadow:0 0 0 1px rgba(15,23,42,.28),0 12px 30px rgba(15,23,42,.16);pointer-events:auto}
+        .re-stage.re-mode-outpaint .re-outpaint-frame{display:block;cursor:move}
+        .re-stage.re-mode-outpaint .re-outpaint-frame{pointer-events:none}
+        .re-stage.re-mode-outpaint .re-oh{pointer-events:auto}
+        .re-stage.re-mode-outpaint #reCanvas,.re-stage.re-mode-outpaint #rePaint{pointer-events:auto;cursor:move}
+        .re-oh{position:absolute;z-index:6;background:#fff;border:2px solid #f8fafc;box-shadow:0 3px 12px rgba(15,23,42,.24)}
+        .re-oh[data-re-oh="top"],.re-oh[data-re-oh="bottom"]{left:50%;width:34px;height:10px;margin-left:-17px;border-radius:999px;cursor:ns-resize}
+        .re-oh[data-re-oh="top"]{top:-6px}
+        .re-oh[data-re-oh="bottom"]{bottom:-6px}
+        .re-oh[data-re-oh="left"],.re-oh[data-re-oh="right"]{top:50%;width:10px;height:34px;margin-top:-17px;border-radius:999px;cursor:ew-resize}
+        .re-oh[data-re-oh="left"]{left:-6px}
+        .re-oh[data-re-oh="right"]{right:-6px}
+        .re-oh[data-re-oh="corner"]{right:-8px;bottom:-8px;width:18px;height:18px;border-radius:999px;cursor:nwse-resize}
+        /* 视角：3D 卡片（正面受光 / 背面背光），图片跟着机位转 */
+        .re-angle-card{position:absolute;inset:0;z-index:4;display:none;align-items:center;justify-content:center;perspective:1400px;pointer-events:none}
+        .re-stage.re-mode-angle .re-angle-card{display:flex}
+        /* 🚨 舞台 flex 居中 + .re-angle-card 是 absolute 的，两者一叠加卡片会多偏一次；
+           卡片位置只由 syncRefAngleCardSize() 的像素值决定，外层必须回到 left:0;top:0 */
+        .re-stage.re-mode-angle .re-angle-card{left:0;top:0;width:100%;height:100%;display:block}
+        .re-stage:not(.re-mode-angle) #reAngleCard{display:none}
+        .re-stage.re-mode-angle{cursor:ew-resize;background:linear-gradient(160deg,#eef2f7,#dde5ef)}
+        /* 🚨 视角模式要先把舞台撑开：舞台按图片比例收缩时只剩一条缝，卡片会被 overflow:hidden 裁掉一半 */
+        .re-stage.re-mode-angle{flex:1 1 auto;min-height:min(48vh,420px);aspect-ratio:auto!important}
+        .re-text{pointer-events:auto}
+        .re-stage.re-mode-angle .re-outpaint-frame{display:none}
+        .re-ac-card[data-face="front"] .re-ac-back{display:none}
+        .re-ac-card[data-face="back"] .re-ac-front{display:none}
+        .re-ac-card{position:relative;transform-style:preserve-3d;transform-origin:center center;transition:transform .1s linear;will-change:transform}
+        .re-ac-face{position:absolute;inset:0;border-radius:12px;overflow:hidden;backface-visibility:hidden;-webkit-backface-visibility:hidden;box-shadow:0 18px 40px rgba(15,23,42,.28)}
+        .re-ac-face img{width:100%;height:100%;object-fit:cover;display:block}
+        .re-ac-edge{position:absolute;top:0;width:9px;height:100%;border-radius:3px;background-image:var(--re-card-img,none);background-size:cover;background-position:center;filter:brightness(.72) saturate(.75);box-shadow:inset 0 0 0 1px rgba(15,23,42,.45)}
+        .re-ac-edge.edge-left{left:0;transform-origin:left center;transform:rotateY(-90deg)}
+        .re-ac-edge.edge-right{right:0;transform-origin:right center;transform:rotateY(90deg)}
+        .re-ac-back img{filter:brightness(.62) saturate(.7)}
+        .re-ac-shade{position:absolute;inset:0;background:linear-gradient(160deg,rgba(15,23,42,.30),rgba(15,23,42,.52));mix-blend-mode:multiply}
+        .re-ac-sheen{position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at var(--sheen-x,50%) var(--sheen-y,36%),rgba(255,255,255,.55),rgba(255,255,255,.12) 38%,rgba(255,255,255,0) 68%);opacity:.9}
+        .re-angle-badge{position:absolute;top:12px;left:12px;z-index:6;display:none;align-items:center;height:26px;padding:0 12px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid #eef2f7;background:rgba(255,255,255,.92);color:#111827;box-shadow:0 10px 24px rgba(15,23,42,.16);pointer-events:none}
+        .re-stage.re-mode-angle .re-angle-badge{display:flex}
+        .re-angle-badge.back{background:#111827;color:#fff;border-color:#111827;border-style:dashed}
+        .re-angle-bar{display:flex;flex-direction:column;gap:7px;min-width:0;flex:1 1 100%}
+        .re-angle-row{display:flex;align-items:center;gap:8px;min-width:0}
+        .re-angle-label{flex:0 0 26px;font-size:11px;font-weight:800;color:#64748b}
+        .re-angle-range{flex:1 1 auto;min-width:0;height:18px;accent-color:#111827;cursor:pointer}
+        .re-angle-value{flex:0 0 auto;min-width:52px;text-align:right;font-size:11px;font-weight:800;color:#111827;white-space:nowrap}
+        .re-angle-scale{display:flex;justify-content:space-between;padding:0 30px 0 34px;margin:-2px 0 2px}
+        .re-angle-scale span{font-size:9.5px;font-weight:700;color:#94a3b8}
+        .re-angle-scale span:nth-child(1),.re-angle-scale span:nth-child(5){color:#111827}
+        .re-angle-deg{margin-left:auto;font-size:11px;font-weight:800;color:#64748b;white-space:nowrap}
+        .re-angle-presets{display:flex;flex-wrap:wrap;gap:4px}
+        .re-angle-presets button{height:22px;padding:0 8px;border-radius:999px;border:1px solid #eef2f7;background:#f8fafc;color:#64748b;font-size:10.5px;font-weight:800;cursor:pointer;white-space:nowrap}
+        .re-angle-presets button.active{background:#111827;border-color:#111827;color:#fff}
+        .re-angle-text{flex:1 1 100%;min-height:108px;resize:none;font-size:11px;color:#334155;background:#f8fafc;border:1px solid #eef2f7;border-radius:12px;padding:9px 11px;line-height:1.6;font-weight:600;outline:none}
+        #rePaint{cursor:crosshair}
+        .re-tools{padding:12px 22px 0;display:flex;gap:10px;flex-wrap:nowrap;align-items:center}
+        /* 工具行永远一行：不换行，滑杆吃掉剩余宽度，实在不够再横向滚动，绝不折成两行 */
+        .re-tool{display:flex;gap:8px;flex-wrap:nowrap;align-items:center;font-size:11px;color:#64748b;flex:1 1 100%;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+        .re-tool::-webkit-scrollbar{height:0}
+        .re-tool > span{white-space:nowrap;flex:0 0 auto}
+        .re-tool .re-tip{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+        .re-tool input[type="range"]{width:auto;flex:1 1 70px;min-width:60px;max-width:140px}
+        .re-tool.hidden{display:none}
+        .re-tool input[type="range"]{width:120px;accent-color:#111827}
+        .re-tool input[type="color"]{width:30px;height:28px;padding:0;border:1px solid #eef2f7;border-radius:8px;background:#fff}
+        .re-chips{display:inline-flex;gap:4px;flex-wrap:nowrap;flex:0 0 auto}
+        .re-tool input[type="color"]{flex:0 0 auto;width:30px;min-width:30px}
+        /* 窄屏（竖屏手机）再压一轮间距/内边距，保证一行能完整放下 */
+        @media (max-width:560px){
+            .re-tool{gap:5px;font-size:10px}
+            .re-tool .re-chip{padding:0 7px;font-size:10px}
+            .re-tool .re-btn{padding:0 7px}
+            .re-tool .re-btn span{display:none}
+            .re-tool .re-tip{display:none}
+            .re-tool input[type="color"]{width:26px;min-width:26px}
+            .re-tool input[type="range"]{flex:1 1 40px;min-width:40px}
+        }
+        .re-sep{width:1px;height:18px;background:#eef2f7}
+        .re-tip{font-size:10.5px;color:#94a3b8}
+        .re-btn{height:28px;padding:0 10px;border-radius:999px;border:1px solid #eef2f7;background:#f8fafc;font-size:11px;font-weight:700;color:#475569;cursor:pointer;display:inline-flex;align-items:center;gap:5px}
+        .re-btn i,.re-btn svg{width:14px;height:14px}
+        .re-btn.active{background:#111827;border-color:#111827;color:#fff}
+        .re-chip{height:28px;padding:0 10px;border-radius:999px;border:1px solid #eef2f7;background:#f8fafc;font-size:11px;font-weight:700;color:#475569;cursor:pointer;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;flex:0 0 auto}
+        .re-chip.active{background:#111827;border-color:#111827;color:#fff}
+        .re-foot{display:flex;align-items:center;gap:10px;padding:14px 22px 18px}
+        .re-foot .re-hint{font-size:11px;color:#94a3b8;flex:1}
+        .re-foot button{height:36px;padding:0 16px;border-radius:999px;border:1px solid #eef2f7;background:#fff;font-size:12px;font-weight:700;color:#334155;cursor:pointer}
+        .re-foot button.primary{background:#111827;border-color:#111827;color:#fff}
+        .re-text-item{position:absolute;z-index:8;padding:2px 4px;border-radius:6px;cursor:move;white-space:pre;font-weight:800;line-height:1.25;outline:none;text-shadow:0 1px 3px rgba(15,23,42,.35);pointer-events:auto}
+        .re-text-item[contenteditable="true"]{background:rgba(255,255,255,.92);text-shadow:none;box-shadow:0 0 0 1px #111827}
+        .re-seg{display:flex;gap:4px;padding:3px;border-radius:11px;background:#fff;border:1px solid #eef2f7}
+        .re-seg button{height:24px;padding:0 10px;border-radius:8px;font-size:11px;font-weight:800;color:#64748b;background:transparent;cursor:pointer;border:0}
+        .re-seg button.active{background:#111827;color:#fff}
+        .re-toast{position:fixed;left:50%;bottom:32px;transform:translate(-50%,12px);z-index:2147483000;max-width:min(560px,86vw);padding:10px 16px;border-radius:999px;background:rgba(17,24,39,.94);color:#fff;font-size:12px;font-weight:700;line-height:1.5;text-align:center;opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease}
+        .re-toast.show{opacity:1;transform:translate(-50%,0)}
+        .style-wrap{position:relative;margin-left:auto}
+        .style-btn{display:flex;align-items:center;gap:5px;height:26px;padding:0 10px;border-radius:999px;border:1px solid #eef2f7;background:#fff;color:#94a3b8;font-size:10px;font-weight:800;cursor:pointer;max-width:220px}
+        .style-btn.active{border-color:#111827;color:#111827}
+        .style-btn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .style-panel{position:absolute;right:0;top:32px;z-index:30;width:290px;max-height:340px;overflow:auto;background:#fff;border:1px solid #eef2f7;border-radius:16px;box-shadow:0 18px 40px rgba(15,23,42,.14);padding:6px}
+        .style-row{display:flex;align-items:center;gap:10px;width:100%;padding:7px;border:0;background:transparent;border-radius:10px;cursor:pointer;text-align:left}
+        .style-row:hover{background:#f8fafc}
+        .style-row.active{background:#f1f5f9}
+        .style-row img{width:38px;height:38px;border-radius:8px;object-fit:cover;background:#f1f5f9}
+        .style-row .n{font-size:12px;font-weight:700;color:#111827}
+        .style-row .m{font-size:10px;color:#94a3b8}
+        .style-hint{padding:12px;font-size:11px;color:#94a3b8;line-height:1.6}
         html:not(.studio-theme-dark) body:not(.studio-theme-dark) #lightbox.gallery-lightbox {
             background: rgba(255,255,255,.99) !important;
             backdrop-filter: blur(22px) saturate(1.05) !important;
@@ -92,6 +242,12 @@
                     <div class="flex items-center gap-2 text-gray-400">
                         <i data-lucide="terminal" class="w-3.5 h-3.5"></i>
                         <span class="text-[10px] font-black uppercase tracking-widest">Prompt</span>
+                        <span class="style-wrap">
+                            <button id="styleBtn" type="button" class="style-btn" onclick="toggleStylePanel(event)" title="风格（风格库里建好的风格 Skill）">
+                                <i data-lucide="palette" class="w-3 h-3"></i><span>风格</span>
+                            </button>
+                            <div id="stylePanel" class="style-panel hidden"></div>
+                        </span>
                     </div>
                     <textarea id="promptInput" rows="5" class="nano-input w-full p-6 rounded-3xl text-sm outline-none resize-none placeholder-gray-300" placeholder="输入想生成或编辑的画面..." data-i18n-placeholder="online.promptPlaceholder"></textarea>
                 </section>
@@ -106,16 +262,40 @@
                             <input type="file" id="file1" accept="image/*" class="hidden" onchange="handleFile(this.files[0],1)">
                             <i data-lucide="plus" class="w-5 h-5 text-gray-300 group-hover:text-black"></i><span class="text-[9px] mt-2 font-bold text-gray-400 uppercase">Main</span>
                             <img id="prev1" class="preview-img hidden"><button id="del1" onclick="clearSlot(1,event)" class="hidden absolute top-2 right-2 w-6 h-6 bg-white/90 rounded-full shadow-sm z-10">×</button>
+                            <img id="maskprev1" class="preview-img ref-mask hidden" alt="">
+                            <span id="mbadge1" class="ref-badge hidden">已涂遮罩</span>
+                            <div id="tools1" class="ref-tools hidden" onclick="event.stopPropagation()">
+                                <button type="button" title="扩图" onclick="openRefEditor(1,'outpaint',event)"><i data-lucide="expand"></i></button>
+                                <button type="button" title="遮罩" onclick="openRefEditor(1,'mask',event)"><i data-lucide="brush"></i></button>
+                                <button type="button" title="视角" onclick="openRefEditor(1,'angle',event)"><i data-lucide="camera"></i></button>
+                                <button type="button" title="画笔" onclick="openRefEditor(1,'brush',event)"><i data-lucide="paintbrush"></i></button>
+                            </div>
                         </div>
                         <div id="drop-zone-2" onclick="document.getElementById('file2').click()" class="upload-item group aspect-square rounded-2xl flex flex-col items-center justify-center cursor-pointer">
                             <input type="file" id="file2" accept="image/*" class="hidden" onchange="handleFile(this.files[0],2)">
                             <i data-lucide="plus" class="w-5 h-5 text-gray-300 group-hover:text-black"></i><span class="text-[9px] mt-2 font-bold text-gray-400 uppercase">Aux A</span>
                             <img id="prev2" class="preview-img hidden"><button id="del2" onclick="clearSlot(2,event)" class="hidden absolute top-2 right-2 w-6 h-6 bg-white/90 rounded-full shadow-sm z-10">×</button>
+                            <img id="maskprev2" class="preview-img ref-mask hidden" alt="">
+                            <span id="mbadge2" class="ref-badge hidden">已涂遮罩</span>
+                            <div id="tools2" class="ref-tools hidden" onclick="event.stopPropagation()">
+                                <button type="button" title="扩图" onclick="openRefEditor(2,'outpaint',event)"><i data-lucide="expand"></i></button>
+                                <button type="button" title="遮罩" onclick="openRefEditor(2,'mask',event)"><i data-lucide="brush"></i></button>
+                                <button type="button" title="视角" onclick="openRefEditor(2,'angle',event)"><i data-lucide="camera"></i></button>
+                                <button type="button" title="画笔" onclick="openRefEditor(2,'brush',event)"><i data-lucide="paintbrush"></i></button>
+                            </div>
                         </div>
                         <div id="drop-zone-3" onclick="document.getElementById('file3').click()" class="upload-item group aspect-square rounded-2xl flex flex-col items-center justify-center cursor-pointer">
                             <input type="file" id="file3" accept="image/*" class="hidden" onchange="handleFile(this.files[0],3)">
                             <i data-lucide="plus" class="w-5 h-5 text-gray-300 group-hover:text-black"></i><span class="text-[9px] mt-2 font-bold text-gray-400 uppercase">Aux B</span>
                             <img id="prev3" class="preview-img hidden"><button id="del3" onclick="clearSlot(3,event)" class="hidden absolute top-2 right-2 w-6 h-6 bg-white/90 rounded-full shadow-sm z-10">×</button>
+                            <img id="maskprev3" class="preview-img ref-mask hidden" alt="">
+                            <span id="mbadge3" class="ref-badge hidden">已涂遮罩</span>
+                            <div id="tools3" class="ref-tools hidden" onclick="event.stopPropagation()">
+                                <button type="button" title="扩图" onclick="openRefEditor(3,'outpaint',event)"><i data-lucide="expand"></i></button>
+                                <button type="button" title="遮罩" onclick="openRefEditor(3,'mask',event)"><i data-lucide="brush"></i></button>
+                                <button type="button" title="视角" onclick="openRefEditor(3,'angle',event)"><i data-lucide="camera"></i></button>
+                                <button type="button" title="画笔" onclick="openRefEditor(3,'brush',event)"><i data-lucide="paintbrush"></i></button>
+                            </div>
                         </div>
                     </div>
                 </section>
@@ -214,6 +394,99 @@
         </section>
     </div>
 
+    <!-- 参考图编辑弹窗：扩图 / 遮罩 / 视角 / 画笔（画布同款语义） -->
+    <div id="refEditModal" class="re-overlay hidden">
+        <div class="re-panel">
+            <div class="re-head">
+                <div><h3 id="reTitle">编辑参考图</h3><p id="reSub"></p></div>
+                <button class="re-close" type="button" onclick="closeRefEditor()"><i data-lucide="x" class="w-4 h-4 mx-auto"></i></button>
+            </div>
+            <div class="re-tabs">
+                <button type="button" data-re-mode="outpaint" onclick="setRefEditMode('outpaint')">扩图</button>
+                <button type="button" data-re-mode="mask" onclick="setRefEditMode('mask')">遮罩</button>
+                <button type="button" data-re-mode="angle" onclick="setRefEditMode('angle')">视角</button>
+                <button type="button" data-re-mode="brush" onclick="setRefEditMode('brush')">画笔</button>
+            </div>
+            <div class="re-stage" id="reStage">
+                <canvas id="reCanvas"></canvas>
+                <canvas id="rePaint"></canvas>
+                <div id="reOutpaintFrame" class="re-outpaint-frame">
+                    <div class="re-oh" data-re-oh="top"></div>
+                    <div class="re-oh" data-re-oh="right"></div>
+                    <div class="re-oh" data-re-oh="bottom"></div>
+                    <div class="re-oh" data-re-oh="left"></div>
+                    <div class="re-oh" data-re-oh="corner"></div>
+                </div>
+                <div id="reAngleCard" class="re-angle-card">
+                    <div class="re-ac-card" data-face="front">
+                        <div class="re-ac-face re-ac-front"><img id="reAngleImg" alt=""><div class="re-ac-sheen"></div></div>
+                        <div class="re-ac-face re-ac-back"><img alt=""><div class="re-ac-shade"></div></div>
+                        <div class="re-ac-edge edge-left"></div>
+                        <div class="re-ac-edge edge-right"></div>
+                    </div>
+                </div>
+                <div id="reAngleBadge" class="re-angle-badge">正面</div>
+                            </div>
+            <div class="re-tools">
+                <div id="reToolOutpaint" class="re-tool">
+                    <span>扩到</span>
+                    <span id="reOutpaintChips" class="re-chips"></span>
+                    <span class="re-sep"></span>
+                <div class="re-chips" style="flex:1 1 100%;gap:6px">
+                    <button class="re-btn" type="button" onclick="refUndo()" title="撤销"><i data-lucide="undo-2" class="w-4 h-4"></i><span>撤销</span></button>
+                    <button class="re-btn" type="button" onclick="refRedo()" title="恢复"><i data-lucide="redo-2" class="w-4 h-4"></i><span>恢复</span></button>
+                    <button class="re-btn" type="button" onclick="clearRefPaint()"><i data-lucide="eraser" class="w-4 h-4"></i><span>清空</span></button>
+                </div>
+                </div>
+                <div id="reToolMask" class="re-tool hidden">
+                    <span>笔粗</span><input id="reMaskSize" type="range" min="4" max="160" value="42" oninput="syncRefCursorSize()">
+                    <button class="re-btn" type="button" onclick="refUndo()" title="撤销"><i data-lucide="undo-2" class="w-4 h-4"></i></button>
+                    <button class="re-btn" type="button" onclick="refRedo()" title="恢复"><i data-lucide="redo-2" class="w-4 h-4"></i></button>
+                    <button class="re-btn" type="button" onclick="clearRefPaint()"><i data-lucide="eraser" class="w-4 h-4"></i><span>清空</span></button>
+                    <span class="re-tip">红色区域为要编辑的遮罩</span>
+                </div>
+                <div id="reToolBrush" class="re-tool hidden">
+                    <span id="reBrushTools" class="re-chips"></span>
+                    <span>颜色</span><input id="reBrushColor" type="color" value="#ff2d55">
+                    <span>笔粗</span><input id="reBrushSize" type="range" min="2" max="80" value="14" oninput="syncRefCursorSize()">
+                    <button class="re-btn" type="button" onclick="refUndo()" title="撤销"><i data-lucide="undo-2" class="w-4 h-4"></i></button>
+                    <button class="re-btn" type="button" onclick="refRedo()" title="恢复"><i data-lucide="redo-2" class="w-4 h-4"></i></button>
+                    <button class="re-btn" type="button" onclick="clearRefPaint()"><i data-lucide="eraser" class="w-4 h-4"></i><span>清空</span></button>
+                </div>
+                <div id="reToolAngle" class="re-tool hidden">
+                    <div class="re-angle-bar">
+                        <div class="re-angle-row">
+                            <span class="re-angle-label">方位</span>
+                            <input id="reAngleRange" class="re-angle-range" type="range" min="-180" max="180" step="5" value="0">
+                            <span id="reAngleValue" class="re-angle-value">正面</span>
+                        </div>
+                        <div class="re-angle-scale"><span>背面</span><span>左侧</span><span>正面</span><span>右侧</span><span>背面</span></div>
+                        <div class="re-angle-row">
+                            <span class="re-angle-label">俯仰</span>
+                            <input id="reAngleElevRange" class="re-angle-range" type="range" min="-30" max="60" step="5" value="0">
+                            <span id="reAngleElevValue" class="re-angle-value">平视</span>
+                        </div>
+                        <div class="re-angle-scale"><span>仰拍</span><span></span><span>平视</span><span></span><span>俯拍</span></div>
+                        <div class="re-angle-row">
+                            <span class="re-angle-label">景别</span>
+                            <input id="reAngleShotRange" class="re-angle-range" type="range" min="0" max="2" step="1" value="1">
+                            <span id="reAngleShotValue" class="re-angle-value">中景</span>
+                            <span id="reAngleDegLabel" class="re-angle-deg"></span>
+                        </div>
+                        <div class="re-angle-scale"><span>特写</span><span></span><span>中景</span><span></span><span>远景</span></div>
+                        <div id="reAngleAzimuth" class="re-angle-presets"></div>
+                    </div>
+                    <textarea id="reAnglePreview" class="re-angle-text" spellcheck="false" readonly></textarea>
+                </div>
+            </div>
+            <div class="re-foot">
+                <span id="reHint" class="re-hint"></span>
+                <button type="button" onclick="closeRefEditor()">取消</button>
+                <button type="button" id="reApplyBtn" class="primary" onclick="applyRefEdit()">应用</button>
+            </div>
+        </div>
+    </div>
+
     <div id="lightbox" onclick="handleOutsideClick(event)" class="hidden fixed inset-0 z-50 gallery-lightbox flex flex-col items-center justify-center p-8">
         <button onclick="closeLightbox()" class="absolute top-10 right-10 text-gray-400 hover:text-black"><i data-lucide="x" class="w-8 h-8"></i></button>
         <div class="w-full flex flex-col items-center pointer-events-none" style="max-width:min(1280px, 92vw)">
@@ -237,6 +510,7 @@
     </div>
 
     <script>
+        window.addEventListener('error', e => { document.title = 'JSEERR=' + e.message + ' @' + (e.filename||'') + ':' + (e.lineno||0); });
         lucide.createIcons();
         function tr(key){ return window.StudioI18n ? StudioI18n.t(key) : key; }
         function applyLanguage(lang){
@@ -643,6 +917,15 @@
         }
 
         const SLOTS = [1,2,3];
+        // 外部页面（小抽AI）复用同一个编辑面板：?editor=1&src=<图片地址>&mode=outpaint|mask|angle|brush
+        // ponytail: iframe + postMessage 复用这一套实现，不把 900 行编辑器复制到第二个页面
+        const REF_EDITOR_BRIDGE = (() => {
+            try {
+                const q = new URLSearchParams(location.search);
+                if(q.get('editor') !== '1') return null;
+                return { src:q.get('src') || '', mode:q.get('mode') || 'outpaint' };
+            } catch(e) { return null; }
+        })();
         function firstEmptySlot(){ return SLOTS.find(id => !refs[id]) || 1; }
         // 从 start 开始按格子顺序排列（循环），让多张图依次落进 Main / Aux A / Aux B
         function slotOrder(start){
@@ -693,32 +976,1202 @@
             form.append('files', file);
             const data = await fetch('/api/ai/upload', {method:'POST', body:form}).then(r=>r.json());
             refs[index] = data.files[0];
+            slotMask[index] = null;
+            rePendingMask = null; rePendingMaskUrl = ''; rePendingPreview = '';   // 换了图，未应用的遮罩作废
+            refMaskBadge(index);
+            refToolBar(index, true);
         }
         function clearSlot(index, ev){
             if(ev) ev.stopPropagation();
             refs[index] = null;
             refDims[index] = null;
+            slotMask[index] = null;
+            rePendingMask = null; rePendingMaskUrl = ''; rePendingPreview = '';
+            document.getElementById(`tools${index}`).classList.add('hidden');
+            refMaskBadge(index);
             document.getElementById(`prev${index}`).src = '';
             document.getElementById(`prev${index}`).classList.add('hidden');
             document.getElementById(`del${index}`).classList.add('hidden');
         }
 
+        /* ── 参考图编辑：扩图 / 遮罩 / 视角 / 画笔（语义对齐 smart-canvas.js）─────
+           扩图：白底把原图往外扩到目标比例 → 提示词补 'Remove white area and fill the scene'，
+                 尺寸切成扩后的像素（画布 applyImageOutpaint 同款做法）。
+           遮罩：涂的区域转成黑白 mask（白=要改）→ /api/image-mask-prepare 求框裁切 →
+                 生成时带 operation=inpaint，由后端羽化回贴成整图。
+           视角：方位/俯仰/景别拼中文句子写进提示词，参考图本身不动。
+           画笔：把涂画直接烧进参考图，替换这一格。 */
+        const REF_RATIOS = [['source','原图'],['1:1','1:1'],['4:3','4:3'],['3:4','3:4'],['16:9','16:9'],['9:16','9:16'],['3:2','3:2'],['2:3','2:3']];
+        const ANGLE_AZIMUTHS = [{deg:0,label:'正面'},{deg:45,label:'右 45°'},{deg:90,label:'右侧面'},{deg:135,label:'右后 135°'},{deg:180,label:'背面'},{deg:-135,label:'左后 135°'},{deg:-90,label:'左侧面'},{deg:-45,label:'左 45°'}];
+        // 俯仰/景别都是滑块：elev 连续可调，提示词按区间取最近的说法
+        const ANGLE_ELEV_MIN = -30, ANGLE_ELEV_MAX = 60;
+        const ANGLE_SHOT_KEYS = ['close', 'mid', 'wide'];
+        const ANGLE_SHOT_LABELS = {close:'特写', mid:'中景', wide:'远景'};
+        const REF_EDIT_TITLES = {
+            outpaint:{title:'扩图', sub:'把原图往外扩，空白由模型补全（白边别自己擦）'},
+            mask:{title:'遮罩', sub:'涂出要修改的区域，生成时只改这块、其余保持原样'},
+            angle:{title:'视角', sub:'选机位后把视角要求写进提示词，再点生成'},
+            brush:{title:'画笔', sub:'直接在参考图上涂画，应用后替换这张参考图'}
+        };
+        // 遮罩元数据（含 base_url）；参考图被换掉/清掉时必须一起失效，否则会贴歪
+        let slotMask = {1:null,2:null,3:null};
+        // 还没点「应用」的遮罩涂抹（编辑器里的黑底白掩膜 + 它的半透明红预览），只用于缩略图提示
+        let rePendingMask = null, rePendingMaskUrl = '', rePendingPreview = '', refEditSrc = '';
+        let refEdit = null;
+        let refPaintBinding = false;
+        // 画笔工具：与画布同一套 free/rect/ellipse/label/text
+        let reBrushTool = 'free';
+        let reLabelCounter = 1;
+        const RE_BRUSH_TOOLS = [['free','自由','paintbrush'],['rect','矩形','square'],['ellipse','椭圆','circle'],['label','数字','list-ordered'],['text','文字','type']];
+        let reTextItems = [];        // 文字标签（不进像素画布，应用时一起合成）
+        let reTextDraft = null;
+        let reTextSel = '';
+        let reDrawUndo = [];
+        let reDrawRedo = [];
+        let reShape = null;          // rect/ellipse 拖拽中的起点/终点
+        let refShapeSnapshot = null; // rect/ellipse 开画前的像素快照
+        let reOutDrag = null;        // 扩图拖拽（移动图片 / 拉边）
+        let reAngleDrag = null;      // 视角左右拖拽
+
+        function refToolBar(slot, show){
+            const box = document.getElementById(`tools${slot}`);
+            if(box) box.classList.toggle('hidden', !show);
+        }
+        function refMaskBadge(slot){
+            const meta = slotMask[slot];
+            const badge = document.getElementById(`mbadge${slot}`);
+            if(badge) badge.classList.toggle('hidden', !meta);
+            // 遮罩缩略图：直接用打包好的黑白 mask 叠在参考图上，涂了哪儿一眼可见
+            const prev = document.getElementById(`maskprev${slot}`);
+            if(prev){
+                // 🚨 别直接把 mask（黑底白块）铺在参考图上：纯黑会盖住原图（老板报过「看不到原图」）。
+                // 转成「涂过=半透明红、没涂=透明」再叠，只提示涂了哪儿。
+                const url = meta?.mask_url || '';
+                // 🚨 别直接把 mask（黑底白块）铺在参考图上：纯黑会盖住原图（老板报过「看不到原图」）。
+                // 只显示「涂了哪儿」：有已应用遮罩用它的预览，否则用编辑器里还没应用的涂抹。
+                const srcUrl = url || rePendingPreview || '';
+                // 注意：rePendingMaskUrl 是原始黑白掩膜，只能当数据用，绝不能直接贴到缩略图上
+                if(!srcUrl){ prev.classList.add('hidden'); return; }
+                applyMaskPreview(prev, srcUrl);
+            }
+        }
+        // mask 图（黑底白块）→ 半透明红色叠加图；按 url 缓存，避免每次重算
+        const maskPreviewCache = {};
+        function applyMaskPreview(img, url){
+            const done = tinted => { img.src = tinted; img.classList.remove('hidden'); };
+            if(maskPreviewCache[url]){ done(maskPreviewCache[url]); return; }
+            tintMaskPreview(url, tinted => {
+                if(!tinted) return;
+                maskPreviewCache[url] = tinted;
+                if(img.src !== tinted) done(tinted);
+            });
+        }
+        function tintMaskPreview(url, cb){
+            if(!url) { cb(''); return; }
+            const m = new Image();
+            m.onload = () => {
+                let w = m.naturalWidth || m.width, h = m.naturalHeight || m.height;
+                if(!w || !h){ cb(''); return; }
+                // 预览不需要原图分辨率：遮罩动辄上千像素，逐像素转 RGBA 在低端机上会卡，先压到长边 ≤ 512
+                const k = Math.min(1, 512 / Math.max(w, h));
+                w = Math.max(1, Math.round(w * k)); h = Math.max(1, Math.round(h * k));
+                const c = document.createElement('canvas');
+                c.width = w; c.height = h;
+                const g = c.getContext('2d');
+                g.drawImage(m, 0, 0, w, h);
+                const data = g.getImageData(0, 0, w, h);
+                // 🚨 遮罩是「黑底 + 白选区」。以前用 source-in 整块 fill 红色：白选区保持 alpha=1 → 缩略图整片红、看不到原图。
+                // 这里按原遮罩的亮度（黑底取反就是选区）直接写像素：选区半透明红，其余 alpha=0 透出原图。
+                const d = data.data;
+                for(let i = 0; i < d.length; i += 4){
+                    const alpha = ((d[i] + d[i + 1] + d[i + 2]) / 3 / 255) * 214;
+                    d[i] = 239; d[i + 1] = 68; d[i + 2] = 68;
+                    d[i + 3] = alpha < 12 ? 0 : alpha;
+                    if(!d[i + 3]) d[i] = d[i + 1] = d[i + 2] = 0;
+                }
+                g.putImageData(data, 0, 0);
+                cb(c.toDataURL('image/png'));
+            };
+            m.onerror = () => cb('');
+            m.src = url;
+        }
+        // 编辑器里每涂一笔就更新一次缩略图预览（只提示涂了哪儿，还没点应用也算）
+        let rePendingTimer = 0;
+        function markPendingMask(){
+            if(!refEdit || refEdit.mode !== 'mask') return;
+            refEditSrc = refs[refEdit.slot]?.url || refEditSrc;
+            const paint = document.getElementById('rePaint');
+            if(!paint) return;
+            const flat = refMaskCanvas(paint);
+            rePendingMask = flat;
+            clearTimeout(rePendingTimer);
+            rePendingTimer = setTimeout(() => {
+                const slot = refEdit?.slot || 1;
+                // 🚨 不能直接拿 flat（不透明白黑掩膜）当预览：叠到参考图上就是整块白/红盖死原图
+                // 先把原始掩膜存着（关编辑器/切格时要用它清掉），缩略图只用着色后的透明叠加
+                rePendingMaskUrl = flat.toDataURL('image/png');
+                tintMaskPreview(rePendingMaskUrl, tinted => {
+                    rePendingPreview = tinted || '';
+                    refMaskBadge(slot);
+                });
+            }, 160);
+        }
+        async function applyRefEdit(){
+            if(!refEdit || refEdit.busy) return;
+            // 🚨 先把 refEdit 钉住：下面有 await（画布转码 / 上传），期间用户关窗或切格会把 refEdit 置 null
+            const edit = refEdit;
+            const mode = edit.mode;
+            if(mode === 'angle'){
+                const sentence = refAnglePrompt(refEdit.angle);
+                const input = document.getElementById('promptInput');
+                const current = input.value.trim();
+                input.value = current ? `${current}\n${sentence}` : sentence;
+                closeRefEditor();
+                return;
+            }
+            if(mode === 'mask'){
+                if(refPaintEmpty()){ alert('先涂出要修改的区域'); return; }
+                // 遮罩必须是原图像素、不透明白黑：舞台画布是原图尺寸，文字标签要一起烧进去
+                const slot = edit.slot;
+                const paint = document.getElementById('rePaint');
+                const flat = refMaskCanvas(paint);
+                const blob = await canvasToBlob(flat);
+                if(!blob){ alert('遮罩生成失败'); return; }
+                const file = await uploadRefBlob(blob, `ref_mask_${Date.now()}.png`);
+                if(!file?.url){ alert('遮罩上传失败'); return; }
+                const baseUrl = refs[slot]?.url || '';
+                edit.busy = true;
+                document.getElementById('reApplyBtn').disabled = true;
+                try {
+                    const res = await fetch('/api/image-mask-prepare', {method:'POST', headers:{'Content-Type':'application/json'},
+                        body:JSON.stringify({image_url:baseUrl, mask_url:file.url})});
+                    if(!res.ok) throw new Error((await res.json()).detail || '遮罩准备失败');
+                    const data = await res.json();
+                    slotMask[slot] = {
+                        slot, base_url:data.base_url || baseUrl, ref_url:baseUrl, mask_url:file.url,
+                        crop_url:data.crop_url, crop_mask_url:data.crop_mask_url,
+                        bbox:(data.bbox || []).slice(0, 4), base_w:data.base_w || 0, base_h:data.base_h || 0,
+                        aspect_ratio:data.aspect_ratio || '', size:data.size || '', feather:data.feather || 0
+                    };
+                    refMaskBadge(slot);
+                    edit.busy = false;
+                    closeRefEditor();
+                    toastSafe('遮罩已就绪：写清要改什么，直接点生成');
+                } catch(err) {
+                    alert(err.message || '遮罩准备失败');
+                } finally {
+                    edit.busy = false;
+                    const btn = document.getElementById('reApplyBtn');
+                    if(btn) btn.disabled = false;
+                }
+                return;
+            }
+            // 扩图 / 画笔：都是本地像素编辑，出图则交给生图链路
+            const slot = refEdit.slot;
+            const source = document.getElementById('reCanvas');
+            let width = source.width, height = source.height;
+            let flat = null;
+            if(mode === 'brush'){
+                flat = document.createElement('canvas');
+                flat.width = width; flat.height = height;
+                const fctx = flat.getContext('2d');
+                fctx.drawImage(source, 0, 0);
+                fctx.drawImage(document.getElementById('rePaint'), 0, 0, width, height);
+                // 文字标签、数字标记一起烧进像素（跟画布画笔一致）
+                drawRefTextsOn(flat);
+            } else {
+                flat = source;
+            }
+            const blob = await canvasToBlob(flat);
+            if(!blob){ alert('导出图片失败'); return; }
+            const name = `${(refs[slot]?.name || 'ref').replace(/\.[^.]+$/, '')}_${mode}.png`;
+            const file = await uploadRefBlob(blob, name);
+            if(!file?.url){ alert('上传失败'); return; }
+            if(!(await replaceRefImage(slot, file, {width, height}))) return;
+            if(mode === 'outpaint'){
+                // 尺寸切成扩后的像素（16 对齐），提示词补一句让模型把白边画满
+                const snap = v => Math.max(64, Math.round(v / 16) * 16);
+                resolution = 'custom';
+                ratio = '';
+                customWidth = snap(width);
+                customHeight = snap(height);
+                updateSizeUI();
+                const input = document.getElementById('promptInput');
+                const hint = 'Remove white area and fill the scene';
+                if(!input.value.toLowerCase().includes(hint.toLowerCase())){
+                    input.value = input.value.trim() ? `${input.value.trim()}\n${hint}` : hint;
+                }
+            }
+            closeRefEditor();
+        }
+        // ─────────────────────────────────────────────────────────────────────────
+        // 参考图编辑（扩图 / 遮罩 / 视角 / 画笔）—— 与画布 smart-canvas.js 同一套交互
+        // 2026-11-09 重写：上一版落盘时被截断，这里按 b17 取证重做
+        // ─────────────────────────────────────────────────────────────────────────
+        const REF_STAGE_PAD = 40;
+
+        function refEditStage(){ return document.getElementById('reStage'); }
+        function refRatioValue(key){
+            if(key === 'source') return {ratio:1, w:(refEdit?.natW || 1), h:(refEdit?.natH || 1)};
+            const [w,h] = String(key || '1:1').split(':').map(Number);
+            return {ratio:(w&&h) ? w/h : 1, w, h};
+        }
+        function refOutpaintSize(){
+            if(!refEdit) return {width:1, height:1};
+            if(refEdit.customPad) return {...refEdit.customPad};
+            if(refEdit.ratioKey === 'source') return {width:refEdit.natW, height:refEdit.natH};
+            const [cw, ch] = String(refEdit.ratioKey).split(':').map(Number);
+            const natW = refEdit.natW, natH = refEdit.natH;
+            let width, height;
+            if(cw >= ch){ height = natH; width = Math.round(natH * cw / ch); }
+            else { width = natW; height = Math.round(natW * ch / cw); }
+            if(width < natW || height < natH){
+                // 比例比原图“窄”时，反过来按宽补齐，保证外扩一定 >= 原图
+                if(width < natW){ width = natW; height = Math.round(natW * ch / cw); }
+                if(height < natH){ height = natH; width = Math.round(natH * cw / ch); }
+            }
+            return {width, height};
+        }
+        function clampRefBox(box, pad){
+            const natW = refEdit ? refEdit.natW : pad.width, natH = refEdit ? refEdit.natH : pad.height;
+            const w = Math.max(natW, pad.width), h = Math.max(natH, pad.height);
+            return {x:Math.min(Math.max(0, box?.x || 0), w - natW), y:Math.min(Math.max(0, box?.y || 0), h - natH), w, h};
+        }
+
+        function openRefEditor(slot, mode, ev){
+            if(ev) ev.stopPropagation();
+            // theme.js 给 body 加了 transform:scale()，它会成为 fixed 的包含块 ⇒ 页面一滚动弹窗就跑到视口外。
+            // 打开期间把缩放撤掉，弹窗就老老实实居中在可见区域里。
+            document.body.classList.add('re-open');
+            const ref = refs[slot];
+            if(!ref?.url){ toastSafe('先上传一张参考图'); return; }
+            refEditSrc = ref.url;
+            const img = new Image();
+            img.onload = () => {
+                refEdit = {slot, mode: mode || 'outpaint', img, natW:img.naturalWidth || 1, natH:img.naturalHeight || 1,
+                    ratioKey:'source', angle:{deg:0, elev:0, shot:'mid'}, busy:false};
+                reDrawUndo = []; reDrawRedo = []; reTextItems = []; reLabelCounter = 1; reTextSel = ''; reShape = null; refShapeSnapshot = null;
+                reOutDrag = null; reAngleDrag = null; reTextDraft = null;
+                refEdit.box = clampRefBox({x:0, y:0, w:refEdit.natW, h:refEdit.natH}, refOutpaintSize());
+                const overlay = document.getElementById('refEditModal');
+                overlay.classList.remove('hidden');
+                refEditStage().classList.add('empty');
+                bindRefPaint();
+                bindRefStage();
+                renderRefModeTools(true);
+                drawRefStage();
+            };
+            img.onerror = () => toastSafe('图片加载失败，换一张试试')   // 用 toast 而不是 alert：在 iframe 弹层里 alert 会卡住整个面板;
+            img.src = ref.url;
+        }
+        function closeRefEditor(){
+            const overlay = document.getElementById('refEditModal');
+            if(overlay) overlay.classList.add('hidden');
+            const st = refEditStage();
+            if(st){ st.classList.remove('loaded', 'empty', 're-mode-outpaint', 're-mode-mask', 're-mode-angle', 're-mode-brush'); st.style.removeProperty('--re-ratio'); }
+            const cur = document.getElementById('reCursor');
+            if(cur) cur.style.display = 'none';
+            refEdit = null; reShape = null; reOutDrag = null; reAngleDrag = null; reTextDraft = null;
+            document.body.classList.remove('re-open');
+            // 桥接模式：整个窗口就是这个 iframe，关掉面板必须让外层把 iframe 也收起来
+            if(REF_EDITOR_BRIDGE) {
+                try { window.parent.postMessage({ type: 'xvai-ref-editor-closed' }, '*'); } catch(err) {}
+            }
+        }
+        function setRefEditMode(mode){
+            if(!refEdit) return;
+            refEdit.mode = mode;
+            reShape = null; reOutDrag = null; reAngleDrag = null;
+            const cur = document.getElementById('reCursor');
+            if(cur) cur.style.display = 'none';
+            renderRefModeTools(true);
+            drawRefStage();
+        }
+        function refModeHint(){
+            const hint = document.getElementById('reHint');
+            if(!hint || !refEdit) return;
+            hint.textContent = ({
+                outpaint:'拖动图片调整位置 · 拉边/角改外扩范围 · 白色区域会被补全',
+                mask:'涂出要修改的区域，应用后再写提示词生成',
+                angle:'选好视角后点「应用」，视角要求会追加到提示词',
+                brush:'直接在图上涂画，应用后替换这张参考图'
+            })[refEdit.mode] || '';
+        }
+        function renderRefModeTools(syncStage = true){
+            if(!refEdit) return;
+            const mode = refEdit.mode;
+            document.querySelectorAll('#refEditModal .re-tabs button').forEach(b => b.classList.toggle('active', b.dataset.reMode === mode));
+            ['outpaint','mask','brush','angle'].forEach(m => {
+                const el = document.getElementById('reTool' + m.charAt(0).toUpperCase() + m.slice(1));
+                if(el) el.classList.toggle('hidden', m !== mode);
+            });
+            const titles = {outpaint:'扩图', mask:'遮罩', angle:'视角', brush:'画笔'};
+            const subs = {outpaint:'选择画布比例，拖动图片摆位置，白色区域交给模型补全',
+                          mask:'涂出要改的地方，写清要求后生成',
+                          angle:'选机位后把视角要求写进提示词，再点生成',
+                          brush:'涂画 / 标注后替换这张参考图'};
+            document.getElementById('reTitle').textContent = titles[mode] || '编辑参考图';
+            document.getElementById('reSub').textContent = subs[mode] || '';
+            if(mode === 'outpaint'){
+                const box = document.getElementById('reOutpaintChips');
+                if(box) box.innerHTML = REF_RATIOS.map(([k, label]) =>
+                    `<button type="button" class="re-chip${refEdit.ratioKey === k ? ' active' : ''}" data-re-ratio="${k}">${label}</button>`).join('');
+                box?.querySelectorAll('[data-re-ratio]').forEach(btn => btn.onclick = () => {
+                    refEdit.ratioKey = btn.dataset.reRatio;
+                    refEdit.customPad = null;
+                    refEdit.box = clampRefBox({x:0, y:0}, refOutpaintSize());
+                    renderRefModeTools(false); drawRefStage();
+                });
+            }
+            if(mode === 'brush'){
+                const box = document.getElementById('reBrushTools');
+                if(box){
+                    box.innerHTML = RE_BRUSH_TOOLS.map(([k, label, icon]) =>
+                        `<button type="button" class="re-chip${reBrushTool === k ? ' active' : ''}" data-re-brush="${k}"><i data-lucide="${icon}" class="w-3.5 h-3.5"></i><span>${label}</span></button>`).join('');
+                    box.querySelectorAll('[data-re-brush]').forEach(btn => btn.onclick = () => {
+                        reBrushTool = btn.dataset.reBrush; reShape = null;
+                        renderRefModeTools(false); refModeHint();
+                        const cur = document.getElementById('reCursor');
+                        if(cur) cur.style.display = (reBrushTool === 'free' && window.matchMedia('(hover:hover)').matches) ? 'block' : 'none';
+                    });
+                    window.lucide?.createIcons();
+                }
+            }
+            if(mode === 'angle'){
+                renderRefAngleControls();
+            }
+            refModeHint();
+            if(syncStage) syncRefStageClass();
+        }
+        function syncRefStageClass(){
+            const st = refEditStage();
+            if(!st || !refEdit) return;
+            ['outpaint','mask','angle','brush'].forEach(m => st.classList.toggle('re-mode-' + m, refEdit.mode === m && !st.classList.contains('empty')));
+        }
+
+        function drawRefStage(){
+            if(!refEdit) return;
+            const st = refEditStage();
+            const canvas = document.getElementById('reCanvas');
+            const paint = document.getElementById('rePaint');
+            const mode = refEdit.mode;
+            const sizes = {outpaint: refOutpaintSize(), mask:{width:refEdit.natW, height:refEdit.natH},
+                           brush:{width:refEdit.natW, height:refEdit.natH}, angle:{width:refEdit.natW, height:refEdit.natH}};
+            const size = sizes[mode];
+            if(mode === 'outpaint'){
+                refEdit.box = clampRefBox(refEdit.box || {x:0, y:0}, size);
+                for(const cv of [canvas, paint]){
+                    if(cv.width !== size.width || cv.height !== size.height){ cv.width = size.width; cv.height = size.height; }
+                }
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, size.width, size.height);
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(0, 0, size.width, size.height);
+                ctx.drawImage(refEdit.img, refEdit.box.x, refEdit.box.y, refEdit.natW, refEdit.natH);
+                const frame = document.getElementById('reOutpaintFrame');
+                if(frame){
+                    frame.style.left = refEdit.box.x + 'px'; frame.style.top = refEdit.box.y + 'px';
+                    frame.style.width = refEdit.natW + 'px'; frame.style.height = refEdit.natH + 'px';
+                }
+            } else {
+                if(canvas.width !== refEdit.natW || canvas.height !== refEdit.natH){ canvas.width = refEdit.natW; canvas.height = refEdit.natH; }
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(refEdit.img, 0, 0, refEdit.natW, refEdit.natH);
+                if(paint.width !== refEdit.natW || paint.height !== refEdit.natH){
+                    const old = document.createElement('canvas');
+                    old.width = paint.width; old.height = paint.height;
+                    if(paint.width && paint.height) old.getContext('2d').drawImage(paint, 0, 0);
+                    paint.width = refEdit.natW; paint.height = refEdit.natH;
+                }
+            }
+            st.classList.remove('empty');
+            st.style.setProperty('--re-ratio', String(size.width / Math.max(1, size.height)));
+            st.classList.add('loaded');
+            syncRefStageClass();
+            layoutRefCanvases(mode === 'outpaint' ? 0 : REF_STAGE_PAD);
+            if(mode === 'angle'){ drawRefAngleCard(); syncRefAngleCard(); }
+            renderRefTexts();
+            drawRefTextsOn(null);
+        }
+        function layoutRefCanvases(pad = REF_STAGE_PAD){
+            if(!refEdit) return;
+            const st = refEditStage();
+            const canvas = document.getElementById('reCanvas');
+            const paint = document.getElementById('rePaint');
+            const availW = Math.max(120, st.clientWidth - pad * 2);
+            const availH = Math.max(120, st.clientHeight - pad * 2);
+            const scale = Math.min(availW / canvas.width, availH / canvas.height, 4);
+            const w = Math.round(canvas.width * scale), h = Math.round(canvas.height * scale);
+            // 视角模式只用 3D 卡片，底图整层隐藏（否则两张图并排，看着像重复）
+            const hideBase = refEdit.mode === 'angle';
+            for(const cv of [canvas, paint]){
+                cv.style.width = w + 'px'; cv.style.height = h + 'px';
+                cv.style.left = Math.round((st.clientWidth - w) / 2) + 'px';
+                cv.style.top = Math.round((st.clientHeight - h) / 2) + 'px';
+                cv.style.visibility = hideBase ? 'hidden' : 'visible';
+            }
+            const frame = document.getElementById('reOutpaintFrame');
+            if(frame && refEdit.mode === 'outpaint'){
+                const box = refEdit.box;
+                frame.style.left = Math.round(canvas.offsetLeft + box.x * scale) + 'px';
+                frame.style.top = Math.round(canvas.offsetTop + box.y * scale) + 'px';
+                frame.style.width = Math.round(refEdit.natW * scale) + 'px';
+                frame.style.height = Math.round(refEdit.natH * scale) + 'px';
+            }
+            if(refEdit.mode === 'angle') syncRefAngleCardSize();
+            else if(st.clientHeight) st.style.removeProperty('--re-stage-h');
+        }
+        function refStagePoint(event){
+            const paint = document.getElementById('rePaint');
+            const rect = paint.getBoundingClientRect();
+            const sx = paint.width / Math.max(1, rect.width), sy = paint.height / Math.max(1, rect.height);
+            return {x:(event.clientX - rect.left) * sx, y:(event.clientY - rect.top) * sy};
+        }
+        function refPaintColor(){
+            if(refEdit?.mode === 'mask') return 'rgba(239,68,68,.55)';
+            return document.getElementById('reBrushColor')?.value || '#ff2d55';
+        }
+        function refBrushSize(){
+            if(refEdit?.mode === 'mask') return Number(document.getElementById('reMaskSize')?.value || 42);
+            return Number(document.getElementById('reBrushSize')?.value || 14);
+        }
+        function setupRefDrawStyle(ctx){
+            ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+            ctx.lineWidth = refBrushSize(); ctx.strokeStyle = refPaintColor(); ctx.fillStyle = refPaintColor();
+        }
+        function refStrokePoint(ctx, from, to){
+            setupRefDrawStyle(ctx);
+            ctx.beginPath();
+            if(from){ ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke(); }
+            else { ctx.arc(to.x, to.y, Math.max(1, refBrushSize() / 2), 0, Math.PI * 2); ctx.fill(); }
+        }
+        function refStrokeAt(event, from){
+            const paint = document.getElementById('rePaint');
+            if(!paint) return null;
+            const ctx = paint.getContext('2d');
+            const to = refStagePoint(event);
+            refStrokePoint(ctx, from, to);
+            return to;
+        }
+        function refSnapshot(){
+            const paint = document.getElementById('rePaint');
+            const txt = JSON.stringify(reTextItems);
+            return {paint: paint.toDataURL('image/png'), text: txt, label: reLabelCounter};
+        }
+        // 快照回滚（dataURL 异步解码后覆盖画布）；返回 Promise，保证调用方知道何时是新像素
+        function refRestore(canvas, snap){
+            return new Promise(resolve => {
+                if(!snap || !canvas){ resolve(); return; }
+                const ctx = canvas.getContext('2d');
+                const img = new Image();
+                img.onload = () => { ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.drawImage(img, 0, 0); refShapeSnapshot = null; resolve(); };
+                img.onerror = () => resolve();
+                img.src = snap.paint;
+            });
+        }
+        function refPushHistory(){
+            const snap = refSnapshot();
+            reDrawUndo.push(snap);
+            if(reDrawUndo.length > 30) reDrawUndo.shift();
+            reDrawRedo = [];
+        }
+        function refUndo(){
+            if(!reDrawUndo.length) return;
+            reDrawRedo.push(refSnapshot());
+            const snap = reDrawUndo.pop();
+            const paint = document.getElementById('rePaint');
+            const ctx = paint.getContext('2d');
+            refRestore(paint, snap).then(() => {
+                reTextItems = JSON.parse(snap.text || '[]'); reLabelCounter = snap.label || 1;
+                renderRefTexts(); drawRefTextsOn(null);
+            });
+        }
+        function refRedo(){
+            if(!reDrawRedo.length) return;
+            reDrawUndo.push(refSnapshot());
+            const snap = reDrawRedo.pop();
+            const paint = document.getElementById('rePaint');
+            const ctx = paint.getContext('2d');
+            refRestore(paint, snap).then(() => {
+                reTextItems = JSON.parse(snap.text || '[]'); reLabelCounter = snap.label || 1;
+                renderRefTexts(); drawRefTextsOn(null);
+            });
+        }
+        function clearRefPaint(){
+            const paint = document.getElementById('rePaint');
+            const ctx = paint.getContext('2d');
+            ctx.clearRect(0, 0, paint.width, paint.height);
+            reTextItems = []; reLabelCounter = 1; reShape = null;
+            renderRefTexts();
+            rePendingMaskUrl = ''; if(refEdit) refMaskBadge(refEdit.slot);
+        }
+        function refPaintEmpty(){
+            const paint = document.getElementById('rePaint');
+            const data = paint.getContext('2d').getImageData(0, 0, paint.width, paint.height).data;
+            for(let i = 3; i < data.length; i += 4){ if(data[i] > 0) return false; }
+            return !reTextItems.length;
+        }
+        function refMaskCanvas(src){
+            const c = document.createElement('canvas');
+            c.width = refEdit ? refEdit.natW : src.width;
+            c.height = refEdit ? refEdit.natH : src.height;
+            const ctx = c.getContext('2d');
+            const scaled = document.createElement('canvas');
+            scaled.width = c.width; scaled.height = c.height;
+            scaled.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+            const data = scaled.getContext('2d').getImageData(0, 0, c.width, c.height);
+            const out = ctx.createImageData(c.width, c.height);
+            for(let i = 0; i < data.data.length; i += 4){
+                const on = data.data[i + 3] > 8;
+                out.data[i] = out.data[i + 1] = out.data[i + 2] = on ? 255 : 0;
+                out.data[i + 3] = 255;
+            }
+            ctx.putImageData(out, 0, 0);
+            drawRefTextsOn(c, true);
+            return c;
+        }
+        function drawRefNumberLabel(ctx, x, y){
+            if(!ctx) return;
+            const r = Math.max(18, refBrushSize() * 2.2);
+            ctx.save();
+            setupRefDrawStyle(ctx);
+            ctx.beginPath(); ctx.arc(x, y, r / 2, 0, Math.PI * 2);
+            ctx.fillStyle = refPaintColor(); ctx.fill();
+            ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,.92)'; ctx.stroke();
+            ctx.fillStyle = '#fff';
+            ctx.font = `800 ${Math.round(r * 0.62)}px system-ui, sans-serif`;
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText(String.fromCharCode(0x2460 + Math.max(0, reLabelCounter - 1)), x, y);
+            ctx.restore();
+        }
+
+        // ── 文字工具（DOM 覆盖层，应用时烧进像素）──────────────────────────────
+        function renderRefTexts(){
+            const st = refEditStage();
+            // 逐个删：contenteditable 失焦会触发 blur 回调里再渲染一次，forEach 的静态列表会撞上已被删的节点
+            // 先把列表快照下来再删：blur 回调会在删的过程中重跑本函数，实时 querySelector 会和它互相踩
+            const stale = st ? Array.prototype.slice.call(st.querySelectorAll('.re-text-item')) : [];
+            // try 包住：blur 链里可能有别处先一步删掉同一节点，抛错会打断后面的重绘
+            stale.forEach(n => { try { n.remove(); } catch(err) {} });
+            const paint = document.getElementById('rePaint');
+            if(!st || !paint || !refEdit) return;
+            const rect = paint.getBoundingClientRect();
+            const stRect = st.getBoundingClientRect();
+            const sx = rect.width / Math.max(1, paint.width), sy = rect.height / Math.max(1, paint.height);
+            reTextItems.forEach((item, i) => {
+                const el = document.createElement('div');
+                el.className = 're-text-item';
+                el.contentEditable = 'false';
+                el.textContent = item.text;
+                el.style.left = (rect.left - stRect.left + item.x * sx) + 'px';
+                el.style.top = (rect.top - stRect.top + item.y * sy) + 'px';
+                el.style.color = item.color || '#ff2d55';
+                el.style.fontSize = Math.max(12, (item.size || 28) * sx) + 'px';
+                el.dataset.reTextIndex = i;
+                el.onclick = e => { e.stopPropagation(); reTextSel = String(i); beginRefTextEdit(i); };
+                st.appendChild(el);
+            });
+        }
+        function beginRefTextEdit(index){
+            const st = refEditStage();
+            const el = st?.querySelector(`.re-text-item[data-re-text-index="${index}"]`);
+            if(!el) return;
+            el.contentEditable = 'true';
+            el.focus();
+            document.execCommand?.('selectAll', false, null);
+            el.onblur = () => {
+                el.contentEditable = 'false';
+                reTextItems[index] = {...reTextItems[index], text: el.textContent || ''};
+                if(!reTextItems[index].text.trim()) reTextItems.splice(index, 1);
+                renderRefTexts(); drawRefTextsOn(null);
+            };
+        }
+        function beginRefText(event){
+            const p = refStagePoint(event);
+            refPushHistory();
+            reTextItems.push({x:p.x, y:p.y, text:'文字', color:refPaintColor(), size:refBrushSize() * 2});
+            renderRefTexts();
+            setTimeout(() => beginRefTextEdit(reTextItems.length - 1), 30);
+        }
+        function finishRefText(){
+            const active = document.activeElement;
+            if(active?.classList?.contains('re-text-item')) active.blur();
+        }
+        function drawRefTextsOn(target, monochrome){
+            if(!refEdit || !reTextItems.length) return;
+            const st = refEditStage();
+            const paint = document.getElementById('rePaint');
+            if(!st || !paint) return;
+            const rect = paint.getBoundingClientRect(), stRect = st.getBoundingClientRect();
+            const sx = paint.width / Math.max(1, rect.width), sy = paint.height / Math.max(1, rect.height);
+            const ctx = target ? target.getContext('2d') : paint.getContext('2d');
+            ctx.save();
+            reTextItems.forEach(item => {
+                const x = target ? item.x : (rect.left - stRect.left + item.x / sx);
+                const y = target ? item.y : (rect.top - stRect.top + item.y / sy);
+                if(target){
+                    ctx.fillStyle = monochrome ? '#fff' : (item.color || '#ff2d55');
+                    ctx.font = `800 ${Math.round(Math.max(12, item.size || 28))}px system-ui, sans-serif`;
+                    ctx.textBaseline = 'top';
+                    ctx.fillText(item.text || '', x, y);
+                }
+            });
+            ctx.restore();
+        }
+
+        // ── 指针绑定（只绑一次）────────────────────────────────────────────────
+        function capturePointer(el, event){
+            try { el.setPointerCapture?.(event.pointerId); } catch(err) { /* 合成事件没有真实指针 */ }
+        }
+        function syncRefCursorSize(){
+            if(!refEdit) return;
+            const cur = document.getElementById('reCursor');
+            const paint = document.getElementById('rePaint');
+            if(!cur || !paint) return;
+            const rect = paint.getBoundingClientRect();
+            const size = Math.max(4, refBrushSize() * (rect.width / Math.max(1, paint.width)));
+            cur.style.width = cur.style.height = size + 'px';
+        }
+        function refCursorMove(event){
+            if(!refEdit || !(refEdit.mode === 'mask' || (refEdit.mode === 'brush' && reBrushTool === 'free'))) return;
+            if(window.matchMedia('(hover:none)').matches) return;
+            const cur = document.getElementById('reCursor');
+            if(!cur) return;
+            syncRefCursorSize();
+            const size = parseFloat(cur.style.width) || 20;
+            cur.style.display = 'block';
+            cur.style.left = (event.clientX - size / 2) + 'px';
+            cur.style.top = (event.clientY - size / 2) + 'px';
+            cur.style.transform = 'none';
+        }
+        function bindRefPaint(){
+            if(refPaintBinding) return;
+            refPaintBinding = true;
+            const paint = document.getElementById('rePaint');
+            if(!paint) return;
+            let last = null;
+            paint.addEventListener('pointerdown', event => {
+                if(!refEdit) return;
+                if(!(refEdit.mode === 'mask' || refEdit.mode === 'brush')) return;
+                if(event.button !== 0) return;
+                event.preventDefault();
+                capturePointer(paint, event);
+                refPushHistory();
+                const tool = refEdit.mode === 'brush' ? reBrushTool : 'free';
+                const p = refStagePoint(event);
+                if(tool === 'label'){
+                    drawRefNumberLabel(paint.getContext('2d'), p.x, p.y);
+                    reLabelCounter += 1;
+                    last = null;
+                    markPendingMask();
+                    return;
+                }
+                if(tool === 'text'){ beginRefText(event); last = null; return; }
+                if(tool === 'rect' || tool === 'ellipse'){
+                    refShapeSnapshot = refSnapshot();
+                    reShape = {tool, from:p, to:p};
+                    last = null;
+                    return;
+                }
+                refStrokePoint(paint.getContext('2d'), null, p);
+                last = p;
+                markPendingMask();
+            });
+            paint.addEventListener('pointermove', event => {
+                refCursorMove(event);
+                if(!refEdit) return;
+                if(reShape){
+                    const ctx = paint.getContext('2d');
+                    refRestore(paint, refShapeSnapshot).then(() => {
+                        // 回滚是异步的，期间可能已经 pointerup 收尾，这里必须重新判空
+                        if(!reShape) return;
+                        const p = refStagePoint(event);
+                        reShape.to = p;
+                        ctx.save(); setupRefDrawStyle(ctx); ctx.globalAlpha = .9;
+                        if(reShape.tool === 'rect'){
+                            ctx.strokeRect(reShape.from.x, reShape.from.y, p.x - reShape.from.x, p.y - reShape.from.y);
+                        } else {
+                            const cx = (reShape.from.x + p.x) / 2, cy = (reShape.from.y + p.y) / 2;
+                            ctx.beginPath();
+                            ctx.ellipse(cx, cy, Math.abs(p.x - reShape.from.x) / 2, Math.abs(p.y - reShape.from.y) / 2, 0, 0, Math.PI * 2);
+                            ctx.stroke();
+                        }
+                        ctx.restore();
+                    });
+                    return;
+                }
+                if(!last) return;
+                const evts = event.getCoalescedEvents?.() || [event];
+                for(const e of evts){
+                    const to = refStrokeAt(e, last);
+                    if(to) last = to;
+                }
+                markPendingMask();
+            });
+            const endStroke = event => {
+                if(reShape){
+                    // 合成/快速点击可能没派发 pointermove，这里兜底补终点
+                    if(event && event.clientX && refEdit){
+                        try { reShape.to = refStagePoint(event); } catch(err) { /* 忽略 */ }
+                    }
+                    const ctx = paint.getContext('2d');
+                    const shape = reShape;
+                    reShape = null;
+                    refRestore(paint, refShapeSnapshot).then(() => {
+                        ctx.save(); setupRefDrawStyle(ctx);
+                        if(shape.tool === 'rect'){
+                            ctx.strokeRect(shape.from.x, shape.from.y, shape.to.x - shape.from.x, shape.to.y - shape.from.y);
+                        } else {
+                            const cx = (shape.from.x + shape.to.x) / 2, cy = (shape.from.y + shape.to.y) / 2;
+                            ctx.beginPath();
+                            ctx.ellipse(cx, cy, Math.abs(shape.to.x - shape.from.x) / 2, Math.abs(shape.to.y - shape.from.y) / 2, 0, 0, Math.PI * 2);
+                            ctx.stroke();
+                        }
+                        ctx.restore();
+                        markPendingMask();
+                    });
+                }
+                last = null;
+            };
+            paint.addEventListener('pointerup', event => endStroke(event));
+            paint.addEventListener('pointercancel', () => endStroke(null));
+            paint.addEventListener('pointerleave', event => {
+                const cur = document.getElementById('reCursor');
+                if(cur && !last && !reShape) cur.style.display = 'none';
+            });
+        }
+        function bindRefStage(){
+            if(window.__refStageBound) return;
+            window.__refStageBound = true;
+            const st = refEditStage();
+            if(!st) return;
+            st.addEventListener('pointerdown', event => {
+                if(!refEdit) return;
+                const tag = (event.target.tagName || '').toLowerCase();
+                if(['button','input','textarea','select'].includes(tag)) return;
+                if(refEdit.mode === 'outpaint'){
+                    if(event.button !== 0) return;
+                    const handle = event.target.closest?.('[data-re-oh]');
+                    const onImage = ['reCanvas','rePaint','reOutpaintFrame'].includes(event.target.id);
+                    if(!handle && !onImage) return;
+                    event.preventDefault();
+                    capturePointer(st, event);
+                    const size = refOutpaintSize();
+                    refEdit.box = clampRefBox({x:refEdit.box?.x || 0, y:refEdit.box?.y || 0}, size);
+                    reOutDrag = {mode: handle ? handle.dataset.reOh : 'move', sx:event.clientX, sy:event.clientY,
+                        start:{...refEdit.box}, natW:refEdit.natW, natH:refEdit.natH, padW:size.width, padH:size.height};
+                } else if(refEdit.mode === 'angle'){
+                    if(event.button !== 0) return;
+                    event.preventDefault();
+                    capturePointer(st, event);
+                    reAngleDrag = {sx:event.clientX, sy:event.clientY, deg:refEdit.angle.deg, elev:refEdit.angle.elev};
+                }
+            });
+            st.addEventListener('pointermove', event => {
+                if(reOutDrag){
+                    const dx = event.clientX - reOutDrag.sx, dy = event.clientY - reOutDrag.sy;
+                    const s = reOutDrag.start;
+                    const natW = reOutDrag.natW, natH = reOutDrag.natH;
+                    if(reOutDrag.mode === 'move'){
+                        refEdit.box = clampRefBox({x:s.x + dx, y:s.y + dy, w:reOutDrag.padW, h:reOutDrag.padH}, {width:reOutDrag.padW, height:reOutDrag.padH});
+                    } else {
+                        // 拉边/角：与画布一致，对称外扩
+                        const scaleX = natW / Math.max(1, s.w), scaleY = natH / Math.max(1, s.h);
+                        let growX = 0, growY = 0;
+                        const m = reOutDrag.mode;
+                        if(m === 'left' || m === 'right' || m === 'corner') growX = Math.abs(dx) * scaleX / 2;
+                        if(m === 'top' || m === 'bottom' || m === 'corner') growY = Math.abs(dy) * scaleY / 2;
+                        let w = natW + growX * 2, h = natH + growY * 2;
+                        if(m === 'left' || m === 'right') h = Math.max(s.h, natH);
+                        if(m === 'top' || m === 'bottom') w = Math.max(s.w, natW);
+                        refEdit.box = clampRefBox({x:0, y:0, w, h}, {width:Math.round(w), height:Math.round(h)});
+                        refEdit.ratioKey = 'source';
+                        // 画布宽高直接跟着外扩走（自定义 pad 优先于比例估算）
+                        refEdit.customPad = {width:Math.round(w), height:Math.round(h)};
+                        refEdit.box = {x:Math.round((w - natW) / 2), y:Math.round((h - natH) / 2), w:Math.round(w), h:Math.round(h)};
+                    }
+                    drawRefStage();
+                } else if(reAngleDrag){
+                    const dx = event.clientX - reAngleDrag.sx, dy = event.clientY - reAngleDrag.sy;
+                    const deg = Math.round((reAngleDrag.deg + dx * 0.6) / 5) * 5;
+                    const elev = Math.round((reAngleDrag.elev - dy * 0.4) / 5) * 5;
+                    refEdit.angle.deg = Math.max(-180, Math.min(180, deg));
+                    refEdit.angle.elev = Math.max(-30, Math.min(60, elev));
+                    renderRefAngleControls(false);
+                    syncRefAngleCard();
+                }
+            });
+            const stopDrag = () => { reOutDrag = null; reAngleDrag = null; };
+            st.addEventListener('pointerup', stopDrag);
+            st.addEventListener('pointercancel', stopDrag);
+            st.addEventListener('pointerup', () => {
+                if(!refEdit || refEdit.mode !== 'mask') markPendingMask();
+            });
+            st.addEventListener('dragover', e => e.preventDefault());
+            const range = document.getElementById('reAngleRange');
+            if(range) range.addEventListener('input', () => {
+                if(!refEdit) return;
+                refEdit.angle.deg = Number(range.value) || 0;
+                renderRefAngleControls(false);
+                syncRefAngleCard();
+            });
+            const bindAngleRange = (id, apply) => {
+                const el = document.getElementById(id);
+                if(el) el.addEventListener('input', () => { if(!refEdit) return; apply(el); renderRefAngleControls(false); syncRefAngleCard(); });
+            };
+            bindAngleRange('reAngleElevRange', el => { refEdit.angle.elev = Number(el.value) || 0; });
+            bindAngleRange('reAngleShotRange', el => { refEdit.angle.shot = ANGLE_SHOT_KEYS[Number(el.value)] || 'mid'; });
+            window.addEventListener('resize', () => { if(refEdit) { layoutRefCanvases(refEdit.mode === 'outpaint' ? 0 : REF_STAGE_PAD); renderRefTexts(); drawRefTextsOn(null); } });
+        }
+
+        // ── 视角：3D 卡片 + 提示词，与画布 imageAnglePrompt 同句式 ─────────────
+        function setRefAngleDeg(deg){ if(!refEdit) return; refEdit.angle.deg = deg; renderRefAngleControls(false); syncRefAngleCard(); }
+        function setRefAngleElev(elev){ if(!refEdit) return; refEdit.angle.elev = elev; renderRefAngleControls(false); syncRefAngleCard(); }
+        function setRefAngleShot(shot){ if(!refEdit) return; refEdit.angle.shot = shot; renderRefAngleControls(false); syncRefAngleCard(); }
+        // 滑块是连续的，标签按区间取最近的说法（-30~60 共 90 度）
+        function refAngleElevLabel(elev){
+            if(elev <= -22) return '仰拍';
+            if(elev <= -8) return '略仰';
+            if(elev < 8) return '平视';
+            if(elev < 45) return '略俯';
+            return '俯拍';
+        }
+        function refAngleLabel(deg){
+            const a = Math.abs(deg);
+            if(a <= 15) return '正面';
+            if(a >= 165) return '背面';
+            if(Math.abs(a - 90) <= 15) return deg > 0 ? '右侧面' : '左侧面';
+            return deg > 0 ? `右 ${a}°` : `左 ${a}°`;
+        }
+        function refAngleElevSentence(elev){
+            if(elev >= 45) return '从高处俯拍同一主体。';
+            if(elev >= 15) return '从略高于主体的角度俯拍同一主体。';
+            if(elev <= -15) return '以低机位仰拍同一主体。';
+            return '';
+        }
+        function refAnglePrompt(state = {deg:0, elev:0, shot:'mid'}){
+            const deg = Number(state.deg) || 0, elev = Number(state.elev) || 0, shot = state.shot || 'mid';
+            const a = Math.abs(deg);
+            let head;
+            if(a < 5) head = '';
+            else if(a >= 175) head = '从正后方展示同一主体。';
+            else if(Math.abs(a - 90) <= 5) head = `以 90 度正侧面（${deg > 0 ? '右' : '左'}侧）展示同一主体。`;
+            else head = `将镜头绕主体向${deg > 0 ? '右' : '左'}旋转 ${a} 度。`;
+            const elevText = refAngleElevSentence(elev);
+            const shotText = shot === 'close' ? '将镜头推近，给主体一个特写。'
+                           : shot === 'wide' ? '将镜头拉远，拍一个能看到更多周围环境的远景。' : '';
+            const keepClothing = !(elev >= 15 || shot !== 'mid');
+            const tail = `保持主体${keepClothing ? '、服装' : ''}、配色、光线和风格不变。`;
+            const parts = [head || '以正面平视角度展示同一主体。', elevText, shotText, tail].filter(Boolean);
+            return parts.join('');
+        }
+        function renderRefAngleControls(full = true){
+            if(!refEdit) return;
+            const angle = refEdit.angle;
+            const range = document.getElementById('reAngleRange');
+            if(range) range.value = String(angle.deg);
+            const value = document.getElementById('reAngleValue');
+            if(value) value.textContent = refAngleLabel(angle.deg);
+            const degLabel = document.getElementById('reAngleDegLabel');
+            if(degLabel) degLabel.textContent = `${angle.deg}° / ${angle.elev}° / ${({close:'特写',mid:'中景',wide:'远景'})[angle.shot]}`;
+            const elevRange = document.getElementById('reAngleElevRange');
+            if(elevRange) elevRange.value = String(angle.elev);
+            const elevValue = document.getElementById('reAngleElevValue');
+            if(elevValue) elevValue.textContent = refAngleElevLabel(angle.elev);
+            const shotRange = document.getElementById('reAngleShotRange');
+            if(shotRange) shotRange.value = String(Math.max(0, ANGLE_SHOT_KEYS.indexOf(angle.shot)));
+            const shotValue = document.getElementById('reAngleShotValue');
+            if(shotValue) shotValue.textContent = ANGLE_SHOT_LABELS[angle.shot] || '中景';
+            const azBox = document.getElementById('reAngleAzimuth');
+            if(azBox && full){
+                azBox.innerHTML = ANGLE_AZIMUTHS.map(({deg, label}) =>
+                    `<button type="button" class="re-chip${angle.deg === deg ? ' active' : ''}" data-re-deg="${deg}">${label}</button>`).join('');
+                azBox.querySelectorAll('[data-re-deg]').forEach(b => b.onclick = () => setRefAngleDeg(Number(b.dataset.reDeg)));
+            } else if(azBox){
+                azBox.querySelectorAll('[data-re-deg]').forEach(b => b.classList.toggle('active', Number(b.dataset.reDeg) === angle.deg));
+            }
+            const preview = document.getElementById('reAnglePreview');
+            if(preview) preview.value = refAnglePrompt(angle);
+            const badge = document.getElementById('reAngleBadge');
+            if(badge) badge.textContent = refAngleLabel(angle.deg);
+        }
+        function syncRefAngleCardSize(){
+            const st = refEditStage();
+            const card = document.querySelector('#reAngleCard .re-ac-card');
+            if(!st || !card || !refEdit) return;
+            // 🚨 必须按卡片自己的 offsetParent 算尺寸：clientWidth 含 padding，而卡片是 absolute 定位，
+            // 用舞台的 clientWidth/clientHeight 居中会让卡片偏到右下（padding 40px 直接变成偏移量）
+            const host = card.offsetParent || st;
+            const boxW = host.clientWidth || st.clientWidth;
+            const boxH = host.clientHeight || st.clientHeight;
+            const ratio = refEdit.natW / Math.max(1, refEdit.natH);
+            const w = Math.round(Math.min(boxW * 0.72, 520));
+            // 高度受舞台约束时要反过来压宽度，只夹高度会让卡片变成超宽条、转到侧面就捅出舞台
+            const maxH = Math.max(120, boxH * 0.72);
+            const h = Math.round(Math.min(w / Math.max(0.35, ratio), maxH));
+            const fitW = h < w / Math.max(0.35, ratio) ? Math.round(h * Math.max(0.35, ratio)) : w;
+            const w2 = Math.min(w, Math.max(120, fitW));
+            const cardH = Math.max(120, h);
+            // 🚨 left/top 用百分比会按 offsetParent 解析，一律算像素：相对 offsetParent 居中，而不是相对舞台
+            card.style.width = w2 + 'px';
+            card.style.height = cardH + 'px';
+            card.style.left = Math.round((boxW - w2) / 2) + 'px';
+            card.style.top = Math.round((boxH - cardH) / 2) + 'px';
+            card.style.marginLeft = '0px';
+            card.style.marginTop = '0px';
+        }
+        function drawRefAngleCard(){
+            const url = refEdit?.img?.src || refEditSrc || '';
+            const front = document.querySelector('#reAngleCard .re-ac-front img');
+            const back = document.querySelector('#reAngleCard .re-ac-back img');
+            if(front) front.src = url;
+            if(back) back.src = url;
+            const card = document.querySelector('#reAngleCard .re-ac-card');
+            if(card) card.style.setProperty('--re-card-img', url ? `url("${String(url).replace(/"/g, '%22')}")` : 'none');
+            syncRefAngleCardSize();
+        }
+        function syncRefAngleCard(){
+            if(!refEdit) return;
+            const card = document.querySelector('#reAngleCard .re-ac-card');
+            if(!card) return;
+            const deg = Number(refEdit.angle.deg) || 0;
+            const elev = Number(refEdit.angle.elev) || 0;
+            const shot = refEdit.angle.shot || 'mid';
+            const back = Math.abs(deg) > 90;
+            // 与画布 syncImageAngleCard 同款：超过 ±90° 后映射到背面 + 镜像角度，避免薄片正对镜头
+            const mapped = back ? (deg > 0 ? deg - 180 : deg + 180) : deg;
+            const rotY = Math.max(-82, Math.min(82, mapped));
+            const rotX = -elev * 0.55;
+            const zoom = shot === 'close' ? 1.16 : shot === 'wide' ? 0.62 : 0.9;
+            card.dataset.face = back ? 'back' : 'front';
+            card.style.transform = `rotateY(${rotY}deg) rotateX(${rotX}deg) scale(${zoom})`;
+            const mx = 50 + rotY * 0.4, my = 50 + rotX * 0.8;
+            card.style.setProperty('--sheen-x', mx + '%');
+            card.style.setProperty('--sheen-y', my + '%');
+        }
+
+        // ── 风格 ────────────────────────────────────────────────────────────────
+        function stylePromptPrefix(style){
+            if(!style) return '';
+            return `参考所给图片的风格，生成时保持相同的画风、配色与质感：${style.name}。`;
+        }
+        function selectStyle(style){
+            selectedStyle = style ? {skillId:style.skill_id, name:style.name, urls:(style.images || []).map(i => i.url).filter(Boolean).slice(0, STYLE_REF_LIMIT), scope:style.scope || 'personal'} : null;
+            renderStylePanel();
+        }
+        function toggleStylePanel(ev){
+            if(ev?.stopPropagation) ev.stopPropagation();
+            const panel = document.getElementById('stylePanel');
+            panel?.classList.toggle('hidden');
+        }
+
+        async function canvasToBlob(canvas, name){
+            return new Promise(resolve => {
+                if(!canvas) { resolve(null); return; }
+                canvas.toBlob(blob => resolve(blob), 'image/png');
+            });
+        }
+        async function uploadRefBlob(blob, name){
+            if(!blob) return null;
+            const form = new FormData();
+            form.append('files', blob, name || `ref_${Date.now()}.png`);
+            try {
+                const data = await fetch('/api/ai/upload', {method:'POST', body:form}).then(r => r.json());
+                return data?.files?.[0] || null;
+            } catch(err) { return null; }
+        }
+        async function replaceRefImage(slot, file, dim){
+            if(!file?.url) return false;
+            refs[slot] = {...(refs[slot] || {}), ...file};
+            const prev = document.getElementById(`prev${slot}`);
+            if(prev){ prev.src = file.url; prev.classList.remove('hidden'); }
+            const del = document.getElementById(`del${slot}`);
+            if(del) del.classList.remove('hidden');
+            if(dim?.width && dim?.height) refDims[slot] = {width:dim.width, height:dim.height};
+            // 🚨 参考图变了，之前的遮罩坐标全部失效
+            slotMask[slot] = null;
+            rePendingMask = null; rePendingMaskUrl = ''; rePendingPreview = '';
+            refMaskBadge(slot);
+            updateSizeUI();
+            if(REF_EDITOR_BRIDGE && window.parent !== window){
+                window.parent.postMessage({ type:'xvai-ref-edited', url:file.url, slot }, '*');
+            }
+            return true;
+        }
+        if(REF_EDITOR_BRIDGE && REF_EDITOR_BRIDGE.src){
+            document.body.style.background = '#0b0f14';
+            document.body.classList.add('re-solo');
+            // 不挂在 window load 上：页面里有需要鉴权的图片会 401，load 可能永远不触发
+            refs[1] = { url:REF_EDITOR_BRIDGE.src, name:'edit.png' };
+            // 弹窗原本嵌在 .page-wrap 里，fixed 定位会相对那个容器算，顶部留一条黑边；
+            // 桥接模式把它挪到 body 下，inset:0 才是真的整窗
+            const bridgeOverlay = document.getElementById('refEditModal');
+            if(bridgeOverlay && bridgeOverlay.parentElement !== document.body) document.body.appendChild(bridgeOverlay);
+            openRefEditor(1, REF_EDITOR_BRIDGE.mode);
+        }
+        function toastSafe(text){
+            if(!text) return;
+            let el = document.getElementById('reToast');
+            if(!el){
+                el = document.createElement('div');
+                el.id = 'reToast';
+                el.className = 're-toast';
+                document.body.appendChild(el);
+            }
+            el.textContent = text;
+            el.classList.add('show');
+            clearTimeout(el._t);
+            el._t = setTimeout(() => el.classList.remove('show'), 3200);
+        }
+        function syncRefCursorSizeSafe(){ syncRefCursorSize(); }
+
+        // 有效遮罩：参考图没被换过 / 清过才算，否则坐标对不上
+        function activeInpaintMeta(){
+            for(const slot of [1,2,3]){
+                const meta = slotMask[slot];
+                if(!meta) continue;
+                // 🚨 比的是「应用遮罩时那张参考图的地址」：base_url 是后端规范化后的地址，未必和 refs[slot].url 一模一样
+                const refUrl = meta.ref_url || meta.base_url;
+                if(!refs[slot]?.url || refs[slot].url !== refUrl) { slotMask[slot] = null; refMaskBadge(slot); continue; }
+                return meta;
+            }
+            return null;
+        }
+
+        /* ── 提示词「风格」：挑一个风格库里的风格，生图时强行并进参考图 + 提示词前缀 ── */
+        const STYLE_REF_LIMIT = 3;
+        let styleList = null;
+        let styleLoading = false;
+        let selectedStyle = null;
+        function stylePromptPrefix(style){
+            const name = String(style?.name || '');
+            return `风格要求${name ? `（${name}）` : ''}：严格参照所附参考图的配色、光线、材质、笔触与整体氛围；主体与场景按下述提示词绘制，不要把参考图里的人物或场景照搬进来。`;
+        }
+        async function loadStyleList(force){
+            if(styleList && !force) return styleList;
+            styleLoading = true;
+            const out = [];
+            for(const scope of ['personal','team']){
+                try {
+                    const data = await fetch(`/api/style-library?scope=${scope}`).then(r => r.ok ? r.json() : null);
+                    for(const style of (data?.styles || [])){
+                        if(!style?.skill_id) continue;
+                        if(style.status !== 'ready' && style.status !== 'shared') continue;
+                        const urls = (style.images || []).map(img => img?.url).filter(Boolean).slice(0, STYLE_REF_LIMIT);
+                        if(!urls.length) continue;
+                        out.push({skillId:String(style.skill_id), name:String(style.name || '未命名风格'), urls, scope});
+                    }
+                } catch(e) {}
+            }
+            styleList = out;
+            styleLoading = false;
+            return out;
+        }
+        async function toggleStylePanel(event){
+            if(event) event.stopPropagation();
+            const panel = document.getElementById('stylePanel');
+            if(!panel) return;
+            if(panel.style.display !== 'none' && !panel.classList.contains('hidden')){ panel.classList.add('hidden'); return; }
+            panel.classList.remove('hidden');
+            if(!styleList && !styleLoading){
+                panel.innerHTML = '<div class="style-hint">加载中…</div>';
+                await loadStyleList();
+            }
+            renderStylePanel();
+        }
+        function renderStylePanel(){
+            const panel = document.getElementById('stylePanel');
+            if(!panel) return;
+            const list = styleList || [];
+            const rows = [`<button type="button" class="style-row${selectedStyle ? '' : ' active'}" data-style-id=""><span class="style-row n">不使用风格</span></button>`];
+            for(const style of list){
+                rows.push(`<button type="button" class="style-row${selectedStyle?.skillId === style.skillId ? ' active' : ''}" data-style-id="${escapeHtml(style.skillId)}">
+                    <img src="${escapeHtml(style.urls[0])}" alt="">
+                    <span><span class="n">${escapeHtml(style.name)}</span><br><span class="m">${style.urls.length} 张参考图 · ${style.scope === 'team' ? '团队' : '个人'}</span></span>
+                </button>`);
+            }
+            if(!list.length) rows.push('<div class="style-hint">还没有可用的风格：先到「资产库 → 风格库」传够 3 张参考图并创建</div>');
+            panel.innerHTML = rows.join('');
+            panel.querySelectorAll('[data-style-id]').forEach(btn => {
+                btn.onclick = () => {
+                    const id = btn.dataset.styleId || '';
+                    selectedStyle = id ? (styleList || []).find(item => item.skillId === id) || null : null;
+                    renderStylePanel();
+                    const label = document.getElementById('styleBtn');
+                    if(label){
+                        label.querySelector('span').textContent = selectedStyle ? selectedStyle.name : '风格';
+                        label.classList.toggle('active', !!selectedStyle);
+                    }
+                    panel.classList.add('hidden');
+                };
+            });
+        }
+        document.addEventListener('click', event => {
+            const panel = document.getElementById('stylePanel');
+            if(!panel || panel.classList.contains('hidden')) return;
+            if(event.target.closest('#stylePanel') || event.target.closest('#styleBtn')) return;
+            panel.classList.add('hidden');
+        });
+
         async function submitImage(){
-            const prompt = document.getElementById('promptInput').value.trim();
-            if(!prompt){ alert(tr('online.promptRequired')); return; }
+            const basePrompt = document.getElementById('promptInput').value.trim();
+            if(!basePrompt){ alert(tr('online.promptRequired')); return; }
             const btn = document.getElementById('genBtn'), loader = document.getElementById('loader'), placeholder = document.getElementById('placeholder'), out = document.getElementById('outputImg'), dl = document.getElementById('downloadBtn');
             btn.disabled = true; placeholder.classList.add('hidden'); out.classList.add('hidden'); dl.classList.add('hidden'); loader.classList.remove('hidden');
             try {
+                // 遮罩局部重绘：参考图换成「裁切局部图 + 对齐遮罩（+ 其它参考图）」，
+                // 后端按 mask 羽化回贴成整图；这条路径不带风格（基准图只能是裁切图）。
+                const inpaintMeta = activeInpaintMeta();
+                const refList = [];
+                let prompt = basePrompt;
+                if(inpaintMeta){
+                    const skip = new Set([inpaintMeta.crop_url, inpaintMeta.crop_mask_url, inpaintMeta.mask_url, inpaintMeta.base_url]);
+                    refList.push({url:inpaintMeta.crop_url, name:'inpaint_crop.png', kind:'image'});
+                    refList.push({url:inpaintMeta.crop_mask_url, name:'inpaint_mask.png', kind:'image', role:'mask'});
+                    [1,2,3].map(id => refs[id]).filter(Boolean).forEach(ref => {
+                        if(!ref.url || skip.has(ref.url)) return;
+                        refList.push({url:ref.url, name:ref.name || 'ref.png', kind:ref.kind || 'image'});
+                    });
+                } else {
+                    [1,2,3].map(id => refs[id]).filter(Boolean).forEach(ref => refList.push({url:ref.url, name:ref.name || 'ref.png', kind:ref.kind || 'image'}));
+                    // 风格：把风格库的参考图强行并进本次生图 + 提示词前缀，不靠模型自觉
+                    if(selectedStyle){
+                        const seen = new Set(refList.map(ref => ref.url));
+                        for(const url of selectedStyle.urls.slice(0, STYLE_REF_LIMIT)){
+                            if(seen.has(url)) continue;
+                            seen.add(url);
+                            refList.push({url, name:'style-ref.png', kind:'image'});
+                        }
+                        prompt = `${stylePromptPrefix(selectedStyle)}\n${basePrompt}`;
+                    }
+                }
                 const reqBody = {
                     prompt,
                     provider_id:provider,
                     model:selectedModel,
-                    size:currentSize(),
-                    resolution:resolution === 'custom' ? '' : resolution,
-                    aspect_ratio:currentAspectRatio(),
-                    n:outputCount,
-                    reference_images:Object.values(refs).filter(Boolean)
+                    size:(inpaintMeta && inpaintMeta.size) || currentSize(),
+                    resolution:inpaintMeta ? '' : (resolution === 'custom' ? '' : resolution),
+                    aspect_ratio:(inpaintMeta && inpaintMeta.aspect_ratio) || currentAspectRatio(),
+                    n:inpaintMeta ? 1 : outputCount,
+                    reference_images:refList
                 };
+                if(inpaintMeta){
+                    reqBody.operation = 'inpaint';
+                    reqBody.inpaint = {
+                        base_url:inpaintMeta.base_url,
+                        base_name:'',
+                        mask_url:inpaintMeta.mask_url || '',
+                        crop_url:inpaintMeta.crop_url,
+                        crop_mask_url:inpaintMeta.crop_mask_url,
+                        bbox:(inpaintMeta.bbox || []).slice(0, 4).map(v => Math.round(Number(v) || 0)),
+                        base_w:Math.round(Number(inpaintMeta.base_w) || 0),
+                        base_h:Math.round(Number(inpaintMeta.base_h) || 0),
+                        aspect_ratio:inpaintMeta.aspect_ratio || '',
+                        size:inpaintMeta.size || '',
+                        feather:Math.round(Number(inpaintMeta.feather) || 0)
+                    };
+                }
                 if(QUALITY_PROTOCOLS.has(providerProtocol(provider))) reqBody.quality = quality;
                 const result = await fetch('/api/online-image', {
                     method:'POST', headers:{'Content-Type':'application/json'},
@@ -807,6 +2260,7 @@
             (currentLightboxData.params?.reference_images || []).slice(0,3).forEach((ref,i) => {
                 refs[i+1] = ref; const prev = document.getElementById(`prev${i+1}`);
                 prev.src = ref.url; prev.classList.remove('hidden'); document.getElementById(`del${i+1}`).classList.remove('hidden');
+                refToolBar(i+1, true);
                 getImageDimensions(ref.url).then(dim => {
                     refDims[i+1] = dim;
                     updateSizeUI();
@@ -846,5 +2300,6 @@
         const observer = new IntersectionObserver(entries => { if(entries[0].isIntersecting && currentIndex < allHistory.length) loadHistory(1); }, {threshold:.1});
         window.onload = async () => { applyLanguage(); setRatio('square'); setResolution('1k'); await initModels(); await loadHistory(0); window.HistoryBulkManager?.attach({masonry:'#masonry'}); observer.observe(document.getElementById('loadMoreTrigger')); document.getElementById('loadMoreTrigger').onclick = () => loadHistory(1); };
     </script>
+    <div id="reCursor" class="re-cursor" style="display:none"></div>
 </body>
 </html>

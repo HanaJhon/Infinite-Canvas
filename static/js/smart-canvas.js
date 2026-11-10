@@ -6531,7 +6531,8 @@ function mergeSmartImageLists(localImgs, remoteImgs){
 }
 function smartNodeInFlight(node){
     if(smartNodeHasCompletedResult(node)) return false;
-    return Boolean(node && (node.running || node.pending || node.queued || node.jimengPending || smartPendingTasks(node).length));
+    // llmProcessing 也算忙：LLM 还在出最终提示词时点运行，会拿用户原文直接提交（老板 2026-11-10）
+    return Boolean(node && (node.running || node.llmProcessing || node.pending || node.queued || node.jimengPending || smartPendingTasks(node).length));
 }
 function smartNodeHasDisplayResult(node){
     return Boolean((node?.images || []).some(img => img?.url && !img.loopInputPreview));
@@ -19825,10 +19826,18 @@ function imageAnglePrompt(state = imageAngleState){
     const keepClothing = !(elev >= 15 || shot !== 'mid');
     return `${head}保持主体${keepClothing ? '、服装' : ''}、配色、光线和风格不变。`;
 }
+// 俯仰现在是滑块（-30~60 连续），标签按区间取最近的说法
+function imageAngleElevLabel(elev){
+    if(elev <= -22) return '仰拍';
+    if(elev <= -8) return '略仰';
+    if(elev < 8) return '平视';
+    if(elev < 45) return '略俯';
+    return '俯拍';
+}
 function imageAngleLabel(state = imageAngleState){
     const deg = normalizeAngleDeg(state.deg);
     const elev = clampAngleElev(state.elev);
-    const elevLabel = IMAGE_ANGLE_ELEVATIONS.find(item => item.elev === elev)?.label || `${elev}°`;
+    const elevLabel = imageAngleElevLabel(elev);
     const shot = IMAGE_ANGLE_SHOTS.find(item => item.shot === (state.shot || 'mid'))?.label || '中景';
     return `${imageAngleAzimuthLabel(deg)} · ${elevLabel} · ${shot}`;
 }
@@ -19918,8 +19927,17 @@ function syncImageAngleUI(){
     const preview = document.getElementById('anglePromptPreview');
     if(preview) preview.value = imageAnglePrompt(state);
     document.querySelectorAll('[data-angle-deg]').forEach(btn => btn.classList.toggle('active', normalizeAngleDeg(btn.dataset.angleDeg) === deg));
-    document.querySelectorAll('[data-angle-elev]').forEach(btn => btn.classList.toggle('active', Number(btn.dataset.angleElev) === elev));
-    document.querySelectorAll('[data-angle-shot]').forEach(btn => btn.classList.toggle('active', btn.dataset.angleShot === (state.shot || 'mid')));
+    const elevRange = document.getElementById('angleElevRange');
+    if(elevRange && Number(elevRange.value) !== elev) elevRange.value = String(elev);
+    const elevValue = document.getElementById('angleElevValue');
+    if(elevValue) elevValue.textContent = imageAngleElevLabel(elev);
+    const shotRange = document.getElementById('angleShotRange');
+    if(shotRange){
+        const idx = Math.max(0, IMAGE_ANGLE_SHOTS.findIndex(item => item.shot === shot));
+        if(Number(shotRange.value) !== idx) shotRange.value = String(idx);
+    }
+    const shotValue = document.getElementById('angleShotValue');
+    if(shotValue) shotValue.textContent = IMAGE_ANGLE_SHOTS.find(item => item.shot === shot)?.label || '中景';
     syncImageAngleFace(deg);
 }
 function setImageAngleDeg(deg, {snap = false} = {}){
@@ -19961,13 +19979,14 @@ function bindImageAngleControls(){
     }
     tools.addEventListener('click', event => {
         const degBtn = event.target.closest('[data-angle-deg]');
-        if(degBtn){ setImageAngleDeg(Number(degBtn.dataset.angleDeg)); return; }
-        const elevBtn = event.target.closest('[data-angle-elev]');
-        if(elevBtn){ setImageAngleElev(Number(elevBtn.dataset.angleElev)); return; }
-        const shotBtn = event.target.closest('[data-angle-shot]');
-        if(shotBtn) setImageAngleShot(shotBtn.dataset.angleShot);
+        if(degBtn) setImageAngleDeg(Number(degBtn.dataset.angleDeg));
     });
     document.getElementById('angleDegRange')?.addEventListener('input', event => setImageAngleDeg(Number(event.target.value)));
+    document.getElementById('angleElevRange')?.addEventListener('input', event => setImageAngleElev(Number(event.target.value)));
+    document.getElementById('angleShotRange')?.addEventListener('input', event => {
+        const item = IMAGE_ANGLE_SHOTS[Number(event.target.value) || 0];
+        if(item) setImageAngleShot(item.shot);
+    });
     // 卡片尺寸要等图片真的解码完才算得出来（naturalWidth 之前是 0）
     const cardFrontImg = document.getElementById('angleCardFrontImg');
     if(cardFrontImg && !cardFrontImg.dataset.angleSized){
@@ -23297,7 +23316,9 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
     const displayPrompt = (request.displayPrompt || '').trim();
     if(runSettings.llmEnabled){
         try {
-            prompt = await resolvePromptWithLlmIfNeeded(prompt, request.refs || [], requestNode, runSettings);
+            // 同上：连锁每一步也必须等 LLM 出最终提示词再提交（老板 2026-11-10）
+            await waitForNodeLlmIdle(requestNode);
+            prompt = await sharedLlmPrompt(prompt, request.refs || [], requestNode, runSettings);
         } catch(err) {
             settings = previousSettings;
             throw new Error((err.message || tr('smart.promptLlmFailed')).slice(0, 160));
@@ -23828,7 +23849,10 @@ async function runGeneration(){
     if(inpaintMeta) settings = {...settings, count:1};
     if(settings.llmEnabled){
         try {
-            prompt = await resolvePromptWithLlmIfNeeded(prompt, refs, node, settings);
+            // LLM 是生图的前置步骤：先等这个节点上正在跑的扩写落地，再取这一轮的最终提示词，
+            // 绝不能让生图带着用户原文先提交（老板 2026-11-10）。
+            await waitForNodeLlmIdle(node);
+            prompt = await sharedLlmPrompt(prompt, refs, node, settings);
         } catch(err) {
             settings = previousSettings;
             toast((err.message || tr('smart.promptLlmFailed')).slice(0, 160));
@@ -24189,6 +24213,28 @@ function nodeLlmFinalPrompt(node){
     const draft = String(node?.promptDraftText || '').trim();
     if(source && draft && source !== draft) return '';
     return out;
+}
+/* 🚨 LLM 提示词扩写是生图的**前置**步骤：老板 2026-11-10 抓到过「LLM 还在跑，生图已经拿用户原文提交了」。
+   两条护栏：
+   1) 同一个节点 + 同一段输入同时只发一次 LLM 请求，后来者复用同一个 Promise（否则双击/连锁会重复计费，还各拿各的结果）。
+   2) 提交前等这个节点上正在跑的 LLM 落地，绝不带着半个结果去生成。 */
+const smartLlmInflight = new Map();
+function sharedLlmPrompt(prompt, refs, node, runSettings){
+    const key = `${node?.id || 'composer'}|${String(prompt || '').trim()}`;
+    const running = smartLlmInflight.get(key);
+    if(running) return running;
+    const task = resolvePromptWithLlmIfNeeded(prompt, refs, node, runSettings)
+        .finally(() => { if(smartLlmInflight.get(key) === task) smartLlmInflight.delete(key); });
+    smartLlmInflight.set(key, task);
+    return task;
+}
+async function waitForNodeLlmIdle(node, timeoutMs=300000){
+    if(!node) return;
+    const start = nowMs();
+    while(node.llmProcessing){
+        if(nowMs() - start > timeoutMs) break;
+        await sleep(80);
+    }
 }
 async function resolvePromptWithLlmIfNeeded(prompt, refs, node, runSettings=settings){
     const s = runSettings || (node ? smartSettingsForNode(node) : settings) || settings;

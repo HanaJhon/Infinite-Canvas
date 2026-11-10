@@ -7,7 +7,7 @@ try{var _g=new URLSearchParams(location.search).get('glass');if(_g){localStorage
 </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" href="/static/images/logo.png?v=1.3.6" type="image/png">
+    <link rel="icon" href="/static/images/logo.png?v=1.3.7" type="image/png">
     <title data-i18n="smart.title">智能画布</title>
     <script>
         (function(){
@@ -20,18 +20,18 @@ try{var _g=new URLSearchParams(location.search).get('glass');if(_g){localStorage
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/lucide.js?v=1.3.6.1767196800"></script>
-    <script src="/static/vendor/js/photopea.min.js?v=1.3.6.1767196800"></script>
-    <script src="/static/js/theme.js?v=1.3.6.1793681298"></script>
-    <script src="/static/js/touch-mouse.js?v=1.3.6.1767196800"></script>
-    <script src="/static/js/i18n.js?v=1.3.6.1794029677"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=1.3.6.1794013744">
+    <script src="/static/vendor/js/lucide.js?v=1.3.7.1767196800"></script>
+    <script src="/static/vendor/js/photopea.min.js?v=1.3.7.1767196800"></script>
+    <script src="/static/js/theme.js?v=1.3.7.1793681298"></script>
+    <script src="/static/js/touch-mouse.js?v=1.3.7.1767196800"></script>
+    <script src="/static/js/i18n.js?v=1.3.7.1794291244"></script>
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=1.3.7.1794291244">
     <!-- Skill 市场：浮层样式与逻辑都在共享模块里（gpt-chat 页用同一份），见 static/js/skill-market.js -->
-    <link rel="stylesheet" href="/static/css/skill-market.css?v=1.3.6.1767196800">
-    <link rel="stylesheet" href="/static/css/split-layers.css?v=1.3.6.1792329089">
-    <link rel="stylesheet" href="/static/css/liquid-glass.css?v=1.3.6.1793776698">
+    <link rel="stylesheet" href="/static/css/skill-market.css?v=1.3.7.1767196800">
+    <link rel="stylesheet" href="/static/css/split-layers.css?v=1.3.7.1792329089">
+    <link rel="stylesheet" href="/static/css/liquid-glass.css?v=1.3.7.1793776698">
     <!-- 新人引导：遮罩/气泡/复习徽标，逻辑在 static/js/canvas-tour.js -->
-    <link rel="stylesheet" href="/static/css/canvas-tour.css?v=1.3.6.1793937955">
+    <link rel="stylesheet" href="/static/css/canvas-tour.css?v=1.3.7.1794031306">
 </head>
 <body>
     <div id="shell" class="shell">
@@ -644,22 +644,17 @@ try{var _g=new URLSearchParams(location.search).get('glass');if(_g){localStorage
                         </div>
                         <div class="angle-row">
                             <span class="image-edit-sub angle-label">俯仰</span>
-                            <div class="angle-seg">
-                                <button type="button" data-angle-elev="-30" title="低机位仰拍 −30°">仰拍</button>
-                                <button type="button" data-angle-elev="0" class="active" title="平视 0°">平视</button>
-                                <button type="button" data-angle-elev="30" title="略俯 30°">略俯</button>
-                                <button type="button" data-angle-elev="60" title="高角度俯拍 60°">俯拍</button>
-                            </div>
+                            <input id="angleElevRange" class="angle-range" type="range" min="-30" max="60" step="5" value="0" aria-label="俯仰角">
+                            <span id="angleElevValue" class="angle-value">平视</span>
                         </div>
+                        <div class="angle-scale" aria-hidden="true"><span>仰拍</span><span></span><span>平视</span><span></span><span>俯拍</span></div>
                         <div class="angle-row">
                             <span class="image-edit-sub angle-label">景别</span>
-                            <div class="angle-seg">
-                                <button type="button" data-angle-shot="close">特写</button>
-                                <button type="button" data-angle-shot="mid" class="active">中景</button>
-                                <button type="button" data-angle-shot="wide">远景</button>
-                            </div>
+                            <input id="angleShotRange" class="angle-range" type="range" min="0" max="2" step="1" value="1" aria-label="景别">
+                            <span id="angleShotValue" class="angle-value">中景</span>
                             <span id="angleDegLabel" class="angle-deg"></span>
                         </div>
+                        <div class="angle-scale" aria-hidden="true"><span>特写</span><span></span><span>中景</span><span></span><span>远景</span></div>
                         <div id="anglePresets" class="angle-presets"></div>
                     </div>
                     <textarea id="anglePromptPreview" class="angle-prompt" spellcheck="false" aria-label="视角提示词"></textarea>
@@ -1009,10 +1004,10 @@ try{var _g=new URLSearchParams(location.search).get('glass');if(_g){localStorage
         </div>
     </div>
 
-    <script src="/static/js/skill-market.js?v=1.3.6.1767196800"></script>
-    <script src="/static/js/credits-badge.js?v=1.3.6.1793976493"></script>
-    <script src="/static/js/smart-canvas.js?v=1.3.6.1794027028"></script>
+    <script src="/static/js/skill-market.js?v=1.3.7.1767196800"></script>
+    <script src="/static/js/credits-badge.js?v=1.3.7.1794031306"></script>
+    <script src="/static/js/smart-canvas.js?v=1.3.7.1794296195"></script>
     <!-- 新人引导：必须在 smart-canvas.js 之后加载（要读画布页已有 DOM 与状态） -->
-    <script src="/static/js/canvas-tour.js?v=1.3.6.1793938001"></script>
+    <script src="/static/js/canvas-tour.js?v=1.3.7.1794031306"></script>
 </body>
 </html>

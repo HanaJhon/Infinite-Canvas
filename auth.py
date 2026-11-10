@@ -119,11 +119,16 @@ class AuthStore:
             raise ValueError("用户名只能包含中英文、数字、下划线和短横线，长度 2-24")
         if len(password or "") < MIN_PASSWORD_LEN:
             raise ValueError(f"密码至少 {MIN_PASSWORD_LEN} 位")
+        email = (email or "").strip()
         with self._lock:
             data = self._read_json(self.users_file, {"users": []})
             users = data.setdefault("users", [])
             if any(str(u.get("name", "")).lower() == name.lower() for u in users):
                 raise ValueError("用户名已存在")
+            # 🚨 一个邮箱只能绑一个账号（2026-11-09）：注册、管理员建号都走这里，
+            #    以前只在「注册要求邮箱」时查重，邮箱选填时能一个邮箱绑多个 ID。
+            if email and any(str(u.get("email") or "").strip().lower() == email.lower() for u in users):
+                raise ValueError("该邮箱已被注册")
             seq = 0
             for u in users:
                 try:
@@ -156,6 +161,11 @@ class AuthStore:
         with self._lock:
             data = self._read_json(self.users_file, {"users": []})
             hit = None
+            new_email = str(patch.get("email") or "").strip().lower()
+            if new_email and any(
+                    u.get("id") != uid and str(u.get("email") or "").strip().lower() == new_email
+                    for u in data.get("users", [])):
+                raise ValueError("该邮箱已被注册")
             for u in data.get("users", []):
                 if u.get("id") == uid:
                     u.update(patch)
@@ -310,3 +320,25 @@ def claim_legacy_data(data_dir: str, uid: str) -> Dict[str, Any]:
         except Exception as exc:                      # 被占用 / 跨盘等
             errors.append(f"{item}: {exc}")
     return {"moved": moved, "skipped": skipped, "errors": errors}
+
+
+if __name__ == "__main__":
+    # 自检：一个邮箱只能绑一个账号（2026-11-09 回归点）
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        store = AuthStore(td)
+        a = store.create_user("jia01", "secret123", email="Same@QQ.com")
+        assert a.get("email") == "Same@QQ.com"
+        try:
+            store.create_user("yi01", "secret123", email="same@qq.com")
+            raise AssertionError("同一邮箱不应能建第二个账号")
+        except ValueError as exc:
+            assert "邮箱" in str(exc), exc
+        b = store.create_user("yi01", "secret123")          # 不填邮箱照常建
+        try:
+            store.update_user(b["id"], {"email": "same@qq.com"})
+            raise AssertionError("同一邮箱不应能改绑到别的账号")
+        except ValueError as exc:
+            assert "邮箱" in str(exc), exc
+        store.update_user(a["id"], {"email": "same@qq.com"})   # 本人改自己不算冲突
+        print("auth.py self-check ok")

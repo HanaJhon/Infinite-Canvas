@@ -4558,6 +4558,7 @@ class ChatRequest(BaseModel):
     reference_images: List[AIReference] = []
     provider: str = "comfly"
     ms_model: str = ""
+    output_format: str = ""   # 留空=跟随上游默认；gif 等由后端按模型+提示词自动兜底
 
 def chat_system_prompt(payload):
     prompt = str(getattr(payload, "system_prompt", "") or "").strip()
@@ -25127,6 +25128,13 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
         image_size = snap_size_to_multiple(prompt_size or inherited_size or payload.size, 16)
         requested_count = 1 if action == "edit_image" else chat_requested_image_count(payload.message)
         prompts = chat_split_parallel_prompts(prompt, requested_count)
+        # 输出格式兜底（与画布同一套规则）：模型是 gpt-image-2.6 系列、提示词要动图时补 gif。
+        # 不补这个参数上游只回 png（静图 + 宫格），老板会以为「输出被我转换过」。
+        chat_output_format = str(payload.output_format or "").strip().lower()
+        if not chat_output_format \
+                and re.search(r"gif|动图|动态图|循环动画|逐帧|动画", payload.message or "", re.I) \
+                and re.search(r"gpt-image-2\.6", str(model), re.I):
+            chat_output_format = "gif"
         local_urls = []
         raw_items = []
         try:
@@ -25140,6 +25148,7 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
                     image_provider["id"],
                     payload.aspect_ratio,
                     payload.resolution,
+                    chat_output_format,
                 )
                 local_urls.append(await save_ai_image_to_output(image_data, prefix="chat_"))
                 raw_items.append(raw)
@@ -25150,6 +25159,9 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
         except httpx.HTTPError as exc:
             log_net_error(f"对话生图 网络/TLS错误 model={model}", exc)
             raise HTTPException(status_code=502, detail=f"请求上游生图接口失败：{exc}") from exc
+        if chat_output_format == "gif":
+            # 上游同时回 png 海报和 gif，把 gif 排在前面，前端第一张就展示动图
+            local_urls.sort(key=lambda u: 0 if str(u).lower().split("?")[0].endswith(".gif") else 1)
         local_url = local_urls[0] if local_urls else ""
         assistant_message = {
             "id": uuid.uuid4().hex,
@@ -25165,6 +25177,7 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
             "image_count": len(local_urls),
             "prompts": prompts,
             "agent_action": action,
+            "output_format": chat_output_format,
             "agent_reply": decision.get("reply") or "",
             "used_references": tool_refs,
             "raw_usage": raw_items[0].get("usage") if raw_items and isinstance(raw_items[0], dict) else None,
@@ -25173,6 +25186,42 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
         assistant_message = await build_chat_text_reply(payload, conversation, user_id)
         assistant_message["agent_action"] = "chat"
 
+    # 小抽AI 计费（2026-11-10 老板要求「按无限画布 Agent 的计费逻辑」）：
+    # 画布 Agent 的生图是被 /api/canvas-image-tasks 的中间件预扣的；/api/chat/agent 不在扣费
+    # 白名单里，所以这里用同一套 credits.estimate 规则显式扣一次 —— 生图按 per_image×张数，
+    # 问答按上游 usage 的输入/缓存/输出三段（拿不到 usage 就用正文长度兜底输出）。
+    credits_info: Dict[str, Any] = {}
+    try:
+        if action in {"generate_image", "edit_image"}:
+            charge_payload: Dict[str, Any] = {
+                "model": model,
+                "provider": image_provider.get("id") or "",
+                "kind": "image",
+                "count": max(1, len(local_urls) or 1),
+                "reason": "小抽AI 生图",
+            }
+        else:
+            usage = assistant_message.get("raw_usage") or {}
+            prompt_details = usage.get("prompt_tokens_details") or {}
+            output_text = assistant_message.get("content") or ""
+            charge_payload = {
+                "model": assistant_message.get("model") or payload.model or "",
+                "provider": payload.provider or "",
+                "kind": "llm",
+                "input_tokens": usage.get("prompt_tokens") or usage.get("input_tokens") or 0,
+                "output_tokens": usage.get("completion_tokens") or usage.get("output_tokens") or _credits.estimate_tokens(output_text),
+                "cache_tokens": prompt_details.get("cached_tokens") or 0,
+                "input_text": payload.message,
+                "reason": "小抽AI 对话",
+            }
+        credits_info = _credits_store.spend(user_id, charge_payload)
+        if credits_info.get("charged"):
+            print(f"[credits] 小抽AI 扣 {credits_info.get('credits')} 积分"
+                  f"（{charge_payload.get('kind')} · {charge_payload.get('model')}）余额 {credits_info.get('balance')}")
+    except Exception as exc:
+        print(f"[credits] 小抽AI 扣费失败: {exc}")
+    assistant_message["credits"] = credits_info
+
     auto_compressed = conversation.pop("_auto_compressed", False)
     conversation["messages"].append(assistant_message)
     conversation["updated_at"] = now_ms()
@@ -25180,7 +25229,8 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
     agent_meta = {"action": action, "decision": decision}
     if auto_compressed:
         agent_meta["auto_compressed"] = True
-    return {"conversation": conversation, "message": assistant_message, "agent": agent_meta}
+    return {"conversation": conversation, "message": assistant_message,
+            "agent": agent_meta, "credits": credits_info}
 
 @app.post("/api/chat/stream")
 async def chat_stream(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):

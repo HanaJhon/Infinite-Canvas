@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="/static/images/logo.png?v=1.3.7" type="image/png">
+    <title>小抽AI</title>
+    <script>
+        (function(){
+            try {
+                var theme = localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'light';
+                if(theme === 'dark') {
+                    document.documentElement.classList.add('studio-theme-dark');
+                    document.documentElement.classList.add('theme-dark');
+                }
+            } catch(e) {}
+        })();
+    </script>
+    <script src="/static/vendor/js/tailwindcss-cdn.js?v=1.3.7.1767196800"></script>
+    <script src="/static/vendor/js/lucide.js?v=1.3.7.1767196800"></script>
+    <script src="/static/js/theme.js?v=1.3.7.1793681298"></script>
+    <script src="/static/js/i18n.js?v=1.3.7.1794291244"></script>
+    <link rel="stylesheet" href="/static/css/xvai-agent.css?v=1.3.7.1794280955">
+    <style>
+        @import url('/static/vendor/css/fonts.css?v=1.3.7.1767196800');
+        :root {
+            --accent:#111827; --bg:#f9fafb; --card:#fff; --line:#edf0f3; --muted:#94a3b8;
+            --easing:cubic-bezier(0.4,0,0.2,1);
+        }
+        html.studio-theme-dark {
+            --accent:#f1f5f9; --bg:#0b0f14; --card:#141a21; --line:#232b35; --muted:#7d8b9c;
+        }
+        /* 页头/输入区固定在上下，只有聊天区滚动 */
+        html, body { height:100%; margin:0; overflow:hidden; overscroll-behavior:none; }
+        body { background:var(--bg); color:var(--accent); font-family:'Inter',-apple-system,sans-serif; -webkit-font-smoothing:antialiased; }
+        .xv-shell { display:flex; height:100%; overflow:hidden; }
+        .xv-main { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; }
+        .xv-head { flex:0 0 auto; display:flex; align-items:center; gap:12px; padding:14px 22px; border-bottom:1px solid var(--line); background:var(--card); }
+        .xv-title { font-size:15px; font-weight:800; letter-spacing:-.01em; }
+        .xv-sub { font-size:10px; font-weight:700; color:var(--muted); letter-spacing:.04em; }
+        .xv-head-right { margin-left:auto; display:flex; align-items:center; gap:8px; }
+        .xv-btn { height:32px; display:inline-flex; align-items:center; gap:6px; padding:0 12px; border-radius:12px; border:1px solid var(--line); background:var(--card); color:var(--accent); font-size:11px; font-weight:700; cursor:pointer; transition:all .2s var(--easing); white-space:nowrap; }
+        .xv-btn:hover { border-color:var(--accent); }
+        .xv-balance { height:28px; display:inline-flex; align-items:center; gap:5px; padding:0 10px; border-radius:999px; border:1px solid var(--line); background:var(--card); color:var(--accent); font-size:11px; font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; }
+        .xv-cost { margin-top:7px; font-size:10.5px; font-weight:700; color:var(--muted); letter-spacing:.01em; }
+        .xv-send-credit { font-size:10.5px; font-weight:800; color:var(--muted); letter-spacing:.01em; margin-right:8px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+        .xv-badge { min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:var(--accent); color:var(--card); font-size:10px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; }
+        .xv-thread { flex:1 1 auto; min-height:0; overflow-y:auto; padding:26px 22px 10px; display:flex; flex-direction:column; gap:16px; }
+        .xv-msg { display:flex; gap:10px; max-width:860px; width:100%; margin:0 auto; }
+        .xv-msg.user { flex-direction:row-reverse; }
+        .xv-avatar { width:26px; height:26px; border-radius:9px; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; background:#eef2ff; color:#4338ca; }
+        .xv-msg.user .xv-avatar { background:var(--accent); color:var(--card); }
+        .xv-bubble { padding:12px 15px; border-radius:16px; background:var(--card); border:1px solid var(--line); font-size:13px; line-height:1.65; white-space:pre-wrap; word-break:break-word; }
+        .xv-msg.user .xv-bubble { background:var(--accent); color:var(--card); border-color:var(--accent); }
+        .xv-msg-tools { display:flex; gap:6px; margin-top:6px; }
+        .xv-typing { display:flex; align-items:center; gap:5px; padding:15px 16px; }
+        .xv-typing span { width:6px; height:6px; border-radius:50%; background:var(--muted); animation:xvBlink 1.2s infinite ease-in-out; }
+        .xv-typing span:nth-child(2) { animation-delay:.18s; }
+        .xv-typing span:nth-child(3) { animation-delay:.36s; }
+        @keyframes xvBlink { 0%,80%,100% { opacity:.25; transform:translateY(0); } 40% { opacity:1; transform:translateY(-2px); } }
+        .xv-mini { border:none; background:transparent; color:var(--muted); cursor:pointer; padding:2px; border-radius:6px; display:inline-flex; }
+        .xv-mini:hover { color:var(--accent); background:var(--bg); }
+        .xv-img-card { position:relative; margin-top:10px; border:1px solid var(--line); border-radius:16px; padding:10px; background:var(--bg); max-width:300px; }
+        .xv-img-card img { width:100%; border-radius:12px; display:block; cursor:zoom-in; background:#0b0f14; }
+        /* 模型名与操作按钮只在悬浮图片时出现，静态隐藏 */
+        .xv-img-model { position:absolute; left:14px; top:14px; z-index:2; padding:3px 9px; border-radius:999px;
+            background:rgba(2,6,23,.62); color:#f8fafc; font-size:10px; font-weight:700; backdrop-filter:blur(6px);
+            opacity:0; pointer-events:none; transition:opacity .18s var(--easing); }
+        .xv-img-actions { position:absolute; left:12px; right:12px; bottom:12px; z-index:2; display:flex; flex-wrap:wrap; gap:6px;
+            padding:8px; border-radius:14px; background:rgba(2,6,23,.55); backdrop-filter:blur(8px);
+            opacity:0; pointer-events:none; transition:opacity .18s var(--easing); }
+        .xv-img-actions button { height:28px; padding:0 10px; border-radius:10px; border:1px solid rgba(248,250,252,.28); background:rgba(248,250,252,.12); color:#f8fafc; font-size:10px; font-weight:700; cursor:pointer; display:inline-flex; align-items:center; gap:4px; }
+        .xv-img-actions button:hover { background:rgba(248,250,252,.24); }
+        .xv-img-card:hover .xv-img-model, .xv-img-card:hover .xv-img-actions,
+        .xv-img-card:focus-within .xv-img-model, .xv-img-card:focus-within .xv-img-actions { opacity:1; pointer-events:auto; }
+        .xv-ref-edit-layer { position:fixed; inset:0; z-index:90; display:flex; align-items:center; justify-content:center; background:rgba(2,6,23,.5); padding:14px; }
+        .xv-ref-edit-frame { position:relative; width:100%; height:100%; border-radius:18px; overflow:hidden; background:#fff; box-shadow:0 30px 80px rgba(2,6,23,.45); }
+        .xv-ref-edit-close { display:none; }
+        .xv-ref-edit-frame iframe { width:100%; height:100%; border:0; display:block; }
+        .xv-ref-edit-close { position:absolute; right:10px; top:10px; z-index:2; width:28px; height:28px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--accent); font-size:16px; line-height:1; cursor:pointer; }
+        .xv-empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; color:var(--muted); font-size:12px; font-weight:600; }
+        .xv-composer { flex:0 0 auto; border-top:1px solid var(--line); background:var(--card); padding:12px 22px 14px; }
+        .xv-composer-inner { max-width:880px; margin:0 auto; }
+        .xv-hint { max-width:880px; margin:6px auto 0; font-size:10px; color:var(--muted); text-align:center; font-weight:600; min-height:14px; }
+        .xv-spin { width:10px; height:10px; border:2px solid var(--muted); border-top-color:transparent; border-radius:50%; animation:xvspin .8s linear infinite; display:inline-block; vertical-align:-1px; margin-right:5px; }
+        @keyframes xvspin { to { transform:rotate(360deg); } }
+        .xv-drawer { width:0; overflow:hidden; border-left:1px solid var(--line); background:var(--card); transition:width .28s var(--easing); display:flex; flex-direction:column; }
+        .xv-drawer.open { width:300px; }
+        .xv-drawer-head { flex:0 0 auto; display:flex; align-items:center; gap:8px; padding:16px; border-bottom:1px solid var(--line); font-size:12px; font-weight:800; white-space:nowrap; }
+        .xv-drawer-head .xv-close { margin-left:auto; cursor:pointer; color:var(--muted); background:none; border:none; padding:4px; }
+        .xv-out-list { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
+        .xv-out { border:1px solid var(--line); border-radius:14px; padding:10px; display:flex; gap:10px; align-items:center; background:var(--bg); }
+        .xv-out-thumb { width:44px; height:44px; border-radius:10px; object-fit:cover; background:#e2e8f0; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+        .xv-out-meta { min-width:0; flex:1; }
+        .xv-out-name { font-size:11px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .xv-out-kind { font-size:9px; font-weight:700; color:var(--muted); letter-spacing:.04em; text-transform:uppercase; }
+        .xv-out-actions { display:flex; gap:4px; }
+        .xv-icon-btn { width:26px; height:26px; border-radius:9px; border:1px solid var(--line); background:var(--card); color:var(--accent); display:flex; align-items:center; justify-content:center; cursor:pointer; }
+        .xv-icon-btn:hover { border-color:var(--accent); }
+        .xv-out-empty { color:var(--muted); font-size:11px; text-align:center; padding:26px 10px; line-height:1.7; }
+        .xv-modal { position:fixed; inset:0; background:rgba(8,12,18,.62); display:none; align-items:center; justify-content:center; z-index:80; padding:28px; }
+        .xv-modal.open { display:flex; }
+        .xv-modal-card { background:var(--card); color:var(--accent); border-radius:18px; max-width:min(920px,92vw); max-height:86vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 30px 80px rgba(0,0,0,.35); }
+        .xv-modal-head { display:flex; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid var(--line); font-size:12px; font-weight:800; }
+        .xv-modal-body { overflow:auto; padding:14px; display:flex; justify-content:center; }
+        .xv-modal-body img { max-width:100%; max-height:64vh; border-radius:12px; display:block; }
+        .xv-modal-body pre { margin:0; font-size:12px; line-height:1.6; white-space:pre-wrap; word-break:break-word; max-height:64vh; overflow:auto; min-width:min(640px,80vw); }
+
+        /* 历史对话抽屉：左侧滑出，点条目换对话 */
+        .xv-hist-mask { position:fixed; inset:0; z-index:70; background:rgba(2,6,23,.28); opacity:0; pointer-events:none; transition:opacity .18s; }
+        .xv-hist-mask.open { opacity:1; pointer-events:auto; }
+        .xv-hist { position:fixed; left:0; top:0; bottom:0; z-index:71; width:min(320px,78vw); background:var(--card);
+            border-right:1px solid var(--line); box-shadow:18px 0 50px rgba(2,6,23,.18); display:flex; flex-direction:column;
+            transform:translateX(-102%); transition:transform .2s; }
+        .xv-hist.open { transform:none; }
+        .xv-hist-head { flex:0 0 auto; display:flex; align-items:center; gap:8px; padding:14px 16px; border-bottom:1px solid var(--line); }
+        .xv-hist-head b { font-size:13px; font-weight:800; }
+        .xv-hist-close { margin-left:auto; width:26px; height:26px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--muted); display:grid; place-items:center; cursor:pointer; }
+        .xv-hist-list { flex:1 1 auto; min-height:0; overflow-y:auto; padding:8px; display:flex; flex-direction:column; gap:4px; }
+        .xv-hist-item { text-align:left; border:1px solid transparent; background:transparent; border-radius:12px; padding:9px 11px; cursor:pointer; display:flex; flex-direction:column; gap:3px; }
+        .xv-hist-item:hover { background:var(--soft); }
+        .xv-hist-item.active { background:var(--soft); border-color:var(--line); }
+        .xv-hist-title { font-size:12.5px; font-weight:700; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .xv-hist-sub { font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .xv-hist-empty { padding:22px 14px; font-size:12px; color:var(--muted); text-align:center; }
+    </style>
+</head>
+<body>
+<div class="xv-shell">
+    <div class="xv-main">
+        <div class="xv-head">
+            <div>
+                <div class="xv-title" data-i18n="xvai.title">小抽AI</div>
+                <div class="xv-sub" data-i18n="xvai.subtitle">对话生成 · 产物实时预览</div>
+            </div>
+            <div class="xv-head-right">
+                <span class="xv-balance" id="xvBalance" title="积分余额"><i data-lucide="wallet" style="width:13px;height:13px"></i><span id="xvBalanceNum">--</span></span>
+                <button class="xv-btn" type="button" id="xvHistory" title="历史对话">
+                    <i data-lucide="history"></i><span>历史</span>
+                </button>
+                <button class="xv-btn" type="button" id="xvNew" title="新对话">
+                    <i data-lucide="plus"></i><span data-i18n="xvai.newChat">新对话</span>
+                </button>
+                <button class="xv-btn" type="button" id="xvOutToggle">
+                    <i data-lucide="panel-right"></i><span data-i18n="xvai.outputs">输出</span>
+                    <span class="xv-badge" id="xvOutCount">0</span>
+                </button>
+            </div>
+        </div>
+        <div class="xv-thread" id="xvThread">
+            <div class="xv-empty" id="xvEmpty">
+                <i data-lucide="sparkles"></i>
+                <span data-i18n="xvai.empty">问点什么，产物会收进右侧「输出」。</span>
+            </div>
+        </div>
+        <div class="xv-composer xv-agent">
+            <div class="xv-composer-inner">
+                <div class="agent-input-area">
+                    <div class="agent-onebox">
+                        <div class="agent-topbar">
+                            <div class="agent-toolbar-dropdown-wrap">
+                                <button id="agentModelBtn" class="agent-toolbar-btn" type="button" title="理解模型 · 点击切换"><i data-lucide="cpu"></i><span id="agentModelLabel">理解</span><i data-lucide="chevron-down"></i></button>
+                                <button id="agentGenModelBtn" class="agent-toolbar-btn" type="button" title="生图模型 · 点击切换"><i data-lucide="image"></i><span id="agentGenModelLabel">生图</span><i data-lucide="chevron-down"></i></button>
+                                <div id="agentModelPanel" class="agent-dropdown-panel" hidden>
+                                    <div class="agent-dropdown-row"><label>理解</label><div class="agent-dropdown-selects">
+                                        <select id="xvChatProvider"></select>
+                                        <select id="xvChatModel"></select>
+                                    </div></div>
+                                    <div class="agent-dropdown-row"><label>生图</label><div class="agent-dropdown-selects">
+                                        <select id="xvImgProvider"></select>
+                                        <select id="xvImgModel"></select>
+                                    </div></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="agentAttachRow" class="agent-attach-row"></div>
+                        <div id="agentInput" class="agent-input-rich" contenteditable="true" role="textbox" aria-multiline="true"
+                             data-i18n-placeholder="xvai.placeholder" placeholder="输入需求，可附参考图…" data-empty="1"></div>
+                        <div class="agent-toolbar">
+                            <button id="agentAttachBtn" class="agent-toolbar-icon" type="button" title="添加参考图"><i data-lucide="paperclip"></i></button>
+                            <button id="agentParamsBtn" class="agent-toolbar-btn agent-params-btn" type="button" title="出图参数 · 点击调整">
+                                <i data-lucide="ruler"></i><span id="agentParamsLabel">1:1 · 4K · 高</span><i data-lucide="chevron-down"></i>
+                            </button>
+                            <div class="agent-toolbar-spacer"></div>
+                            <span id="xvSendCredit" class="xv-send-credit" hidden></span>
+                            <button id="agentSendBtn" class="agent-send-btn" type="button" title="发送"><i data-lucide="send"></i></button>
+                        </div>
+                    </div>
+                    <div id="agentParamsPanel" class="agent-dropdown-panel agent-params-panel" hidden>
+                        <div class="agent-params-section">
+                            <div class="agent-params-title">比例</div>
+                            <div class="agent-ratio-grid" id="agentRatioGrid"></div>
+                        </div>
+                        <div class="agent-params-section">
+                            <div class="agent-params-title">分辨率</div>
+                            <div class="agent-res-grid" id="agentResGrid"></div>
+                        </div>
+                        <div class="agent-params-section">
+                            <div class="agent-params-title">质量</div>
+                            <div class="agent-quality-seg" id="agentQualitySeg"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="xv-hint" id="xvHint"></div>
+            </div>
+        </div>
+    </div>
+    <aside class="xv-drawer" id="xvDrawer">
+        <div class="xv-drawer-head">
+            <i data-lucide="folder-open"></i>
+            <span data-i18n="xvai.outputs">输出</span>
+            <button class="xv-close" type="button" id="xvOutClose" title="收起"><i data-lucide="x"></i></button>
+        </div>
+        <div class="xv-out-list" id="xvOutList">
+            <div class="xv-out-empty" data-i18n="xvai.noOutputs">还没有产物。让 AI 出图或生成文件后会出现在这里。</div>
+        </div>
+    </aside>
+</div>
+
+<input type="file" id="xvFileInput" accept="image/*" multiple hidden>
+
+<div class="xv-modal" id="xvModal">
+    <div class="xv-modal-card">
+        <div class="xv-modal-head">
+            <span id="xvModalTitle">预览</span>
+            <span style="margin-left:auto;display:flex;gap:6px">
+                <a class="xv-icon-btn" id="xvModalDownload" download title="下载"><i data-lucide="download"></i></a>
+                <button class="xv-icon-btn" type="button" id="xvModalClose" title="关闭"><i data-lucide="x"></i></button>
+            </span>
+        </div>
+        <div class="xv-modal-body" id="xvModalBody"></div>
+    </div>
+</div>
+
+<div class="xv-hist-mask" id="xvHistMask"></div>
+<aside class="xv-hist" id="xvHist">
+    <div class="xv-hist-head">
+        <b>历史对话</b>
+        <button class="xv-hist-close" type="button" id="xvHistClose"><i data-lucide="x"></i></button>
+    </div>
+    <div class="xv-hist-list" id="xvHistList"><div class="xv-hist-empty">还没有历史对话</div></div>
+</aside>
+
+<script>
+(function(){
+    const $ = id => document.getElementById(id);
+    const OUT_RE = /(?:^|[\s("'=])((?:\/output|\/assets|\/api\/storage-files)\/[^\s)"'<>]+)/g;
+    const IMG_MD_RE = /!\[[^\]]*\]\(([^)\s]+)\)/g;
+    const RATIOS = [
+        ['square','1:1',1], ['landscape','3:2',3/2], ['portrait','2:3',2/3], ['landscape43','4:3',4/3],
+        ['portrait43','3:4',3/4], ['wide','16:9',16/9], ['story','9:16',9/16]
+    ];
+    const RES_LONG_SIDE = {'1k':1536,'2k':2048,'4k':3840};
+    const RES_PIXEL_LIMIT = {'1k':1572864,'2k':4194304,'4k':8294400};
+    const QUALITIES = [['','自动'],['high','高'],['medium','中'],['low','低']];
+    const state = {
+        convId: localStorage.getItem('xvai_conv_id') || '',
+        chatProvider: localStorage.getItem('xvai_provider') || '',
+        chatModel: localStorage.getItem('xvai_model') || '',
+        imgProvider: localStorage.getItem('xvai_img_provider') || '',
+        imgModel: localStorage.getItem('xvai_img_model') || '',
+        params: { ratio:'square', res:'4k', quality:'high' },
+        refs: [],
+        messages: [],
+        outputs: [],
+        sending: false,
+        pending: false,
+        chatOptions: [],
+        imgOptions: [],
+        providers: []
+    };
+    try { Object.assign(state.params, JSON.parse(localStorage.getItem('xvai_params') || '{}')); } catch(e) {}
+
+    function esc(text){
+        return String(text == null ? '' : text)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function isImage(url){ return /\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?|#|$)/i.test(String(url || '')); }
+    function fileName(url){
+        try {
+            const clean = String(url).split('?')[0].split('#')[0];
+            return decodeURIComponent(clean.split('/').pop() || 'file');
+        } catch(e){ return 'file'; }
+    }
+    function icons(){ try { window.lucide?.createIcons(); } catch(e) {} }
+    function setHint(text, busy){
+        $('xvHint').innerHTML = (busy ? '<span class="xv-spin"></span>' : '') + esc(text || '');
+    }
+    function closePanels(except){
+        [$('agentModelPanel'), $('agentParamsPanel')].forEach(el => { if(el && el !== except) el.hidden = true; });
+        ['agentModelBtn','agentGenModelBtn','agentParamsBtn'].forEach(id => $(id)?.classList.remove('active'));
+    }
+
+    // 比例 + 分辨率 → WxH，与画布 apiImageSize 同一套约束（长边 + 像素上限），16 对齐
+    function computeSize(){
+        const [, , ratio] = RATIOS.find(r => r[0] === state.params.ratio) || RATIOS[0];
+        const longSide = RES_LONG_SIDE[state.params.res] || 3840;
+        const pixelLimit = RES_PIXEL_LIMIT[state.params.res] || 8294400;
+        const w = Math.min(ratio >= 1 ? longSide : longSide * ratio, Math.sqrt(pixelLimit * ratio));
+        const h = Math.min(ratio >= 1 ? longSide / ratio : longSide, Math.sqrt(pixelLimit / ratio));
+        return `${Math.round(w / 16) * 16}x${Math.round(h / 16) * 16}`;
+    }
+
+    // ---------- 参数 ----------
+    $('agentRatioGrid').innerHTML = RATIOS.map(r =>
+        `<button class="agent-ratio-btn" type="button" data-ratio="${r[0]}"><span class="agent-ratio-icon" style="aspect-ratio:${r[2]}"></span>${r[1]}</button>`
+    ).join('');
+    $('agentResGrid').innerHTML = ['1k','2k','4k'].map(r => `<button class="agent-res-btn" type="button" data-res="${r}">${r.toUpperCase()}</button>`).join('');
+    $('agentQualitySeg').innerHTML = QUALITIES.map(q => `<button class="agent-quality-btn" type="button" data-quality="${q[0]}">${q[1]}</button>`).join('');
+
+    function syncParamsLabel(){
+        const ratioLabel = (RATIOS.find(r => r[0] === state.params.ratio) || RATIOS[0])[1];
+        const qualityLabel = (QUALITIES.find(q => q[0] === state.params.quality) || QUALITIES[0])[1];
+        $('agentParamsLabel').textContent = `${ratioLabel} · ${String(state.params.res).toUpperCase()} · ${qualityLabel}`;
+        document.querySelectorAll('#agentRatioGrid .agent-ratio-btn').forEach(b => b.classList.toggle('active', b.dataset.ratio === state.params.ratio));
+        document.querySelectorAll('#agentResGrid .agent-res-btn').forEach(b => b.classList.toggle('active', b.dataset.res === state.params.res));
+        document.querySelectorAll('#agentQualitySeg .agent-quality-btn').forEach(b => b.classList.toggle('active', b.dataset.quality === state.params.quality));
+    }
+    function persistParams(){ localStorage.setItem('xvai_params', JSON.stringify(state.params)); }
+
+    $('agentRatioGrid').addEventListener('click', ev => {
+        const btn = ev.target.closest('[data-ratio]'); if(!btn) return;
+        state.params.ratio = btn.dataset.ratio;
+        if(btn.dataset.ratio === 'ultrawide' || btn.dataset.ratio === 'ultratall') state.params.ratio = btn.dataset.ratio;
+        persistParams(); syncParamsLabel();
+    });
+    $('agentResGrid').addEventListener('click', ev => {
+        const btn = ev.target.closest('[data-res]'); if(!btn) return;
+        state.params.res = btn.dataset.res; persistParams(); syncParamsLabel();
+    });
+    $('agentQualitySeg').addEventListener('click', ev => {
+        const btn = ev.target.closest('[data-quality]'); if(!btn) return;
+        state.params.quality = btn.dataset.quality; persistParams(); syncParamsLabel();
+    });
+    $('agentParamsBtn').addEventListener('click', ev => {
+        ev.stopPropagation();
+        const panel = $('agentParamsPanel');
+        const open = panel.hidden;
+        closePanels(open ? panel : null);
+        panel.hidden = !open;
+        $('agentParamsBtn').classList.toggle('active', open);
+    });
+
+    // ---------- 模型 ----------
+    function providerById(pid){ return state.providers.find(p => p.id === pid) || null; }
+    function modelsOf(pid, kind){
+        const p = providerById(pid);
+        if(!p) return [];
+        return kind === 'chat' ? (p.chat_models || []) : (p.image_models || []);
+    }
+    function fillModelSelects(){
+        const chatList = state.chatOptions;
+        const imgList = state.imgOptions;
+        const chatPs = [...new Set(chatList.map(o => o.provider))];
+        const imgPs = [...new Set(imgList.map(o => o.provider))];
+
+        $('xvChatProvider').innerHTML = chatPs.map(pid => {
+            const p = providerById(pid);
+            return `<option value="${esc(pid)}">${esc(p?.name || pid)}</option>`;
+        }).join('') || '<option value="">未配置</option>';
+        if(!chatPs.includes(state.chatProvider) && chatPs.length) state.chatProvider = chatPs[0];
+        $('xvChatProvider').value = state.chatProvider;
+
+        $('xvChatModel').innerHTML = modelsOf(state.chatProvider, 'chat').map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('') || '<option value="">—</option>';
+        if(!modelsOf(state.chatProvider, 'chat').includes(state.chatModel)) state.chatModel = modelsOf(state.chatProvider, 'chat')[0] || '';
+        $('xvChatModel').value = state.chatModel;
+
+        $('xvImgProvider').innerHTML = imgPs.map(pid => {
+            const p = providerById(pid);
+            return `<option value="${esc(pid)}">${esc(p?.name || pid)}</option>`;
+        }).join('') || '<option value="">未配置</option>';
+        if(!imgPs.includes(state.imgProvider) && imgPs.length) state.imgProvider = imgPs[0];
+        $('xvImgProvider').value = state.imgProvider;
+
+        $('xvImgModel').innerHTML = modelsOf(state.imgProvider, 'image').map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('') || '<option value="">—</option>';
+        if(!modelsOf(state.imgProvider, 'image').includes(state.imgModel)) state.imgModel = modelsOf(state.imgProvider, 'image')[0] || '';
+        $('xvImgModel').value = state.imgModel;
+
+        $('agentModelLabel').textContent = state.chatModel || '理解';
+        $('agentGenModelLabel').textContent = state.imgModel || '生图';
+    }
+    async function loadProviders(){
+        try {
+            const res = await fetch('/api/providers');
+            const data = await res.json();
+            state.providers = (data.providers || []).filter(p => p && p.enabled !== false);
+        } catch(e) { state.providers = []; }
+        state.chatOptions = [];
+        state.imgOptions = [];
+        state.providers.forEach(p => {
+            (p.chat_models || []).forEach(m => state.chatOptions.push({ provider:p.id, model:m }));
+            (p.image_models || []).forEach(m => state.imgOptions.push({ provider:p.id, model:m }));
+        });
+        fillModelSelects();
+        if(!state.chatOptions.length) setHint('没找到可用的对话通道，请先在 API 设置里配好 chat 模型。');
+    }
+    ['xvChatProvider','xvChatModel'].forEach(id => $(id).addEventListener('change', () => {
+        state.chatProvider = $('xvChatProvider').value;
+        state.chatModel = $('xvChatModel').value;
+        localStorage.setItem('xvai_provider', state.chatProvider);
+        localStorage.setItem('xvai_model', state.chatModel);
+        fillModelSelects();
+        scheduleSendCredit();
+    }));
+    ['xvImgProvider','xvImgModel'].forEach(id => $(id).addEventListener('change', () => {
+        state.imgProvider = $('xvImgProvider').value;
+        state.imgModel = $('xvImgModel').value;
+        localStorage.setItem('xvai_img_provider', state.imgProvider);
+        localStorage.setItem('xvai_img_model', state.imgModel);
+        fillModelSelects();
+        scheduleSendCredit();
+    }));
+
+    $('agentModelBtn').addEventListener('click', ev => {
+        ev.stopPropagation();
+        const panel = $('agentModelPanel');
+        const open = panel.hidden;
+        closePanels(open ? panel : null);
+        panel.hidden = !open;
+    });
+    $('agentGenModelBtn').addEventListener('click', ev => {
+        ev.stopPropagation();
+        const panel = $('agentModelPanel');
+        const open = panel.hidden;
+        closePanels(open ? panel : null);
+        panel.hidden = !open;
+        panel.querySelectorAll('.agent-dropdown-row')[1]?.scrollIntoView({block:'nearest'});
+    });
+    document.addEventListener('click', ev => {
+        if(!ev.target.closest('.agent-toolbar-dropdown-wrap') && !ev.target.closest('.agent-params-panel') && !ev.target.closest('#agentParamsBtn')) closePanels();
+    });
+
+    // ---------- 附件 ----------
+    function renderAttachRow(){
+        const row = $('agentAttachRow');
+        if(!state.refs.length){ row.innerHTML = ''; return; }
+        row.innerHTML = state.refs.map((ref, i) => `<div class="agent-attach-ref">
+            <img src="${esc(ref.url)}" alt="">
+            <span class="agent-attach-ref-name">${esc(ref.name || fileName(ref.url))}</span>
+            <button type="button" data-xv-rm="${i}" title="移除"><i data-lucide="x"></i></button>
+        </div>`).join('');
+        icons();
+    }
+    async function uploadRefs(files){
+        for(const file of files){
+            try {
+                const form = new FormData();
+                form.append('files', file, file.name);
+                const res = await fetch('/api/ai/upload', { method:'POST', body: form });
+                const data = await res.json();
+                const first = (data.files || [])[0];
+                if(first && first.url) state.refs.push({ url:first.url, name:first.name || file.name });
+            } catch(e) { setHint('参考图上传失败：' + (e.message || e)); }
+        }
+        renderAttachRow();
+    }
+    $('agentAttachBtn').addEventListener('click', () => $('xvFileInput').click());
+    $('xvFileInput').addEventListener('change', ev => {
+        const files = Array.from(ev.target.files || []);
+        if(files.length) uploadRefs(files);
+        ev.target.value = '';
+    });
+    $('agentAttachRow').addEventListener('click', ev => {
+        const btn = ev.target.closest('[data-xv-rm]'); if(!btn) return;
+        state.refs.splice(Number(btn.dataset.xvRm), 1);
+        renderAttachRow();
+    });
+
+    // ---------- 输出收集 ----------
+    function addOutput(list, url, kind){
+        if(!url) return;
+        const clean = String(url).replace(/[.,，。]+$/, '');
+        if(!clean || list.some(o => o.url === clean)) return;
+        list.push({ url: clean, kind: kind || (isImage(clean) ? 'image' : 'file'), name: fileName(clean) });
+    }
+    function collectOutputs(messages){
+        const out = [];
+        (messages || []).forEach(msg => {
+            if(!msg || msg.role !== 'assistant') return;
+            (msg.image_urls || []).forEach(url => addOutput(out, url, 'image'));
+            (msg.attachments || []).forEach(item => { if(item && item.url && isImage(item.url)) addOutput(out, item.url, 'image'); });
+            const text = String(msg.content || '');
+            let m;
+            IMG_MD_RE.lastIndex = 0;
+            while((m = IMG_MD_RE.exec(text))) addOutput(out, m[1], 'image');
+            OUT_RE.lastIndex = 0;
+            while((m = OUT_RE.exec(text))) addOutput(out, m[1]);
+            (msg.tool_events || []).forEach(ev => {
+                const args = ev && ev.args || {};
+                ['path', 'file_path', 'filepath', 'filename', 'url'].forEach(k => {
+                    const v = args[k];
+                    if(typeof v === 'string' && v.trim()) addOutput(out, v.trim());
+                });
+            });
+        });
+        return out;
+    }
+    function renderOutputs(){
+        state.outputs = collectOutputs(state.messages);
+        $('xvOutCount').textContent = String(state.outputs.length);
+        const list = $('xvOutList');
+        if(!state.outputs.length){
+            list.innerHTML = `<div class="xv-out-empty">${esc((window.t && t('xvai.noOutputs')) || '还没有产物。让 AI 出图或生成文件后会出现在这里。')}</div>`;
+            return;
+        }
+        list.innerHTML = state.outputs.map((o, i) => {
+            const thumb = o.kind === 'image'
+                ? `<img class="xv-out-thumb" src="${esc(o.url)}" alt="" loading="lazy">`
+                : `<div class="xv-out-thumb"><i data-lucide="file-text" style="color:#94a3b8"></i></div>`;
+            return `<div class="xv-out">
+                ${thumb}
+                <div class="xv-out-meta">
+                    <div class="xv-out-name" title="${esc(o.url)}">${esc(o.name)}</div>
+                    <div class="xv-out-kind">${o.kind === 'image' ? 'IMAGE' : 'FILE'}</div>
+                </div>
+                <div class="xv-out-actions">
+                    <button class="xv-icon-btn" type="button" data-xv-preview="${i}" title="预览"><i data-lucide="eye"></i></button>
+                    <a class="xv-icon-btn" href="${esc(o.url)}" download="${esc(o.name)}" title="下载"><i data-lucide="download"></i></a>
+                </div>
+            </div>`;
+        }).join('');
+        icons();
+    }
+
+    // ---------- 消息渲染 ----------
+    function imageCard(url, model){
+        return `<div class="xv-img-card">
+            <img src="${esc(url)}" alt="" loading="lazy" data-xv-zoom="${esc(url)}">
+            <div class="xv-img-model">${esc(model || '')}</div>
+            <div class="xv-img-actions">
+                <button type="button" data-xv-act="edit"><i data-lucide="pencil"></i>修改</button>
+                <button type="button" data-xv-act="vary"><i data-lucide="layers"></i>变体</button>
+                <button type="button" data-xv-act="reverse"><i data-lucide="scan-eye"></i>反推</button>
+            </div>
+        </div>`;
+    }
+    // 本次消耗（后端 chat_agent 显式扣费后写进消息里，见 main.py「小抽AI 计费」块）
+    function creditsChip(msg){
+        const c = msg && msg.credits;
+        if(!c || !c.charged) return '';
+        return `<div class="xv-cost">本次消耗 ${esc(String(c.credits))} 积分 · 余额 ${esc(String(c.balance))}</div>`;
+    }
+    async function refreshBalance(){
+        try {
+            const res = await fetch('/api/credits/balance');
+            if(!res.ok) return;
+            const data = await res.json();
+            const num = $('xvBalanceNum');
+            if(num) num.textContent = String(data.balance ?? '--');
+        } catch(e) {}
+    }
+    function renderThread(){
+        const thread = $('xvThread');
+        if(!state.messages.length){
+            thread.innerHTML = `<div class="xv-empty" id="xvEmpty">
+                <i data-lucide="sparkles"></i>
+                <span>${esc((window.t && t('xvai.empty')) || '问点什么，产物会收进右侧「输出」。')}</span>
+            </div>`;
+            icons();
+            return;
+        }
+        thread.innerHTML = state.messages.map((msg, idx) => {
+            const mine = msg.role === 'user';
+            const cards = !mine && (msg.image_urls || []).length
+                ? (msg.image_urls || []).map(u => imageCard(u, msg.model)).join('')
+                : '';
+            const tools = mine ? '' : `<div class="xv-msg-tools">
+                <button class="xv-mini" type="button" data-xv-copy="${idx}" title="复制回复"><i data-lucide="copy"></i></button>
+                <button class="xv-mini" type="button" data-xv-retry="${idx}" title="重试上一条"><i data-lucide="rotate-ccw"></i></button>
+            </div>`;
+            return `<div class="xv-msg ${mine ? 'user' : 'assistant'}">
+                <div class="xv-avatar">${mine ? '我' : 'AI'}</div>
+                <div class="xv-bubble">${esc(msg.content || '')}${cards}${creditsChip(msg)}</div>
+                ${tools}
+            </div>`;
+        }).join('');
+        if(state.pending){
+            thread.innerHTML += `<div class="xv-msg assistant xv-bubble-pending">
+                <div class="xv-avatar">AI</div>
+                <div class="xv-bubble xv-typing"><span></span><span></span><span></span></div>
+            </div>`;
+        }
+        icons();
+        thread.scrollTop = thread.scrollHeight;
+    }
+
+    // ---------- 预览 ----------
+    async function openPreview(url, name){
+        const body = $('xvModalBody');
+        $('xvModalTitle').textContent = name || fileName(url);
+        $('xvModalDownload').href = url;
+        $('xvModalDownload').setAttribute('download', name || fileName(url));
+        body.innerHTML = '<div style="color:#94a3b8;font-size:12px">加载中…</div>';
+        $('xvModal').classList.add('open');
+        if(isImage(url)){
+            const img = new Image();
+            img.src = url;
+            img.alt = name || '';
+            await new Promise(r => { img.onload = r; img.onerror = r; });
+            body.innerHTML = '';
+            body.appendChild(img);
+            return;
+        }
+        try {
+            const res = await fetch(url);
+            const text = await res.text();
+            body.innerHTML = `<pre>${esc(text.slice(0, 200000))}</pre>`;
+        } catch(e) {
+            body.innerHTML = `<div style="color:#94a3b8;font-size:12px">打不开这个文件，直接下载看看。</div>`;
+        }
+    }
+    function closePreview(){ $('xvModal').classList.remove('open'); $('xvModalBody').innerHTML = ''; }
+
+    // ---------- 输入 ----------
+    function readInput(){ return ($('agentInput').innerText || '').replace(/\u00a0/g, ' ').trim(); }
+    function clearInput(){ $('agentInput').innerHTML = ''; syncInputEmpty(); updateSendCredit(); }
+    function syncInputEmpty(){ $('agentInput').dataset.empty = readInput() ? '0' : '1'; }
+    $('agentInput').addEventListener('input', () => { syncInputEmpty(); scheduleSendCredit(); });
+    $('agentInput').addEventListener('keydown', ev => {
+        if(ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing){ ev.preventDefault(); send(); }
+    });
+
+    /* 发送前的积分预估（老板 m03745：和画布 agent 一样，在发送键左边显示「约 x 积分」）
+       画布那套是本地读单价表算的；这里没有单价表，直接问后端同一个估算接口，
+       省得两边算法漂移。 */
+    let creditTimer = 0, creditSeq = 0;
+    function fmtCredits(n){
+        const v = Number(n) || 0;
+        if(!(v > 0)) return '';
+        if(v >= 100) return String(Math.round(v));
+        if(v >= 1) return String(Math.round(v * 10) / 10);
+        return String(Math.round(v * 10000) / 10000);
+    }
+    function looksLikeImageRequest(text){
+        return /(画|绘制|生成|出图|生图|图生图|参考图|头像|海报|壁纸|插画|修图|改图|编辑这张|gif|动图)/i.test(String(text || ''));
+    }
+    async function postEstimate(payload){
+        const res = await fetch('/api/credits/estimate', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload), cache: 'no-store'
+        });
+        if(!res.ok) return { configured: false, credits: 0 };
+        return res.json();
+    }
+    async function updateSendCredit(){
+        const badge = $('xvSendCredit');
+        if(!badge) return;
+        const text = readInput();
+        if(!text){ badge.hidden = true; badge.textContent = ''; return; }
+        const seq = ++creditSeq;
+        const wantImage = looksLikeImageRequest(text);
+        let data;
+        try {
+            data = wantImage
+                ? await postEstimate({ model: state.imgModel, provider: state.imgProvider, kind: 'image', count: 1 })
+                : await postEstimate({ model: state.chatModel, provider: state.chatProvider, kind: 'llm', input_text: text });
+            if(seq !== creditSeq) return;
+            /* 生图模型没配单价时，退回去按对话 token 给个参考价 */
+            if(wantImage && !data.configured){
+                data = await postEstimate({ model: state.chatModel, provider: state.chatProvider, kind: 'llm', input_text: text });
+                if(seq !== creditSeq) return;
+            }
+        } catch(e){ if(seq === creditSeq){ badge.hidden = true; } return; }
+        const label = data && data.configured ? fmtCredits(data.credits) : '';
+        badge.textContent = label ? (`约 ${label} 积分`) : '';
+        badge.hidden = !badge.textContent;
+    }
+    function scheduleSendCredit(){
+        clearTimeout(creditTimer);
+        creditTimer = setTimeout(updateSendCredit, 300);
+    }
+    async function send(message){
+        const text = (message != null ? message : readInput()).trim();
+        if(!text || state.sending) return;
+        if(!state.chatProvider || !state.chatModel){ setHint('还没有可用的对话通道，先去 API 设置。'); return; }
+        state.sending = true;
+        $('agentSendBtn').disabled = true;
+        if(message == null) clearInput();
+        state.messages.push({ role:'user', content:text });
+        state.pending = true;
+        renderThread();
+        setHint('小抽AI 正在思考…', true);
+        try {
+            const payload = {
+                message: text,
+                conversation_id: state.convId || '',
+                provider: state.chatProvider,
+                model: state.chatModel,
+                image_provider: state.imgProvider,
+                image_model: state.imgModel,
+                size: computeSize(),
+                quality: state.params.quality || 'auto',
+                mode: 'agent',
+                reference_images: state.refs.map(r => ({ url:r.url, name:r.name || '', kind:'image' }))
+            };
+            const res = await fetch('/api/chat/agent', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json().catch(() => ({}));
+            if(!res.ok) throw new Error(data.detail || `请求失败（${res.status}）`);
+            const conversation = data.conversation || {};
+            state.convId = conversation.id || state.convId;
+            if(state.convId) localStorage.setItem('xvai_conv_id', state.convId);
+            state.messages = conversation.messages ? normalizeMessages(conversation.messages) : state.messages;
+            state.refs = [];
+            renderAttachRow();
+            renderThread();
+            renderOutputs();
+            if(data.credits) refreshBalance();
+            setHint('');
+        } catch(err) {
+            state.messages.push({ role:'assistant', content:`出错了：${err.message || err}` });
+            renderThread();
+            setHint('');
+        } finally {
+            state.pending = false;
+            state.sending = false;
+            $('agentSendBtn').disabled = false;
+            renderThread();
+            if(document.getElementById('xvHist').classList.contains('open')) loadHistory();
+        }
+    }
+    $('agentSendBtn').addEventListener('click', () => send());
+
+    // 对话记录在后端（data/conversations/<user>/*.json），页面打开时按上次的 id 取回；
+    // 换设备/清缓存就退化成"取最近一条有内容的对话"，保证刷新和重启都不丢。
+    function normalizeMessages(list){
+        return (list || []).filter(m => m && m.role && m.role !== 'system').map(m => ({
+            role: m.role,
+            content: m.content,
+            model: m.model,
+            image_urls: m.image_urls || (m.image_url ? [m.image_url] : []),
+            attachments: m.attachments,
+            tool_events: m.tool_events,
+            credits: m.credits
+        }));
+    }
+    async function loadConversationById(id){
+        if(!id) return false;
+        try {
+            const res = await fetch('/api/conversations/' + encodeURIComponent(id), { cache:'no-store' });
+            if(!res.ok) return false;
+            const data = await res.json();
+            const conv = data.conversation || {};
+            state.convId = conv.id || id;
+            localStorage.setItem('xvai_conv_id', state.convId);
+            state.messages = normalizeMessages(conv.messages);
+            renderThread();
+            renderOutputs();
+            return true;
+        } catch(e) { return false; }
+    }
+    async function restoreConversation(){
+        if(state.messages.length) return;
+        if(await loadConversationById(state.convId)) return;
+        state.convId = '';
+        localStorage.removeItem('xvai_conv_id');
+        try {
+            const res = await fetch('/api/conversations', { cache:'no-store' });
+            const data = await res.json();
+            const list = (data.conversations || []).filter(c => c && c.id)
+                .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+            for(const item of list){
+                if(await loadConversationById(item.id)) return;
+            }
+        } catch(e) {}
+    }
+
+    function resetChat(){
+        state.convId = '';
+        state.messages = [];
+        state.refs = [];
+        localStorage.removeItem('xvai_conv_id');
+        renderAttachRow();
+        renderThread();
+        renderOutputs();
+        setHint('');
+    }
+
+    // ---------- 其他事件 ----------
+    $('xvNew').addEventListener('click', resetChat);
+    $('xvOutToggle').addEventListener('click', () => $('xvDrawer').classList.toggle('open'));
+    $('xvOutClose').addEventListener('click', () => $('xvDrawer').classList.remove('open'));
+    $('xvModalClose').addEventListener('click', closePreview);
+    $('xvModal').addEventListener('click', ev => { if(ev.target === $('xvModal')) closePreview(); });
+    document.addEventListener('keydown', ev => { if(ev.key === 'Escape'){ closePreview(); closePanels(); } });
+
+    $('xvOutList').addEventListener('click', ev => {
+        const btn = ev.target.closest('[data-xv-preview]');
+        if(!btn) return;
+        const item = state.outputs[Number(btn.dataset.xvPreview)];
+        if(item) openPreview(item.url, item.name);
+    });
+    $('xvThread').addEventListener('click', ev => {
+        const zoom = ev.target.closest('[data-xv-zoom]');
+        if(zoom){ openPreview(zoom.dataset.xvZoom, fileName(zoom.dataset.xvZoom)); return; }
+        const act = ev.target.closest('[data-xv-act]');
+        if(act){
+            if(act.dataset.xvAct === 'edit'){
+                // 修改 = 打开在线生图那套参考图编辑面板（扩图/遮罩/视角/画笔），改完自动进参考图
+                const card = ev.target.closest('.xv-img-card');
+                const img = card && card.querySelector('img');
+                openRefEditorForImage(img ? (img.dataset.xvZoom || img.src) : '');
+            }
+            if(act.dataset.xvAct === 'vary') send('以最新一张图为参考，生成 3 个不同方向的变体。');
+            if(act.dataset.xvAct === 'reverse') send('反推最新一张图的中文提示词，只要提示词本身。');
+            return;
+        }
+        const copy = ev.target.closest('[data-xv-copy]');
+        if(copy){
+            const msg = state.messages[Number(copy.dataset.xvCopy)];
+            if(msg) navigator.clipboard?.writeText(String(msg.content || '')).catch(() => {});
+            return;
+        }
+        const retry = ev.target.closest('[data-xv-retry]');
+        if(retry){
+            const idx = Number(retry.dataset.xvRetry);
+            for(let i = idx - 1; i >= 0; i--){
+                if(state.messages[i] && state.messages[i].role === 'user'){ send(state.messages[i].content); break; }
+            }
+        }
+    });
+
+    // ---------- 复用在线生图的参考图编辑面板（iframe + postMessage） ----------
+    function openRefEditorForImage(url){
+        if(!url) return;
+        const layer = document.createElement('div');
+        layer.className = 'xv-ref-edit-layer';
+        const frameSrc = '/static/online.html?editor=1&src=' + encodeURIComponent(url);
+        layer.innerHTML = `<div class="xv-ref-edit-frame">
+            <button type="button" class="xv-ref-edit-close" aria-label="关闭">×</button>
+            <iframe src="${frameSrc}" title="参考图编辑"></iframe>
+        </div>`;
+        document.body.appendChild(layer);
+        const onMsg = ev => {
+            const data = ev.data || {};
+            if(data.type === 'xvai-ref-editor-closed'){ close(); return; }
+            if(data.type !== 'xvai-ref-edited') return;
+            close();
+            if(!data.url) return;
+            state.refs = [{ url:data.url, name:'edited.png', kind:'image' }];
+            renderAttachRow();
+            state.messages.push({ role:'assistant', content:'已把编辑结果放进参考图，可以直接说要把这块改成什么。', image_urls:[data.url] });
+            renderThread();
+            renderOutputs();
+        };
+        function close(){
+            window.removeEventListener('message', onMsg);
+            layer.remove();
+        }
+        layer.querySelector('.xv-ref-edit-close').addEventListener('click', close);
+        layer.addEventListener('click', ev => { if(ev.target === layer) close(); });
+        window.addEventListener('message', onMsg);
+    }
+
+    window.addEventListener('studio-theme-change', () => icons());
+    window.addEventListener('message', ev => {
+        if(ev.data && ev.data.type === 'studio-theme'){
+            const dark = ev.data.theme === 'dark';
+            document.documentElement.classList.toggle('studio-theme-dark', dark);
+            document.documentElement.classList.toggle('theme-dark', dark);
+        }
+    });
+
+    icons();
+    syncInputEmpty();
+    syncParamsLabel();
+    renderThread();
+    renderOutputs();
+    let histItems = [];
+    function fmtHistTime(ms){
+        if(!ms) return '';
+        const d = new Date(Number(ms));
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getMonth()+1}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+    async function loadHistory(){
+        try {
+            const res = await fetch('/api/conversations', { cache:'no-store' });
+            const data = await res.json().catch(() => ({}));
+            histItems = (data.conversations || []).filter(c => c && c.id)
+                .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+        } catch(e) { histItems = []; }
+        renderHistory();
+    }
+    function renderHistory(){
+        const box = document.getElementById('xvHistList');
+        if(!box) return;
+        if(!histItems.length){ box.innerHTML = '<div class="xv-hist-empty">还没有历史对话</div>'; return; }
+        box.innerHTML = histItems.map(c => {
+            const active = c.id === state.convId ? ' active' : '';
+            const sub = c.last_message ? esc(c.last_message).slice(0, 60) : '';
+            // 不把 id 拼进 onclick：id 里万一有引号就会串味，统一走事件委托
+            return `<button type="button" class="xv-hist-item${active}" data-conv="${esc(c.id)}">
+                <span class="xv-hist-title">${esc(c.title || '新对话')}</span>
+                <span class="xv-hist-sub">${esc(fmtHistTime(c.updated_at))}${sub ? ' · ' + sub : ''}</span>
+            </button>`;
+        }).join('');
+    }
+    document.getElementById('xvHistList').addEventListener('click', e => {
+        const btn = e.target.closest('[data-conv]');
+        if(btn) switchConversation(btn.getAttribute('data-conv'));
+    });
+    function openHistory(){
+        document.getElementById('xvHistMask').classList.add('open');
+        document.getElementById('xvHist').classList.add('open');
+        loadHistory();
+    }
+    function closeHistory(){
+        document.getElementById('xvHistMask').classList.remove('open');
+        document.getElementById('xvHist').classList.remove('open');
+    }
+    async function switchConversation(id){
+        if(!id) return;
+        if(state.sending) return;
+        await loadConversationById(id);
+        renderHistory();
+        closeHistory();
+        setHint('');
+    }
+    document.getElementById('xvHistory').addEventListener('click', openHistory);
+    document.addEventListener('keydown', e => { if(e.key === 'Escape') closeHistory(); });
+
+    // 历史抽屉在 <body> 末尾，主脚本先于它解析 ⇒ 必须等 DOM 建好再绑
+    document.addEventListener('DOMContentLoaded', () => {
+        $('xvHistMask').addEventListener('click', closeHistory);
+        $('xvHistClose').addEventListener('click', closeHistory);
+    });
+
+    (async () => { await loadProviders(); await restoreConversation(); refreshBalance(); })();
+})();
+</script>
+
+
+</body>
+</html>
