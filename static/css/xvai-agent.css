@@ -89,3 +89,5 @@ html.studio-theme-dark .xv-agent {
 .xv-agent .xv-slash-label { font-size:12px; font-weight:650; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .xv-agent .xv-slash-desc { font-size:10px; color:var(--muted); margin-top:1px; }
 .xv-composer.xv-drag-over .agent-onebox { border-color:#38bdf8; box-shadow:0 0 0 3px rgba(56,189,248,.18); }
+.xv-msg-atts { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+.xv-msg-atts img { width:72px; height:72px; object-fit:cover; border-radius:9px; border:1px solid var(--line, #edf0f3); cursor:zoom-in; }

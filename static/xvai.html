@@ -20,7 +20,7 @@
     <script src="/static/vendor/js/lucide.js?v=1.3.7.1767196800"></script>
     <script src="/static/js/theme.js?v=1.3.7.1793681298"></script>
     <script src="/static/js/i18n.js?v=1.3.7.1794291244"></script>
-    <link rel="stylesheet" href="/static/css/xvai-agent.css?v=1.3.7.1794280955">
+    <link rel="stylesheet" href="/static/css/xvai-agent.css?v=1.3.7.1794370556">
     <style>
         @import url('/static/vendor/css/fonts.css?v=1.3.7.1767196800');
         :root {
@@ -532,9 +532,13 @@
     });
     $('agentInput').addEventListener('click', ev => {
         const x = ev.target.closest('.xv-chip-x');
-        if(!x) return;
-        x.closest('.xv-chip')?.remove();
-        syncInputEmpty(); scheduleSendCredit();
+        if(x){
+            x.closest('.xv-chip')?.remove();
+            syncInputEmpty(); scheduleSendCredit();
+            return;
+        }
+        const chip = ev.target.closest('.xv-chip');
+        if(chip && chip.dataset.url) openPreview(chip.dataset.url, chip.dataset.name);
     });
 
     // ---------- 拖入 / 粘贴文件（照画布 Agent：整页可拖，附件落成胶囊） ----------
@@ -613,8 +617,11 @@
         const it = slashItems[slashIndex];
         if(!it) return;
         closeSlashPalette();
-        clearInput();
+        // 命令必须自成一条消息（后端只认以 / 开头的整句），所以先摘掉正文末尾的 /xxx，发完再把原文放回输入栏
+        const rest = readInput().replace(/(?:^|\s)\/[^\s]*$/, '').trim();
+        const refs = inputRefs();
         send(it.insert);
+        setInputContent(rest, refs);
     }
     slashEl.addEventListener('mousedown', ev => {
         const node = ev.target.closest('[data-slash]');
@@ -624,7 +631,8 @@
         pickSlashItem();
     });
     $('agentInput').addEventListener('input', () => {
-        const m = /^\/([^\s]*)$/.exec(readInput());
+        // 光标处的「/」开头词才弹面板：句中的 /、路径里的 / 不打扰
+        const m = /(?:^|\s)\/([^\s]*)$/.exec(readInput());
         if(m) openSlashPalette(m[1]); else closeSlashPalette();
     });
     document.addEventListener('click', ev => {
@@ -736,7 +744,11 @@
                 <button class="xv-mini" type="button" data-xv-copy="${idx}" title="复制"><i data-lucide="copy"></i></button>
                 <button class="xv-mini" type="button" data-xv-edit-msg="${idx}" title="回到这条消息继续编辑重发"><i data-lucide="pencil"></i></button>
             </div>`;
-            const bubble = `<div class="xv-bubble">${esc(msg.content || '')}${cards}${creditsChip(msg)}</div>`;
+            const atts = mine && (msg.attachments || []).length
+                ? `<div class="xv-msg-atts">${(msg.attachments || []).map(a =>
+                    `<img src="${esc(a.url)}" alt="${esc(a.name || '')}" loading="lazy" data-xv-zoom="${esc(a.url)}">`).join('')}</div>`
+                : '';
+            const bubble = `<div class="xv-bubble">${esc(msg.content || '')}${atts}${cards}${creditsChip(msg)}</div>`;
             return `<div class="xv-msg ${mine ? 'user' : 'assistant'}">
                 <div class="xv-avatar">${mine ? '我' : 'AI'}</div>
                 ${bubble}
@@ -908,7 +920,7 @@
         $('agentSendBtn').disabled = true;
         if(message == null) clearInput();
         state.rewindId = '';
-        state.messages.push({ role:'user', content:text });
+        state.messages.push({ role:'user', content:text, attachments: refs });
         state.pending = true;
         renderThread();
         setHint('小抽AI 正在思考…', true);
