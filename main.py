@@ -19157,6 +19157,76 @@ async def skills_uninstall(payload: AgentSkillRequest):
     result["installed"] = load_installed_skills().get("skills", [])
     return result
 
+
+class SkillCreateRequest(BaseModel):
+    """用户自建 Skill（小抽AI 的「新建」页）—— 只收名称与 SKILL.md 正文。"""
+    name: str = ""
+    content: str = ""
+
+
+@app.post("/api/skills/create")
+async def skills_create(payload: SkillCreateRequest):
+    """把用户手写的 Skill 落到 data/agent_skills/<id>/SKILL.md 并登记索引。
+
+    与市场安装共用同一个索引目录，所以建完立刻出现在「已安装」里、也会被拼进
+    Agent 系统提示词 —— 不需要重启，也不需要额外的「激活」步骤。
+    id 由名称派生（同名覆盖），保证重复保存是更新而不是堆积一堆副本。
+    """
+    name = sanitize_asset_name(payload.name, "自建 Skill")
+    text = (payload.content or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Skill 内容不能为空")
+    raw = text.encode("utf-8")
+    if len(raw) > SKILL_DOWNLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Skill 内容超过 {SKILL_DOWNLOAD_BYTES // 1024} KB，请精简")
+    if not text.startswith("#"):
+        text = f"# Skill: {name}\n\n{text}"
+        raw = text.encode("utf-8")
+    skill_id = "custom-" + hashlib.md5(name.encode("utf-8")).hexdigest()[:10]
+    target = agent_skill_dir(skill_id)
+    os.makedirs(target, exist_ok=True)
+    with open(os.path.join(target, "SKILL.md"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+    summary = next((ln.strip() for ln in text.splitlines()
+                    if ln.strip() and not ln.strip().startswith("#")), "")[:200]
+    index = load_installed_skills()
+    index["skills"] = [s for s in index.get("skills", []) if str(s.get("id") or "") != skill_id]
+    record = {
+        "id": skill_id,
+        "name": name,
+        "title": name,
+        "summary": summary,
+        "repo": "",
+        "raw_url": "",
+        "bytes": len(raw),
+        "installed_at": now_ms(),
+        "source": "custom",
+        "tags": skill_tags_cached(name, summary),
+        "category": skill_category(skill_tags_cached(name, summary)),
+    }
+    index["skills"].append(record)
+    save_installed_skills(index)
+    return {"ok": True, "skill": record, "installed": index["skills"]}
+
+
+@app.get("/api/skills/{skill_id}/content")
+async def skill_content(skill_id: str):
+    """读一个已安装 Skill 的 SKILL.md 原文（前端「查看」用；内置 Skill 也能读）。"""
+    path = os.path.join(agent_skill_dir(skill_id), "SKILL.md")
+    text = ""
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8-sig") as f:
+                text = f.read()
+        except Exception:
+            text = ""
+    if not text:
+        for item in load_builtin_skills():
+            if str(item.get("id") or "") == str(skill_id):
+                text = item.get("content") or ""
+                break
+    return {"id": skill_id, "content": text, "exists": bool(text)}
+
 @app.get("/api/gemini-cli/status")
 async def gemini_cli_status():
     exe = gemini_cli_executable()

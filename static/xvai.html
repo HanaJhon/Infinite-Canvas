@@ -36,8 +36,10 @@
         .xv-shell { display:flex; height:100%; overflow:hidden; }
         .xv-main { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; }
         .xv-head { flex:0 0 auto; display:flex; align-items:center; gap:12px; padding:14px 22px; border-bottom:1px solid var(--line); background:var(--card); }
-        .xv-title { font-size:15px; font-weight:800; letter-spacing:-.01em; }
-        .xv-sub { font-size:10px; font-weight:700; color:var(--muted); letter-spacing:.04em; }
+        /* 标题与副标题并成一行（老板 2026-11-11：图1 那两块别叠两行） */
+        .xv-brand { display:flex; align-items:baseline; gap:8px; min-width:0; }
+        .xv-title { font-size:15px; font-weight:800; letter-spacing:-.01em; flex:0 0 auto; }
+        .xv-sub { font-size:10px; font-weight:700; color:var(--muted); letter-spacing:.04em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .xv-head-right { margin-left:auto; display:flex; align-items:center; gap:8px; }
         .xv-btn { height:32px; display:inline-flex; align-items:center; gap:6px; padding:0 12px; border-radius:12px; border:1px solid var(--line); background:var(--card); color:var(--accent); font-size:11px; font-weight:700; cursor:pointer; transition:all .2s var(--easing); white-space:nowrap; }
         .xv-btn:hover { border-color:var(--accent); }
@@ -52,14 +54,34 @@
         .xv-msg.user .xv-avatar { background:var(--accent); color:var(--card); }
         .xv-bubble { padding:12px 15px; border-radius:16px; background:var(--card); border:1px solid var(--line); font-size:13px; line-height:1.65; white-space:pre-wrap; word-break:break-word; }
         .xv-msg.user .xv-bubble { background:var(--accent); color:var(--card); border-color:var(--accent); }
-        .xv-msg.user .xv-bubble.xv-bubble-edit { background:var(--card); color:inherit; border-color:var(--accent); padding:10px; white-space:normal; }
-        .xv-edit-area { width:100%; min-width:200px; max-width:560px; box-sizing:border-box; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:inherit; font:inherit; line-height:1.6; padding:8px 10px; resize:vertical; outline:none; }
-        .xv-edit-area:focus { border-color:var(--accent); }
-        .xv-edit-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:8px; }
-        .xv-edit-btn { border:1px solid var(--line); background:var(--bg); color:var(--muted); border-radius:10px; padding:5px 12px; font-size:12px; cursor:pointer; }
-        .xv-edit-btn:hover { color:inherit; }
-        .xv-edit-btn.primary { background:var(--accent); border-color:var(--accent); color:var(--card); font-weight:600; }
-        .xv-edit-btn.primary:disabled { opacity:.6; cursor:default; }
+        /* 附件胶囊直接嵌在输入框里（照画布 Agent 的 .agent-inline-chip，老板 2026-11-11 图2） */
+        .xv-agent .agent-input-rich .xv-chip { display:inline-flex; align-items:center; gap:3px; height:20px; max-width:180px; padding:0 3px 0 7px;
+            margin:0 3px; border-radius:999px; border:1px solid var(--line); background:var(--soft); font-size:10.5px; font-weight:650; line-height:1;
+            vertical-align:middle; cursor:default; user-select:none; }
+        .xv-chip-name { max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .xv-chip-x { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:50%; color:var(--muted); cursor:pointer; font-size:11px; line-height:1; }
+        .xv-chip-x:hover { background:rgba(15,23,42,.14); color:var(--text); }
+
+        /* 技能面板 */
+        .xv-skill-panel { min-width:320px; max-width:min(440px, calc(100vw - 60px)); padding:10px; gap:8px; }
+        .xv-skill-tabs { display:flex; gap:4px; }
+        .xv-skill-tab { flex:1; height:26px; border-radius:9px; border:1px solid transparent; background:var(--soft); color:var(--muted); font-size:10.5px; font-weight:750; cursor:pointer; }
+        .xv-skill-tab.active { border-color:var(--strong); color:var(--text); background:var(--card); }
+        .xv-skill-body { display:flex; flex-direction:column; gap:6px; }
+        .xv-skill-list { display:flex; flex-direction:column; gap:5px; max-height:260px; overflow-y:auto; }
+        .xv-skill-item { display:flex; align-items:center; gap:6px; padding:6px 8px; border:1px solid var(--line); border-radius:10px; background:var(--card); }
+        .xv-skill-item-main { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+        .xv-skill-item-name { font-size:10.5px; font-weight:750; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .xv-skill-item-sub { font-size:9.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .xv-skill-item button { height:22px; padding:0 8px; border-radius:8px; border:1px solid var(--line); background:var(--soft); color:var(--text); font-size:9.5px; font-weight:700; cursor:pointer; flex:0 0 auto; }
+        .xv-skill-item button:hover { border-color:var(--strong); }
+        .xv-skill-item button.primary { background:var(--strong); border-color:var(--strong); color:var(--strong-text); }
+        .xv-skill-search { display:flex; gap:4px; }
+        .xv-skill-search input, .xv-skill-create input, .xv-skill-create textarea { width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:9px; background:var(--soft); color:var(--text); font-size:10.5px; padding:6px 8px; outline:none; font-family:inherit; }
+        .xv-skill-search input:focus, .xv-skill-create input:focus, .xv-skill-create textarea:focus { border-color:var(--strong); }
+        .xv-skill-search button { height:26px; padding:0 10px; border-radius:9px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:10px; font-weight:700; cursor:pointer; flex:0 0 auto; }
+        .xv-skill-create { display:flex; flex-direction:column; gap:6px; }
+        .xv-skill-create textarea { resize:vertical; }
         .xv-msg-tools { display:flex; gap:6px; margin-top:6px; }
         .xv-typing { display:flex; align-items:center; gap:5px; padding:15px 16px; }
         .xv-typing span { width:6px; height:6px; border-radius:50%; background:var(--muted); animation:xvBlink 1.2s infinite ease-in-out; }
@@ -142,9 +164,9 @@
 <div class="xv-shell">
     <div class="xv-main">
         <div class="xv-head">
-            <div>
-                <div class="xv-title" data-i18n="xvai.title">小抽AI</div>
-                <div class="xv-sub" data-i18n="xvai.subtitle">对话生成 · 产物实时预览</div>
+            <div class="xv-brand">
+                <span class="xv-title" data-i18n="xvai.title">小抽AI</span>
+                <span class="xv-sub" data-i18n="xvai.subtitle">对话生成 · 产物实时预览</span>
             </div>
             <div class="xv-head-right">
                 <span class="xv-balance" id="xvBalance" title="积分余额"><i data-lucide="wallet" style="width:13px;height:13px"></i><span id="xvBalanceNum">--</span></span>
@@ -185,8 +207,8 @@
                                     </div></div>
                                 </div>
                             </div>
+                            <button id="agentSkillBtn" class="agent-toolbar-btn" type="button" title="技能 · 已安装 / 市场 / 新建"><i data-lucide="sparkles"></i><span>技能</span></button>
                         </div>
-                        <div id="agentAttachRow" class="agent-attach-row"></div>
                         <div id="agentInput" class="agent-input-rich" contenteditable="true" role="textbox" aria-multiline="true"
                              data-i18n-placeholder="xvai.placeholder" placeholder="输入需求，可附参考图…" data-empty="1"></div>
                         <div class="agent-toolbar">
@@ -211,6 +233,28 @@
                         <div class="agent-params-section">
                             <div class="agent-params-title">质量</div>
                             <div class="agent-quality-seg" id="agentQualitySeg"></div>
+                        </div>
+                    </div>
+                    <div id="xvSkillPanel" class="agent-dropdown-panel xv-skill-panel" hidden>
+                        <div class="xv-skill-tabs">
+                            <button type="button" class="xv-skill-tab active" data-skill-tab="installed">已安装</button>
+                            <button type="button" class="xv-skill-tab" data-skill-tab="market">市场</button>
+                            <button type="button" class="xv-skill-tab" data-skill-tab="create">新建</button>
+                        </div>
+                        <div class="xv-skill-body">
+                            <div id="xvSkillInstalled" class="xv-skill-list"><div class="xv-skill-item-sub">加载中…</div></div>
+                            <div id="xvSkillMarket" class="xv-skill-list" hidden>
+                                <div class="xv-skill-search">
+                                    <input id="xvSkillQuery" type="text" placeholder="搜索 SkillsMP…">
+                                    <button type="button" id="xvSkillSearchBtn">搜索</button>
+                                </div>
+                                <div id="xvSkillMarketList" class="xv-skill-list"></div>
+                            </div>
+                            <div id="xvSkillCreate" class="xv-skill-create" hidden>
+                                <input id="xvSkillName" type="text" placeholder="名称，例如：胶片人像">
+                                <textarea id="xvSkillText" rows="8" placeholder="SKILL.md 正文：写清这个 Skill 什么时候用、具体怎么做。已安装后 Agent 每轮都会读到。"></textarea>
+                                <div style="display:flex;justify-content:flex-end"><button type="button" id="xvSkillCreateBtn">保存并安装</button></div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -273,12 +317,12 @@
         imgProvider: localStorage.getItem('xvai_img_provider') || '',
         imgModel: localStorage.getItem('xvai_img_model') || '',
         params: { ratio:'square', res:'4k', quality:'high' },
-        refs: [],
         messages: [],
         outputs: [],
         sending: false,
         pending: false,
-        editingIdx: null,
+        rewindId: '',
+        skills: [],
         chatOptions: [],
         imgOptions: [],
         providers: []
@@ -302,8 +346,8 @@
         $('xvHint').innerHTML = (busy ? '<span class="xv-spin"></span>' : '') + esc(text || '');
     }
     function closePanels(except){
-        [$('agentModelPanel'), $('agentParamsPanel')].forEach(el => { if(el && el !== except) el.hidden = true; });
-        ['agentModelBtn','agentGenModelBtn','agentParamsBtn'].forEach(id => $(id)?.classList.remove('active'));
+        [$('agentModelPanel'), $('agentParamsPanel'), $('xvSkillPanel')].forEach(el => { if(el && el !== except) el.hidden = true; });
+        ['agentModelBtn','agentGenModelBtn','agentParamsBtn','agentSkillBtn'].forEach(id => $(id)?.classList.remove('active'));
     }
 
     // 比例 + 分辨率 → WxH，与画布 apiImageSize 同一套约束（长边 + 像素上限），16 对齐
@@ -442,19 +486,30 @@
         panel.querySelectorAll('.agent-dropdown-row')[1]?.scrollIntoView({block:'nearest'});
     });
     document.addEventListener('click', ev => {
-        if(!ev.target.closest('.agent-toolbar-dropdown-wrap') && !ev.target.closest('.agent-params-panel') && !ev.target.closest('#agentParamsBtn')) closePanels();
+        if(!ev.target.closest('.agent-toolbar-dropdown-wrap') && !ev.target.closest('.agent-params-panel') && !ev.target.closest('#agentParamsBtn')
+            && !ev.target.closest('#xvSkillPanel') && !ev.target.closest('#agentSkillBtn')) closePanels();
     });
 
-    // ---------- 附件 ----------
-    function renderAttachRow(){
-        const row = $('agentAttachRow');
-        if(!state.refs.length){ row.innerHTML = ''; return; }
-        row.innerHTML = state.refs.map((ref, i) => `<div class="agent-attach-ref">
-            <img src="${esc(ref.url)}" alt="">
-            <span class="agent-attach-ref-name">${esc(ref.name || fileName(ref.url))}</span>
-            <button type="button" data-xv-rm="${i}" title="移除"><i data-lucide="x"></i></button>
-        </div>`).join('');
-        icons();
+    // ---------- 附件：内联进输入框（照画布 Agent：文件是句子里的胶囊，不是下面的卡片） ----------
+    function chipNode(ref){
+        const chip = document.createElement('span');
+        chip.className = 'xv-chip';
+        chip.contentEditable = 'false';
+        chip.dataset.url = ref.url;
+        chip.dataset.name = ref.name || fileName(ref.url);
+        chip.innerHTML = `<span class="xv-chip-name">${esc(chip.dataset.name)}</span><span class="xv-chip-x" role="button" title="移除">×</span>`;
+        return chip;
+    }
+    // 附件就是以 DOM 胶囊为准（删除、拖走、退格删到头，状态自动跟着变，不会残留幽灵附件）
+    function inputRefs(){
+        return Array.from($('agentInput').querySelectorAll('.xv-chip'))
+            .map(chip => ({ url: chip.dataset.url, name: chip.dataset.name, kind:'image' }));
+    }
+    function addRef(ref){
+        const input = $('agentInput');
+        input.appendChild(document.createTextNode(input.childNodes.length ? ' ' : ''));
+        input.appendChild(chipNode(ref));
+        syncInputEmpty(); scheduleSendCredit();
     }
     async function uploadRefs(files){
         for(const file of files){
@@ -464,10 +519,9 @@
                 const res = await fetch('/api/ai/upload', { method:'POST', body: form });
                 const data = await res.json();
                 const first = (data.files || [])[0];
-                if(first && first.url) state.refs.push({ url:first.url, name:first.name || file.name });
+                if(first && first.url) addRef({ url:first.url, name:first.name || file.name });
             } catch(e) { setHint('参考图上传失败：' + (e.message || e)); }
         }
-        renderAttachRow();
     }
     $('agentAttachBtn').addEventListener('click', () => $('xvFileInput').click());
     $('xvFileInput').addEventListener('change', ev => {
@@ -475,10 +529,11 @@
         if(files.length) uploadRefs(files);
         ev.target.value = '';
     });
-    $('agentAttachRow').addEventListener('click', ev => {
-        const btn = ev.target.closest('[data-xv-rm]'); if(!btn) return;
-        state.refs.splice(Number(btn.dataset.xvRm), 1);
-        renderAttachRow();
+    $('agentInput').addEventListener('click', ev => {
+        const x = ev.target.closest('.xv-chip-x');
+        if(!x) return;
+        x.closest('.xv-chip')?.remove();
+        syncInputEmpty(); scheduleSendCredit();
     });
 
     // ---------- 输出收集 ----------
@@ -579,35 +634,21 @@
             const cards = !mine && (msg.image_urls || []).length
                 ? (msg.image_urls || []).map(u => imageCard(u, msg.model)).join('')
                 : '';
-            const editing = mine && state.editingIdx === idx;
             const tools = !mine ? `<div class="xv-msg-tools">
                 <button class="xv-mini" type="button" data-xv-copy="${idx}" title="复制回复"><i data-lucide="copy"></i></button>
                 <button class="xv-mini" type="button" data-xv-retry="${idx}" title="重试上一条"><i data-lucide="rotate-ccw"></i></button>
-            </div>` : (editing ? '' : `<div class="xv-msg-tools">
+            </div>` : `<div class="xv-msg-tools">
                 <button class="xv-mini" type="button" data-xv-copy="${idx}" title="复制"><i data-lucide="copy"></i></button>
-                <button class="xv-mini" type="button" data-xv-edit-msg="${idx}" title="编辑后从这里重新生成"><i data-lucide="pencil"></i></button>
-            </div>`);
-            const bubble = editing
-                ? `<div class="xv-bubble xv-bubble-edit">
-                    <textarea class="xv-edit-area" id="xvEditArea" rows="${Math.min(8, Math.max(2, String(msg.content || '').split('\\n').length))}">${esc(msg.content || '')}</textarea>
-                    <div class="xv-edit-actions">
-                        <button class="xv-edit-btn" type="button" data-xv-edit-cancel="${idx}">取消</button>
-                        <button class="xv-edit-btn primary" type="button" data-xv-edit-send="${idx}"${state.sending ? ' disabled' : ''}>保存并重发</button>
-                    </div>
-                   </div>`
-                : `<div class="xv-bubble">${esc(msg.content || '')}${cards}${creditsChip(msg)}</div>`;
-            return `<div class="xv-msg ${mine ? 'user' : 'assistant'}${editing ? ' editing' : ''}">
+                <button class="xv-mini" type="button" data-xv-edit-msg="${idx}" title="回到这条消息继续编辑重发"><i data-lucide="pencil"></i></button>
+            </div>`;
+            const bubble = `<div class="xv-bubble">${esc(msg.content || '')}${cards}${creditsChip(msg)}</div>`;
+            return `<div class="xv-msg ${mine ? 'user' : 'assistant'}">
                 <div class="xv-avatar">${mine ? '我' : 'AI'}</div>
                 ${bubble}
                 ${tools}
             </div>`;
         }).join('');
-        const editArea = $('xvEditArea');
-        if(editArea){
-            // 光标放到末尾，改一个字不用先按 End
-            editArea.focus();
-            try { editArea.setSelectionRange(editArea.value.length, editArea.value.length); } catch(e) {}
-        }
+
         if(state.pending){
             thread.innerHTML += `<div class="xv-msg assistant xv-bubble-pending">
                 <div class="xv-avatar">AI</div>
@@ -646,9 +687,58 @@
     function closePreview(){ $('xvModal').classList.remove('open'); $('xvModalBody').innerHTML = ''; }
 
     // ---------- 输入 ----------
-    function readInput(){ return ($('agentInput').innerText || '').replace(/\u00a0/g, ' ').trim(); }
+    /* 读正文时要跳过附件胶囊：胶囊隐藏后 innerText 就不含它们的名字了。
+       不用 cloneNode —— 脱离文档的元素取 innerText 会丢掉换行。 */
+    function readInput(){
+        const input = $('agentInput');
+        const chips = Array.from(input.querySelectorAll('.xv-chip'));
+        chips.forEach(chip => { chip.style.display = 'none'; });
+        const text = (input.innerText || '').replace(/\u00a0/g, ' ').trim();
+        chips.forEach(chip => { chip.style.display = ''; });
+        return text;
+    }
     function clearInput(){ $('agentInput').innerHTML = ''; syncInputEmpty(); updateSendCredit(); }
-    function syncInputEmpty(){ $('agentInput').dataset.empty = readInput() ? '0' : '1'; }
+    // 回溯用：正文 + 当时的附件一起放回输入栏
+    function setInputContent(text, refs){
+        const input = $('agentInput');
+        input.innerHTML = '';
+        if(text) input.appendChild(document.createTextNode(text));
+        (refs || []).filter(ref => ref && ref.url).forEach(ref => {
+            if(input.childNodes.length) input.appendChild(document.createTextNode(' '));
+            input.appendChild(chipNode(ref));
+        });
+        syncInputEmpty(); updateSendCredit();
+    }
+    function focusInputEnd(){
+        const input = $('agentInput');
+        input.focus();
+        try {
+            const range = document.createRange();
+            range.selectNodeContents(input);
+            range.collapse(false);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+        } catch(e) {}
+    }
+    // 回溯：点「编辑」= 把这条 user 消息（正文 + 附件）搬回输入栏，后面的对话先在本地位上退掉，
+    // 发送时带上 rewind_message_id 让后端同样截断并落盘（照画布 Agent 的 agentBeginEditMessage）
+    function beginEditMessage(idx){
+        if(state.sending) return;
+        const msg = state.messages[idx];
+        if(!msg || msg.role !== 'user') return;
+        const dropped = state.messages.length - idx - 1;
+        state.rewindId = msg.id || '';
+        state.messages = state.messages.slice(0, idx);
+        setInputContent(msg.content || '', msg.attachments || []);
+        renderThread();
+        focusInputEnd();
+        setHint(dropped > 0 ? `已回到这条消息，后面 ${dropped} 条已回退；改完直接发送` : '已回到这条消息，改完直接发送');
+    }
+    // 只有附件胶囊也算"有内容"：否则占位提示会和胶囊挤在同一行
+    function syncInputEmpty(){
+        $('agentInput').dataset.empty = (readInput() || inputRefs().length) ? '0' : '1';
+    }
     $('agentInput').addEventListener('input', () => { syncInputEmpty(); scheduleSendCredit(); });
     $('agentInput').addEventListener('keydown', ev => {
         if(ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing){ ev.preventDefault(); send(); }
@@ -707,13 +797,12 @@
         const text = (message != null ? message : readInput()).trim();
         if(!text || state.sending) return;
         if(!state.chatProvider || !state.chatModel){ setHint('还没有可用的对话通道，先去 API 设置。'); return; }
-        const rewindIdx = opts && typeof opts.rewindIdx === 'number' ? opts.rewindIdx : -1;
-        const rewindId = (opts && opts.rewindId) || '';
+        const rewindId = (opts && opts.rewindId) || state.rewindId || '';
+        const refs = inputRefs();
         state.sending = true;
         $('agentSendBtn').disabled = true;
         if(message == null) clearInput();
-        if(rewindIdx >= 0) state.messages = state.messages.slice(0, rewindIdx);
-        state.editingIdx = null;
+        state.rewindId = '';
         state.messages.push({ role:'user', content:text });
         state.pending = true;
         renderThread();
@@ -729,7 +818,7 @@
                 size: computeSize(),
                 quality: state.params.quality || 'auto',
                 mode: 'agent',
-                reference_images: state.refs.map(r => ({ url:r.url, name:r.name || '', kind:'image' })),
+                reference_images: refs.map(r => ({ url:r.url, name:r.name || '', kind:'image' })),
                 rewind_message_id: rewindId
             };
             const res = await fetch('/api/chat/agent', {
@@ -743,8 +832,6 @@
             state.convId = conversation.id || state.convId;
             if(state.convId) localStorage.setItem('xvai_conv_id', state.convId);
             state.messages = conversation.messages ? normalizeMessages(conversation.messages) : state.messages;
-            state.refs = [];
-            renderAttachRow();
             renderThread();
             renderOutputs();
             if(data.credits) refreshBalance();
@@ -786,7 +873,6 @@
             const conv = data.conversation || {};
             state.convId = conv.id || id;
             localStorage.setItem('xvai_conv_id', state.convId);
-            state.editingIdx = null;
             state.messages = normalizeMessages(conv.messages);
             renderThread();
             renderOutputs();
@@ -810,12 +896,11 @@
     }
 
     function resetChat(){
-        state.editingIdx = null;
+        state.rewindId = '';
         state.convId = '';
         state.messages = [];
-        state.refs = [];
         localStorage.removeItem('xvai_conv_id');
-        renderAttachRow();
+        clearInput();
         renderThread();
         renderOutputs();
         setHint('');
@@ -838,26 +923,9 @@
     $('xvThread').addEventListener('click', ev => {
         const zoom = ev.target.closest('[data-xv-zoom]');
         if(zoom){ openPreview(zoom.dataset.xvZoom, fileName(zoom.dataset.xvZoom)); return; }
-        // 回溯编辑：把这条 user 消息原地变成输入框，保存后截断这段对话重新生成
+        // 回溯：点「编辑」把这条 user 消息（含附件）搬回输入栏，改完直接发送
         const editMsg = ev.target.closest('[data-xv-edit-msg]');
-        if(editMsg){
-            state.editingIdx = Number(editMsg.dataset.xvEditMsg);
-            renderThread();
-            return;
-        }
-        const editCancel = ev.target.closest('[data-xv-edit-cancel]');
-        if(editCancel){ state.editingIdx = null; renderThread(); return; }
-        const editSend = ev.target.closest('[data-xv-edit-send]');
-        if(editSend){
-            const idx = Number(editSend.dataset.xvEditSend);
-            const area = $('xvEditArea');
-            const text = ((area && area.value) || '').trim();
-            const msg = state.messages[idx];
-            if(!text) return;
-            state.editingIdx = null;
-            send(text, { rewindIdx: idx, rewindId: (msg && msg.id) || '' });
-            return;
-        }
+        if(editMsg){ beginEditMessage(Number(editMsg.dataset.xvEditMsg)); return; }
         const act = ev.target.closest('[data-xv-act]');
         if(act){
             if(act.dataset.xvAct === 'edit'){
@@ -902,8 +970,7 @@
             if(data.type !== 'xvai-ref-edited') return;
             close();
             if(!data.url) return;
-            state.refs = [{ url:data.url, name:'edited.png', kind:'image' }];
-            renderAttachRow();
+            addRef({ url:data.url, name:'edited.png' });
             state.messages.push({ role:'assistant', content:'已把编辑结果放进参考图，可以直接说要把这块改成什么。', image_urls:[data.url] });
             renderThread();
             renderOutputs();
@@ -917,6 +984,161 @@
         window.addEventListener('message', onMsg);
     }
 
+    // ---------- 技能：已安装 / 市场 / 自建（装完立刻进系统提示词，不用重启） ----------
+    let skillInstalled = [];
+    let skillMarketRows = [];
+    function openTextPreview(title, text){
+        $('xvModalTitle').textContent = title;
+        $('xvModalDownload').removeAttribute('href');
+        $('xvModalDownload').removeAttribute('download');
+        $('xvModalBody').innerHTML = `<pre>${esc(text || '（空）')}</pre>`;
+        $('xvModal').classList.add('open');
+    }
+    function renderInstalledSkills(){
+        const box = $('xvSkillInstalled');
+        if(!skillInstalled.length){
+            box.innerHTML = '<div class="xv-skill-item-sub">还没有安装 Skill。去「市场」挑一个，或在「新建」里写一个。</div>';
+            return;
+        }
+        box.innerHTML = skillInstalled.map(s => `<div class="xv-skill-item">
+            <div class="xv-skill-item-main">
+                <span class="xv-skill-item-name">${esc(s.title || s.name || s.id)}</span>
+                <span class="xv-skill-item-sub">${esc(s.summary || s.category || s.id)}</span>
+            </div>
+            <button type="button" data-skill-view="${esc(s.id)}">查看</button>
+            <button type="button" data-skill-del="${esc(s.id)}">卸载</button>
+        </div>`).join('');
+    }
+    async function loadInstalledSkills(){
+        try {
+            const res = await fetch('/api/skills/installed', { cache:'no-store' });
+            const data = await res.json();
+            skillInstalled = data.skills || [];
+        } catch(e) { skillInstalled = []; }
+        renderInstalledSkills();
+    }
+    function renderMarketRows(rows){
+        const box = $('xvSkillMarketList');
+        if(!rows.length){ box.innerHTML = '<div class="xv-skill-item-sub">没搜到，换个关键词试试。</div>'; return; }
+        box.innerHTML = rows.slice(0, 40).map((r, i) => `<div class="xv-skill-item">
+            <div class="xv-skill-item-main">
+                <span class="xv-skill-item-name">${esc(r.title || r.name || r.id)}</span>
+                <span class="xv-skill-item-sub">${esc(r.summary_zh || r.summary || r.repo || '')}</span>
+            </div>
+            ${r.installed ? '<button type="button" disabled>已装</button>' : `<button type="button" class="primary" data-skill-install="${i}">安装</button>`}
+        </div>`).join('');
+    }
+    async function loadMarketSkills(q){
+        const box = $('xvSkillMarketList');
+        box.innerHTML = '<div class="xv-skill-item-sub">加载中…</div>';
+        try {
+            const url = q ? '/api/skills/search?q=' + encodeURIComponent(q) : '/api/skills/market';
+            const res = await fetch(url, { cache:'no-store' });
+            const data = await res.json();
+            skillMarketRows = data.skills || [];
+        } catch(e) {
+            skillMarketRows = [];
+            box.innerHTML = '<div class="xv-skill-item-sub">市场打不开，检查一下网络。</div>';
+            return;
+        }
+        renderMarketRows(skillMarketRows);
+    }
+    async function installSkillRow(row){
+        if(!row) return;
+        setHint('正在安装 Skill…', true);
+        try {
+            const res = await fetch('/api/skills/install', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ id: row.id, raw_url: row.raw_url || '', name: row.name || '',
+                    title: row.title || '', summary: row.summary || '', repo: row.repo || '' })
+            });
+            const data = await res.json().catch(() => ({}));
+            if(!res.ok) throw new Error(data.detail || `安装失败（${res.status}）`);
+            skillInstalled = data.installed || skillInstalled;
+            row.installed = true;
+            renderInstalledSkills(); renderMarketRows(skillMarketRows);
+            setHint(`已安装「${row.title || row.name || row.id}」，下一句起就会生效`);
+        } catch(err){ setHint(err.message || '安装失败'); }
+    }
+    async function uninstallSkill(id){
+        if(!id) return;
+        if(!window.confirm('卸载这个 Skill？卸载后 Agent 就不再读它了。')) return;
+        try {
+            const res = await fetch('/api/skills/uninstall', {
+                method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ id })
+            });
+            const data = await res.json().catch(() => ({}));
+            if(!res.ok) throw new Error(data.detail || `卸载失败（${res.status}）`);
+            skillInstalled = data.installed || [];
+            renderInstalledSkills();
+            setHint('已卸载');
+        } catch(err){ setHint(err.message || '卸载失败'); }
+    }
+    async function viewSkill(id){
+        try {
+            const res = await fetch('/api/skills/' + encodeURIComponent(id) + '/content', { cache:'no-store' });
+            const data = await res.json();
+            openTextPreview(id, data.content || '（这个 Skill 没有可读内容）');
+        } catch(e){ setHint('读取 Skill 失败'); }
+    }
+    async function createSkillEditor(){
+        const name = ($('xvSkillName').value || '').trim();
+        const content = ($('xvSkillText').value || '').trim();
+        if(!name){ setHint('先给这个 Skill 起个名字'); return; }
+        if(!content){ setHint('Skill 内容不能为空'); return; }
+        setHint('正在保存 Skill…', true);
+        try {
+            const res = await fetch('/api/skills/create', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ name, content })
+            });
+            const data = await res.json().catch(() => ({}));
+            if(!res.ok) throw new Error(data.detail || `保存失败（${res.status}）`);
+            skillInstalled = data.installed || [];
+            $('xvSkillText').value = '';
+            renderInstalledSkills();
+            setHint(`已保存并安装「${name}」，Agent 每轮都会读到它`);
+        } catch(err){ setHint(err.message || '保存失败'); }
+    }
+    function bindSkillPanel(){
+        $('agentSkillBtn').addEventListener('click', ev => {
+            ev.stopPropagation();
+            const panel = $('xvSkillPanel');
+            const open = panel.hidden;
+            closePanels(open ? panel : null);
+            panel.hidden = !open;
+            if(open) loadInstalledSkills();
+        });
+        $('xvSkillPanel').querySelectorAll('[data-skill-tab]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tab = btn.dataset.skillTab;
+                $('xvSkillPanel').querySelectorAll('[data-skill-tab]')
+                    .forEach(b => b.classList.toggle('active', b === btn));
+                $('xvSkillInstalled').hidden = tab !== 'installed';
+                $('xvSkillMarket').hidden = tab !== 'market';
+                $('xvSkillCreate').hidden = tab !== 'create';
+                if(tab === 'installed') loadInstalledSkills();
+                if(tab === 'market' && !skillMarketRows.length) loadMarketSkills('');
+            });
+        });
+        $('xvSkillInstalled').addEventListener('click', ev => {
+            const view = ev.target.closest('[data-skill-view]');
+            if(view){ viewSkill(view.dataset.skillView); return; }
+            const del = ev.target.closest('[data-skill-del]');
+            if(del) uninstallSkill(del.dataset.skillDel);
+        });
+        $('xvSkillMarketList').addEventListener('click', ev => {
+            const ins = ev.target.closest('[data-skill-install]');
+            if(ins) installSkillRow(skillMarketRows[Number(ins.dataset.skillInstall)]);
+        });
+        $('xvSkillSearchBtn').addEventListener('click', () => loadMarketSkills(($('xvSkillQuery').value || '').trim()));
+        $('xvSkillQuery').addEventListener('keydown', ev => {
+            if(ev.key === 'Enter'){ ev.preventDefault(); loadMarketSkills(($('xvSkillQuery').value || '').trim()); }
+        });
+        $('xvSkillCreateBtn').addEventListener('click', createSkillEditor);
+    }
+
+
     window.addEventListener('studio-theme-change', () => icons());
     window.addEventListener('message', ev => {
         if(ev.data && ev.data.type === 'studio-theme'){
@@ -926,6 +1148,7 @@
         }
     });
 
+    bindSkillPanel();
     icons();
     syncInputEmpty();
     syncParamsLabel();
