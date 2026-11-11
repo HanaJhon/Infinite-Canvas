@@ -17072,9 +17072,21 @@ def pick_chat_image_provider(provider_id="", fallback_id=""):
         return primary or providers[0]
     return get_api_provider(provider_id or fallback_id or "comfly")
 
+AGENT_TEXT_TASK_KEYWORDS = [
+    "反推", "描述", "说明", "讲解", "分析", "翻译", "总结", "提取", "写出",
+    "介绍", "点评", "评估", "扩写", "改写", "缩写", "润色", "翻译成",
+    "caption", "describe", "analyze", "summarize", "translate", "prompt of",
+]
+
 def heuristic_agent_decision(message, refs, has_previous_image):
     text = str(message or "").strip().lower()
     has_image_word = any(key.lower() in text for key in AGENT_IMAGE_KEYWORDS)
+    # 🚨 文本任务动词优先：「反推这张图的提示词」「描述这张图」语义是问答，不是生图。
+    # 没有这个排除，LLM 决策一旦失败回落 heuristic，就会拿用户原话当提示词抢跑生图（2026-11-11 老板截图）。
+    if any(key.lower() in text for key in AGENT_TEXT_TASK_KEYWORDS) and not any(
+        key in text for key in ("生成", "画一张", "画个", "画幅", "帮我画", "给我画", "来一张", "出一张")
+    ):
+        return {"action": "chat", "prompt": message, "reply": ""}
     has_edit_word = any(key.lower() in text for key in AGENT_EDIT_KEYWORDS)
     if refs and (has_edit_word or has_image_word):
         return {"action": "edit_image", "prompt": message, "reply": ""}
@@ -17100,6 +17112,10 @@ def parse_agent_decision(raw_text, message, refs, has_previous_image):
     action = str(data.get("action") or "").strip()
     if action not in AGENT_ACTIONS:
         action = heuristic["action"]
+    # 🚨 二道守卫：LLM 自己把「反推/描述这张图的提示词」这类文本任务判成生图时也拦下（决策失败回落
+    # heuristic 的一道在 heuristic_agent_decision 里）。两个入口共用同一张排除词表。
+    if action in {"generate_image", "edit_image"}             and any(key.lower() in str(message).lower() for key in AGENT_TEXT_TASK_KEYWORDS)             and not any(key in str(message) for key in ("生成", "画一张", "画个", "帮我画", "给我画", "来一张", "出一张")):
+        action = "chat"
     prompt = str(data.get("prompt") or message).strip() or message
     reply = str(data.get("reply") or "").strip()
     if action == "edit_image" and not (refs or has_previous_image):

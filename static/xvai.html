@@ -105,10 +105,9 @@
         .xv-img-card:hover .xv-img-model, .xv-img-card:hover .xv-img-actions,
         .xv-img-card:focus-within .xv-img-model, .xv-img-card:focus-within .xv-img-actions { opacity:1; pointer-events:auto; }
         .xv-ref-edit-layer { position:fixed; inset:0; z-index:90; display:flex; align-items:center; justify-content:center; background:rgba(2,6,23,.5); padding:14px; }
-        .xv-ref-edit-frame { position:relative; width:100%; height:100%; border-radius:18px; overflow:hidden; background:#fff; box-shadow:0 30px 80px rgba(2,6,23,.45); }
-        .xv-ref-edit-close { display:none; }
+        .xv-ref-edit-frame { position:relative; width:min(960px, 94vw); height:min(880px, 92vh); border-radius:26px; overflow:hidden; background:#fff; box-shadow:0 30px 80px rgba(2,6,23,.45); }
         .xv-ref-edit-frame iframe { width:100%; height:100%; border:0; display:block; }
-        .xv-ref-edit-close { position:absolute; right:10px; top:10px; z-index:2; width:28px; height:28px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--accent); font-size:16px; line-height:1; cursor:pointer; }
+        html.studio-ui-scaled body.xv-editor-open { transform:none !important; width:100% !important; min-height:100vh !important; height:100vh !important; overflow:hidden !important; }
         .xv-empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; color:var(--muted); font-size:12px; font-weight:600; }
         .xv-composer { flex:0 0 auto; border-top:1px solid var(--line); background:var(--card); padding:12px 22px 14px; }
         .xv-composer-inner { max-width:880px; margin:0 auto; }
@@ -1200,9 +1199,11 @@
         layer.className = 'xv-ref-edit-layer';
         const frameSrc = '/static/online.html?editor=1&src=' + encodeURIComponent(url);
         layer.innerHTML = `<div class="xv-ref-edit-frame">
-            <button type="button" class="xv-ref-edit-close" aria-label="关闭">×</button>
             <iframe src="${frameSrc}" title="参考图编辑"></iframe>
         </div>`;
+        // theme.js 的 body transform:scale 会成为 fixed 层的包含块 ⇒ 弹窗居中于整页而非视口（滚下去就看不到）。
+        // 打开期间撤掉缩放，关闭时恢复（theme.js 不监听 body class，remove 即还原）。
+        document.body.classList.add('xv-editor-open');
         document.body.appendChild(layer);
         const onMsg = ev => {
             const data = ev.data || {};
@@ -1217,9 +1218,9 @@
         };
         function close(){
             window.removeEventListener('message', onMsg);
+            document.body.classList.remove('xv-editor-open');
             layer.remove();
         }
-        layer.querySelector('.xv-ref-edit-close').addEventListener('click', close);
         layer.addEventListener('click', ev => { if(ev.target === layer) close(); });
         window.addEventListener('message', onMsg);
     }
