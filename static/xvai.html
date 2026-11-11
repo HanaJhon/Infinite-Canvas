@@ -191,6 +191,7 @@
         <div class="xv-composer xv-agent">
             <div class="xv-composer-inner">
                 <div class="agent-input-area">
+                    <div id="xvSlashPalette" class="xv-slash" hidden></div>
                     <div class="agent-onebox">
                         <div class="agent-topbar">
                             <div class="agent-toolbar-dropdown-wrap">
@@ -536,6 +537,100 @@
         syncInputEmpty(); scheduleSendCredit();
     });
 
+    // ---------- 拖入 / 粘贴文件（照画布 Agent：整页可拖，附件落成胶囊） ----------
+    function filesFromPaste(dt){
+        const out = [];
+        Array.from((dt && dt.items) || []).forEach(it => {
+            if(it.kind !== 'file') return;
+            const f = it.getAsFile();
+            if(f) out.push(f);
+        });
+        if(!out.length && dt && dt.files) out.push(...Array.from(dt.files));
+        return out;
+    }
+    $('agentInput').addEventListener('paste', ev => {
+        const files = filesFromPaste(ev.clipboardData);
+        if(!files.length) return;
+        ev.preventDefault();
+        uploadRefs(files);
+        focusInputEnd();
+    });
+    const composerEl = document.querySelector('.xv-composer');
+    let dragDepth = 0;
+    ['dragenter', 'dragover'].forEach(type => document.addEventListener(type, ev => {
+        if(!Array.from((ev.dataTransfer && ev.dataTransfer.types) || []).includes('Files')) return;
+        ev.preventDefault();
+        if(type === 'dragenter') dragDepth++;
+        composerEl?.classList.add('xv-drag-over');
+    }));
+    document.addEventListener('dragleave', () => {
+        dragDepth -= 1;
+        if(dragDepth <= 0){ dragDepth = 0; composerEl?.classList.remove('xv-drag-over'); }
+    });
+    document.addEventListener('drop', ev => {
+        const files = Array.from((ev.dataTransfer && ev.dataTransfer.files) || []);
+        if(!files.length) return;
+        ev.preventDefault();
+        dragDepth = 0; composerEl?.classList.remove('xv-drag-over');
+        uploadRefs(files);
+        focusInputEnd();
+    });
+
+    // ---------- / 斜杠命令：调用已安装 Skill（后端 /api/chat/agent 自己解析 /skill xxx） ----------
+    let slashSkills = null, slashItems = [], slashIndex = 0, slashOpen = false;
+    const slashEl = $('xvSlashPalette');
+    async function loadSlashSkills(){
+        if(slashSkills) return slashSkills;
+        try {
+            const res = await fetch('/api/skills/installed', { cache:'no-store' });
+            const data = await res.json();
+            slashSkills = Array.isArray(data.skills) ? data.skills : [];
+        } catch(e){ slashSkills = []; }
+        return slashSkills;
+    }
+    function renderSlashPalette(){
+        if(!slashItems.length){ closeSlashPalette(); return; }
+        slashEl.innerHTML = '<div class="xv-slash-head">输入 / 调用 Skill</div>' + slashItems.map((it, i) =>
+            '<div class="xv-slash-item' + (i === slashIndex ? ' active' : '') + '" data-slash="' + i + '">'
+            + '<div class="xv-slash-label">' + esc(it.label) + '</div>'
+            + '<div class="xv-slash-desc">' + esc(it.desc) + '</div></div>').join('');
+        slashEl.hidden = false;
+        slashOpen = true;
+    }
+    function closeSlashPalette(){ slashOpen = false; slashEl.hidden = true; slashEl.innerHTML = ''; }
+    async function openSlashPalette(query){
+        const skills = await loadSlashSkills();
+        const q = String(query || '').toLowerCase();
+        slashItems = skills
+            .filter(s => !q || String(s.name || s.title || s.id || '').toLowerCase().includes(q))
+            .slice(0, 8)
+            .map(s => ({ label: s.title || s.name || s.id, desc: '激活这个 Skill', insert: '/skill ' + (s.name || s.id) }));
+        slashItems.push({ label: '关闭主动 Skill', desc: '/skill off', insert: '/skill off' });
+        slashIndex = 0;
+        renderSlashPalette();
+    }
+    function pickSlashItem(){
+        const it = slashItems[slashIndex];
+        if(!it) return;
+        closeSlashPalette();
+        clearInput();
+        send(it.insert);
+    }
+    slashEl.addEventListener('mousedown', ev => {
+        const node = ev.target.closest('[data-slash]');
+        if(!node) return;
+        ev.preventDefault();
+        slashIndex = parseInt(node.dataset.slash, 10) || 0;
+        pickSlashItem();
+    });
+    $('agentInput').addEventListener('input', () => {
+        const m = /^\/([^\s]*)$/.exec(readInput());
+        if(m) openSlashPalette(m[1]); else closeSlashPalette();
+    });
+    document.addEventListener('click', ev => {
+        if(slashOpen && !ev.target.closest('#xvSlashPalette') && !ev.target.closest('#agentInput')) closeSlashPalette();
+    });
+
     // ---------- 输出收集 ----------
     function addOutput(list, url, kind){
         if(!url) return;
@@ -741,6 +836,16 @@
     }
     $('agentInput').addEventListener('input', () => { syncInputEmpty(); scheduleSendCredit(); });
     $('agentInput').addEventListener('keydown', ev => {
+        if(slashOpen){
+            if(ev.key === 'ArrowDown' || ev.key === 'ArrowUp'){
+                ev.preventDefault();
+                slashIndex = (slashIndex + (ev.key === 'ArrowDown' ? 1 : -1) + slashItems.length) % slashItems.length;
+                renderSlashPalette();
+                return;
+            }
+            if(ev.key === 'Enter' || ev.key === 'Tab'){ ev.preventDefault(); pickSlashItem(); return; }
+            if(ev.key === 'Escape'){ ev.preventDefault(); closeSlashPalette(); return; }
+        }
         if(ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing){ ev.preventDefault(); send(); }
     });
 

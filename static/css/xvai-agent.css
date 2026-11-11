@@ -79,3 +79,13 @@ html.studio-theme-dark .xv-agent {
 .xv-agent .agent-attach-ref button { position:absolute; top:2px; right:2px; width:14px; height:14px; border-radius:50%; background:rgba(15,23,42,.78); color:#fff; display:flex; align-items:center; justify-content:center; border:none; cursor:pointer; padding:0; }
 .xv-agent .agent-attach-ref button i,
 .xv-agent .agent-attach-ref button svg { width:8px; height:8px; }
+
+/* / 斜杠命令浮层 + 拖入文件高亮 */
+.xv-agent .xv-slash { position:absolute; left:0; right:0; bottom:calc(100% + 6px); z-index:70; border:1px solid var(--line); background:var(--card); border-radius:13px; box-shadow:0 8px 28px var(--shadow); padding:6px; max-height:240px; overflow:auto; }
+.xv-agent .xv-slash[hidden] { display:none; }
+.xv-agent .xv-slash-head { padding:4px 8px 6px; font-size:10px; font-weight:700; color:var(--muted); }
+.xv-agent .xv-slash-item { padding:7px 9px; border-radius:9px; cursor:pointer; }
+.xv-agent .xv-slash-item.active { background:var(--soft); }
+.xv-agent .xv-slash-label { font-size:12px; font-weight:650; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.xv-agent .xv-slash-desc { font-size:10px; color:var(--muted); margin-top:1px; }
+.xv-composer.xv-drag-over .agent-onebox { border-color:#38bdf8; box-shadow:0 0 0 3px rgba(56,189,248,.18); }
