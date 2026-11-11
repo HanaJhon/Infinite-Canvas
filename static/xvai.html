@@ -89,6 +89,7 @@
         .xv-typing span:nth-child(3) { animation-delay:.36s; }
         @keyframes xvBlink { 0%,80%,100% { opacity:.25; transform:translateY(0); } 40% { opacity:1; transform:translateY(-2px); } }
         .xv-mini { border:none; background:transparent; color:var(--muted); cursor:pointer; padding:2px; border-radius:6px; display:inline-flex; }
+        .xv-mini svg { width:16px; height:16px; }
         .xv-mini:hover { color:var(--accent); background:var(--bg); }
         .xv-img-card { position:relative; margin-top:10px; border:1px solid var(--line); border-radius:16px; padding:10px; background:var(--bg); max-width:300px; }
         .xv-img-card img { width:100%; border-radius:12px; display:block; cursor:zoom-in; background:#0b0f14; }
@@ -208,7 +209,7 @@
                                     </div></div>
                                 </div>
                             </div>
-                            <button id="agentSkillBtn" class="agent-toolbar-btn" type="button" title="技能 · 已安装 / 市场 / 新建"><i data-lucide="sparkles"></i><span>技能</span></button>
+                            <button id="agentSkillBtn" class="agent-toolbar-btn" type="button" title="技能 · 已安装 / 市场 / 新建" hidden><i data-lucide="sparkles"></i><span>技能</span></button>
                         </div>
                         <div id="xvStyleCard" class="xv-style-card" hidden>
                             <div class="xv-style-main">
