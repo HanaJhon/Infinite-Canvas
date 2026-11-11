@@ -105,5 +105,5 @@ html.studio-theme-dark .xv-agent {
    UA 的 [hidden]{display:none} 优先级不够，技能按钮藏不住（老板两次反馈「技能还在」） */
 .xv-agent .agent-toolbar-btn[hidden] { display:none !important; }
 /* 顶栏「历史/新对话/输出」与输出抽屉的眼睛/下载：24px → 16px（缩小 1/3） */
-.xv-btn svg { width:16px; height:16px; flex-shrink:0; }
+.xv-btn svg { width:11px; height:11px; flex-shrink:0; }
 .xv-icon-btn svg { width:16px; height:16px; flex-shrink:0; }

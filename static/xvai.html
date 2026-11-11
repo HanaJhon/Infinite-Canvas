@@ -20,7 +20,7 @@
     <script src="/static/vendor/js/lucide.js?v=1.3.7.1767196800"></script>
     <script src="/static/js/theme.js?v=1.3.7.1793681298"></script>
     <script src="/static/js/i18n.js?v=1.3.7.1794291244"></script>
-    <link rel="stylesheet" href="/static/css/xvai-agent.css?v=1.3.7.1794373291">
+    <link rel="stylesheet" href="/static/css/xvai-agent.css?v=1.3.7.1794378669">
     <style>
         @import url('/static/vendor/css/fonts.css?v=1.3.7.1767196800');
         :root {
@@ -603,7 +603,7 @@
     }
     function renderSlashPalette(){
         if(!slashItems.length){ closeSlashPalette(); return; }
-        slashEl.innerHTML = '<div class="xv-slash-head">输入 / 调用 Skill</div>' + slashItems.map((it, i) =>
+        slashEl.innerHTML = '<div class="xv-slash-head">可调用指令</div>' + slashItems.map((it, i) =>
             '<div class="xv-slash-item' + (i === slashIndex ? ' active' : '') + '" data-slash="' + i + '">'
             + '<div class="xv-slash-label">' + esc(it.label) + '</div>'
             + '<div class="xv-slash-desc">' + esc(it.desc) + '</div></div>').join('');
@@ -614,10 +614,15 @@
     async function openSlashPalette(query){
         const skills = await loadSlashSkills();
         const q = String(query || '').toLowerCase();
-        slashItems = skills
+        // 内置指令（照画布 Agent 的「可调用指令」区）：压缩上下文走后端 /compress，清空=开新对话
+        const builtins = [
+            { label:'压缩上下文', desc:'只留最近几条对话，早期的折叠成一行说明', insert:'/compress', keys:'compress 压 压缩' },
+            { label:'清空上下文', desc:'清空本次对话记录（Skill 与附件不受影响）', clear:true, keys:'clear 清 清空' }
+        ].filter(b => !q || b.label.toLowerCase().includes(q) || b.keys.includes(q));
+        slashItems = builtins.concat(skills
             .filter(s => !q || String(s.name || s.title || s.id || '').toLowerCase().includes(q))
             .slice(0, 8)
-            .map(s => ({ label: s.title || s.name || s.id, id: s.id, desc: '激活这个 Skill', insert: '/skill ' + (s.name || s.id) }));
+            .map(s => ({ label: s.title || s.name || s.id, id: s.id, desc: '激活这个 Skill', insert: '/skill ' + (s.name || s.id) })));
         slashItems.push({ label: '关闭主动 Skill', desc: '/skill off', insert: '/skill off' });
         // 同名 Skill 装过多次时只留一条，免得列表里两个一模一样的选项
         const seen = new Set();
@@ -629,6 +634,12 @@
         const it = slashItems[slashIndex];
         if(!it) return;
         closeSlashPalette();
+        if(it.clear){
+            setInputContent('', []);
+            resetChat();
+            setHint('已开新对话，上下文清空了；旧对话还在「历史」里');
+            return;
+        }
         // 命令必须自成一条消息（后端只认以 / 开头的整句），所以先摘掉正文末尾的 /xxx，发完再把原文放回输入栏
         const rest = readInput().replace(/(?:^|\s)\/[^\s]*$/, '').trim();
         const refs = inputRefs();
