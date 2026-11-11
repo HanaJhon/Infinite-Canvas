@@ -20,7 +20,7 @@
     <script src="/static/vendor/js/lucide.js?v=1.3.7.1767196800"></script>
     <script src="/static/js/theme.js?v=1.3.7.1793681298"></script>
     <script src="/static/js/i18n.js?v=1.3.7.1794291244"></script>
-    <link rel="stylesheet" href="/static/css/xvai-agent.css?v=1.3.7.1794372113">
+    <link rel="stylesheet" href="/static/css/xvai-agent.css?v=1.3.7.1794373291">
     <style>
         @import url('/static/vendor/css/fonts.css?v=1.3.7.1767196800');
         :root {
@@ -618,6 +618,9 @@
             .slice(0, 8)
             .map(s => ({ label: s.title || s.name || s.id, id: s.id, desc: '激活这个 Skill', insert: '/skill ' + (s.name || s.id) }));
         slashItems.push({ label: '关闭主动 Skill', desc: '/skill off', insert: '/skill off' });
+        // 同名 Skill 装过多次时只留一条，免得列表里两个一模一样的选项
+        const seen = new Set();
+        slashItems = slashItems.filter(it => (seen.has(it.label) ? false : (seen.add(it.label), true)));
         slashIndex = 0;
         renderSlashPalette();
     }
@@ -663,15 +666,25 @@
     function saveStyle(){ try { localStorage.setItem('xvai_style', JSON.stringify(state.activeStyle || null)); } catch(e){} }
     async function activateStyleSkill(skillId, title){
         let style = null;
+        const pool = [];
         for(const scope of ['personal', 'team']){
             try {
                 const res = await fetch('/api/style-library?scope=' + scope, { cache:'no-store' });
                 const data = await res.json();
-                style = (data.styles || []).find(s => String(s.skill_id || '') === String(skillId));
-                if(style) break;
+                (data.styles || []).forEach(s => pool.push(s));
             } catch(e){}
         }
-        if(!style || !(style.images || []).length){ setHint('这个风格还没有参考图，先在风格库里补几张'); return; }
+        style = pool.find(s => String(s.skill_id || '') === String(skillId));
+        /* 同一个风格可能被装过多次（旧 Skill 已失效、只留下同名条目），
+           按 skill_id 找不到就退一步按名字认，否则用户选中的那条永远挂不上卡片。 */
+        if(!style && title){
+            const t = String(title);
+            style = pool.find(s => {
+                const name = String(s.name || '');
+                return name && (t.includes(name) || name.includes(t));
+            }) || null;
+        }
+        if(!style || !(style.images || []).length){ setHint(`「${title || skillId}」在风格库里没有参考图，先在风格库补几张`); return; }
         state.activeStyle = {
             id: style.id, skillId, name: style.name || title,
             urls: style.images.map(i => i.url).filter(Boolean).slice(0, STYLE_REF_LIMIT)
@@ -682,6 +695,12 @@
     function clearStyle(tellServer){
         state.activeStyle = null; saveStyle(); renderStyleCard();
         if(tellServer) send('/skill off');
+    }
+    // 手打 /skill <名称|id> 时也能挂卡片：从已安装列表里找到 id 再查风格库
+    async function activateStyleFromArg(arg){
+        const skills = await loadSlashSkills();
+        const hit = skills.find(s => s.id === arg || s.name === arg || s.title === arg);
+        if(hit && String(hit.id || '').startsWith('style-')) activateStyleSkill(hit.id, hit.title || hit.name);
     }
     $('xvStyleClear')?.addEventListener('click', () => clearStyle(true));
     try { state.activeStyle = JSON.parse(localStorage.getItem('xvai_style') || 'null'); } catch(e) { state.activeStyle = null; }
@@ -963,6 +982,12 @@
         if(!text || state.sending) return;
         if(!state.chatProvider || !state.chatModel){ setHint('还没有可用的对话通道，先去 API 设置。'); return; }
         const rewindId = (opts && opts.rewindId) || state.rewindId || '';
+        // /skill 命令：不管从 / 面板选还是手打，都把风格卡片挂起来（后端只负责注入 Skill 文本）
+        if(/^\/skill\b/i.test(text)){
+            const arg = text.replace(/^\/skill\s*/i, '').trim();
+            if(!arg || /^(off|clear|exit|关闭)$/i.test(arg)) clearStyle(false);
+            else activateStyleFromArg(arg);
+        }
         const refs = inputRefs();
         state.sending = true;
         $('agentSendBtn').disabled = true;
