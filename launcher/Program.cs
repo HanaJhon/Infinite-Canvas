@@ -17,6 +17,11 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        // 2026-11-11：从浏览器下载的 zip 解压后，每个文件都带 Mark-of-the-Web（:Zone.Identifier），
+        // 首次运行会弹 SmartScreen「Windows 已保护你的电脑」。启动时无声清掉本目录的 MOTW，
+        // 之后再启动/自动更新落地的新文件都不会重复弹（首次那一次仍要用户点「仍要运行」，
+        // 彻底消除只能靠 Authenticode 证书签名）。
+        TryClearZoneIdentifiers(AppContext.BaseDirectory);
         // 更新执行器模式：必须赶在拿单实例互斥量之前处理 ——
         // 此时旧启动器可能还没退干净，走正常分支会被互斥量挡下并弹「已在运行中」。
         // 这一路也不需要 WinForms，故不调 ApplicationConfiguration.Initialize()。
@@ -173,6 +178,23 @@ internal static class Program
         if (parent is not null && File.Exists(Path.Combine(parent, "main.py"))) return parent;
         return executableDir;
     }
+
+    /// <summary>
+    /// 清除目录下所有文件的 Mark-of-the-Web（备用数据流 :Zone.Identifier）。
+    /// 全部失败静默 —— 文件被占用/无权访问都无所谓，删不掉最多是下次再弹一次。
+    /// </summary>
+    private static void TryClearZoneIdentifiers(string directory)
+    {
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+            {
+                try { File.Delete(file + ":Zone.Identifier"); } catch { }
+            }
+        }
+        catch { }
+    }
+
 }
 
 internal sealed class LauncherForm : Form
@@ -986,6 +1008,13 @@ sealed class LauncherHost : IDisposable
                         break;
                     case "STOP_SERVER":
                         result = HandleStopServer();
+                        break;
+                    case "OPEN_AI_CHAT":
+                        // 2026-11-11：横屏/大屏用户直接进「小抽AI」独立页（/ai，无侧边栏）。
+                        // 服务没起来时浏览器会打不开，这里顺手把地址回给前端提示用。
+                        var aiUrl = appUrl.TrimEnd('/') + "/ai";
+                        OpenInDefaultBrowser(aiUrl);
+                        result = new { opened = true, url = aiUrl };
                         break;
                     case "SAVE_PREFERENCES":
                         HandleSavePreferences(payload);

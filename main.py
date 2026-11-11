@@ -312,7 +312,10 @@ async def no_cache_html_middleware(request: Request, call_next):
         if not _u:
             if path.startswith("/api/"):
                 return JSONResponse({"detail": "未登录", "need_login": True}, status_code=401)
-            return RedirectResponse("/login.html", status_code=302)
+            return RedirectResponse(
+                "/login.html?next=" + urllib.parse.quote(path, safe="/"),
+                status_code=302,
+            )
         if _u.get("role") != "admin":
             if path.startswith("/api/"):
                 return JSONResponse({"detail": "仅管理员可访问"}, status_code=403)
@@ -345,7 +348,10 @@ async def no_cache_html_middleware(request: Request, call_next):
             # 媒体文件（/assets/、/output/）不能 302：`<img>` 会把登录页 HTML 当图片解码
             if path.lower().startswith(_AUTH_MEDIA_PREFIXES):
                 return Response(status_code=401, headers={"Cache-Control": "no-store"})
-            return RedirectResponse("/login.html", status_code=302)
+            return RedirectResponse(
+                "/login.html?next=" + urllib.parse.quote(path, safe="/"),
+                status_code=302,
+            )
         # 用 contextvar 把当前用户传给 UserScopedPath（异步并发下安全）
         _token_set = current_uid.set(user["id"])
         _charge_uid = user["id"]
@@ -17351,6 +17357,16 @@ async def index():
 async def index_alias():
     """`/index.html` 兜底：只注册了 `/`，直接访问 `/index.html` 会 404。"""
     return static_html_response("index.html")
+
+
+@app.get("/ai")
+async def ai_chat_page():
+    """横屏 / 独立入口：只有小抽AI（无侧边栏），局域网访问同一地址。
+
+    与 `/static/xvai.html` 是同一个页面，单独开一个短路由是为了让
+    启动器的「AI Chat」按钮和局域网用户都能直接输入 `http://<ip>:3000/ai`。
+    """
+    return static_html_response("xvai.html")
 
 
 @app.get("/login.html")

@@ -96,6 +96,8 @@ ROOT_FILES = [
     "build-launcher.ps1",
     "get-pip.py",
     "run.bat",
+    # 2026-11-11：清除下载包的 Mark-of-the-Web，避免首次运行弹 SmartScreen
+    "首次运行-先双击我.bat",
     "安装依赖.bat",
     "安装即梦CLI.bat",
     "登录即梦CLI.bat",
