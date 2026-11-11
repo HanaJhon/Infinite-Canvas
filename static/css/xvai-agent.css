@@ -91,3 +91,12 @@ html.studio-theme-dark .xv-agent {
 .xv-composer.xv-drag-over .agent-onebox { border-color:#38bdf8; box-shadow:0 0 0 3px rgba(56,189,248,.18); }
 .xv-msg-atts { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
 .xv-msg-atts img { width:72px; height:72px; object-fit:cover; border-radius:9px; border:1px solid var(--line, #edf0f3); cursor:zoom-in; }
+
+/* 风格 Skill 已挂载卡片（照画布 Agent 的风格胶囊） */
+.xv-agent .xv-style-card { position:relative; display:flex; align-items:center; gap:9px; margin:6px 8px 2px; padding:9px 12px; border-radius:13px; background:var(--soft); border:1px solid var(--line); max-width:280px; }
+.xv-agent .xv-style-card[hidden] { display:none; }
+.xv-agent .xv-style-main { min-width:0; }
+.xv-agent .xv-style-title { font-size:12px; font-weight:750; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.xv-agent .xv-style-sub { font-size:10.5px; color:var(--muted); margin-top:2px; }
+.xv-agent .xv-style-x { position:absolute; top:-7px; right:-7px; width:19px; height:19px; border-radius:999px; border:1px solid var(--line); background:var(--card); color:var(--muted); font-size:12px; line-height:1; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+.xv-agent .xv-style-x:hover { color:var(--text); }

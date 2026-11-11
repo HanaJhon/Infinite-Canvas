@@ -20,7 +20,7 @@
     <script src="/static/vendor/js/lucide.js?v=1.3.7.1767196800"></script>
     <script src="/static/js/theme.js?v=1.3.7.1793681298"></script>
     <script src="/static/js/i18n.js?v=1.3.7.1794291244"></script>
-    <link rel="stylesheet" href="/static/css/xvai-agent.css?v=1.3.7.1794370556">
+    <link rel="stylesheet" href="/static/css/xvai-agent.css?v=1.3.7.1794372113">
     <style>
         @import url('/static/vendor/css/fonts.css?v=1.3.7.1767196800');
         :root {
@@ -210,6 +210,13 @@
                             </div>
                             <button id="agentSkillBtn" class="agent-toolbar-btn" type="button" title="技能 · 已安装 / 市场 / 新建"><i data-lucide="sparkles"></i><span>技能</span></button>
                         </div>
+                        <div id="xvStyleCard" class="xv-style-card" hidden>
+                            <div class="xv-style-main">
+                                <div class="xv-style-title">风格：<span id="xvStyleName"></span></div>
+                                <div class="xv-style-sub"><span id="xvStyleCount"></span> 张参考图</div>
+                            </div>
+                            <button id="xvStyleClear" class="xv-style-x" type="button" title="取消风格">×</button>
+                        </div>
                         <div id="agentInput" class="agent-input-rich" contenteditable="true" role="textbox" aria-multiline="true"
                              data-i18n-placeholder="xvai.placeholder" placeholder="输入需求，可附参考图…" data-empty="1"></div>
                         <div class="agent-toolbar">
@@ -324,6 +331,7 @@
         pending: false,
         rewindId: '',
         skills: [],
+        activeStyle: null,
         chatOptions: [],
         imgOptions: [],
         providers: []
@@ -608,7 +616,7 @@
         slashItems = skills
             .filter(s => !q || String(s.name || s.title || s.id || '').toLowerCase().includes(q))
             .slice(0, 8)
-            .map(s => ({ label: s.title || s.name || s.id, desc: '激活这个 Skill', insert: '/skill ' + (s.name || s.id) }));
+            .map(s => ({ label: s.title || s.name || s.id, id: s.id, desc: '激活这个 Skill', insert: '/skill ' + (s.name || s.id) }));
         slashItems.push({ label: '关闭主动 Skill', desc: '/skill off', insert: '/skill off' });
         slashIndex = 0;
         renderSlashPalette();
@@ -622,6 +630,8 @@
         const refs = inputRefs();
         send(it.insert);
         setInputContent(rest, refs);
+        // 风格库建出来的 Skill（id = style-xxx）→ 挂成风格卡片，生图时带参考图
+        if(String(it.id || '').startsWith('style-')) activateStyleSkill(it.id, it.label);
     }
     slashEl.addEventListener('mousedown', ev => {
         const node = ev.target.closest('[data-slash]');
@@ -638,6 +648,44 @@
     document.addEventListener('click', ev => {
         if(slashOpen && !ev.target.closest('#xvSlashPalette') && !ev.target.closest('#agentInput')) closeSlashPalette();
     });
+
+    // ---------- 风格 Skill：挂上后显示参考图卡片，生图自动带参考图（照画布 Agent） ----------
+    const STYLE_REF_LIMIT = 3;
+    function renderStyleCard(){
+        const card = $('xvStyleCard');
+        if(!card) return;
+        const st = state.activeStyle;
+        card.hidden = !(st && st.urls && st.urls.length);
+        if(card.hidden) return;
+        $('xvStyleName').textContent = st.name || '';
+        $('xvStyleCount').textContent = String(st.urls.length);
+    }
+    function saveStyle(){ try { localStorage.setItem('xvai_style', JSON.stringify(state.activeStyle || null)); } catch(e){} }
+    async function activateStyleSkill(skillId, title){
+        let style = null;
+        for(const scope of ['personal', 'team']){
+            try {
+                const res = await fetch('/api/style-library?scope=' + scope, { cache:'no-store' });
+                const data = await res.json();
+                style = (data.styles || []).find(s => String(s.skill_id || '') === String(skillId));
+                if(style) break;
+            } catch(e){}
+        }
+        if(!style || !(style.images || []).length){ setHint('这个风格还没有参考图，先在风格库里补几张'); return; }
+        state.activeStyle = {
+            id: style.id, skillId, name: style.name || title,
+            urls: style.images.map(i => i.url).filter(Boolean).slice(0, STYLE_REF_LIMIT)
+        };
+        saveStyle(); renderStyleCard();
+        setHint(`已挂上风格「${state.activeStyle.name}」，生图会自动带 ${state.activeStyle.urls.length} 张参考图`);
+    }
+    function clearStyle(tellServer){
+        state.activeStyle = null; saveStyle(); renderStyleCard();
+        if(tellServer) send('/skill off');
+    }
+    $('xvStyleClear')?.addEventListener('click', () => clearStyle(true));
+    try { state.activeStyle = JSON.parse(localStorage.getItem('xvai_style') || 'null'); } catch(e) { state.activeStyle = null; }
+    renderStyleCard();
 
     // ---------- 输出收集 ----------
     function addOutput(list, url, kind){
@@ -935,7 +983,11 @@
                 size: computeSize(),
                 quality: state.params.quality || 'auto',
                 mode: 'agent',
-                reference_images: refs.map(r => ({ url:r.url, name:r.name || '', kind:'image' })),
+                reference_images: [
+                    ...((state.activeStyle && state.activeStyle.urls) || []).map((url, i) =>
+                        ({ url, name: `${(state.activeStyle && state.activeStyle.name) || 'style'}-${i + 1}.png`, kind:'image' })),
+                    ...refs.map(r => ({ url:r.url, name:r.name || '', kind:'image' }))
+                ],
                 rewind_message_id: rewindId
             };
             const res = await fetch('/api/chat/agent', {
