@@ -107,3 +107,9 @@ html.studio-theme-dark .xv-agent {
 /* 顶栏「历史/新对话/输出」与输出抽屉的眼睛/下载：24px → 16px（缩小 1/3） */
 .xv-btn svg { width:11px; height:11px; flex-shrink:0; }
 .xv-icon-btn svg { width:16px; height:16px; flex-shrink:0; }
+
+/* 思考强度面板（照画布 Agent smart-canvas.css:2252-2255） */
+.agent-reasoning-list { display:flex; flex-direction:column; gap:2px; min-width:158px; }
+.agent-reasoning-item { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:7px 10px; border-radius:8px; border:none; background:none; color:var(--text); font-size:10.5px; font-weight:650; cursor:pointer; text-align:left; }
+.agent-reasoning-item:hover { background:var(--soft); }
+.agent-reasoning-hint { font-size:9px; font-weight:500; color:var(--faint); }

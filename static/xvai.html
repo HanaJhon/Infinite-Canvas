@@ -20,7 +20,7 @@
     <script src="/static/vendor/js/lucide.js?v=1.3.7.1767196800"></script>
     <script src="/static/js/theme.js?v=1.3.7.1793681298"></script>
     <script src="/static/js/i18n.js?v=1.3.7.1794291244"></script>
-    <link rel="stylesheet" href="/static/css/xvai-agent.css?v=1.3.7.1794378669">
+    <link rel="stylesheet" href="/static/css/xvai-agent.css?v=1.3.7.1794379737">
     <style>
         @import url('/static/vendor/css/fonts.css?v=1.3.7.1767196800');
         :root {
@@ -209,7 +209,8 @@
                                     </div></div>
                                 </div>
                             </div>
-                            <button id="agentSkillBtn" class="agent-toolbar-btn" type="button" title="技能 · 已安装 / 市场 / 新建" hidden><i data-lucide="sparkles"></i><span>技能</span></button>
+                            <button id="agentReasoningBtn" class="agent-toolbar-btn" type="button" title="思考强度 · 点击切换"><i data-lucide="brain"></i><span id="agentReasoningLabel">自动</span><i data-lucide="chevron-down"></i></button>
+                                <button id="agentSkillBtn" class="agent-toolbar-btn" type="button" title="技能 · 已安装 / 市场 / 新建" hidden><i data-lucide="sparkles"></i><span>技能</span></button>
                         </div>
                         <div id="xvStyleCard" class="xv-style-card" hidden>
                             <div class="xv-style-main">
@@ -242,6 +243,15 @@
                         <div class="agent-params-section">
                             <div class="agent-params-title">质量</div>
                             <div class="agent-quality-seg" id="agentQualitySeg"></div>
+                        </div>
+                    </div>
+                    <div id="agentReasoningPanel" class="agent-dropdown-panel" hidden>
+                        <div class="agent-reasoning-list">
+                            <button type="button" class="agent-reasoning-item" data-reasoning="auto">自动<span class="agent-reasoning-hint">跟随模型默认</span></button>
+                            <button type="button" class="agent-reasoning-item" data-reasoning="minimal">最低<span class="agent-reasoning-hint">minimal</span></button>
+                            <button type="button" class="agent-reasoning-item" data-reasoning="low">低<span class="agent-reasoning-hint">low</span></button>
+                            <button type="button" class="agent-reasoning-item" data-reasoning="medium">中<span class="agent-reasoning-hint">medium</span></button>
+                            <button type="button" class="agent-reasoning-item" data-reasoning="high">高<span class="agent-reasoning-hint">high</span></button>
                         </div>
                     </div>
                     <div id="xvSkillPanel" class="agent-dropdown-panel xv-skill-panel" hidden>
@@ -325,7 +335,7 @@
         chatModel: localStorage.getItem('xvai_model') || '',
         imgProvider: localStorage.getItem('xvai_img_provider') || '',
         imgModel: localStorage.getItem('xvai_img_model') || '',
-        params: { ratio:'square', res:'4k', quality:'high' },
+        params: { ratio:'square', res:'4k', quality:'high', think:'auto' },
         messages: [],
         outputs: [],
         sending: false,
@@ -356,7 +366,7 @@
         $('xvHint').innerHTML = (busy ? '<span class="xv-spin"></span>' : '') + esc(text || '');
     }
     function closePanels(except){
-        [$('agentModelPanel'), $('agentParamsPanel'), $('xvSkillPanel')].forEach(el => { if(el && el !== except) el.hidden = true; });
+        [$('agentModelPanel'), $('agentParamsPanel'), $('xvSkillPanel'), $('agentReasoningPanel')].forEach(el => { if(el && el !== except) el.hidden = true; });
         ['agentModelBtn','agentGenModelBtn','agentParamsBtn','agentSkillBtn'].forEach(id => $(id)?.classList.remove('active'));
     }
 
@@ -401,6 +411,28 @@
         const btn = ev.target.closest('[data-quality]'); if(!btn) return;
         state.params.quality = btn.dataset.quality; persistParams(); syncParamsLabel();
     });
+    const THINK_LABELS = {auto:'自动', minimal:'最低', low:'低', medium:'中', high:'高'};
+    function syncThinkLabel(){
+        const v = String(state.params.think || 'auto');
+        $('agentReasoningLabel').textContent = THINK_LABELS[v] || '自动';
+        $('agentReasoningLabel').title = v === 'auto' ? '思考强度：跟随模型默认' : `思考强度：${THINK_LABELS[v]}（reasoning_effort=${v}）`;
+    }
+    $('agentReasoningBtn').addEventListener('click', ev => {
+        ev.stopPropagation();
+        const panel = $('agentReasoningPanel');
+        const open = panel.hidden;
+        closePanels(open ? panel : null);
+        panel.hidden = !open;
+        $('agentReasoningBtn').classList.toggle('active', open);
+    });
+    $('agentReasoningPanel').addEventListener('click', ev => {
+        const btn = ev.target.closest('[data-reasoning]'); if(!btn) return;
+        state.params.think = btn.dataset.reasoning || 'auto';
+        persistParams(); syncThinkLabel();
+        $('agentReasoningPanel').hidden = true;
+        $('agentReasoningBtn').classList.remove('active');
+    });
+    syncThinkLabel();
     $('agentParamsBtn').addEventListener('click', ev => {
         ev.stopPropagation();
         const panel = $('agentParamsPanel');
@@ -497,7 +529,8 @@
     });
     document.addEventListener('click', ev => {
         if(!ev.target.closest('.agent-toolbar-dropdown-wrap') && !ev.target.closest('.agent-params-panel') && !ev.target.closest('#agentParamsBtn')
-            && !ev.target.closest('#xvSkillPanel') && !ev.target.closest('#agentSkillBtn')) closePanels();
+            && !ev.target.closest('#xvSkillPanel') && !ev.target.closest('#agentSkillBtn')
+            && !ev.target.closest('#agentReasoningPanel') && !ev.target.closest('#agentReasoningBtn')) closePanels();
     });
 
     // ---------- 附件：内联进输入框（照画布 Agent：文件是句子里的胶囊，不是下面的卡片） ----------
@@ -1019,6 +1052,7 @@
                 image_model: state.imgModel,
                 size: computeSize(),
                 quality: state.params.quality || 'auto',
+                reasoning_effort: (String(state.params.think || 'auto') !== 'auto') ? state.params.think : '',
                 mode: 'agent',
                 reference_images: [
                     ...((state.activeStyle && state.activeStyle.urls) || []).map((url, i) =>

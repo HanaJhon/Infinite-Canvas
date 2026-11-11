@@ -4566,6 +4566,7 @@ class ChatRequest(BaseModel):
     ms_model: str = ""
     output_format: str = ""   # 留空=跟随上游默认；gif 等由后端按模型+提示词自动兜底
     rewind_message_id: str = ""   # 回溯编辑：先丢掉这条 user 消息及其之后的全部消息，再重新提问
+    reasoning_effort: str = ""   # 思考强度：空/auto=跟随模型默认；minimal/low/medium/high 透传上游
 
 def chat_system_prompt(payload):
     prompt = str(getattr(payload, "system_prompt", "") or "").strip()
@@ -17144,7 +17145,10 @@ async def decide_chat_agent_action(payload, conversation, refs):
     })
     try:
         async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
-            req_body = {"model": model, "messages": upstream_messages}
+            req_body = apply_reasoning_effort(
+                {"model": model, "messages": upstream_messages},
+                getattr(payload, "reasoning_effort", ""),
+            )
             if is_apimart_provider(provider_cfg):
                 req_body["stream"] = False
             response = await client.post(
@@ -17230,7 +17234,10 @@ async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, 
     last_usage = None
     async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
         for round_index in range(rounds + 1):
-            req_body = {"model": model, "messages": upstream_messages}
+            req_body = apply_reasoning_effort(
+                {"model": model, "messages": upstream_messages},
+                getattr(payload, "reasoning_effort", ""),
+            )
             if is_apimart:
                 req_body["stream"] = False
             if tools:
@@ -17349,7 +17356,10 @@ async def build_chat_text_reply(payload, conversation, user_id=None):
             upstream_messages.append(msg)
     try:
         async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
-            req_body = {"model": model, "messages": upstream_messages}
+            req_body = apply_reasoning_effort(
+                {"model": model, "messages": upstream_messages},
+                getattr(payload, "reasoning_effort", ""),
+            )
             if is_apimart:
                 req_body["stream"] = False
             response = await client.post(f"{chat_base}/chat/completions", headers=chat_hdrs, json=req_body)
