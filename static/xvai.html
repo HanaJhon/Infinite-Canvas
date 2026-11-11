@@ -52,6 +52,14 @@
         .xv-msg.user .xv-avatar { background:var(--accent); color:var(--card); }
         .xv-bubble { padding:12px 15px; border-radius:16px; background:var(--card); border:1px solid var(--line); font-size:13px; line-height:1.65; white-space:pre-wrap; word-break:break-word; }
         .xv-msg.user .xv-bubble { background:var(--accent); color:var(--card); border-color:var(--accent); }
+        .xv-msg.user .xv-bubble.xv-bubble-edit { background:var(--card); color:inherit; border-color:var(--accent); padding:10px; white-space:normal; }
+        .xv-edit-area { width:100%; min-width:200px; max-width:560px; box-sizing:border-box; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:inherit; font:inherit; line-height:1.6; padding:8px 10px; resize:vertical; outline:none; }
+        .xv-edit-area:focus { border-color:var(--accent); }
+        .xv-edit-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:8px; }
+        .xv-edit-btn { border:1px solid var(--line); background:var(--bg); color:var(--muted); border-radius:10px; padding:5px 12px; font-size:12px; cursor:pointer; }
+        .xv-edit-btn:hover { color:inherit; }
+        .xv-edit-btn.primary { background:var(--accent); border-color:var(--accent); color:var(--card); font-weight:600; }
+        .xv-edit-btn.primary:disabled { opacity:.6; cursor:default; }
         .xv-msg-tools { display:flex; gap:6px; margin-top:6px; }
         .xv-typing { display:flex; align-items:center; gap:5px; padding:15px 16px; }
         .xv-typing span { width:6px; height:6px; border-radius:50%; background:var(--muted); animation:xvBlink 1.2s infinite ease-in-out; }
@@ -117,9 +125,14 @@
         .xv-hist-head b { font-size:13px; font-weight:800; }
         .xv-hist-close { margin-left:auto; width:26px; height:26px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--muted); display:grid; place-items:center; cursor:pointer; }
         .xv-hist-list { flex:1 1 auto; min-height:0; overflow-y:auto; padding:8px; display:flex; flex-direction:column; gap:4px; }
-        .xv-hist-item { text-align:left; border:1px solid transparent; background:transparent; border-radius:12px; padding:9px 11px; cursor:pointer; display:flex; flex-direction:column; gap:3px; }
+        .xv-hist-item { position:relative; border:1px solid transparent; background:transparent; border-radius:12px; display:flex; align-items:center; }
         .xv-hist-item:hover { background:var(--soft); }
         .xv-hist-item.active { background:var(--soft); border-color:var(--line); }
+        .xv-hist-main { flex:1 1 auto; min-width:0; text-align:left; background:transparent; border:none; color:inherit; font:inherit; border-radius:12px; padding:9px 11px; cursor:pointer; display:flex; flex-direction:column; gap:3px; }
+        .xv-hist-del { flex:0 0 auto; margin-right:6px; border:none; background:transparent; color:var(--muted); cursor:pointer; padding:5px; border-radius:8px; display:inline-flex; opacity:0; transition:opacity .15s ease, color .15s ease, background .15s ease; }
+        .xv-hist-item:hover .xv-hist-del, .xv-hist-del:focus-visible { opacity:1; }
+        .xv-hist-del:hover { color:#ef4444; background:var(--bg); }
+        @media (hover:none) { .xv-hist-del { opacity:1; } }
         .xv-hist-title { font-size:12.5px; font-weight:700; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .xv-hist-sub { font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .xv-hist-empty { padding:22px 14px; font-size:12px; color:var(--muted); text-align:center; }
@@ -265,6 +278,7 @@
         outputs: [],
         sending: false,
         pending: false,
+        editingIdx: null,
         chatOptions: [],
         imgOptions: [],
         providers: []
@@ -565,16 +579,35 @@
             const cards = !mine && (msg.image_urls || []).length
                 ? (msg.image_urls || []).map(u => imageCard(u, msg.model)).join('')
                 : '';
-            const tools = mine ? '' : `<div class="xv-msg-tools">
+            const editing = mine && state.editingIdx === idx;
+            const tools = !mine ? `<div class="xv-msg-tools">
                 <button class="xv-mini" type="button" data-xv-copy="${idx}" title="复制回复"><i data-lucide="copy"></i></button>
                 <button class="xv-mini" type="button" data-xv-retry="${idx}" title="重试上一条"><i data-lucide="rotate-ccw"></i></button>
-            </div>`;
-            return `<div class="xv-msg ${mine ? 'user' : 'assistant'}">
+            </div>` : (editing ? '' : `<div class="xv-msg-tools">
+                <button class="xv-mini" type="button" data-xv-copy="${idx}" title="复制"><i data-lucide="copy"></i></button>
+                <button class="xv-mini" type="button" data-xv-edit-msg="${idx}" title="编辑后从这里重新生成"><i data-lucide="pencil"></i></button>
+            </div>`);
+            const bubble = editing
+                ? `<div class="xv-bubble xv-bubble-edit">
+                    <textarea class="xv-edit-area" id="xvEditArea" rows="${Math.min(8, Math.max(2, String(msg.content || '').split('\\n').length))}">${esc(msg.content || '')}</textarea>
+                    <div class="xv-edit-actions">
+                        <button class="xv-edit-btn" type="button" data-xv-edit-cancel="${idx}">取消</button>
+                        <button class="xv-edit-btn primary" type="button" data-xv-edit-send="${idx}"${state.sending ? ' disabled' : ''}>保存并重发</button>
+                    </div>
+                   </div>`
+                : `<div class="xv-bubble">${esc(msg.content || '')}${cards}${creditsChip(msg)}</div>`;
+            return `<div class="xv-msg ${mine ? 'user' : 'assistant'}${editing ? ' editing' : ''}">
                 <div class="xv-avatar">${mine ? '我' : 'AI'}</div>
-                <div class="xv-bubble">${esc(msg.content || '')}${cards}${creditsChip(msg)}</div>
+                ${bubble}
                 ${tools}
             </div>`;
         }).join('');
+        const editArea = $('xvEditArea');
+        if(editArea){
+            // 光标放到末尾，改一个字不用先按 End
+            editArea.focus();
+            try { editArea.setSelectionRange(editArea.value.length, editArea.value.length); } catch(e) {}
+        }
         if(state.pending){
             thread.innerHTML += `<div class="xv-msg assistant xv-bubble-pending">
                 <div class="xv-avatar">AI</div>
@@ -670,13 +703,17 @@
         clearTimeout(creditTimer);
         creditTimer = setTimeout(updateSendCredit, 300);
     }
-    async function send(message){
+    async function send(message, opts){
         const text = (message != null ? message : readInput()).trim();
         if(!text || state.sending) return;
         if(!state.chatProvider || !state.chatModel){ setHint('还没有可用的对话通道，先去 API 设置。'); return; }
+        const rewindIdx = opts && typeof opts.rewindIdx === 'number' ? opts.rewindIdx : -1;
+        const rewindId = (opts && opts.rewindId) || '';
         state.sending = true;
         $('agentSendBtn').disabled = true;
         if(message == null) clearInput();
+        if(rewindIdx >= 0) state.messages = state.messages.slice(0, rewindIdx);
+        state.editingIdx = null;
         state.messages.push({ role:'user', content:text });
         state.pending = true;
         renderThread();
@@ -692,7 +729,8 @@
                 size: computeSize(),
                 quality: state.params.quality || 'auto',
                 mode: 'agent',
-                reference_images: state.refs.map(r => ({ url:r.url, name:r.name || '', kind:'image' }))
+                reference_images: state.refs.map(r => ({ url:r.url, name:r.name || '', kind:'image' })),
+                rewind_message_id: rewindId
             };
             const res = await fetch('/api/chat/agent', {
                 method: 'POST',
@@ -729,6 +767,7 @@
     // 换设备/清缓存就退化成"取最近一条有内容的对话"，保证刷新和重启都不丢。
     function normalizeMessages(list){
         return (list || []).filter(m => m && m.role && m.role !== 'system').map(m => ({
+            id: m.id,
             role: m.role,
             content: m.content,
             model: m.model,
@@ -747,6 +786,7 @@
             const conv = data.conversation || {};
             state.convId = conv.id || id;
             localStorage.setItem('xvai_conv_id', state.convId);
+            state.editingIdx = null;
             state.messages = normalizeMessages(conv.messages);
             renderThread();
             renderOutputs();
@@ -770,6 +810,7 @@
     }
 
     function resetChat(){
+        state.editingIdx = null;
         state.convId = '';
         state.messages = [];
         state.refs = [];
@@ -797,6 +838,26 @@
     $('xvThread').addEventListener('click', ev => {
         const zoom = ev.target.closest('[data-xv-zoom]');
         if(zoom){ openPreview(zoom.dataset.xvZoom, fileName(zoom.dataset.xvZoom)); return; }
+        // 回溯编辑：把这条 user 消息原地变成输入框，保存后截断这段对话重新生成
+        const editMsg = ev.target.closest('[data-xv-edit-msg]');
+        if(editMsg){
+            state.editingIdx = Number(editMsg.dataset.xvEditMsg);
+            renderThread();
+            return;
+        }
+        const editCancel = ev.target.closest('[data-xv-edit-cancel]');
+        if(editCancel){ state.editingIdx = null; renderThread(); return; }
+        const editSend = ev.target.closest('[data-xv-edit-send]');
+        if(editSend){
+            const idx = Number(editSend.dataset.xvEditSend);
+            const area = $('xvEditArea');
+            const text = ((area && area.value) || '').trim();
+            const msg = state.messages[idx];
+            if(!text) return;
+            state.editingIdx = null;
+            send(text, { rewindIdx: idx, rewindId: (msg && msg.id) || '' });
+            return;
+        }
         const act = ev.target.closest('[data-xv-act]');
         if(act){
             if(act.dataset.xvAct === 'edit'){
@@ -894,13 +955,32 @@
             const active = c.id === state.convId ? ' active' : '';
             const sub = c.last_message ? esc(c.last_message).slice(0, 60) : '';
             // 不把 id 拼进 onclick：id 里万一有引号就会串味，统一走事件委托
-            return `<button type="button" class="xv-hist-item${active}" data-conv="${esc(c.id)}">
-                <span class="xv-hist-title">${esc(c.title || '新对话')}</span>
-                <span class="xv-hist-sub">${esc(fmtHistTime(c.updated_at))}${sub ? ' · ' + sub : ''}</span>
-            </button>`;
+            return `<div class="xv-hist-item${active}">
+                <button type="button" class="xv-hist-main" data-conv="${esc(c.id)}">
+                    <span class="xv-hist-title">${esc(c.title || '新对话')}</span>
+                    <span class="xv-hist-sub">${esc(fmtHistTime(c.updated_at))}${sub ? ' · ' + sub : ''}</span>
+                </button>
+                <button type="button" class="xv-hist-del" data-del-conv="${esc(c.id)}" title="删除这段对话"><i data-lucide="trash-2"></i></button>
+            </div>`;
         }).join('');
+        icons();
+    }
+    async function deleteConversation(id){
+        if(!id) return;
+        const item = histItems.find(c => c.id === id);
+        const name = (item && item.title) || '这段对话';
+        if(!window.confirm(`删除「${name}」？删了就找不回来了（画布/资产里的图不受影响）。`)) return;
+        try {
+            const res = await fetch('/api/conversations/' + encodeURIComponent(id), { method:'DELETE', cache:'no-store' });
+            if(!res.ok) throw new Error(`删除失败（${res.status}）`);
+        } catch(err){ window.alert(err.message || '删除失败'); return; }
+        histItems = histItems.filter(c => c.id !== id);
+        if(state.convId === id) resetChat();
+        renderHistory();
     }
     document.getElementById('xvHistList').addEventListener('click', e => {
+        const del = e.target.closest('[data-del-conv]');
+        if(del){ e.stopPropagation(); deleteConversation(del.getAttribute('data-del-conv')); return; }
         const btn = e.target.closest('[data-conv]');
         if(btn) switchConversation(btn.getAttribute('data-conv'));
     });

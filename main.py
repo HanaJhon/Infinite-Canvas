@@ -4565,6 +4565,7 @@ class ChatRequest(BaseModel):
     provider: str = "comfly"
     ms_model: str = ""
     output_format: str = ""   # 留空=跟随上游默认；gif 等由后端按模型+提示词自动兜底
+    rewind_message_id: str = ""   # 回溯编辑：先丢掉这条 user 消息及其之后的全部消息，再重新提问
 
 def chat_system_prompt(payload):
     prompt = str(getattr(payload, "system_prompt", "") or "").strip()
@@ -25216,6 +25217,15 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
         if payload.conversation_id
         else new_conversation(user_id, display_title(payload.message))
     )
+    # 回溯编辑：从被编辑的那条 user 消息开始截断（连它一起丢掉），再按新内容重走一遍，
+    # 这样分叉只保留最后一次的结果，不会像"重试"那样越堆越多。
+    rewind_id = str(payload.rewind_message_id or "").strip()
+    if rewind_id and conversation.get("messages"):
+        cut = next((i for i, m in enumerate(conversation["messages"]) if m.get("id") == rewind_id), None)
+        if cut is not None:
+            conversation["messages"] = conversation["messages"][:cut]
+            conversation["updated_at"] = now_ms()
+            save_conversation(user_id, conversation)
     if not conversation.get("messages"):
         conversation["title"] = display_title(payload.message)
 
