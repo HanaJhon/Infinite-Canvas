@@ -14629,6 +14629,32 @@ def saved_image_digest(url) -> str:
             digest.update(chunk)
     return digest.hexdigest()
 
+async def fetch_remote_image_response(url, attempts=3):
+    """下载上游图片：带浏览器 UA + 退避重试。
+
+    🚨 即梦 / AIzzz 的 CDN（file*.aitohumanize.com、api.image2pro.top）对空 UA 和瞬时
+    5xx 都很敏感。原来用 httpx 默认 UA 单次请求，失败就把远程 url 直接写进画布 ——
+    链接一过期就只剩一张空白节点（老板截图里的 06119f9f….png 就是这种）。
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    }
+    timeout = httpx.Timeout(connect=20.0, read=300.0, write=60.0, pool=20.0)
+    last_error = None
+    for attempt in range(max(1, attempts)):
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+                return response
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 < attempts:
+                await asyncio.sleep(0.8 * (attempt + 1))
+    raise last_error or RuntimeError("下载上游图片失败")
+
 async def save_ai_image_to_output(image_data, prefix="online_", category="output"):
     def write_image(data, hint=""):
         ext = image_extension_from_bytes(data) or image_extension_from_hint(hint) or ".png"
@@ -14645,14 +14671,12 @@ async def save_ai_image_to_output(image_data, prefix="online_", category="output
         return value
     value = rewrite_runninghub_file_url(value)
     try:
-        timeout = httpx.Timeout(connect=20.0, read=300.0, write=60.0, pool=20.0)
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            response = await client.get(value)
-            response.raise_for_status()
-            hint = f"{response.headers.get('Content-Type', '')} {str(value).split('?')[0]}"
-            return write_image(response.content, hint)
+        response = await fetch_remote_image_response(value)
+        hint = f"{response.headers.get('Content-Type', '')} {str(value).split('?')[0]}"
+        return write_image(response.content, hint)
     except Exception as e:
-        print(f"保存上游图片失败: {e}; url={value}")
+        # 落盘失败只能保留远程 url（上游 CDN 链接会过期），至少别静默。
+        print(f"[save-image] 警告: 上游图片未落盘，节点将保留远程 url（链接过期即空白）: {e}; url={value}")
         return value
 
 def image_output_meta(url, source_item=None):
@@ -23372,7 +23396,32 @@ def sanitize_export_filename(name: str, fallback: str) -> str:
     base = re.sub(r'[\\/:*?"<>|]+', "_", base)
     return base or fallback
 
+#: 画布里指向"本机文件"的三种 url 形态（/api/storage-files/ 是资产库那一套）
+CANVAS_WORKFLOW_LOCAL_PREFIXES = ("/assets/", "/output/", "/api/storage-files/")
+#: 远程 url 只当"媒体"处理：上游 CDN 链接（即梦 / AIzzz）就长这样
+CANVAS_WORKFLOW_REMOTE_EXTS = (
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif",
+    ".mp4", ".webm", ".mov", ".m4v", ".mkv",
+    ".mp3", ".wav", ".m4a", ".ogg",
+)
+#: 一次导出最多打包多少个资源 / 多少字节（远程要真的下载，必须有上限）
+CANVAS_WORKFLOW_MAX_RESOURCES = 200
+CANVAS_WORKFLOW_MAX_BYTES = 300 * 1024 * 1024
+
+def canvas_workflow_is_remote_media(text):
+    low = str(text or "").strip().lower()
+    if not low.startswith(("http://", "https://")):
+        return False
+    path = urllib.parse.urlsplit(low).path
+    return path.endswith(CANVAS_WORKFLOW_REMOTE_EXTS)
+
 def canvas_workflow_collect_resource_refs(value, found=None):
+    """收集节点里所有需要跟着工作流走的资源 url。
+
+    🚨 只认 /assets/、/output/ 是不够的：上游生成的图有时是
+    `https://file*.aitohumanize.com/...` 这种远程链接（落盘失败时被原样存进画布），
+    不打包的话导入方拿到的是一条过期链接 —— 就是「工作流导入丢图」。
+    """
     if found is None:
         found = []
     if isinstance(value, dict):
@@ -23383,9 +23432,38 @@ def canvas_workflow_collect_resource_refs(value, found=None):
             canvas_workflow_collect_resource_refs(item, found)
     elif isinstance(value, str):
         text = value.strip()
-        if (text.startswith("/assets/") or text.startswith("/output/")) and output_file_from_url(text):
-            found.append(text)
+        if not text:
+            return found
+        if text.startswith(CANVAS_WORKFLOW_LOCAL_PREFIXES):
+            if output_file_from_url(text):
+                found.append(text)
+        elif canvas_workflow_is_remote_media(text):
+            if text not in found:
+                found.append(text)
     return found
+
+def canvas_workflow_resource_blob(url):
+    """把一个资源 url 变成可写进 zip 的内容：(本地路径, 字节, 文件名)。"""
+    path = output_file_from_url(url)
+    if path and os.path.isfile(path):
+        return path, None, os.path.basename(path)
+    text = str(url or "").strip()
+    if not text.lower().startswith(("http://", "https://")):
+        return None, None, ""
+    name = filename_from_media_url(text, "")
+    # 远程链接也可能其实躺在本地（同名文件），先试本机再下载
+    local = local_media_file_by_basename(name) if name else None
+    if local and os.path.isfile(local):
+        return local, None, os.path.basename(local)
+    try:
+        # ponytail: 单张 15s 上限，导出是同步请求，别让一条坏链接拖死整个导出
+        remote = fetch_remote_media_bytes(text, timeout=15.0)
+    except Exception as exc:
+        print(f"[workflow-export] 警告: 远程资源下载失败，已跳过: {exc}; url={text}")
+        remote = None
+    if not remote:
+        return None, None, ""
+    return None, remote[0], name or f"resource-{uuid.uuid4().hex[:6]}.bin"
 
 def canvas_workflow_unique_archive_name(base, used):
     safe = sanitize_export_filename(base, "resource.bin")
@@ -23405,6 +23483,28 @@ def canvas_workflow_replace_strings(value, mapping):
         return [canvas_workflow_replace_strings(item, mapping) for item in value]
     if isinstance(value, str):
         return mapping.get(value, value)
+    return value
+
+def canvas_workflow_normalize_media_urls(value):
+    """把「指向本站文件」的绝对 url 归一成相对路径。
+
+    局域网里导出的工作流常带着 `http://192.168.x.x:3000/assets/...` 或
+    `http://127.0.0.1:3000/...`，换台机器打开就是坏图。只有在本地确实找得到这个文件时
+    才改写，所以不会把别的服务器的地址误改成自己的。
+    """
+    if isinstance(value, dict):
+        return {k: canvas_workflow_normalize_media_urls(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [canvas_workflow_normalize_media_urls(item) for item in value]
+    if isinstance(value, str):
+        text = value.strip()
+        if not text.lower().startswith(("http://", "https://")):
+            return value
+        parsed = urllib.parse.urlsplit(text)
+        path = urllib.parse.unquote(parsed.path)
+        if path.startswith(CANVAS_WORKFLOW_LOCAL_PREFIXES) and output_file_from_url(path):
+            return path
+        return value
     return value
 
 def canvas_workflow_payload(nodes, connections, resources=None):
@@ -23427,20 +23527,35 @@ def build_canvas_workflow_archive(payload: CanvasWorkflowExportRequest) -> Tuple
     used = set()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         if payload.include_resources:
+            seen_urls = set()
+            packed_bytes = 0
             for url in canvas_workflow_collect_resource_refs(nodes_payload):
-                if any(item.get("url") == url for item in resources):
+                if len(resources) >= CANVAS_WORKFLOW_MAX_RESOURCES:
+                    print(f"[workflow-export] 警告: 资源数超过 {CANVAS_WORKFLOW_MAX_RESOURCES}，其余未打包")
+                    break
+                if packed_bytes >= CANVAS_WORKFLOW_MAX_BYTES:
+                    print("[workflow-export] 警告: 资源体积超过上限，其余未打包")
+                    break
+                if url in seen_urls:
                     continue
-                path = output_file_from_url(url)
-                if not path or not os.path.isfile(path):
+                seen_urls.add(url)
+                path, content, name = canvas_workflow_resource_blob(url)
+                if not path and content is None:
                     continue
-                archive_name = canvas_workflow_unique_archive_name(os.path.basename(path), used)
+                archive_name = canvas_workflow_unique_archive_name(name or "resource.bin", used)
                 archive_path = f"resources/{archive_name}"
-                zf.write(path, archive_path)
+                if path:
+                    zf.write(path, archive_path)
+                    size = os.path.getsize(path)
+                else:
+                    zf.writestr(archive_path, content)
+                    size = len(content)
+                packed_bytes += size
                 resources.append({
                     "url": url,
                     "archive": archive_path,
-                    "name": os.path.basename(path),
-                    "size": os.path.getsize(path),
+                    "name": name or archive_name,
+                    "size": size,
                 })
         workflow = canvas_workflow_payload(nodes_payload, connections_payload, resources)
         zf.writestr("workflow.json", json.dumps(workflow, ensure_ascii=False, indent=2))
@@ -23559,6 +23674,8 @@ async def import_canvas_workflow(file: UploadFile = File(...)):
     if resource_mapping:
         nodes_payload = canvas_workflow_replace_strings(nodes_payload, resource_mapping)
         connections_payload = canvas_workflow_replace_strings(connections_payload, resource_mapping)
+    nodes_payload = canvas_workflow_normalize_media_urls(nodes_payload)
+    connections_payload = canvas_workflow_normalize_media_urls(connections_payload)
     return {
         "workflow": canvas_workflow_payload(nodes_payload, connections_payload, workflow.get("resources") or []),
         "nodes": nodes_payload,
