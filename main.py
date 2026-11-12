@@ -17494,7 +17494,7 @@ def agent_tool_event_from_result(call_id, name, args, result, round_index):
         "round": round_index + 1,
     }
 
-async def _stream_chat_completion(client, url, headers, body, on_event=None):
+async def _stream_chat_completion(client, url, headers, body, on_event=None, stream_answer=False):
     """流式请求 /chat/completions，边收边把思考内容推给前端。
 
     返回与整包响应等价的字段，调用方不用关心是流式还是回退成整包：
@@ -17570,7 +17570,10 @@ async def _stream_chat_completion(client, url, headers, body, on_event=None):
                     for item in delta["tool_calls"]:
                         absorb_tool_call(item if isinstance(item, dict) else {})
                 if delta.get("content"):
-                    content_parts.append(str(delta["content"]))
+                    piece_text = str(delta["content"])
+                    content_parts.append(piece_text)
+                    if stream_answer:
+                        _emit(on_event, {"type": "answer", "text": piece_text})
                 piece = delta.get("reasoning_content") or delta.get("reasoning") or ""
                 if piece:
                     # 每个 delta 直接推：这就是「逐字跳动」的来源。
@@ -17765,31 +17768,57 @@ async def build_chat_text_reply(payload, conversation, user_id=None, on_event=No
         msg = upstream_message_from_record(item)
         if msg:
             upstream_messages.append(msg)
-    try:
-        async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
-            req_body = apply_reasoning_effort(
-                {"model": model, "messages": upstream_messages},
-                getattr(payload, "reasoning_effort", ""),
-            )
-            if is_apimart:
-                req_body["stream"] = False
-            response = await client.post(f"{chat_base}/chat/completions", headers=chat_hdrs, json=req_body)
-            response.raise_for_status()
-            raw = response.json()
-    except httpx.HTTPStatusError as exc:
-        body = exc.response.text or ""
-        friendly = friendly_chat_error_detail(body, model, provider_cfg)
-        raise HTTPException(status_code=exc.response.status_code, detail=friendly or f"上游接口错误：{body}") from exc
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=friendly_upstream_http_error(exc)) from exc
-    raw_data = unwrap_apimart_response(raw) if isinstance(raw, dict) else raw
+    # 🚨 没开本机工具时也要流式：否则思考内容整段憋到最后一次性冒出来（用户看到的「卡住没反应」）。
+    use_stream = not is_apimart
+    raw = None
+    text = ""
+    usage = None
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
+                req_body = apply_reasoning_effort(
+                    {"model": model, "messages": upstream_messages},
+                    getattr(payload, "reasoning_effort", ""),
+                )
+                if use_stream:
+                    req_body["stream"] = True
+                    req_body["stream_options"] = {"include_usage": True}
+                    part = await _stream_chat_completion(
+                        client, f"{chat_base}/chat/completions", chat_hdrs, req_body, on_event, stream_answer=True
+                    )
+                    raw = part.get("raw")
+                    text = str(part.get("content") or "").strip()
+                    usage = part.get("usage")
+                else:
+                    response = await client.post(f"{chat_base}/chat/completions", headers=chat_hdrs, json=req_body)
+                    response.raise_for_status()
+                    raw = response.json()
+                    raw_data = unwrap_apimart_response(raw) if isinstance(raw, dict) else raw
+                    text = text_from_chat_response(raw).strip()
+                    usage = raw_data.get("usage") if isinstance(raw_data, dict) else None
+            break
+        except httpx.HTTPStatusError as exc:
+            try:
+                body = exc.response.text or ""
+            except Exception:
+                body = ""
+            body = body or str(exc)
+            if use_stream and (_stream_unsupported(body) or exc.response.status_code in (400, 422)):
+                print("[agent-stream] 上游不支持流式，回退为整包响应")
+                use_stream = False
+                continue
+            friendly = friendly_chat_error_detail(body, model, provider_cfg)
+            raise HTTPException(status_code=exc.response.status_code, detail=friendly or f"上游接口错误：{body}") from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=friendly_upstream_http_error(exc)) from exc
     return {
         "id": uuid.uuid4().hex,
         "role": "assistant",
-        "content": text_from_chat_response(raw).strip() or "接口返回了空回复。",
+        "content": text or "接口返回了空回复。",
         "created_at": now_ms(),
         "model": model,
-        "raw_usage": raw_data.get("usage") if isinstance(raw_data, dict) else None,
+        "raw_usage": usage,
+        "raw": raw,
     }
 
 # --- 路由接口 ---

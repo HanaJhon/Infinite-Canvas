@@ -127,6 +127,9 @@
         .xv-stop:hover { color:var(--text); border-color:var(--strong); background:var(--soft); }
         .xv-stop svg { width:10px; height:10px; }
         .xv-progress-meta { font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; }
+        /* 正文流式：先按纯文本逐段长出来，收完 done 再交给 Markdown 渲染（每段都跑一遍渲染太贵） */
+        .xv-stream-answer { margin-top:10px; font-size:13.5px; line-height:1.7; white-space:pre-wrap; word-break:break-word; }
+        .xv-stream-answer:empty { display:none; }
         .xv-progress-steps { display:flex; flex-wrap:wrap; gap:6px; margin-top:1px; }
         .xv-progress-step { display:inline-flex; align-items:center; height:22px; padding:0 9px; border-radius:999px; background:var(--soft); color:var(--muted); font-size:11px; }
         .xv-progress-step.active { background:var(--strong); color:var(--strong-text); }
@@ -1029,6 +1032,14 @@
         node.textContent = text;
         return true;
     }
+    function paintAnswer(){
+        const node = $('xvStreamAnswer');
+        if(!node) return false;
+        node.textContent = state.run.answer || '';
+        const thread = $('xvThread');
+        thread.scrollTop = thread.scrollHeight;
+        return true;
+    }
     function pushTrace(ev){
         if(!state.run) return;
         const list = state.run.trace || (state.run.trace = []);
@@ -1045,6 +1056,11 @@
                 item.ok = ev.ok !== false;
                 item.summary = ev.summary || (item.ok ? '完成' : '失败');
             }
+        } else if(ev.type === 'answer'){
+            // 正文增量：同样只改一个节点，不走整屏 renderThread
+            state.run.answer = (state.run.answer || '') + (ev.text || '');
+            if(state.run.label !== '模型正在回复…'){ state.run.label = '模型正在回复…'; renderThread(); }
+            if(paintAnswer()) return;
         } else if(ev.type === 'thinking'){
             state.run.label = '模型思考中…';
             const last = list[list.length - 1];
@@ -1105,6 +1121,7 @@
                     <div class="xv-progress-row"><span class="xv-spin"></span><span id="xvProgressLabel">${esc(run.label || '准备中…')}</span>
                         <button class="xv-stop" type="button" data-xv-stop title="停止这次任务"><i data-lucide="square"></i>停止</button></div>
                     <div class="xv-progress-meta" id="xvProgressMeta">${esc(progressMeta(run))}</div>
+                    <div class="xv-stream-answer" id="xvStreamAnswer">${esc(run.answer || '')}</div>
                     ${steps ? `<div class="xv-progress-steps">${steps}</div>` : ''}
                 </div></div>
             </div>`;

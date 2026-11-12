@@ -87,6 +87,20 @@ class StreamThinkingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0]["function"]["name"], "web_search")
         self.assertEqual(main.agent_parse_tool_args(calls[0]["function"]["arguments"]), {"query": "雪场"})
 
+    async def test_answer_text_streams_when_asked(self):
+        lines = _sse(
+            '{"choices":[{"delta":{"content":"雪山"}}]}',
+            '{"choices":[{"delta":{"content":"推荐"}}]}',
+            "data: [DONE]",
+        )
+        events = []
+        result = await main._stream_chat_completion(
+            _Client(_Resp(lines)), "http://x", {}, {}, events.append, stream_answer=True
+        )
+        answers = [e["text"] for e in events if e.get("type") == "answer"]
+        self.assertEqual(answers, ["雪山", "推荐"])
+        self.assertEqual("".join(answers), result["content"])
+
     async def test_upstream_ignoring_stream_still_parses(self):
         body = '{"choices":[{"message":{"content":"整包回复","reasoning_content":"整包思考"}}],"usage":{"total_tokens":9}}'
         events = []
