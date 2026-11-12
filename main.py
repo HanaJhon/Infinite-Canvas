@@ -4602,6 +4602,8 @@ class CanvasLLMRequest(BaseModel):
 
 class ConversationCreateRequest(BaseModel):
     title: str = "新对话"
+class ConversationTitleUpdate(BaseModel):
+    title: str = ""
 class CanvasCreateRequest(BaseModel):
     title: str = "未命名画布"
     icon: str = "🧩"
@@ -23483,6 +23485,16 @@ async def create_conversation(payload: ConversationCreateRequest, request: Reque
 async def get_conversation(conversation_id: str, request: Request, x_user_id: str = Header(default="")):
     user_id = safe_user_id(x_user_id, request)
     return {"conversation": load_conversation(user_id, conversation_id)}
+
+@app.post("/api/conversations/{conversation_id}/title")
+async def rename_conversation(conversation_id: str, payload: ConversationTitleUpdate, request: Request, x_user_id: str = Header(default="")):
+    user_id = safe_user_id(x_user_id, request)
+    conversation = load_conversation(user_id, conversation_id)
+    title = re.sub(r"\s+", " ", (payload.title or "")).strip()[:80] or "新对话"
+    conversation["title"] = title
+    conversation["updated_at"] = now_ms()
+    save_conversation(user_id, conversation)
+    return {"ok": True, "title": title}
 
 @app.delete("/api/conversations/{conversation_id}")
 async def delete_conversation(conversation_id: str, request: Request, x_user_id: str = Header(default="")):

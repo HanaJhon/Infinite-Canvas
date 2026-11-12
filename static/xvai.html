@@ -181,10 +181,14 @@
         .xv-hist-item:hover { background:var(--soft); }
         .xv-hist-item.active { background:var(--soft); border-color:var(--line); }
         .xv-hist-main { flex:1 1 auto; min-width:0; text-align:left; background:transparent; border:none; color:inherit; font:inherit; border-radius:12px; padding:9px 11px; cursor:pointer; display:flex; flex-direction:column; gap:3px; }
-        .xv-hist-del { flex:0 0 auto; margin-right:6px; border:none; background:transparent; color:var(--muted); cursor:pointer; padding:5px; border-radius:8px; display:inline-flex; opacity:0; transition:opacity .15s ease, color .15s ease, background .15s ease; }
-        .xv-hist-item:hover .xv-hist-del, .xv-hist-del:focus-visible { opacity:1; }
-        .xv-hist-del:hover { color:#ef4444; background:var(--bg); }
-        @media (hover:none) { .xv-hist-del { opacity:1; } }
+        .xv-hist-act { flex:0 0 auto; border:none; background:transparent; color:var(--muted); cursor:pointer; padding:5px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; opacity:0; transition:opacity .15s ease, color .15s ease, background .15s ease; }
+        .xv-hist-ren { margin-right:2px; }
+        .xv-hist-del { margin-right:6px; }
+        .xv-hist-act svg { width:16px; height:16px; }
+        .xv-hist-item:hover .xv-hist-act, .xv-hist-act:focus-visible { opacity:1; }
+        .xv-hist-act:hover { color:var(--text); background:var(--bg); }
+        .xv-hist-del:hover { color:#ef4444; }
+        @media (hover:none) { .xv-hist-act { opacity:1; } }
         .xv-hist-title { font-size:12.5px; font-weight:700; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .xv-hist-sub { font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .xv-hist-empty { padding:22px 14px; font-size:12px; color:var(--muted); text-align:center; }
@@ -1679,7 +1683,8 @@
                     <span class="xv-hist-title">${esc(c.title || '新对话')}</span>
                     <span class="xv-hist-sub">${esc(fmtHistTime(c.updated_at))}${sub ? ' · ' + sub : ''}</span>
                 </button>
-                <button type="button" class="xv-hist-del" data-del-conv="${esc(c.id)}" title="删除这段对话"><i data-lucide="trash-2"></i></button>
+                <button type="button" class="xv-hist-act xv-hist-ren" data-ren-conv="${esc(c.id)}" title="重命名"><i data-lucide="pencil-line"></i></button>
+                <button type="button" class="xv-hist-act xv-hist-del" data-del-conv="${esc(c.id)}" title="删除这段对话"><i data-lucide="trash-2"></i></button>
             </div>`;
         }).join('');
         icons();
@@ -1697,7 +1702,28 @@
         if(state.convId === id) resetChat();
         renderHistory();
     }
+    async function renameConversation(id){
+        if(!id) return;
+        const item = histItems.find(c => c.id === id) || {};
+        const input = window.prompt('重命名这段对话', item.title || '新对话');
+        if(input === null) return;
+        const title = input.trim();
+        if(!title) return;
+        try {
+            const res = await fetch('/api/conversations/' + encodeURIComponent(id) + '/title', {
+                method:'POST', cache:'no-store',
+                headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ title })
+            });
+            if(!res.ok) throw new Error(`重命名失败（${res.status}）`);
+            const data = await res.json();
+            item.title = data.title || title;
+            renderHistory();
+        } catch(err){ window.alert(err.message || '重命名失败'); }
+    }
     document.getElementById('xvHistList').addEventListener('click', e => {
+        const ren = e.target.closest('[data-ren-conv]');
+        if(ren){ e.stopPropagation(); renameConversation(ren.getAttribute('data-ren-conv')); return; }
         const del = e.target.closest('[data-del-conv]');
         if(del){ e.stopPropagation(); deleteConversation(del.getAttribute('data-del-conv')); return; }
         const btn = e.target.closest('[data-conv]');
