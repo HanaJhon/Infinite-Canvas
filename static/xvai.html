@@ -20,40 +20,55 @@
     <script src="/static/vendor/js/lucide.js?v=1.3.7.1767196800"></script>
     <script src="/static/js/theme.js?v=1.3.7.1793681298"></script>
     <script src="/static/js/i18n.js?v=1.3.7.1794291244"></script>
-    <link rel="stylesheet" href="/static/css/xvai-agent.css?v=1.3.7.1794379737">
+    <link rel="stylesheet" href="/static/css/xvai-agent.css?v=1.3.7.1794384043">
     <style>
         @import url('/static/vendor/css/fonts.css?v=1.3.7.1767196800');
+        /* 配色照 wuu（github.com/blueberrycongee/wuu）：整套中性灰阶，强调色就是墨色本身，
+           没有彩色 accent；圆角 12/16/20、发丝级边框、极淡的多层阴影。 */
         :root {
-            --accent:#111827; --bg:#f9fafb; --card:#fff; --line:#edf0f3; --muted:#94a3b8;
-            --easing:cubic-bezier(0.4,0,0.2,1);
+            --accent:#151515; --bg:#fcfcfd; --card:#ffffff; --line:#dddddd; --muted:#595959;
+            --soft:#f5f5f5; --panel:#ffffff; --text:#252525; --faint:#858585;
+            --strong:#151515; --strong-text:#ffffff;
+            --easing:cubic-bezier(0.32,0.72,0,1);
+            --shadow-soft:0 0.5px 1px rgba(0,0,0,.045), 0 1px 3px -0.5px rgba(0,0,0,.025);
+            --shadow-card:0 0.5px 1px rgba(0,0,0,.045), 0 2px 4px -1px rgba(0,0,0,.025), 0 4px 10px -3px rgba(0,0,0,.025);
+            --shadow-composer:0 1px 2px -0.5px rgba(0,0,0,.045), 0 3px 8px -2px rgba(0,0,0,.025), 0 6px 16px -4px rgba(0,0,0,.025);
         }
         html.studio-theme-dark {
-            --accent:#f1f5f9; --bg:#0b0f14; --card:#141a21; --line:#232b35; --muted:#7d8b9c;
+            --accent:#e0e1e3; --bg:#191a1c; --card:#222326; --line:#414247; --muted:#adaeb2;
+            --soft:#2a2b2e; --panel:#222326; --text:#cbccd0; --faint:#6e6f74;
+            --strong:#e0e1e3; --strong-text:#191a1c;
+            --shadow-soft:0 0.5px 1px rgba(0,0,0,.35), 0 1px 3px -0.5px rgba(0,0,0,.25);
+            --shadow-card:0 0.5px 1px rgba(0,0,0,.35), 0 2px 4px -1px rgba(0,0,0,.25), 0 4px 10px -3px rgba(0,0,0,.2);
+            --shadow-composer:0 1px 2px -0.5px rgba(0,0,0,.35), 0 3px 8px -2px rgba(0,0,0,.25), 0 6px 16px -4px rgba(0,0,0,.2);
         }
         /* 页头/输入区固定在上下，只有聊天区滚动 */
         html, body { height:100%; margin:0; overflow:hidden; overscroll-behavior:none; }
-        body { background:var(--bg); color:var(--accent); font-family:'Inter',-apple-system,sans-serif; -webkit-font-smoothing:antialiased; }
+        body { background:var(--bg); color:var(--text); font-size:14px;
+            font-family:'Inter',ui-sans-serif,system-ui,-apple-system,'PingFang SC','Hiragino Sans GB','Microsoft YaHei','Noto Sans SC',sans-serif;
+            -webkit-font-smoothing:antialiased; letter-spacing:normal; }
         .xv-shell { display:flex; height:100%; overflow:hidden; }
         .xv-main { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; }
-        .xv-head { flex:0 0 auto; display:flex; align-items:center; gap:12px; padding:14px 22px; border-bottom:1px solid var(--line); background:var(--card); }
+        .xv-head { flex:0 0 auto; display:flex; align-items:center; gap:12px; padding:12px 20px; border-bottom:1px solid var(--line); background:var(--bg); }
         /* 标题与副标题并成一行（老板 2026-11-11：图1 那两块别叠两行） */
         .xv-brand { display:flex; align-items:baseline; gap:8px; min-width:0; }
-        .xv-title { font-size:15px; font-weight:800; letter-spacing:-.01em; flex:0 0 auto; }
-        .xv-sub { font-size:10px; font-weight:700; color:var(--muted); letter-spacing:.04em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .xv-head-right { margin-left:auto; display:flex; align-items:center; gap:8px; }
-        .xv-btn { height:32px; display:inline-flex; align-items:center; gap:6px; padding:0 12px; border-radius:12px; border:1px solid var(--line); background:var(--card); color:var(--accent); font-size:11px; font-weight:700; cursor:pointer; transition:all .2s var(--easing); white-space:nowrap; }
-        .xv-btn:hover { border-color:var(--accent); }
-        .xv-balance { height:28px; display:inline-flex; align-items:center; gap:5px; padding:0 10px; border-radius:999px; border:1px solid var(--line); background:var(--card); color:var(--accent); font-size:11px; font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; }
-        .xv-cost { margin-top:7px; font-size:10.5px; font-weight:700; color:var(--muted); letter-spacing:.01em; }
-        .xv-send-credit { font-size:10.5px; font-weight:800; color:var(--muted); letter-spacing:.01em; margin-right:8px; font-variant-numeric:tabular-nums; white-space:nowrap; }
-        .xv-badge { min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:var(--accent); color:var(--card); font-size:10px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; }
-        .xv-thread { flex:1 1 auto; min-height:0; overflow-y:auto; padding:26px 22px 10px; display:flex; flex-direction:column; gap:16px; }
-        .xv-msg { display:flex; gap:10px; max-width:860px; width:100%; margin:0 auto; }
+        .xv-title { font-size:14px; font-weight:600; letter-spacing:-.01em; flex:0 0 auto; }
+        .xv-sub { font-size:12px; font-weight:400; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .xv-head-right { margin-left:auto; display:flex; align-items:center; gap:6px; }
+        .xv-btn { height:32px; display:inline-flex; align-items:center; gap:6px; padding:0 11px; border-radius:10px; border:none; background:var(--soft); color:var(--text); font-size:12px; font-weight:500; cursor:pointer; transition:background .16s var(--easing), color .16s var(--easing); white-space:nowrap; }
+        .xv-btn:hover { background:var(--line); color:var(--accent); }
+        .xv-balance { height:28px; display:inline-flex; align-items:center; gap:5px; padding:0 10px; border-radius:999px; border:none; background:var(--soft); color:var(--text); font-size:12px; font-weight:500; font-variant-numeric:tabular-nums; white-space:nowrap; }
+        .xv-cost { margin-top:7px; font-size:11px; font-weight:400; color:var(--muted); }
+        .xv-send-credit { font-size:11px; font-weight:500; color:var(--muted); margin-right:8px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+        .xv-badge { min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:var(--strong); color:var(--strong-text); font-size:10px; font-weight:600; display:inline-flex; align-items:center; justify-content:center; }
+        .xv-thread { flex:1 1 auto; min-height:0; overflow-y:auto; padding:28px 24px 12px; display:flex; flex-direction:column; gap:22px; }
+        .xv-msg { display:flex; gap:12px; max-width:820px; width:100%; margin:0 auto; }
         .xv-msg.user { flex-direction:row-reverse; }
-        .xv-avatar { width:26px; height:26px; border-radius:9px; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; background:#eef2ff; color:#4338ca; }
-        .xv-msg.user .xv-avatar { background:var(--accent); color:var(--card); }
-        .xv-bubble { padding:12px 15px; border-radius:16px; background:var(--card); border:1px solid var(--line); font-size:13px; line-height:1.65; white-space:pre-wrap; word-break:break-word; }
-        .xv-msg.user .xv-bubble { background:var(--accent); color:var(--card); border-color:var(--accent); }
+        .xv-avatar { width:26px; height:26px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; background:var(--soft); color:var(--muted); border:1px solid var(--line); }
+        .xv-msg.user .xv-avatar { background:var(--strong); color:var(--strong-text); border-color:var(--strong); }
+        /* 助手回复不套气泡（照 wuu 的阅读流），用户消息是浅灰卡片 */
+        .xv-bubble { padding:2px 0; border-radius:0; background:transparent; border:none; font-size:14px; line-height:1.65; white-space:pre-wrap; word-break:break-word; min-width:0; }
+        .xv-msg.user .xv-bubble { padding:10px 14px; border-radius:20px; background:var(--soft); color:var(--text); border:none; }
         /* 附件胶囊直接嵌在输入框里（照画布 Agent 的 .agent-inline-chip，老板 2026-11-11 图2） */
         .xv-agent .agent-input-rich .xv-chip { display:inline-flex; align-items:center; gap:3px; height:20px; max-width:180px; padding:0 3px 0 7px;
             margin:0 3px; border-radius:999px; border:1px solid var(--line); background:var(--soft); font-size:10.5px; font-weight:650; line-height:1;
@@ -91,7 +106,7 @@
         .xv-mini { border:none; background:transparent; color:var(--muted); cursor:pointer; padding:2px; border-radius:6px; display:inline-flex; }
         .xv-mini svg { width:16px; height:16px; }
         .xv-mini:hover { color:var(--accent); background:var(--bg); }
-        .xv-img-card { position:relative; margin-top:10px; border:1px solid var(--line); border-radius:16px; padding:10px; background:var(--bg); max-width:300px; }
+        .xv-img-card { position:relative; margin-top:10px; border:1px solid var(--line); border-radius:12px; padding:8px; background:var(--card); box-shadow:var(--shadow-card); max-width:300px; }
         .xv-img-card img { width:100%; border-radius:12px; display:block; cursor:zoom-in; background:#0b0f14; }
         /* 模型名与操作按钮只在悬浮图片时出现，静态隐藏 */
         .xv-img-model { position:absolute; left:14px; top:14px; z-index:2; padding:3px 9px; border-radius:999px;
@@ -109,28 +124,28 @@
         .xv-ref-edit-frame iframe { width:100%; height:100%; border:0; display:block; }
         html.studio-ui-scaled body.xv-editor-open { transform:none !important; width:100% !important; min-height:100vh !important; height:100vh !important; overflow:hidden !important; }
         .xv-empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; color:var(--muted); font-size:12px; font-weight:600; }
-        .xv-composer { flex:0 0 auto; border-top:1px solid var(--line); background:var(--card); padding:12px 22px 14px; }
+        .xv-composer { flex:0 0 auto; border-top:none; background:transparent; padding:8px 24px 18px; }
         .xv-composer-inner { max-width:880px; margin:0 auto; }
         .xv-hint { max-width:880px; margin:6px auto 0; font-size:10px; color:var(--muted); text-align:center; font-weight:600; min-height:14px; }
         .xv-spin { width:10px; height:10px; border:2px solid var(--muted); border-top-color:transparent; border-radius:50%; animation:xvspin .8s linear infinite; display:inline-block; vertical-align:-1px; margin-right:5px; }
         @keyframes xvspin { to { transform:rotate(360deg); } }
-        .xv-drawer { width:0; overflow:hidden; border-left:1px solid var(--line); background:var(--card); transition:width .28s var(--easing); display:flex; flex-direction:column; }
+        .xv-drawer { width:0; overflow:hidden; border-left:1px solid var(--line); background:var(--bg); transition:width .28s var(--easing); display:flex; flex-direction:column; }
         .xv-drawer.open { width:300px; }
         .xv-drawer-head { flex:0 0 auto; display:flex; align-items:center; gap:8px; padding:16px; border-bottom:1px solid var(--line); font-size:12px; font-weight:800; white-space:nowrap; }
         .xv-drawer-head .xv-close { margin-left:auto; cursor:pointer; color:var(--muted); background:none; border:none; padding:4px; }
         .xv-out-list { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
-        .xv-out { border:1px solid var(--line); border-radius:14px; padding:10px; display:flex; gap:10px; align-items:center; background:var(--bg); }
+        .xv-out { border:1px solid var(--line); border-radius:12px; padding:10px; display:flex; gap:10px; align-items:center; background:var(--card); }
         .xv-out-thumb { width:44px; height:44px; border-radius:10px; object-fit:cover; background:#e2e8f0; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
         .xv-out-meta { min-width:0; flex:1; }
         .xv-out-name { font-size:11px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .xv-out-kind { font-size:9px; font-weight:700; color:var(--muted); letter-spacing:.04em; text-transform:uppercase; }
         .xv-out-actions { display:flex; gap:4px; }
-        .xv-icon-btn { width:26px; height:26px; border-radius:9px; border:1px solid var(--line); background:var(--card); color:var(--accent); display:flex; align-items:center; justify-content:center; cursor:pointer; }
-        .xv-icon-btn:hover { border-color:var(--accent); }
+        .xv-icon-btn { width:26px; height:26px; border-radius:10px; border:none; background:var(--soft); color:var(--muted); display:flex; align-items:center; justify-content:center; cursor:pointer; }
+        .xv-icon-btn:hover { background:var(--line); color:var(--accent); }
         .xv-out-empty { color:var(--muted); font-size:11px; text-align:center; padding:26px 10px; line-height:1.7; }
         .xv-modal { position:fixed; inset:0; background:rgba(8,12,18,.62); display:none; align-items:center; justify-content:center; z-index:80; padding:28px; }
         .xv-modal.open { display:flex; }
-        .xv-modal-card { background:var(--card); color:var(--accent); border-radius:18px; max-width:min(920px,92vw); max-height:86vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 30px 80px rgba(0,0,0,.35); }
+        .xv-modal-card { background:var(--card); color:var(--text); border-radius:20px; max-width:min(920px,92vw); max-height:86vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 30px 80px rgba(0,0,0,.35); }
         .xv-modal-head { display:flex; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid var(--line); font-size:12px; font-weight:800; }
         .xv-modal-body { overflow:auto; padding:14px; display:flex; justify-content:center; }
         .xv-modal-body img { max-width:100%; max-height:64vh; border-radius:12px; display:block; }
