@@ -123,9 +123,9 @@
         .xv-progress { display:flex; flex-direction:column; gap:7px; min-width:250px; }
         .xv-bubble-pending .xv-progress { min-width:min(420px,72vw); max-width:620px; }
         .xv-progress-row { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:500; color:var(--text); }
-        .xv-stop { margin-left:auto; height:24px; padding:0 10px; display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line); border-radius:999px; background:var(--card); color:var(--muted); font-size:11px; font-weight:600; cursor:pointer; }
-        .xv-stop:hover { color:var(--text); border-color:var(--strong); background:var(--soft); }
-        .xv-stop svg { width:10px; height:10px; }
+        .agent-send-btn.is-stop { background:var(--strong); color:var(--strong-text); }
+        .agent-send-btn.is-stop:hover { opacity:.88; }
+        .agent-send-btn.is-stop svg { width:12px; height:12px; fill:currentColor; }
         .xv-progress-meta { font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; }
         /* 正文流式：先按纯文本逐段长出来，收完 done 再交给 Markdown 渲染（每段都跑一遍渲染太贵） */
         .xv-stream-answer { margin-top:10px; font-size:13.5px; line-height:1.7; white-space:pre-wrap; word-break:break-word; }
@@ -1127,8 +1127,7 @@
                 <div class="xv-avatar">AI</div>
                 <div class="xv-bubble"><div class="xv-progress">
                     ${traceHtml(run.trace)}
-                    <div class="xv-progress-row"><span class="xv-spin"></span><span id="xvProgressLabel">${esc(run.label || '准备中…')}</span>
-                        <button class="xv-stop" type="button" data-xv-stop title="停止这次任务"><i data-lucide="square"></i>停止</button></div>
+                    <div class="xv-progress-row"><span class="xv-spin"></span><span id="xvProgressLabel">${esc(run.label || '准备中…')}</span></div>
                     <div class="xv-progress-meta" id="xvProgressMeta">${esc(progressMeta(run))}</div>
                     <div class="xv-stream-answer" id="xvStreamAnswer">${esc(run.answer || '')}</div>
                     ${steps ? `<div class="xv-progress-steps">${steps}</div>` : ''}
@@ -1407,6 +1406,17 @@
         renderThread();
     }
 
+    // 运行中把发送键变成停止键（老板 m08350：停止要落在发送按钮处）
+    function paintSendBtn(){
+        const btn = $('agentSendBtn');
+        if(!btn) return;
+        const running = !!state.pending;
+        btn.classList.toggle('is-stop', running);
+        btn.disabled = false;
+        btn.title = running ? '停止这次任务' : '发送';
+        btn.innerHTML = running ? '<i data-lucide="square"></i>' : '<i data-lucide="send"></i>';
+        icons();
+    }
     function stopRun(){
         const run = state.run || {};
         run.stopped = true;
@@ -1419,8 +1429,7 @@
         state.messages.push({ role:'assistant', content:'已停止这次任务。' });
         renderThread();
         setHint('');
-        const btn = $('agentSendBtn');
-        if(btn) btn.disabled = false;
+        paintSendBtn();
     }
 
     async function send(message, opts){
@@ -1436,7 +1445,6 @@
         }
         const refs = inputRefs();
         state.sending = true;
-        $('agentSendBtn').disabled = true;
         if(message == null) clearInput();
         state.rewindId = '';
         state.messages.push({ role:'user', content:text, attachments: refs });
@@ -1445,6 +1453,7 @@
             label: '已发送 · 等待模型', steps: [], trace: [], started: Date.now(), timer: 0,
             inputTokens: estimateInputTokens(text), estimate: 0
         };
+        paintSendBtn();
         renderThread();
         startRunTimer();
         setHint('');
@@ -1532,12 +1541,15 @@
             stopRunTimer();
             state.pending = false;
             state.sending = false;
-            $('agentSendBtn').disabled = false;
+            paintSendBtn();
             renderThread();
             if(document.getElementById('xvHist').classList.contains('open')) loadHistory();
         }
     }
-    $('agentSendBtn').addEventListener('click', () => send());
+    $('agentSendBtn').addEventListener('click', () => {
+        if(state.pending) stopRun();
+        else send();
+    });
 
     // 浏览器控制授权：开关在后端（data/browser_control.json），刷新/换标签页都保持。
     // 关闭时后端会把受控窗口一起关掉，不留后台进程。
@@ -1696,7 +1708,6 @@
         const editMsg = ev.target.closest('[data-xv-edit-msg]');
         if(editMsg){ beginEditMessage(Number(editMsg.dataset.xvEditMsg)); return; }
         // 暂停 = 掐断这条流式请求；后端随连接断开结束任务，不会继续扣费
-        if(ev.target.closest('[data-xv-stop]')){ stopRun(); return; }
         const copy = ev.target.closest('[data-xv-copy]');
         if(copy){
             const msg = state.messages[Number(copy.dataset.xvCopy)];
