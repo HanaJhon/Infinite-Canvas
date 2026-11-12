@@ -206,6 +206,14 @@
         .xv-doc pre { margin:0; font-size:12px; line-height:1.6; white-space:pre-wrap; word-break:break-word; }
         .xv-doc-note { color:var(--muted); font-size:11px; }
         .xv-pdf { width:min(760px,86vw); height:66vh; border:0; border-radius:12px; }
+        /* 产物直接贴在回复里：不用再翻右侧「输出」抽屉 */
+        .xv-files { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+        .xv-fileitem { display:flex; align-items:center; gap:10px; padding:9px 12px; border:1px solid var(--line); border-radius:12px; background:var(--card); }
+        .xv-fileitem > svg { width:18px; height:18px; color:var(--muted); flex:0 0 auto; }
+        .xv-fileitem-name { flex:1 1 auto; min-width:0; font-size:12.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .xv-fileitem-acts { display:flex; gap:6px; flex:0 0 auto; }
+        .xv-fileitem-btn { height:24px; padding:0 10px; display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:999px; background:transparent; color:var(--muted); font-size:11px; font-weight:600; cursor:pointer; text-decoration:none; }
+        .xv-fileitem-btn:hover { color:var(--text); border-color:var(--strong); background:var(--soft); }
         .xv-filecard { display:flex; flex-direction:column; align-items:center; gap:10px; padding:26px 18px; text-align:center; }
         .xv-filecard .xv-filecard-name { font-size:13px; font-weight:700; word-break:break-all; }
         .xv-filecard .xv-filecard-tip { font-size:11px; color:var(--muted); line-height:1.7; }
@@ -1103,7 +1111,8 @@
                     `<img src="${esc(a.url)}" alt="${esc(a.name || '')}" loading="lazy" data-xv-zoom="${esc(a.url)}">`).join('')}</div>`
                 : '';
             const body = mine ? esc(msg.content || '') : `<div class="xv-md">${renderMarkdown(msg.content || '')}</div>`;
-            const bubble = `<div class="xv-bubble">${mine ? '' : traceHtml(toolTraceItems(msg))}${body}${atts}${cards}${creditsChip(msg)}</div>`;
+            const files = mine ? '' : fileListHtml(messageFiles(msg));
+            const bubble = `<div class="xv-bubble">${mine ? '' : traceHtml(toolTraceItems(msg))}${body}${atts}${cards}${files}${creditsChip(msg)}</div>`;
             return `<div class="xv-msg ${mine ? 'user' : 'assistant'}">
                 <div class="xv-avatar">${mine ? '我' : 'AI'}</div>
                 ${bubble}
@@ -1134,6 +1143,44 @@
     const PREVIEW_TEXT_EXTS = new Set(['txt','md','markdown','json','csv','tsv','log','py','js','ts','css','xml','yaml','yml','ini','bat','sh']);
     const PREVIEW_OFFICE_EXTS = new Set(['xlsx','xlsm','xltx','docx','pptx']);
     function fileExt(url){ const m = String(url || '').split('?')[0].match(/\.([a-z0-9]+)$/i); return m ? m[1].toLowerCase() : ''; }
+    // 能直接在对话里给卡片、不吵闹的文件类型（.py/.json 这类中间产物不上台面）
+    const DOC_EXT = ['xlsx','xlsm','xls','csv','docx','doc','pptx','ppt','pdf','txt','md','zip','rar','7z'];
+    function isDoc(url){
+        const name = fileName(url).toLowerCase();
+        const dot = name.lastIndexOf('.');
+        return dot > 0 && DOC_EXT.indexOf(name.slice(dot + 1)) >= 0;
+    }
+    function messageFiles(msg){
+        const got = [];
+        const seen = {};
+        const push = (url) => {
+            const clean = String(url || '').replace(/[.,，。]+$/, '');
+            if(!clean || !isDoc(clean) || seen[clean]) return;
+            seen[clean] = true;
+            got.push(clean);
+        };
+        let m;
+        OUT_RE.lastIndex = 0;
+        while((m = OUT_RE.exec(String(msg.content || '')))) push(m[1]);
+        (msg.tool_events || []).forEach(ev => {
+            const args = (ev && ev.args) || {};
+            ['path', 'file_path', 'filepath', 'url'].forEach(k => {
+                if(typeof args[k] === 'string') push(args[k].trim());
+            });
+        });
+        return got;
+    }
+    function fileListHtml(urls){
+        if(!urls || !urls.length) return '';
+        const rows = urls.map(u => `<div class="xv-fileitem">
+            <i data-lucide="file-text"></i>
+            <div class="xv-fileitem-name" title="${esc(u)}">${esc(fileName(u))}</div>
+            <div class="xv-fileitem-acts">
+                <button class="xv-fileitem-btn" type="button" data-xv-file="${esc(u)}">预览</button>
+                <a class="xv-fileitem-btn" href="${esc(u)}" download="${esc(fileName(u))}">下载</a>
+            </div></div>`).join('');
+        return `<div class="xv-files">${rows}</div>`;
+    }
     function fileCard(url, tip){
         return `<div class="xv-filecard">
             <i data-lucide="file-text" style="width:34px;height:34px;color:var(--muted)"></i>
@@ -1626,6 +1673,12 @@
         if(item) openPreview(item.url, item.name);
     });
     $('xvThread').addEventListener('click', ev => {
+        const fileBtn = ev.target.closest('[data-xv-file]');
+        if(fileBtn){
+            const url = fileBtn.getAttribute('data-xv-file') || '';
+            if(url) openPreview(url, fileName(url));
+            return;
+        }
         const codeCopy = ev.target.closest('[data-xv-code-copy]');
         if(codeCopy){
             const pre = codeCopy.closest('.xv-code')?.querySelector('pre');
