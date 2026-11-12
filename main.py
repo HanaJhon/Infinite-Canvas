@@ -15,6 +15,7 @@ import subprocess
 import time
 import traceback
 import shutil
+import ssl
 import glob
 import asyncio
 import logging
@@ -7038,14 +7039,37 @@ def _filter_relevant(items, tokens):
     return kept
 
 
+# 🚨 不走系统代理：Windows 上 urllib 会读注册表里的 ProxyServer，本机代理把一次
+# 必应请求拖到 30~48s，必然吃满超时（实测直连 1.0s）。代理可能在正常网络里是必要的
+# 手段，所以直连失败再退回系统代理试一次。
+_WEB_DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+# 少数站点（含一些 CDN / 镜像）证书链在本机校验不过，读正文时降级到不校验再试一次：
+# 只是抓公开网页的正文，不传任何凭据。排名：直连 → 直连(不校验证书) → 系统代理。
+_WEB_INSECURE_CTX = ssl.create_default_context()
+_WEB_INSECURE_CTX.check_hostname = False
+_WEB_INSECURE_CTX.verify_mode = ssl.CERT_NONE
+_WEB_INSECURE_OPENER = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=_WEB_INSECURE_CTX)
+)
+
+
 def _web_get(url, timeout=AGENT_WEB_TIMEOUT, headers=None):
     """同步 GET（在线程里跑）。urllib 而非 httpx：这里只需最简单的 GET，且要能绕过全局代理。"""
     merged = dict(AGENT_WEB_HEADERS_BASE)
     if headers:
         merged.update(headers)
     req = urllib.request.Request(url, headers=merged)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+    last_exc = None
+    for opener in (_WEB_DIRECT_OPENER, _WEB_INSECURE_OPENER, None):
+        try:
+            if opener is None:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    return resp.read()
+            with opener.open(req, timeout=timeout) as resp:
+                return resp.read()
+        except Exception as exc:
+            last_exc = exc
+    raise last_exc
 
 
 def _search_one_backend(kind, templates, query):
@@ -7174,14 +7198,7 @@ def web_read_sync(url, max_chars=AGENT_WEB_READ_CHARS):
         max_chars = max(500, min(int(max_chars or AGENT_WEB_READ_CHARS), 20000))
     except (TypeError, ValueError):
         max_chars = AGENT_WEB_READ_CHARS
-    # 首选 r.jina.ai：直接给干净 markdown，省掉自己清洗正文
-    try:
-        text = _web_get("https://r.jina.ai/" + raw).decode("utf-8", "ignore")
-        if text.strip():
-            return {"ok": True, "summary": f"{len(text)} 字符", "output": text[:max_chars], "url": raw}
-    except Exception as exc:
-        print(f"[web_read] jina 失败，回落直连：{exc}")
-    # 兜底：直连 + 粗暴去标签
+    # 直连 + 粗暴去标签（r.jina.ai 现在要 API key，401 且常常卡到超时，不再尝试）
     try:
         page = _web_get(raw).decode("utf-8", "ignore")
         text = _html_unescape(re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", page))
@@ -9637,7 +9654,7 @@ COMPRESS_KEEP_RECENT = int(os.getenv("COMPRESS_KEEP_RECENT", "6"))
 #    真等到 1000K，请求早就被服务端 400 拒绝了。所以改成：
 #      阈值 = min(模型窗口 × 80%, 1000K)
 #    —— 小窗口模型及时压缩，大窗口模型（≥1M）才用到 1000K 这个上限。
-AUTO_COMPRESS_MAX_TOKENS = 1_000_000     # 上限兜底（老板要的 1000K）
+AUTO_COMPRESS_MAX_TOKENS = 256_000       # 上限兜底（老板要的 256K）
 AUTO_COMPRESS_RATIO = 0.8                # 用掉窗口 80% 就压，留出工具输出/系统提示的余量
 DEFAULT_CONTEXT_WINDOW = 128_000         # 认不出来时按保守值算（宁可早压，不要被 400）
 
@@ -17324,19 +17341,22 @@ def agent_tool_event_from_result(call_id, name, args, result, round_index):
         "round": round_index + 1,
     }
 
-async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, is_apimart, chat_base, chat_hdrs, model, tool_settings):
+async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, is_apimart, chat_base, chat_hdrs, model, tool_settings, user_id=None):
     """带本机工具（终端 / 文件）的聊天：跑一个 tool-calling 循环，直到模型给出最终文字回复。"""
     level = load_codex_permission()
     tools = agent_tool_schemas(level) + agent_always_on_tool_schemas()
+    # 🚨 开了工具的会话同样要自动压缩：否则历史上限只剩 MAX_HISTORY_MESSAGES 条，
+    # 而工具结果动辄上万字符，长会话必然撞窗口被 400。
+    window, _ = await maybe_auto_compress(conversation, payload, user_id)
     # 与画布 Agent 一致：按最近几条用户消息判断是否注入内置办公 Skill（文件产物任务才需要）
     _recent_user = "\n".join(
         str(item.get("content") or "")
-        for item in conversation["messages"][-6:]
+        for item in window[-6:]
         if isinstance(item, dict) and item.get("role") == "user"
     )
     _system = agent_profile_block() + chat_system_prompt(payload) + installed_skills_prompt_block(_recent_user) + agent_file_capability_block()
     upstream_messages = [{"role": "system", "content": _system + AGENT_TOOLS_SYSTEM_HINT + AGENT_WEB_SYSTEM_HINT + AGENT_VIDEO_SYSTEM_HINT}]
-    for item in conversation["messages"][-MAX_HISTORY_MESSAGES:]:
+    for item in window:
         msg = upstream_message_from_record(item)
         if msg:
             upstream_messages.append(msg)
@@ -17458,7 +17478,7 @@ async def build_chat_text_reply(payload, conversation, user_id=None):
     tool_settings = load_agent_tools_settings()
     if tool_settings.get("enabled"):
         return await build_chat_text_reply_with_tools(
-            payload, conversation, provider_cfg, is_apimart, chat_base, chat_hdrs, model, tool_settings
+            payload, conversation, provider_cfg, is_apimart, chat_base, chat_hdrs, model, tool_settings, user_id
         )
     window, _ = await maybe_auto_compress(conversation, payload, user_id)
     upstream_messages = [{"role": "system", "content": chat_agent_system_prompt(payload, conversation)}]

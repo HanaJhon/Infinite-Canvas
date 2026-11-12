@@ -59,6 +59,7 @@
         .xv-btn:hover { background:var(--line); color:var(--accent); }
         .xv-balance { height:28px; display:inline-flex; align-items:center; gap:5px; padding:0 10px; border-radius:999px; border:none; background:var(--soft); color:var(--text); font-size:12px; font-weight:500; font-variant-numeric:tabular-nums; white-space:nowrap; }
         .xv-cost { margin-top:7px; font-size:11px; font-weight:400; color:var(--muted); }
+        .xv-compact-note { align-self:center; margin:0 0 4px; padding:5px 12px; border-radius:999px; background:var(--soft); color:var(--muted); font-size:11px; }
         .xv-send-credit { font-size:11px; font-weight:500; color:var(--muted); margin-right:8px; font-variant-numeric:tabular-nums; white-space:nowrap; }
         .xv-badge { min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:var(--strong); color:var(--strong-text); font-size:10px; font-weight:600; display:inline-flex; align-items:center; justify-content:center; }
         .xv-thread { flex:1 1 auto; min-height:0; overflow-y:auto; padding:28px 24px 12px; display:flex; flex-direction:column; gap:22px; }
@@ -1256,6 +1257,7 @@
             state.messages = conversation.messages ? normalizeMessages(conversation.messages) : state.messages;
             renderThread();
             renderOutputs();
+            if(data.agent && data.agent.auto_compressed) notifyCompressed();
             if(data.credits) refreshBalance();
             setHint('');
         } catch(err) {
@@ -1276,6 +1278,17 @@
         }
     }
     $('agentSendBtn').addEventListener('click', () => send());
+
+    // 上下文到阈值后端会把较早的消息压成一条摘要（status 里带 auto_compressed）。
+    // 只加一条一次性提示，不写进对话记录 —— 刷新后以服务端摘要为准。
+    function notifyCompressed(){
+        const thread = $('xvThread');
+        if(!thread) return;
+        const note = document.createElement('div');
+        note.className = 'xv-compact-note';
+        note.textContent = '较早的对话已自动压缩为摘要，后续提问仍会带着要点';
+        thread.insertBefore(note, thread.firstChild);
+    }
 
     // 对话记录在后端（data/conversations/<user>/*.json），页面打开时按上次的 id 取回；
     // 换设备/清缓存就退化成"取最近一条有内容的对话"，保证刷新和重启都不丢。
