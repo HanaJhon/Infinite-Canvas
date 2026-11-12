@@ -926,6 +926,11 @@
                 return { src:q.get('src') || '', mode:q.get('mode') || 'outpaint' };
             } catch(e) { return null; }
         })();
+        // 小抽AI 只用 扩图/视角/画笔（遮罩局部重绘要整条 inpaint 链路，属于「在线生图」的活）；
+        // 桥接进来时把遮罩的入口全藏掉，免得点进去应用了也发不出去。
+        if(REF_EDITOR_BRIDGE){
+            document.querySelectorAll('button[title="遮罩"], #refEditModal [data-re-mode="mask"]').forEach(el => { el.style.display = 'none'; });
+        }
         function firstEmptySlot(){ return SLOTS.find(id => !refs[id]) || 1; }
         // 从 start 开始按格子顺序排列（循环），让多张图依次落进 Main / Aux A / Aux B
         function slotOrder(start){
@@ -1250,6 +1255,7 @@
 
         function openRefEditor(slot, mode, ev){
             if(ev) ev.stopPropagation();
+            if(REF_EDITOR_BRIDGE && mode === 'mask') mode = 'outpaint';   // 桥接模式没有遮罩（入口已藏）
             // theme.js 给 body 加了 transform:scale()，它会成为 fixed 的包含块 ⇒ 页面一滚动弹窗就跑到视口外。
             // 打开期间把缩放撤掉，弹窗就老老实实居中在可见区域里。
             document.body.classList.add('re-open');
