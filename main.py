@@ -17445,6 +17445,17 @@ def agent_tools_unsupported(body):
             return True
     return False
 
+def _stream_unsupported(body):
+    """上游把 stream 参数当成非法输入时的典型报错。"""
+    text = str(body or "").lower()
+    if not text or "stream" not in text:
+        return False
+    for hint in ("not support", "unsupported", "unrecognized", "unknown", "invalid", "unexpected", "not allowed", "not permitted"):
+        if hint in text:
+            return True
+    return False
+
+
 def _emit(on_event, event):
     """把进度事件丢给调用方；回调写坏不能拖垮整个请求。"""
     if not on_event:
@@ -17483,6 +17494,99 @@ def agent_tool_event_from_result(call_id, name, args, result, round_index):
         "round": round_index + 1,
     }
 
+async def _stream_chat_completion(client, url, headers, body, on_event=None):
+    """流式请求 /chat/completions，边收边把思考内容推给前端。
+
+    返回与整包响应等价的字段，调用方不用关心是流式还是回退成整包：
+    {"content", "reasoning", "tool_calls", "usage", "raw"}。
+
+    🚨 上游不认 stream（部分中转直接返回整包 JSON）时按 content-type 识别并当整包解析，
+    不让「不支持流式」变成一问就错。
+    """
+    content_parts = []
+    reason_parts = []
+    calls = {}
+    usage = None
+    raw_last = None
+
+    def absorb_tool_call(item):
+        idx = item.get("index")
+        if idx is None:
+            idx = len(calls)
+        slot = calls.setdefault(int(idx), {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+        if item.get("id"):
+            slot["id"] = item["id"]
+        fn = item.get("function") or {}
+        if fn.get("name"):
+            slot["function"]["name"] = fn["name"]
+        if fn.get("arguments"):
+            slot["function"]["arguments"] += fn["arguments"]
+
+    async with client.stream("POST", url, headers=headers, json=body) as resp:
+        ctype = str(resp.headers.get("content-type") or "")
+        if resp.status_code >= 400:
+            text = (await resp.aread()).decode("utf-8", "replace")
+            raise httpx.HTTPStatusError(
+                f"{resp.status_code}: {text[:600]}", request=resp.request, response=resp
+            )
+        if "text/event-stream" not in ctype:
+            # 上游忽略了 stream 参数，直接给了整包：按非流式解析
+            raw = json.loads((await resp.aread()).decode("utf-8", "replace") or "{}")
+            raw_last = raw
+            data = unwrap_apimart_response(raw) if isinstance(raw, dict) else raw
+            choices = (data or {}).get("choices") or []
+            message = (choices[0].get("message") if choices else None) or {}
+            thinking = str(message.get("reasoning_content") or message.get("reasoning") or "").strip()
+            if thinking:
+                _emit(on_event, {"type": "thinking", "text": agent_truncate(thinking, 4000)})
+            return {
+                "content": message.get("content") or "",
+                "reasoning": thinking,
+                "tool_calls": message.get("tool_calls") or [],
+                "usage": (data or {}).get("usage"),
+                "raw": raw,
+            }
+
+        async for line in resp.aiter_lines():
+            line = (line or "").strip()
+            if not line or line.startswith(":"):
+                continue
+            if line.startswith("data:"):
+                line = line[5:].strip()
+            if not line or line == "[DONE]":
+                continue
+            try:
+                chunk = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(chunk, dict):
+                continue
+            raw_last = chunk
+            if isinstance(chunk.get("usage"), dict):
+                usage = chunk["usage"]
+            for choice in chunk.get("choices") or []:
+                delta = (choice or {}).get("delta") or {}
+                if delta.get("tool_calls"):
+                    for item in delta["tool_calls"]:
+                        absorb_tool_call(item if isinstance(item, dict) else {})
+                if delta.get("content"):
+                    content_parts.append(str(delta["content"]))
+                piece = delta.get("reasoning_content") or delta.get("reasoning") or ""
+                if piece:
+                    # 每个 delta 直接推：这就是「逐字跳动」的来源。
+                    # 前端按 append 增量只改一个文本节点，不会整屏重绘。
+                    reason_parts.append(str(piece))
+                    _emit(on_event, {"type": "thinking", "text": str(piece), "append": True})
+
+    return {
+        "content": "".join(content_parts),
+        "reasoning": "".join(reason_parts),
+        "tool_calls": [calls[k] for k in sorted(calls)],
+        "usage": usage,
+        "raw": raw_last,
+    }
+
+
 async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, is_apimart, chat_base, chat_hdrs, model, tool_settings, user_id=None, on_event=None):
     """带本机工具（终端 / 文件）的聊天：跑一个 tool-calling 循环，直到模型给出最终文字回复。
 
@@ -17510,22 +17614,56 @@ async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, 
     tool_events = []
     last_raw = None
     last_usage = None
+    stream_ok = not is_apimart
     async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
         for round_index in range(rounds + 1):
             req_body = apply_reasoning_effort(
                 {"model": model, "messages": upstream_messages},
                 getattr(payload, "reasoning_effort", ""),
             )
-            if is_apimart:
-                req_body["stream"] = False
+            use_stream = stream_ok
             if tools:
                 req_body["tools"] = tools
                 req_body["tool_choice"] = "auto"
+            if use_stream:
+                req_body["stream"] = True
+                req_body["stream_options"] = {"include_usage": True}
+            url = f"{chat_base}/chat/completions"
             try:
-                response = await client.post(f"{chat_base}/chat/completions", headers=chat_hdrs, json=req_body)
-                response.raise_for_status()
+                if use_stream:
+                    part = await _stream_chat_completion(client, url, chat_hdrs, req_body, on_event)
+                    last_raw = part.get("raw")
+                    last_usage = part.get("usage") or last_usage
+                    message = {
+                        "content": part.get("content") or "",
+                        "tool_calls": part.get("tool_calls") or [],
+                    }
+                    text = str(part.get("content") or "").strip()
+                else:
+                    response = await client.post(url, headers=chat_hdrs, json=req_body)
+                    response.raise_for_status()
+                    raw = response.json()
+                    raw_data = unwrap_apimart_response(raw) if isinstance(raw, dict) else raw
+                    last_raw = raw
+                    if isinstance(raw_data, dict):
+                        last_usage = raw_data.get("usage")
+                    choices = (raw_data or {}).get("choices") or []
+                    message = (choices[0].get("message") if choices else None) or {}
+                    _thinking = str(message.get("reasoning_content") or message.get("reasoning") or "").strip()
+                    if _thinking:
+                        _emit(on_event, {"type": "thinking", "text": agent_truncate(_thinking, 4000)})
+                    text = text_from_chat_response(raw).strip()
             except httpx.HTTPStatusError as exc:
-                body = exc.response.text or ""
+                # 流式响应已经 aread 过，.text 可能抛错，取不到就用异常串
+                try:
+                    body = exc.response.text or ""
+                except Exception:
+                    body = ""
+                body = body or str(exc)
+                if use_stream and (_stream_unsupported(body) or exc.response.status_code in (400, 422)):
+                    print("[agent-stream] 上游不支持流式，回退为整包响应")
+                    stream_ok = False
+                    continue
                 # 联网工具默认携带 ⇒ 400/422 也回退一次，避免只认「无 tools」的通道全线报错
                 if tools and not tool_events and (
                     agent_tools_unsupported(body) or exc.response.status_code in (400, 422)
@@ -17537,16 +17675,6 @@ async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, 
                 raise HTTPException(status_code=exc.response.status_code, detail=friendly or f"上游接口错误：{body}") from exc
             except httpx.HTTPError as exc:
                 raise HTTPException(status_code=502, detail=friendly_upstream_http_error(exc)) from exc
-            raw = response.json()
-            raw_data = unwrap_apimart_response(raw) if isinstance(raw, dict) else raw
-            last_raw = raw
-            if isinstance(raw_data, dict):
-                last_usage = raw_data.get("usage")
-            choices = (raw_data or {}).get("choices") or []
-            message = (choices[0].get("message") if choices else None) or {}
-            _thinking = str(message.get("reasoning_content") or message.get("reasoning") or "").strip()
-            if _thinking:
-                _emit(on_event, {"type": "thinking", "text": agent_truncate(_thinking, 4000)})
             tool_calls = message.get("tool_calls") or []
             if tool_calls and tools:
                 upstream_messages.append({
@@ -17571,7 +17699,6 @@ async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, 
                         "content": (f"{event['summary']}\n{event['output']}").strip() or "（无输出）",
                     })
                 continue
-            text = text_from_chat_response(raw).strip()
             if not text and tool_events:
                 text = "（已执行工具，但模型没有给出文字结论）"
             return {

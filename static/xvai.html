@@ -1013,7 +1013,7 @@
         if(!items || !items.length) return '';
         const rows = items.map(it => {
             if(it.kind === 'think')
-                return `<details class="xv-trace-think"><summary>已思考</summary><div class="xv-trace-note">${esc(it.text || '')}</div></details>`;
+                return `<details class="xv-trace-think"${it.open ? ' open' : ''}><summary>已思考</summary><div class="xv-trace-note">${esc(it.text || '')}</div></details>`;
             const icon = it.running ? '<span class="xv-spin xv-spin-sm"></span>'
                 : `<i data-lucide="${it.ok === false ? 'circle-alert' : 'check'}"></i>`;
             return `<div class="xv-trace-row${it.ok === false ? ' bad' : ''}">${icon}
@@ -1021,6 +1021,13 @@
                 ${it.summary ? `<span class="xv-trace-sum">${esc(it.summary)}</span>` : ''}</div>`;
         }).join('');
         return `<div class="xv-trace">${rows}</div>`;
+    }
+    function paintThinking(text){
+        const notes = $('xvThread').querySelectorAll('.xv-bubble-pending .xv-trace-think .xv-trace-note');
+        const node = notes[notes.length - 1];
+        if(!node) return false;
+        node.textContent = text;
+        return true;
     }
     function pushTrace(ev){
         if(!state.run) return;
@@ -1039,8 +1046,16 @@
                 item.summary = ev.summary || (item.ok ? '完成' : '失败');
             }
         } else if(ev.type === 'thinking'){
-            list.push({ kind:'think', text: ev.text || '' });
             state.run.label = '模型思考中…';
+            const last = list[list.length - 1];
+            if(ev.append && last && last.kind === 'think'){
+                // 流式增量：只改这一个节点。整屏 renderThread 每来一段就跑一次，长回复会卡。
+                last.text += (ev.text || '');
+                last.open = true;
+                if(paintThinking(last.text)) return;
+            } else {
+                list.push({ kind:'think', text: ev.text || '', open:true });
+            }
         }
         renderThread();
     }
