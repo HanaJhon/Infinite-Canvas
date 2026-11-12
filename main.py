@@ -25305,9 +25305,9 @@ async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(d
     save_conversation(user_id, conversation)
     return {"conversation": conversation, "message": assistant_message}
 
-@app.post("/api/chat/agent")
-async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):
-    user_id = safe_user_id(x_user_id, request)
+# 小抽AI 的 agent 主流程拆成一个异步生成器：一路 yield 实时进度事件，最后 yield done。
+# /api/chat/agent 只取 done（老前端不用改），/api/chat/agent/stream 把它转成 SSE 推给页面。
+async def chat_agent_events(payload: ChatRequest, request: Request, user_id: str):
     conversation = (
         load_conversation(user_id, payload.conversation_id)
         if payload.conversation_id
@@ -25346,8 +25346,12 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
             conversation["messages"].append(slash_msg)
             conversation["updated_at"] = now_ms()
             save_conversation(user_id, conversation)
-            return {"conversation": conversation, "message": slash_msg, "agent": {"action": "slash", "command": payload.message.strip()}}
+            yield {"event": "done", "payload": {
+                "conversation": conversation, "message": slash_msg,
+                "agent": {"action": "slash", "command": payload.message.strip()}}}
+            return
 
+    yield {"event": "stage", "key": "decide", "label": "理解需求 · 规划动作"}
     decision = await decide_chat_agent_action(payload, conversation, image_refs)
     action = decision.get("action") or "chat"
     tool_refs = image_refs[:]
@@ -25367,6 +25371,14 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
         image_size = snap_size_to_multiple(prompt_size or inherited_size or payload.size, 16)
         requested_count = 1 if action == "edit_image" else chat_requested_image_count(payload.message)
         prompts = chat_split_parallel_prompts(prompt, requested_count)
+        # 生图单价是确定的（per_image × 张数），决策一出来就能告诉页面要花多少积分
+        try:
+            _image_estimate = _credits_store.estimate({
+                "model": model, "provider": image_provider["id"], "kind": "image",
+                "count": max(1, len(prompts)),
+            })
+        except Exception:
+            _image_estimate = {}
         # 输出格式兜底（与画布同一套规则）：模型是 gpt-image-2.6 系列、提示词要动图时补 gif。
         # 不补这个参数上游只回 png（静图 + 宫格），老板会以为「输出被我转换过」。
         chat_output_format = str(payload.output_format or "").strip().lower()
@@ -25377,7 +25389,10 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
         local_urls = []
         raw_items = []
         try:
-            for item_prompt in prompts:
+            for index, item_prompt in enumerate(prompts, 1):
+                yield {"event": "stage", "key": "image", "index": index, "count": len(prompts),
+                       "model": model, "estimate": _image_estimate.get("credits") or 0,
+                       "label": (f"生成第 {index}/{len(prompts)} 张图" if len(prompts) > 1 else "正在出图")}
                 image_data, raw = await generate_ai_image(
                     item_prompt,
                     image_size,
@@ -25422,6 +25437,8 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
             "raw_usage": raw_items[0].get("usage") if raw_items and isinstance(raw_items[0], dict) else None,
         }
     else:
+        yield {"event": "stage", "key": "answer", "model": payload.model or "",
+               "label": "模型生成回复"}
         assistant_message = await build_chat_text_reply(payload, conversation, user_id)
         assistant_message["agent_action"] = "chat"
 
@@ -25453,7 +25470,18 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
                 "input_text": payload.message,
                 "reason": "小抽AI 对话",
             }
+        yield {"event": "stage", "key": "settle", "label": "结算积分"}
         credits_info = _credits_store.spend(user_id, charge_payload)
+        # 把这次的用量也带上（页面要显示「输入 x / 输出 y tokens · 本次消耗 z 积分」）
+        if charge_payload.get("kind") == "image":
+            credits_info["usage"] = {"count": max(1, len(local_urls) or 1), "model": model}
+        else:
+            credits_info["usage"] = {
+                "input_tokens": int(charge_payload.get("input_tokens") or 0),
+                "output_tokens": int(charge_payload.get("output_tokens") or 0),
+                "cache_tokens": int(charge_payload.get("cache_tokens") or 0),
+                "model": charge_payload.get("model") or "",
+            }
         if credits_info.get("charged"):
             print(f"[credits] 小抽AI 扣 {credits_info.get('credits')} 积分"
                   f"（{charge_payload.get('kind')} · {charge_payload.get('model')}）余额 {credits_info.get('balance')}")
@@ -25468,8 +25496,52 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
     agent_meta = {"action": action, "decision": decision}
     if auto_compressed:
         agent_meta["auto_compressed"] = True
-    return {"conversation": conversation, "message": assistant_message,
-            "agent": agent_meta, "credits": credits_info}
+    yield {"event": "done", "payload": {
+        "conversation": conversation, "message": assistant_message,
+        "agent": agent_meta, "credits": credits_info}}
+
+def _agent_error_event(exc: Exception) -> Dict[str, Any]:
+    if isinstance(exc, HTTPException):
+        detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail, ensure_ascii=False)
+        return {"event": "error", "status": exc.status_code, "detail": detail or "请求失败"}
+    return {"event": "error", "status": 500, "detail": f"{type(exc).__name__}: {exc}"}
+
+
+@app.post("/api/chat/agent")
+async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):
+    """非流式入口：消费生成器里最后一个 done 事件（老前端/兼容用）。"""
+    user_id = safe_user_id(x_user_id, request)
+    try:
+        async for ev in chat_agent_events(payload, request, user_id):
+            if ev.get("event") == "done":
+                return ev.get("payload") or {}
+            if ev.get("event") == "error":
+                raise HTTPException(status_code=ev.get("status") or 500, detail=ev.get("detail") or "请求失败")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+    raise HTTPException(status_code=500, detail="agent 流程没有返回结果")
+
+
+@app.post("/api/chat/agent/stream")
+async def chat_agent_stream(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):
+    """SSE 入口：把 agent 主流程的进度事件实时推给页面（小抽AI 底部进程条 + 实时积分）。"""
+    user_id = safe_user_id(x_user_id, request)
+
+    async def event_stream():
+        try:
+            async for ev in chat_agent_events(payload, request, user_id):
+                yield "data: " + json.dumps(ev, ensure_ascii=False) + "\n\n"
+        except Exception as exc:  # 生成器内部抛错也要让前端收到结束信号
+            yield "data: " + json.dumps(_agent_error_event(exc), ensure_ascii=False) + "\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
 
 @app.post("/api/chat/stream")
 async def chat_stream(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):

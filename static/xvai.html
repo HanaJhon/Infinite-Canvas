@@ -127,6 +127,13 @@
         .xv-composer { flex:0 0 auto; border-top:none; background:transparent; padding:8px 24px 18px; }
         .xv-composer-inner { max-width:880px; margin:0 auto; }
         .xv-hint { max-width:880px; margin:6px auto 0; font-size:10px; color:var(--muted); text-align:center; font-weight:600; min-height:14px; }
+        /* 任务进程条（照 wuu 的底部活动条）：当前步骤 + 已用时 + token/积分估算 */
+        .xv-progress { display:flex; flex-direction:column; gap:7px; min-width:250px; }
+        .xv-progress-row { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:500; color:var(--text); }
+        .xv-progress-meta { font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; }
+        .xv-progress-steps { display:flex; flex-wrap:wrap; gap:6px; margin-top:1px; }
+        .xv-progress-step { display:inline-flex; align-items:center; height:22px; padding:0 9px; border-radius:999px; background:var(--soft); color:var(--muted); font-size:11px; }
+        .xv-progress-step.active { background:var(--strong); color:var(--strong-text); }
         .xv-spin { width:10px; height:10px; border:2px solid var(--muted); border-top-color:transparent; border-radius:50%; animation:xvspin .8s linear infinite; display:inline-block; vertical-align:-1px; margin-right:5px; }
         @keyframes xvspin { to { transform:rotate(360deg); } }
         .xv-drawer { width:0; overflow:hidden; border-left:1px solid var(--line); background:var(--bg); transition:width .28s var(--easing); display:flex; flex-direction:column; }
@@ -836,8 +843,13 @@
     // 本次消耗（后端 chat_agent 显式扣费后写进消息里，见 main.py「小抽AI 计费」块）
     function creditsChip(msg){
         const c = msg && msg.credits;
-        if(!c || !c.charged) return '';
-        return `<div class="xv-cost">本次消耗 ${esc(String(c.credits))} 积分 · 余额 ${esc(String(c.balance))}</div>`;
+        if(!c) return '';
+        const u = c.usage || {};
+        const bits = [];
+        if(c.charged) bits.push(`本次消耗 ${esc(String(c.credits))} 积分 · 余额 ${esc(String(c.balance))}`);
+        if(u.input_tokens || u.output_tokens) bits.push(`输入 ${fmtNum(u.input_tokens)} / 输出 ${fmtNum(u.output_tokens)} tokens`);
+        if(u.count) bits.push(`${esc(String(u.count))} 张图`);
+        return bits.length ? `<div class="xv-cost">${bits.join(' · ')}</div>` : '';
     }
     async function refreshBalance(){
         try {
@@ -883,9 +895,15 @@
         }).join('');
 
         if(state.pending){
+            const run = state.run || {};
+            const steps = (run.steps || []).map(it => `<span class="xv-progress-step${it.active ? ' active' : ''}">${esc(it.label)}</span>`).join('');
             thread.innerHTML += `<div class="xv-msg assistant xv-bubble-pending">
                 <div class="xv-avatar">AI</div>
-                <div class="xv-bubble xv-typing"><span></span><span></span><span></span></div>
+                <div class="xv-bubble"><div class="xv-progress">
+                    <div class="xv-progress-row"><span class="xv-spin"></span><span id="xvProgressLabel">${esc(run.label || '准备中…')}</span></div>
+                    <div class="xv-progress-meta" id="xvProgressMeta">${esc(progressMeta(run))}</div>
+                    ${steps ? `<div class="xv-progress-steps">${steps}</div>` : ''}
+                </div></div>
             </div>`;
         }
         icons();
@@ -1036,6 +1054,42 @@
         clearTimeout(creditTimer);
         creditTimer = setTimeout(updateSendCredit, 300);
     }
+    /* ---------- 任务进程 + 实时积分（照 wuu 的底部活动条） ---------- */
+    function fmtNum(n){ return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+    function estimateInputTokens(text){
+        const s = String(text || '');
+        const cjk = (s.match(/[\u3400-\u9fff\u3040-\u30ff\uff00-\uffef]/g) || []).length;
+        return Math.round(cjk + (s.length - cjk) / 4);
+    }
+    function progressMeta(run){
+        const parts = [];
+        const secs = run && run.started ? (Date.now() - run.started) / 1000 : 0;
+        if(secs > 0.05) parts.push(`已用 ${secs.toFixed(1)}s`);
+        if(run && run.inputTokens) parts.push(`输入 ~${fmtNum(run.inputTokens)} tokens`);
+        if(run && Number(run.estimate) > 0) parts.push(`预计 ${fmtCredits(run.estimate)} 积分`);
+        return parts.join(' · ') || '正在连接…';
+    }
+    function startRunTimer(){
+        stopRunTimer();
+        state.run.timer = setInterval(() => {
+            const meta = document.getElementById('xvProgressMeta');
+            if(!meta){ stopRunTimer(); return; }
+            meta.textContent = progressMeta(state.run);
+        }, 150);
+    }
+    function stopRunTimer(){
+        if(state.run && state.run.timer){ clearInterval(state.run.timer); state.run.timer = 0; }
+    }
+    function setStage(ev){
+        const run = state.run;
+        run.label = ev.label || '处理中…';
+        if(Number(ev.estimate) > 0) run.estimate = ev.estimate;
+        run.steps = (run.steps || []).map(it => ({ label:it.label, active:false }));
+        run.steps.push({ label: run.label, active:true });
+        if(run.steps.length > 4) run.steps = run.steps.slice(-4);
+        renderThread();
+    }
+
     async function send(message, opts){
         const text = (message != null ? message : readInput()).trim();
         if(!text || state.sending) return;
@@ -1054,8 +1108,13 @@
         state.rewindId = '';
         state.messages.push({ role:'user', content:text, attachments: refs });
         state.pending = true;
+        state.run = {
+            label: '已发送 · 等待模型', steps: [], started: Date.now(), timer: 0,
+            inputTokens: estimateInputTokens(text), estimate: 0
+        };
         renderThread();
-        setHint('小抽AI 正在思考…', true);
+        startRunTimer();
+        setHint('');
         try {
             const payload = {
                 message: text,
@@ -1075,13 +1134,46 @@
                 ],
                 rewind_message_id: rewindId
             };
-            const res = await fetch('/api/chat/agent', {
+            // 预估积分用发送前那条同样的规则问后端（不阻塞主流程）
+            postEstimate(looksLikeImageRequest(text)
+                ? { model: state.imgModel, provider: state.imgProvider, kind: 'image', count: 1 }
+                : { model: state.chatModel, provider: state.chatProvider, kind: 'llm', input_text: text })
+                .then(d => { if(d && d.configured) state.run.estimate = d.credits; })
+                .catch(() => {});
+
+            const res = await fetch('/api/chat/agent/stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
-            const data = await res.json().catch(() => ({}));
-            if(!res.ok) throw new Error(data.detail || `请求失败（${res.status}）`);
+            if(!res.ok){
+                const errBody = await res.json().catch(() => ({}));
+                throw new Error(errBody.detail || `请求失败（${res.status}）`);
+            }
+            // 逐条读 SSE：stage 事件更新进程条，done 事件带最终结果
+            let data = null, streamError = '';
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            while(true){
+                const chunk = await reader.read();
+                if(chunk.done) break;
+                buffer += decoder.decode(chunk.value, { stream:true });
+                let cut;
+                while((cut = buffer.indexOf('\n\n')) >= 0){
+                    const raw = buffer.slice(0, cut).trim();
+                    buffer = buffer.slice(cut + 2);
+                    const line = raw.split('\n').find(l => l.startsWith('data:'));
+                    if(!line) continue;
+                    let ev;
+                    try { ev = JSON.parse(line.slice(5).trim()); } catch(e) { continue; }
+                    if(ev.event === 'stage') setStage(ev);
+                    else if(ev.event === 'done') data = ev.payload || {};
+                    else if(ev.event === 'error') streamError = ev.detail || '请求失败';
+                }
+            }
+            if(streamError) throw new Error(streamError);
+            if(!data) throw new Error('连接中断，没拿到结果');
             const conversation = data.conversation || {};
             state.convId = conversation.id || state.convId;
             if(state.convId) localStorage.setItem('xvai_conv_id', state.convId);
@@ -1095,6 +1187,7 @@
             renderThread();
             setHint('');
         } finally {
+            stopRunTimer();
             state.pending = false;
             state.sending = false;
             $('agentSendBtn').disabled = false;
