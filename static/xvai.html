@@ -246,6 +246,8 @@
         .xv-hist-title { font-size:12.5px; font-weight:700; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .xv-hist-sub { font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .xv-hist-empty { padding:22px 14px; font-size:12px; color:var(--muted); text-align:center; }
+        .xv-hist-run { width:6px; height:6px; border-radius:50%; background:var(--text); display:inline-block; margin-right:6px; animation:xvPulse 1.2s ease-in-out infinite; }
+        @keyframes xvPulse { 0%,100% { opacity:.25 } 50% { opacity:1 } }
     </style>
 </head>
 <body>
@@ -428,7 +430,7 @@
         params: { ratio:'square', res:'4k', quality:'high', think:'auto' },
         messages: [],
         outputs: [],
-        sending: false,
+        newKey: '',
         pending: false,
         rewindId: '',
         skills: [],
@@ -1040,21 +1042,24 @@
         node.textContent = text;
         return true;
     }
-    function paintAnswer(){
+    function paintAnswer(run){
         const node = $('xvStreamAnswer');
         if(!node) return false;
-        node.textContent = state.run.answer || '';
+        node.textContent = (run || state.run || {}).answer || '';
         const thread = $('xvThread');
         thread.scrollTop = thread.scrollHeight;
         return true;
     }
-    function pushTrace(ev){
-        if(!state.run) return;
-        const list = state.run.trace || (state.run.trace = []);
+    // 并发：事件写进发起它的那个 run；只有它还显示在屏幕上时才碰 DOM
+    function pushTrace(ev, r){
+        const run = (r && r.run) || state.run;
+        if(!run) return;
+        const live = r ? isActiveRun(r) : true;
+        const list = run.trace || (run.trace = []);
         if(ev.type === 'tool_start'){
             list.push({ kind:'tool', label:ev.label || ev.name || '工具',
                 summary: ev.args ? `正在执行 · ${ev.args}` : '正在执行…', running:true });
-            state.run.label = `正在执行 · ${ev.label || ev.name || '工具'}`;
+            run.label = `正在执行 · ${ev.label || ev.name || '工具'}`;
         } else if(ev.type === 'tool_end'){
             const name = ev.label || ev.name;
             const item = [...list].reverse().find(it => it.kind === 'tool' && it.running && (!name || it.label === name))
@@ -1066,22 +1071,26 @@
             }
         } else if(ev.type === 'answer'){
             // 正文增量：同样只改一个节点，不走整屏 renderThread
-            state.run.answer = (state.run.answer || '') + (ev.text || '');
-            if(state.run.label !== '模型正在回复…'){ state.run.label = '模型正在回复…'; renderThread(); }
-            if(paintAnswer()) return;
+            run.answer = (run.answer || '') + (ev.text || '');
+            if(run.label !== '模型正在回复…'){
+                run.label = '模型正在回复…';
+                if(live) renderThread();
+            }
+            if(live) paintAnswer(run);
+            return;
         } else if(ev.type === 'thinking'){
-            state.run.label = '模型思考中…';
+            run.label = '模型思考中…';
             const last = list[list.length - 1];
             if(ev.append && last && last.kind === 'think'){
                 // 流式增量：只改这一个节点。整屏 renderThread 每来一段就跑一次，长回复会卡。
                 last.text += (ev.text || '');
                 last.open = true;
-                if(paintThinking(last.text)) return;
+                if(live && paintThinking(last.text)) return;
             } else {
                 list.push({ kind:'think', text: ev.text || '', open:true });
             }
         }
-        renderThread();
+        if(live) renderThread();
     }
 
     function renderThread(){
@@ -1291,7 +1300,7 @@
     // 回溯：点「编辑」= 把这条 user 消息（正文 + 附件）搬回输入栏，后面的对话先在本地位上退掉，
     // 发送时带上 rewind_message_id 让后端同样截断并落盘（照画布 Agent 的 agentBeginEditMessage）
     function beginEditMessage(idx){
-        if(state.sending) return;
+        if(activeRun()){ setHint('这段对话还在跑，等它结束或者先停掉再回退。'); return; }
         const msg = state.messages[idx];
         if(!msg || msg.role !== 'user') return;
         const dropped = state.messages.length - idx - 1;
@@ -1385,25 +1394,44 @@
         if(run && Number(run.estimate) > 0) parts.push(`预计 ${fmtCredits(run.estimate)} 积分`);
         return parts.join(' · ') || '正在连接…';
     }
-    function startRunTimer(){
-        stopRunTimer();
-        state.run.timer = setInterval(() => {
+    function startRunTimer(r){
+        stopRunTimer(r);
+        const run = (r && r.run) || state.run;
+        if(!run) return;
+        run.timer = setInterval(() => {
             const meta = document.getElementById('xvProgressMeta');
-            if(!meta){ stopRunTimer(); return; }
-            meta.textContent = progressMeta(state.run);
+            if(!meta || (r && !isActiveRun(r))){ stopRunTimer(r); return; }
+            meta.textContent = progressMeta(run);
         }, 150);
     }
-    function stopRunTimer(){
-        if(state.run && state.run.timer){ clearInterval(state.run.timer); state.run.timer = 0; }
+    function stopRunTimer(r){
+        const run = (r && r.run) || state.run;
+        if(run && run.timer){ clearInterval(run.timer); run.timer = 0; }
     }
-    function setStage(ev){
-        const run = state.run;
+    function setStage(ev, r){
+        const run = (r && r.run) || state.run;
+        if(!run) return;
         run.label = ev.label || '处理中…';
         if(Number(ev.estimate) > 0) run.estimate = ev.estimate;
         run.steps = (run.steps || []).map(it => ({ label:it.label, active:false }));
         run.steps.push({ label: run.label, active:true });
         if(run.steps.length > 4) run.steps = run.steps.slice(-4);
-        renderThread();
+        if(!r || isActiveRun(r)) renderThread();
+    }
+
+    /* ---------- 并发对话：一段对话一个 run，切走/新建都不打断 ---------- */
+    // ponytail: run 只活在内存里，刷新页面就收不到也停不掉；要跨刷新得让后端给 run id 再补个订阅端点。
+    const runs = new Map();   // key: 对话 id；还没落库的新对话用 newKey
+    let newSeq = 0;
+    function convKey(){ return state.convId || state.newKey || ''; }
+    function activeRun(){ return runs.get(convKey()) || null; }
+    function isActiveRun(r){ return !!r && runs.get(convKey()) === r; }
+    function syncRunState(){
+        const r = activeRun();
+        state.pending = !!r;
+        state.run = r ? r.run : null;
+        state.abort = r ? r.abort : null;
+        paintSendBtn();
     }
 
     // 运行中把发送键变成停止键（老板 m08350：停止要落在发送按钮处）
@@ -1418,24 +1446,24 @@
         icons();
     }
     function stopRun(){
-        const run = state.run || {};
-        run.stopped = true;
-        try { if(state.abort) state.abort.abort(); } catch(e) {}
+        const r = activeRun();
+        if(!r) return;
+        r.run.stopped = true;
+        try { r.abort.abort(); } catch(e) {}
         // 不依赖 fetch 抛 AbortError：先把界面收干净，流式读循环随后自然结束
-        if(!state.pending) return;
-        stopRunTimer();
-        state.pending = false;
-        state.sending = false;
+        stopRunTimer(r);
+        if(runs.get(r.key) === r) runs.delete(r.key);
+        syncRunState();
         state.messages.push({ role:'assistant', content:'已停止这次任务。' });
         renderThread();
         setHint('');
-        paintSendBtn();
     }
 
     async function send(message, opts){
         const text = (message != null ? message : readInput()).trim();
-        if(!text || state.sending) return;
+        if(!text) return;
         if(!state.chatProvider || !state.chatModel){ setHint('还没有可用的对话通道，先去 API 设置。'); return; }
+        if(activeRun()){ setHint('这段对话还在跑：可以点发送键上方的方块停掉，或者直接新建/切换对话同时干别的。'); return; }
         const rewindId = (opts && opts.rewindId) || state.rewindId || '';
         // /skill 命令：不管从 / 面板选还是手打，都把风格卡片挂起来（后端只负责注入 Skill 文本）
         if(/^\/skill\b/i.test(text)){
@@ -1444,18 +1472,22 @@
             else activateStyleFromArg(arg);
         }
         const refs = inputRefs();
-        state.sending = true;
         if(message == null) clearInput();
         state.rewindId = '';
         state.messages.push({ role:'user', content:text, attachments: refs });
-        state.pending = true;
-        state.run = {
-            label: '已发送 · 等待模型', steps: [], trace: [], started: Date.now(), timer: 0,
-            inputTokens: estimateInputTokens(text), estimate: 0
+        const r = {
+            key: convKey(),
+            convId: state.convId || '',
+            abort: new AbortController(),
+            run: {
+                label: '已发送 · 等待模型', steps: [], trace: [], started: Date.now(), timer: 0,
+                inputTokens: estimateInputTokens(text), estimate: 0, answer: ''
+            }
         };
-        paintSendBtn();
+        runs.set(r.key, r);
+        syncRunState();
         renderThread();
-        startRunTimer();
+        startRunTimer(r);
         setHint('');
         try {
             const payload = {
@@ -1480,16 +1512,15 @@
             postEstimate(looksLikeImageRequest(text)
                 ? { model: state.imgModel, provider: state.imgProvider, kind: 'image', count: 1 }
                 : { model: state.chatModel, provider: state.chatProvider, kind: 'llm', input_text: text })
-                .then(d => { if(d && d.configured) state.run.estimate = d.credits; })
+                .then(d => { if(d && d.configured) r.run.estimate = d.credits; })
                 .catch(() => {});
 
-            state.abort = new AbortController();
-            state.run.stopped = false;
+            r.run.stopped = false;
             const res = await fetch('/api/chat/agent/stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
-                signal: state.abort.signal
+                signal: r.abort.signal
             });
             if(!res.ok){
                 const errBody = await res.json().catch(() => ({}));
@@ -1512,8 +1543,8 @@
                     if(!line) continue;
                     let ev;
                     try { ev = JSON.parse(line.slice(5).trim()); } catch(e) { continue; }
-                    if(ev.event === 'stage') setStage(ev);
-                    else if(ev.event === 'trace') pushTrace(ev.trace || {});
+                    if(ev.event === 'stage') setStage(ev, r);
+                    else if(ev.event === 'trace') pushTrace(ev.trace || {}, r);
                     else if(ev.event === 'done') data = ev.payload || {};
                     else if(ev.event === 'error') streamError = ev.detail || '请求失败';
                 }
@@ -1521,28 +1552,31 @@
             if(streamError) throw new Error(streamError);
             if(!data) throw new Error('连接中断，没拿到结果');
             const conversation = data.conversation || {};
-            state.convId = conversation.id || state.convId;
-            if(state.convId) localStorage.setItem('xvai_conv_id', state.convId);
-            state.messages = conversation.messages ? normalizeMessages(conversation.messages) : state.messages;
-            renderThread();
-            renderOutputs();
-            if(data.agent && data.agent.auto_compressed) notifyCompressed();
+            if(isActiveRun(r)){
+                // 还在看这段对话才刷新界面；已经切走的，结果留在后端那份对话里
+                state.convId = conversation.id || state.convId;
+                state.newKey = '';
+                if(state.convId) localStorage.setItem('xvai_conv_id', state.convId);
+                state.messages = conversation.messages ? normalizeMessages(conversation.messages) : state.messages;
+                renderThread();
+                renderOutputs();
+                if(data.agent && data.agent.auto_compressed) notifyCompressed();
+            }
             if(data.credits) refreshBalance();
             setHint('');
         } catch(err) {
-            if(state.run && state.run.stopped){
+            if(r.run.stopped){
                 // 停止已在 stopRun() 里落地，这里不再重复插消息
-            } else {
+            } else if(isActiveRun(r)){
                 state.messages.push({ role:'assistant', content:`出错了：${err.message || err}` });
             }
-            renderThread();
-            setHint('');
+            if(isActiveRun(r)){ renderThread(); setHint(''); }
         } finally {
-            stopRunTimer();
-            state.pending = false;
-            state.sending = false;
-            paintSendBtn();
-            renderThread();
+            stopRunTimer(r);
+            const wasLive = isActiveRun(r);
+            if(runs.get(r.key) === r) runs.delete(r.key);
+            syncRunState();
+            if(wasLive) renderThread();
             if(document.getElementById('xvHist').classList.contains('open')) loadHistory();
         }
     }
@@ -1623,6 +1657,7 @@
             state.convId = conv.id || id;
             localStorage.setItem('xvai_conv_id', state.convId);
             state.messages = normalizeMessages(conv.messages);
+            syncRunState();
             renderThread();
             renderOutputs();
             return true;
@@ -1645,12 +1680,14 @@
     }
 
     function resetChat(){
-        stopRun();
+        // 新建对话 ≠ 停掉在跑的：切换/新建都不打断后台任务（老板 m08371）
         state.rewindId = '';
         state.convId = '';
+        state.newKey = 'new#' + (++newSeq);
         state.messages = [];
         localStorage.removeItem('xvai_conv_id');
         clearInput();
+        syncRunState();
         renderThread();
         renderOutputs();
         setHint('');
@@ -1956,10 +1993,12 @@
         box.innerHTML = histItems.map(c => {
             const active = c.id === state.convId ? ' active' : '';
             const sub = c.last_message ? esc(c.last_message).slice(0, 60) : '';
+            // 后台还在跑这段对话：标题前点一个小灯，切回去能看到进程条
+            const running = runs.has(c.id) ? '<span class="xv-hist-run" title="还在执行"></span>' : '';
             // 不把 id 拼进 onclick：id 里万一有引号就会串味，统一走事件委托
             return `<div class="xv-hist-item${active}">
                 <button type="button" class="xv-hist-main" data-conv="${esc(c.id)}">
-                    <span class="xv-hist-title">${esc(c.title || '新对话')}</span>
+                    <span class="xv-hist-title">${running}${esc(c.title || '新对话')}</span>
                     <span class="xv-hist-sub">${esc(fmtHistTime(c.updated_at))}${sub ? ' · ' + sub : ''}</span>
                 </button>
                 <button type="button" class="xv-hist-act xv-hist-ren" data-ren-conv="${esc(c.id)}" title="重命名"><i data-lucide="pencil-line"></i></button>
@@ -1978,6 +2017,8 @@
             if(!res.ok) throw new Error(`删除失败（${res.status}）`);
         } catch(err){ window.alert(err.message || '删除失败'); return; }
         histItems = histItems.filter(c => c.id !== id);
+        const dead = runs.get(id);
+        if(dead){ try { dead.abort.abort(); } catch(e) {} runs.delete(id); }
         if(state.convId === id) resetChat();
         renderHistory();
     }
@@ -2019,7 +2060,6 @@
     }
     async function switchConversation(id){
         if(!id) return;
-        if(state.sending) return;
         await loadConversationById(id);
         renderHistory();
         closeHistory();
