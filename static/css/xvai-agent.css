@@ -62,7 +62,9 @@ html.studio-theme-dark .xv-agent {
 .xv-agent .agent-ratio-btn { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; height:52px; border-radius:9px; border:1px solid var(--line); background:var(--card); color:var(--muted); font-size:9.5px; font-weight:700; cursor:pointer; transition:border-color .14s ease, color .14s ease, background .14s ease; padding:6px 4px; }
 .xv-agent .agent-ratio-btn:hover { border-color:var(--strong); color:var(--text); }
 .xv-agent .agent-ratio-btn.active { border-color:var(--strong); background:var(--soft); color:var(--text); }
-.xv-agent .agent-ratio-icon { display:block; border:1.5px solid currentColor; border-radius:3px; }
+.xv-agent .agent-ratio-icon { display:block; flex:0 0 auto; border:1.5px solid currentColor; border-radius:2.5px; opacity:.55; }
+.xv-agent .agent-ratio-btn:hover .agent-ratio-icon { opacity:.85; }
+.xv-agent .agent-ratio-btn.active .agent-ratio-icon { opacity:1; box-shadow:inset 0 0 0 1.5px currentColor; }
 .xv-agent .agent-res-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:5px; }
 .xv-agent .agent-res-btn { height:30px; border-radius:9px; border:1px solid var(--line); background:var(--card); color:var(--muted); font-size:9.5px; font-weight:700; cursor:pointer; transition:border-color .14s ease, color .14s ease, background .14s ease; }
 .xv-agent .agent-res-btn:hover { border-color:var(--strong); color:var(--text); }

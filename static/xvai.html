@@ -108,17 +108,6 @@
         .xv-mini:hover { color:var(--accent); background:var(--bg); }
         .xv-img-card { position:relative; margin-top:10px; border:1px solid var(--line); border-radius:12px; padding:8px; background:var(--card); box-shadow:var(--shadow-card); max-width:300px; }
         .xv-img-card img { width:100%; border-radius:12px; display:block; cursor:zoom-in; background:#0b0f14; }
-        /* 模型名与操作按钮只在悬浮图片时出现，静态隐藏 */
-        .xv-img-model { position:absolute; left:14px; top:14px; z-index:2; padding:3px 9px; border-radius:999px;
-            background:rgba(2,6,23,.62); color:#f8fafc; font-size:10px; font-weight:700; backdrop-filter:blur(6px);
-            opacity:0; pointer-events:none; transition:opacity .18s var(--easing); }
-        .xv-img-actions { position:absolute; left:12px; right:12px; bottom:12px; z-index:2; display:flex; flex-wrap:wrap; gap:6px;
-            padding:8px; border-radius:14px; background:rgba(2,6,23,.55); backdrop-filter:blur(8px);
-            opacity:0; pointer-events:none; transition:opacity .18s var(--easing); }
-        .xv-img-actions button { height:28px; padding:0 10px; border-radius:10px; border:1px solid rgba(248,250,252,.28); background:rgba(248,250,252,.12); color:#f8fafc; font-size:10px; font-weight:700; cursor:pointer; display:inline-flex; align-items:center; gap:4px; }
-        .xv-img-actions button:hover { background:rgba(248,250,252,.24); }
-        .xv-img-card:hover .xv-img-model, .xv-img-card:hover .xv-img-actions,
-        .xv-img-card:focus-within .xv-img-model, .xv-img-card:focus-within .xv-img-actions { opacity:1; pointer-events:auto; }
         .xv-ref-edit-layer { position:fixed; inset:0; z-index:90; display:flex; align-items:center; justify-content:center; background:rgba(2,6,23,.5); padding:14px; }
         .xv-ref-edit-frame { position:relative; width:min(960px, 94vw); height:min(880px, 92vh); border-radius:26px; overflow:hidden; background:#fff; box-shadow:0 30px 80px rgba(2,6,23,.45); }
         .xv-ref-edit-frame iframe { width:100%; height:100%; border:0; display:block; }
@@ -130,6 +119,9 @@
         /* 任务进程条（照 wuu 的底部活动条）：当前步骤 + 已用时 + token/积分估算 */
         .xv-progress { display:flex; flex-direction:column; gap:7px; min-width:250px; }
         .xv-progress-row { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:500; color:var(--text); }
+        .xv-stop { margin-left:auto; height:24px; padding:0 10px; display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line); border-radius:999px; background:var(--card); color:var(--muted); font-size:11px; font-weight:600; cursor:pointer; }
+        .xv-stop:hover { color:var(--text); border-color:var(--strong); background:var(--soft); }
+        .xv-stop svg { width:10px; height:10px; }
         .xv-progress-meta { font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; }
         .xv-progress-steps { display:flex; flex-wrap:wrap; gap:6px; margin-top:1px; }
         .xv-progress-step { display:inline-flex; align-items:center; height:22px; padding:0 9px; border-radius:999px; background:var(--soft); color:var(--muted); font-size:11px; }
@@ -138,8 +130,6 @@
         @keyframes xvspin { to { transform:rotate(360deg); } }
         .xv-drawer { width:0; overflow:hidden; border-left:1px solid var(--line); background:var(--bg); transition:width .28s var(--easing); display:flex; flex-direction:column; }
         .xv-drawer.open { width:300px; }
-        .xv-drawer-head { flex:0 0 auto; display:flex; align-items:center; gap:8px; padding:16px; border-bottom:1px solid var(--line); font-size:12px; font-weight:800; white-space:nowrap; }
-        .xv-drawer-head .xv-close { margin-left:auto; cursor:pointer; color:var(--muted); background:none; border:none; padding:4px; }
         .xv-out-list { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
         .xv-out { border:1px solid var(--line); border-radius:12px; padding:10px; display:flex; gap:10px; align-items:center; background:var(--card); }
         .xv-out-thumb { width:44px; height:44px; border-radius:10px; object-fit:cover; background:#e2e8f0; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
@@ -303,11 +293,6 @@
         </div>
     </div>
     <aside class="xv-drawer" id="xvDrawer">
-        <div class="xv-drawer-head">
-            <i data-lucide="folder-open"></i>
-            <span data-i18n="xvai.outputs">输出</span>
-            <button class="xv-close" type="button" id="xvOutClose" title="收起"><i data-lucide="x"></i></button>
-        </div>
         <div class="xv-out-list" id="xvOutList">
             <div class="xv-out-empty" data-i18n="xvai.noOutputs">还没有产物。让 AI 出图或生成文件后会出现在这里。</div>
         </div>
@@ -321,6 +306,11 @@
         <div class="xv-modal-head">
             <span id="xvModalTitle">预览</span>
             <span style="margin-left:auto;display:flex;gap:6px">
+                <span id="xvModalImgActs" style="display:none;gap:6px">
+                    <button class="xv-icon-btn" type="button" id="xvModalEdit" title="修改这张图"><i data-lucide="pencil"></i></button>
+                    <button class="xv-icon-btn" type="button" id="xvModalVary" title="生成变体"><i data-lucide="layers"></i></button>
+                    <button class="xv-icon-btn" type="button" id="xvModalReverse" title="反推提示词"><i data-lucide="scan-eye"></i></button>
+                </span>
                 <a class="xv-icon-btn" id="xvModalDownload" download title="下载"><i data-lucide="download"></i></a>
                 <button class="xv-icon-btn" type="button" id="xvModalClose" title="关闭"><i data-lucide="x"></i></button>
             </span>
@@ -403,7 +393,13 @@
 
     // ---------- 参数 ----------
     $('agentRatioGrid').innerHTML = RATIOS.map(r =>
-        `<button class="agent-ratio-btn" type="button" data-ratio="${r[0]}"><span class="agent-ratio-icon" style="aspect-ratio:${r[2]}"></span>${r[1]}</button>`
+        (() => {
+            // 图案按比例给真实像素：长边 18px，短边按比例缩，避免只剩一个小点
+            const longSide = 18, ratio = r[2];
+            const w = Math.round(ratio >= 1 ? longSide : longSide * ratio);
+            const h = Math.round(ratio >= 1 ? longSide / ratio : longSide);
+            return `<button class="agent-ratio-btn" type="button" data-ratio="${r[0]}"><span class="agent-ratio-icon" style="width:${w}px;height:${h}px"></span>${r[1]}</button>`;
+        })()
     ).join('');
     $('agentResGrid').innerHTML = ['1k','2k','4k'].map(r => `<button class="agent-res-btn" type="button" data-res="${r}">${r.toUpperCase()}</button>`).join('');
     $('agentQualitySeg').innerHTML = QUALITIES.map(q => `<button class="agent-quality-btn" type="button" data-quality="${q[0]}">${q[1]}</button>`).join('');
@@ -829,15 +825,10 @@
     }
 
     // ---------- 消息渲染 ----------
-    function imageCard(url, model){
+    // 卡片只留图片本身：模型名与「修改/变体/反推」搬进大图预览（老板 m07199）
+    function imageCard(url){
         return `<div class="xv-img-card">
             <img src="${esc(url)}" alt="" loading="lazy" data-xv-zoom="${esc(url)}">
-            <div class="xv-img-model">${esc(model || '')}</div>
-            <div class="xv-img-actions">
-                <button type="button" data-xv-act="edit"><i data-lucide="pencil"></i>修改</button>
-                <button type="button" data-xv-act="vary"><i data-lucide="layers"></i>变体</button>
-                <button type="button" data-xv-act="reverse"><i data-lucide="scan-eye"></i>反推</button>
-            </div>
         </div>`;
     }
     // 本次消耗（后端 chat_agent 显式扣费后写进消息里，见 main.py「小抽AI 计费」块）
@@ -900,7 +891,8 @@
             thread.innerHTML += `<div class="xv-msg assistant xv-bubble-pending">
                 <div class="xv-avatar">AI</div>
                 <div class="xv-bubble"><div class="xv-progress">
-                    <div class="xv-progress-row"><span class="xv-spin"></span><span id="xvProgressLabel">${esc(run.label || '准备中…')}</span></div>
+                    <div class="xv-progress-row"><span class="xv-spin"></span><span id="xvProgressLabel">${esc(run.label || '准备中…')}</span>
+                        <button class="xv-stop" type="button" data-xv-stop title="停止这次任务"><i data-lucide="square"></i>停止</button></div>
                     <div class="xv-progress-meta" id="xvProgressMeta">${esc(progressMeta(run))}</div>
                     ${steps ? `<div class="xv-progress-steps">${steps}</div>` : ''}
                 </div></div>
@@ -913,6 +905,9 @@
     // ---------- 预览 ----------
     async function openPreview(url, name){
         const body = $('xvModalBody');
+        state.previewUrl = url;
+        const acts = $('xvModalImgActs');
+        if(acts) acts.style.display = isImage(url) ? 'inline-flex' : 'none';
         $('xvModalTitle').textContent = name || fileName(url);
         $('xvModalDownload').href = url;
         $('xvModalDownload').setAttribute('download', name || fileName(url));
@@ -935,7 +930,13 @@
             body.innerHTML = `<div style="color:#94a3b8;font-size:12px">打不开这个文件，直接下载看看。</div>`;
         }
     }
-    function closePreview(){ $('xvModal').classList.remove('open'); $('xvModalBody').innerHTML = ''; }
+    function closePreview(){
+        $('xvModal').classList.remove('open');
+        $('xvModalBody').innerHTML = '';
+        state.previewUrl = '';
+        const acts = $('xvModalImgActs');
+        if(acts) acts.style.display = 'none';
+    }
 
     // ---------- 输入 ----------
     /* 读正文时要跳过附件胶囊：胶囊隐藏后 innerText 就不含它们的名字了。
@@ -1090,6 +1091,22 @@
         renderThread();
     }
 
+    function stopRun(){
+        const run = state.run || {};
+        run.stopped = true;
+        try { if(state.abort) state.abort.abort(); } catch(e) {}
+        // 不依赖 fetch 抛 AbortError：先把界面收干净，流式读循环随后自然结束
+        if(!state.pending) return;
+        stopRunTimer();
+        state.pending = false;
+        state.sending = false;
+        state.messages.push({ role:'assistant', content:'已停止这次任务。' });
+        renderThread();
+        setHint('');
+        const btn = $('agentSendBtn');
+        if(btn) btn.disabled = false;
+    }
+
     async function send(message, opts){
         const text = (message != null ? message : readInput()).trim();
         if(!text || state.sending) return;
@@ -1141,10 +1158,13 @@
                 .then(d => { if(d && d.configured) state.run.estimate = d.credits; })
                 .catch(() => {});
 
+            state.abort = new AbortController();
+            state.run.stopped = false;
             const res = await fetch('/api/chat/agent/stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
+                signal: state.abort.signal
             });
             if(!res.ok){
                 const errBody = await res.json().catch(() => ({}));
@@ -1183,7 +1203,11 @@
             if(data.credits) refreshBalance();
             setHint('');
         } catch(err) {
-            state.messages.push({ role:'assistant', content:`出错了：${err.message || err}` });
+            if(state.run && state.run.stopped){
+                // 停止已在 stopRun() 里落地，这里不再重复插消息
+            } else {
+                state.messages.push({ role:'assistant', content:`出错了：${err.message || err}` });
+            }
             renderThread();
             setHint('');
         } finally {
@@ -1243,6 +1267,7 @@
     }
 
     function resetChat(){
+        stopRun();
         state.rewindId = '';
         state.convId = '';
         state.messages = [];
@@ -1256,8 +1281,22 @@
     // ---------- 其他事件 ----------
     $('xvNew').addEventListener('click', resetChat);
     $('xvOutToggle').addEventListener('click', () => $('xvDrawer').classList.toggle('open'));
-    $('xvOutClose').addEventListener('click', () => $('xvDrawer').classList.remove('open'));
+    // 抽屉标题栏已删，收起靠顶部「输出」按钮或 Esc
+    document.addEventListener('keydown', ev => { if(ev.key === 'Escape') $('xvDrawer').classList.remove('open'); });
     $('xvModalClose').addEventListener('click', closePreview);
+    $('xvModalEdit').addEventListener('click', () => {
+        const url = state.previewUrl;
+        closePreview();
+        openRefEditorForImage(url);
+    });
+    $('xvModalVary').addEventListener('click', () => {
+        closePreview();
+        send('以最新一张图为参考，生成 3 个不同方向的变体。');
+    });
+    $('xvModalReverse').addEventListener('click', () => {
+        closePreview();
+        send('反推最新一张图的中文提示词，只要提示词本身。');
+    });
     $('xvModal').addEventListener('click', ev => { if(ev.target === $('xvModal')) closePreview(); });
     document.addEventListener('keydown', ev => { if(ev.key === 'Escape'){ closePreview(); closePanels(); } });
 
@@ -1273,18 +1312,8 @@
         // 回溯：点「编辑」把这条 user 消息（含附件）搬回输入栏，改完直接发送
         const editMsg = ev.target.closest('[data-xv-edit-msg]');
         if(editMsg){ beginEditMessage(Number(editMsg.dataset.xvEditMsg)); return; }
-        const act = ev.target.closest('[data-xv-act]');
-        if(act){
-            if(act.dataset.xvAct === 'edit'){
-                // 修改 = 打开在线生图那套参考图编辑面板（扩图/遮罩/视角/画笔），改完自动进参考图
-                const card = ev.target.closest('.xv-img-card');
-                const img = card && card.querySelector('img');
-                openRefEditorForImage(img ? (img.dataset.xvZoom || img.src) : '');
-            }
-            if(act.dataset.xvAct === 'vary') send('以最新一张图为参考，生成 3 个不同方向的变体。');
-            if(act.dataset.xvAct === 'reverse') send('反推最新一张图的中文提示词，只要提示词本身。');
-            return;
-        }
+        // 暂停 = 掐断这条流式请求；后端随连接断开结束任务，不会继续扣费
+        if(ev.target.closest('[data-xv-stop]')){ stopRun(); return; }
         const copy = ev.target.closest('[data-xv-copy]');
         if(copy){
             const msg = state.messages[Number(copy.dataset.xvCopy)];
