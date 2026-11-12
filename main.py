@@ -17445,6 +17445,27 @@ def agent_tools_unsupported(body):
             return True
     return False
 
+def _emit(on_event, event):
+    """把进度事件丢给调用方；回调写坏不能拖垮整个请求。"""
+    if not on_event:
+        return
+    try:
+        on_event(event)
+    except Exception as exc:
+        print(f"[agent-trace] 事件回调失败：{exc}")
+
+
+def _brief_args(args):
+    """工具入参太长（读文件路径/搜索词），只留能显示的一小截。"""
+    if not isinstance(args, dict):
+        return ""
+    for key in ("query", "url", "path", "action", "command", "selector", "text"):
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            return agent_truncate(value.strip(), 80)
+    return ""
+
+
 def agent_tool_event_from_result(call_id, name, args, result, round_index):
     return {
         "id": call_id or uuid.uuid4().hex,
@@ -17462,8 +17483,12 @@ def agent_tool_event_from_result(call_id, name, args, result, round_index):
         "round": round_index + 1,
     }
 
-async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, is_apimart, chat_base, chat_hdrs, model, tool_settings, user_id=None):
-    """带本机工具（终端 / 文件）的聊天：跑一个 tool-calling 循环，直到模型给出最终文字回复。"""
+async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, is_apimart, chat_base, chat_hdrs, model, tool_settings, user_id=None, on_event=None):
+    """带本机工具（终端 / 文件）的聊天：跑一个 tool-calling 循环，直到模型给出最终文字回复。
+
+    on_event(dict) 把「正在想什么 / 正在调哪个工具」实时推给前端（SSE 的 trace 事件），
+    没有回调时行为和以前完全一致。
+    """
     level = load_codex_permission()
     tools = agent_tool_schemas(level) + agent_always_on_tool_schemas()
     # 🚨 开了工具的会话同样要自动压缩：否则历史上限只剩 MAX_HISTORY_MESSAGES 条，
@@ -17519,6 +17544,9 @@ async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, 
                 last_usage = raw_data.get("usage")
             choices = (raw_data or {}).get("choices") or []
             message = (choices[0].get("message") if choices else None) or {}
+            _thinking = str(message.get("reasoning_content") or message.get("reasoning") or "").strip()
+            if _thinking:
+                _emit(on_event, {"type": "thinking", "text": agent_truncate(_thinking, 4000)})
             tool_calls = message.get("tool_calls") or []
             if tool_calls and tools:
                 upstream_messages.append({
@@ -17531,9 +17559,12 @@ async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, 
                     fn = call.get("function") or {}
                     name = str(fn.get("name") or "").strip()
                     args = agent_parse_tool_args(fn.get("arguments"))
+                    _emit(on_event, {"type": "tool_start", "name": name, "label": agent_tool_label(name), "args": _brief_args(args)})
                     result = await run_agent_tool(name, args)
                     event = agent_tool_event_from_result(call.get("id"), name, args, result, round_index)
                     tool_events.append(event)
+                    _emit(on_event, {"type": "tool_end", "name": name, "label": event["label"],
+                                      "ok": event["ok"], "summary": event["summary"]})
                     upstream_messages.append({
                         "role": "tool",
                         "tool_call_id": event["id"],
@@ -17564,7 +17595,7 @@ async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, 
         "tool_events": tool_events,
     }
 
-async def build_chat_text_reply(payload, conversation, user_id=None):
+async def build_chat_text_reply(payload, conversation, user_id=None, on_event=None):
     provider_cfg = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
     if is_codex_provider(provider_cfg):
         model = selected_model(payload.model, (provider_cfg.get("chat_models") or CODEX_DEFAULT_CHAT_MODELS)[0])
@@ -17599,7 +17630,7 @@ async def build_chat_text_reply(payload, conversation, user_id=None):
     tool_settings = load_agent_tools_settings()
     if tool_settings.get("enabled"):
         return await build_chat_text_reply_with_tools(
-            payload, conversation, provider_cfg, is_apimart, chat_base, chat_hdrs, model, tool_settings, user_id
+            payload, conversation, provider_cfg, is_apimart, chat_base, chat_hdrs, model, tool_settings, user_id, on_event
         )
     window, _ = await maybe_auto_compress(conversation, payload, user_id)
     upstream_messages = [{"role": "system", "content": chat_agent_system_prompt(payload, conversation)}]
@@ -25708,7 +25739,21 @@ async def chat_agent_events(payload: ChatRequest, request: Request, user_id: str
     else:
         yield {"event": "stage", "key": "answer", "model": payload.model or "",
                "label": "模型生成回复"}
-        assistant_message = await build_chat_text_reply(payload, conversation, user_id)
+        # 边跑边把「在调什么工具 / 在想什么」推出去：工具循环在另一个 task 里跑，
+        # 事件走队列，这里按 0.3s 节奏往外吐，页面就能实时显示执行过程。
+        _trace_q: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue()
+        _reply_task = asyncio.create_task(
+            build_chat_text_reply(payload, conversation, user_id, on_event=_trace_q.put_nowait)
+        )
+        while not _reply_task.done():
+            try:
+                _ev = await asyncio.wait_for(_trace_q.get(), timeout=0.3)
+            except asyncio.TimeoutError:
+                continue
+            yield {"event": "trace", "trace": _ev}
+        while not _trace_q.empty():
+            yield {"event": "trace", "trace": _trace_q.get_nowait()}
+        assistant_message = await _reply_task
         assistant_message["agent_action"] = "chat"
 
     # 小抽AI 计费（2026-11-10 老板要求「按无限画布 Agent 的计费逻辑」）：
