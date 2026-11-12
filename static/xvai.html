@@ -147,6 +147,21 @@
         .xv-modal-body { overflow:auto; padding:14px; display:flex; justify-content:center; }
         .xv-modal-body img { max-width:100%; max-height:64vh; border-radius:12px; display:block; }
         .xv-modal-body pre { margin:0; font-size:12px; line-height:1.6; white-space:pre-wrap; word-break:break-word; max-height:64vh; overflow:auto; min-width:min(640px,80vw); }
+        .xv-doc { width:min(720px,86vw); font-size:13px; line-height:1.7; color:var(--text); }
+        .xv-doc h3 { font-size:13px; font-weight:800; margin:14px 0 6px; }
+        .xv-doc h3:first-child { margin-top:0; }
+        .xv-doc p { margin:0 0 8px; }
+        .xv-doc table { border-collapse:collapse; width:100%; font-size:12px; margin-bottom:10px; }
+        .xv-doc th, .xv-doc td { border:1px solid var(--line); padding:4px 8px; text-align:left; vertical-align:top; white-space:pre-wrap; word-break:break-word; }
+        .xv-doc td { color:var(--text); }
+        .xv-doc pre { margin:0; font-size:12px; line-height:1.6; white-space:pre-wrap; word-break:break-word; }
+        .xv-doc-note { color:var(--muted); font-size:11px; }
+        .xv-pdf { width:min(760px,86vw); height:66vh; border:0; border-radius:12px; }
+        .xv-filecard { display:flex; flex-direction:column; align-items:center; gap:10px; padding:26px 18px; text-align:center; }
+        .xv-filecard .xv-filecard-name { font-size:13px; font-weight:700; word-break:break-all; }
+        .xv-filecard .xv-filecard-tip { font-size:11px; color:var(--muted); line-height:1.7; }
+        .xv-filecard-acts { display:flex; gap:8px; }
+        .xv-btn.xv-btn-primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
 
         /* 历史对话抽屉：左侧滑出，点条目换对话 */
         .xv-hist-mask { position:fixed; inset:0; z-index:70; background:rgba(2,6,23,.28); opacity:0; pointer-events:none; transition:opacity .18s; }
@@ -331,7 +346,7 @@
 <script>
 (function(){
     const $ = id => document.getElementById(id);
-    const OUT_RE = /(?:^|[\s("'=])((?:\/output|\/assets|\/api\/storage-files)\/[^\s)"'<>]+)/g;
+    const OUT_RE = /(?:^|[\s("'=:：])((?:\/output|\/assets|\/api\/storage-files)\/[^\s)"'<>]+)/g;
     const IMG_MD_RE = /!\[[^\]]*\]\(([^)\s]+)\)/g;
     const RATIOS = [
         ['square','1:1',1], ['landscape','3:2',3/2], ['portrait','2:3',2/3], ['landscape43','4:3',4/3],
@@ -903,6 +918,20 @@
     }
 
     // ---------- 预览 ----------
+    const PREVIEW_TEXT_EXTS = new Set(['txt','md','markdown','json','csv','tsv','log','py','js','ts','css','xml','yaml','yml','ini','bat','sh']);
+    const PREVIEW_OFFICE_EXTS = new Set(['xlsx','xlsm','xltx','docx','pptx']);
+    function fileExt(url){ const m = String(url || '').split('?')[0].match(/\.([a-z0-9]+)$/i); return m ? m[1].toLowerCase() : ''; }
+    function fileCard(url, tip){
+        return `<div class="xv-filecard">
+            <i data-lucide="file-text" style="width:34px;height:34px;color:var(--muted)"></i>
+            <div class="xv-filecard-name">${esc(fileName(url))}</div>
+            <div class="xv-filecard-tip">${esc(tip || '这种文件暂不支持在线预览')}<br>下载后用本地程序打开。</div>
+            <div class="xv-filecard-acts">
+                <a class="xv-btn xv-btn-primary" href="${esc(url)}" download>下载</a>
+                <a class="xv-btn" href="${esc(url)}" target="_blank" rel="noopener">新标签打开</a>
+            </div>
+        </div>`;
+    }
     async function openPreview(url, name){
         const body = $('xvModalBody');
         state.previewUrl = url;
@@ -922,13 +951,40 @@
             body.appendChild(img);
             return;
         }
-        try {
-            const res = await fetch(url);
-            const text = await res.text();
-            body.innerHTML = `<pre>${esc(text.slice(0, 200000))}</pre>`;
-        } catch(e) {
-            body.innerHTML = `<div style="color:#94a3b8;font-size:12px">打不开这个文件，直接下载看看。</div>`;
+        const ext = fileExt(url);
+        if(ext === 'pdf'){
+            body.innerHTML = `<iframe class="xv-pdf" src="${esc(url)}" title="${esc(name || fileName(url))}"></iframe>`;
+            return;
         }
+        if(PREVIEW_OFFICE_EXTS.has(ext)){
+            try {
+                const res = await fetch('/api/file-preview?url=' + encodeURIComponent(url));
+                if(!res.ok){
+                    const info = await res.json().catch(() => ({}));
+                    throw new Error(info.detail || '预览失败');
+                }
+                body.innerHTML = await res.text();
+                icons();
+                return;
+            } catch(e) {
+                body.innerHTML = fileCard(url, e.message || '预览失败，请下载查看');
+                icons();
+                return;
+            }
+        }
+        if(PREVIEW_TEXT_EXTS.has(ext)){
+            try {
+                const res = await fetch(url);
+                const text = await res.text();
+                body.innerHTML = `<pre>${esc(text.slice(0, 200000))}</pre>`;
+            } catch(e) {
+                body.innerHTML = fileCard(url, '打不开这个文件');
+            }
+            icons();
+            return;
+        }
+        body.innerHTML = fileCard(url);
+        icons();
     }
     function closePreview(){
         $('xvModal').classList.remove('open');

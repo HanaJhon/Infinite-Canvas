@@ -12000,6 +12000,102 @@ async def delete_storage_files(payload: Dict[str, Any]):
             pass
     return {"removed": removed}
 
+PREVIEW_TEXT_EXTS = {"txt", "md", "markdown", "json", "csv", "tsv", "log", "py", "js", "ts", "css", "xml", "yaml", "yml", "ini", "bat", "sh"}
+PREVIEW_ROW_LIMIT = 300
+PREVIEW_COL_LIMIT = 40
+
+def _preview_table_html(rows):
+    out = []
+    for row in rows:
+        cells = "".join("<td>%s</td>" % html.escape(str(c)) if c is not None else "<td></td>" for c in row)
+        out.append("<tr>%s</tr>" % cells)
+    return "<table>%s</table>" % "".join(out)
+
+def _preview_xlsx_html(path):
+    import openpyxl
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        parts = []
+        for ws in wb.worksheets[:5]:
+            parts.append("<h3>%s</h3>" % html.escape(str(ws.title)))
+            rows = []
+            truncated = False
+            for idx, row in enumerate(ws.iter_rows(values_only=True)):
+                if idx >= PREVIEW_ROW_LIMIT:
+                    truncated = True
+                    break
+                rows.append(list(row[:PREVIEW_COL_LIMIT]))
+            parts.append(_preview_table_html(rows))
+            if truncated:
+                parts.append("<p class=\"xv-doc-note\">表格较长，仅显示前 %d 行。</p>" % PREVIEW_ROW_LIMIT)
+        return "".join(parts)
+    finally:
+        wb.close()
+
+def _preview_docx_html(path):
+    import docx
+    document = docx.Document(path)
+    parts = []
+    for para in document.paragraphs:
+        text = para.text.strip()
+        if not text:
+            continue
+        style = (para.style.name or "").lower() if para.style else ""
+        tag = "h3" if ("heading" in style or "标题" in style) else "p"
+        parts.append("<%s>%s</%s>" % (tag, html.escape(text), tag))
+    for table in document.tables:
+        rows = []
+        for row in table.rows[:PREVIEW_ROW_LIMIT]:
+            rows.append([cell.text.strip() for cell in row.cells[:PREVIEW_COL_LIMIT]])
+        parts.append(_preview_table_html(rows))
+    return "".join(parts)
+
+def _preview_pptx_html(path):
+    from pptx import Presentation
+    deck = Presentation(path)
+    parts = []
+    for idx, slide in enumerate(deck.slides, 1):
+        if idx > 30:
+            parts.append("<p class=\"xv-doc-note\">共 %d 页，仅显示前 30 页。</p>" % len(deck.slides))
+            break
+        parts.append("<h3>第 %d 页</h3>" % idx)
+        for shape in slide.shapes:
+            frame = getattr(shape, "text_frame", None)
+            if not frame:
+                continue
+            for para in frame.paragraphs:
+                text = "".join(run.text for run in para.runs).strip()
+                if text:
+                    parts.append("<p>%s</p>" % html.escape(text))
+    return "".join(parts)
+
+@app.get("/api/file-preview")
+async def file_preview(url: str = ""):
+    path = output_file_from_url(url)
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="文件不存在或已被清理")
+    ext = os.path.splitext(path)[1].lower().lstrip(".")
+    try:
+        if ext in ("xlsx", "xlsm", "xltx"):
+            body = _preview_xlsx_html(path)
+        elif ext == "docx":
+            body = _preview_docx_html(path)
+        elif ext == "pptx":
+            body = _preview_pptx_html(path)
+        elif ext in PREVIEW_TEXT_EXTS:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                text = handle.read(400000)
+            body = "<pre>%s</pre>" % html.escape(text)
+        else:
+            raise HTTPException(status_code=415, detail="这种文件暂不支持在线预览，请直接下载")
+    except HTTPException:
+        raise
+    except ImportError:
+        raise HTTPException(status_code=415, detail="服务端缺少预览组件，请直接下载")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="预览失败：%s" % exc)
+    return HTMLResponse("<div class=\"xv-doc\">%s</div>" % body)
+
 @app.get("/api/asset-classification-prompt")
 async def get_asset_classification_prompt():
     current = load_asset_classification_prompt()
