@@ -59,6 +59,8 @@
         .xv-btn:hover { background:var(--line); color:var(--accent); }
         .xv-balance { height:28px; display:inline-flex; align-items:center; gap:5px; padding:0 10px; border-radius:999px; border:none; background:var(--soft); color:var(--text); font-size:12px; font-weight:500; font-variant-numeric:tabular-nums; white-space:nowrap; }
         .xv-cost { margin-top:7px; font-size:11px; font-weight:400; color:var(--muted); }
+        .xv-btn.on { background:var(--text); color:var(--paper); border-color:var(--text); }
+        .xv-btn.on i { color:var(--paper); }
         .xv-compact-note { align-self:center; margin:0 0 4px; padding:5px 12px; border-radius:999px; background:var(--soft); color:var(--muted); font-size:11px; }
         .xv-send-credit { font-size:11px; font-weight:500; color:var(--muted); margin-right:8px; font-variant-numeric:tabular-nums; white-space:nowrap; }
         .xv-badge { min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:var(--strong); color:var(--strong-text); font-size:10px; font-weight:600; display:inline-flex; align-items:center; justify-content:center; }
@@ -198,6 +200,9 @@
             </div>
             <div class="xv-head-right">
                 <span class="xv-balance" id="xvBalance" title="积分余额"><i data-lucide="wallet" style="width:13px;height:13px"></i><span id="xvBalanceNum">--</span></span>
+                <button class="xv-btn" type="button" id="xvBrowserBtn" title="允许 Agent 操作本机浏览器（真实 Edge 窗口）">
+                    <i data-lucide="mouse-pointer-click"></i><span>浏览器</span>
+                </button>
                 <button class="xv-btn" type="button" id="xvHistory" title="历史对话">
                     <i data-lucide="history"></i><span>历史</span>
                 </button>
@@ -1278,6 +1283,43 @@
         }
     }
     $('agentSendBtn').addEventListener('click', () => send());
+
+    // 浏览器控制授权：开关在后端（data/browser_control.json），刷新/换标签页都保持。
+    // 关闭时后端会把受控窗口一起关掉，不留后台进程。
+    function paintBrowserBtn(on){
+        const btn = $('xvBrowserBtn');
+        if(!btn) return;
+        btn.classList.toggle('on', !!on);
+        btn.title = on
+            ? '已授权：Agent 需要时会操作本机浏览器（点此关闭）'
+            : '允许 Agent 操作本机浏览器（真实 Edge 窗口）';
+    }
+    async function loadBrowserControl(){
+        try {
+            const res = await fetch('/api/browser/control', { cache:'no-store' });
+            if(!res.ok) return;
+            const data = await res.json();
+            paintBrowserBtn(data.enabled);
+        } catch(e) {}
+    }
+    $('xvBrowserBtn').addEventListener('click', async () => {
+        const btn = $('xvBrowserBtn');
+        const next = !btn.classList.contains('on');
+        try {
+            const res = await fetch('/api/browser/control', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ enabled: next })
+            });
+            if(!res.ok) throw new Error(`设置失败（${res.status}）`);
+            const data = await res.json();
+            paintBrowserBtn(data.enabled);
+            setHint(data.enabled ? '已授权操作浏览器：需要时会自动打开受控 Edge 窗口' : '已关闭浏览器控制');
+        } catch(err) {
+            setHint(err.message || '设置失败');
+        }
+    });
+    loadBrowserControl();
 
     // 上下文到阈值后端会把较早的消息压成一条摘要（status 里带 auto_compressed）。
     // 只加一条一次性提示，不写进对话记录 —— 刷新后以服务端摘要为准。

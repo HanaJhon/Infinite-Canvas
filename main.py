@@ -16,6 +16,7 @@ import time
 import traceback
 import shutil
 import ssl
+import browser_control as browser_ctl
 import glob
 import asyncio
 import logging
@@ -6912,6 +6913,86 @@ AGENT_VIDEO_TOOL_SPECS = [
         },
     },
 ]
+# ---- 浏览器控制：小抽AI 页的「允许操作浏览器」开关 --------------------------
+# 🚨 浏览器必须带 --remote-debugging-port 才能被驱动（浏览器安全边界）；没开就用
+#    browser_control 自己起一个可见的受控 Edge 窗口。用户点了开关才允许驱动。
+BROWSER_CONTROL_FILE = os.path.join(DATA_DIR, "browser_control.json")
+BROWSER_PROFILE_DIR = os.path.join(DATA_DIR, "browser_profile")
+_BROWSER_LOCK = asyncio.Lock()
+
+AGENT_BROWSER_TOOL_SPECS = [
+    {
+        "name": "browser",
+        "label": "浏览器操作",
+        "desc": (
+            "操作用户本机的浏览器（真实 Edge 窗口）：打开网页、读正文、点按钮、填输入框、"
+            "滚动、截图。需要登录才能看的页面、要在网站上提交表单/查后台数据、"
+            "或者 web_read 拿不到内容时用它。一次只做一步，做完看返回的正文再决定下一步。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["goto", "read", "click", "type", "key", "scroll", "screenshot"],
+                    "description": "动作：goto 打开网址；read 读当前页正文；click 点击元素；"
+                                   "type 输入文字；key 按键；scroll 滚动；screenshot 截图",
+                },
+                "url": {"type": "string", "description": "goto 用：网址"},
+                "selector": {"type": "string", "description": "click/type 用：CSS 选择器（优先用 text）"},
+                "text": {"type": "string", "description": "click 用：要点的按钮/链接上的文字"},
+                "value": {"type": "string", "description": "type 用：要输入的文字"},
+                "key": {"type": "string", "description": "key 用：Enter/Tab/Escape/ArrowDown 等"},
+                "delta": {"type": "integer", "description": "scroll 用：滚动像素，正数向下，默认 600"},
+            },
+            "required": ["action"],
+        },
+    },
+]
+
+AGENT_BROWSER_SYSTEM_HINT = (
+    "\n\n用户已授权你操作本机浏览器（工具 browser）。"
+    "\n- 需要登录态的网站、要真实点击/填写才出结果的页面 → 用 browser：先 goto，再用 read 看正文，"
+    "按页面文字决定 click 哪个按钮 / type 进哪个输入框。"
+    "\n- 每次只做一个动作，等返回的正文再决定下一步；点不到就换个更短的关键词当 text，别乱猜坐标。"
+    "\n- 页面正文很长，返回会被截断 —— 需要细节就再 read 一次或 scroll 往下看。"
+    "\n- 涉及付款、删除账号、发消息给他人这类不可撤销的操作，先向用户说明并等确认，不要自己点下去。"
+)
+
+
+class BrowserControlRequest(BaseModel):
+    enabled: bool = True
+
+
+def load_browser_control_settings():
+    enabled = False
+    try:
+        if os.path.exists(BROWSER_CONTROL_FILE):
+            with open(BROWSER_CONTROL_FILE, "r", encoding="utf-8-sig") as f:
+                enabled = bool((json.load(f) or {}).get("enabled"))
+    except Exception as exc:
+        print(f"加载浏览器控制设置失败: {exc}")
+    return {"enabled": enabled}
+
+
+def save_browser_control_settings(enabled):
+    data = load_browser_control_settings()
+    data["enabled"] = bool(enabled)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(BROWSER_CONTROL_FILE, "w", encoding="utf-8") as f:
+        json.dump({"enabled": data["enabled"], "updated_at": now_ms()}, f, ensure_ascii=False)
+    return data
+
+
+def agent_browser_hint():
+    """只有授权打开时才告诉模型它能操作浏览器 —— 否则等于骗它去调一个不存在的工具。"""
+    return AGENT_BROWSER_SYSTEM_HINT if load_browser_control_settings().get("enabled") else ""
+
+
+def agent_always_on_hints():
+    return AGENT_WEB_SYSTEM_HINT + AGENT_VIDEO_SYSTEM_HINT + agent_browser_hint()
+
+
 AGENT_ALWAYS_ON_TOOL_SPECS = AGENT_WEB_TOOL_SPECS + AGENT_VIDEO_TOOL_SPECS
 AGENT_ALWAYS_ON_TOOL_NAMES = [spec["name"] for spec in AGENT_ALWAYS_ON_TOOL_SPECS]
 
@@ -7217,7 +7298,42 @@ async def agent_tool_web_read(args):
     return await asyncio.to_thread(web_read_sync, args.get("url"), args.get("max_chars"))
 
 
+async def agent_tool_browser(args):
+    """驱动本机浏览器。未授权时直接拒绝 —— 授权是用户点的开关，不是模型自己决定的。"""
+    if not load_browser_control_settings().get("enabled"):
+        return {"ok": False, "summary": "用户没有授权操作浏览器（小抽AI 顶栏的「浏览器」开关）", "output": ""}
+    action = str(args.get("action") or "read").strip().lower()
+    try:
+        session = browser_ctl.get_session(BROWSER_PROFILE_DIR)
+        async with _BROWSER_LOCK:
+            await session.ensure()
+            if action == "goto":
+                return await session.goto(str(args.get("url") or ""))
+            if action == "click":
+                return await session.click(str(args.get("selector") or ""), str(args.get("text") or ""))
+            if action == "type":
+                return await session.type_text(str(args.get("value") or ""), str(args.get("selector") or ""))
+            if action == "key":
+                return await session.key(str(args.get("key") or "Enter"))
+            if action == "scroll":
+                return await session.scroll(int(args.get("delta") or 600))
+            if action == "screenshot":
+                name = f"shot_{now_ms()}.png"
+                result = await session.screenshot(os.path.join(AGENT_FILES_DIR, "browser", name))
+                result["url"] = f"/output/agent/browser/{name}"
+                result["output"] = result["url"]
+                return result
+            return await session.read()
+    except browser_ctl.BrowserControlError as exc:
+        return {"ok": False, "summary": f"浏览器操作失败：{exc}", "output": ""}
+    except Exception as exc:
+        return {"ok": False, "summary": f"浏览器操作异常：{exc}", "output": ""}
+
+
 def agent_always_on_tool_schemas():
+    specs = list(AGENT_ALWAYS_ON_TOOL_SPECS)
+    if load_browser_control_settings().get("enabled"):
+        specs += AGENT_BROWSER_TOOL_SPECS
     return [
         {
             "type": "function",
@@ -7227,7 +7343,7 @@ def agent_always_on_tool_schemas():
                 "parameters": spec["parameters"],
             },
         }
-        for spec in AGENT_ALWAYS_ON_TOOL_SPECS
+        for spec in specs
     ]
 
 
@@ -7947,6 +8063,9 @@ async def run_agent_tool(name, args):
     tool_name = str(name or "").strip()
     if not isinstance(args, dict):
         args = {}
+    # 浏览器控制单独一条：开关在用户手里，agent_tool_browser 内部自己校验授权
+    if tool_name == "browser":
+        return await agent_tool_browser(args)
     # 常驻工具单独放行：不受「本机工具」开关与权限档位约束（只读联网 / 只做 ffmpeg 编码）
     if tool_name in AGENT_ALWAYS_ON_TOOL_NAMES:
         try:
@@ -17296,7 +17415,7 @@ async def decide_chat_agent_action(payload, conversation, refs):
         return fallback
 
 def agent_tool_label(name):
-    for spec in AGENT_TOOL_SPECS + AGENT_ALWAYS_ON_TOOL_SPECS:
+    for spec in AGENT_TOOL_SPECS + AGENT_ALWAYS_ON_TOOL_SPECS + AGENT_BROWSER_TOOL_SPECS:
         if spec["name"] == name:
             return spec["label"]
     return name or "工具"
@@ -17355,7 +17474,7 @@ async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, 
         if isinstance(item, dict) and item.get("role") == "user"
     )
     _system = agent_profile_block() + chat_system_prompt(payload) + installed_skills_prompt_block(_recent_user) + agent_file_capability_block()
-    upstream_messages = [{"role": "system", "content": _system + AGENT_TOOLS_SYSTEM_HINT + AGENT_WEB_SYSTEM_HINT + AGENT_VIDEO_SYSTEM_HINT}]
+    upstream_messages = [{"role": "system", "content": _system + AGENT_TOOLS_SYSTEM_HINT + agent_always_on_hints()}]
     for item in window:
         msg = upstream_message_from_record(item)
         if msg:
@@ -19172,6 +19291,28 @@ async def codex_permissions_set(payload: CodexPermissionRequest):
     data = codex_permission_payload()
     data["saved"] = True
     return data
+
+@app.get("/api/browser/control")
+async def browser_control_get():
+    """小抽AI 顶栏「浏览器」开关的当前状态。"""
+    settings = load_browser_control_settings()
+    running = bool(browser_ctl._SESSION and browser_ctl._SESSION.proc)
+    return {"enabled": settings["enabled"], "running": running,
+            "profile": BROWSER_PROFILE_DIR,
+            "note": "开启后 Agent 需要时会自己打开一个受控 Edge 窗口；已开启调试端口的浏览器可直接接入"}
+
+
+@app.post("/api/browser/control")
+async def browser_control_set(payload: BrowserControlRequest):
+    """开关浏览器控制授权；关闭时顺手把受控窗口关掉，不留后台进程。"""
+    settings = save_browser_control_settings(payload.enabled)
+    if not settings["enabled"]:
+        try:
+            await browser_ctl.shutdown_session()
+        except Exception as exc:
+            print(f"[browser] 关闭受控窗口失败: {exc}")
+    return {"enabled": settings["enabled"]}
+
 
 @app.get("/api/agent/tools")
 async def agent_tools_get():
@@ -23183,7 +23324,7 @@ async def canvas_llm(payload: CanvasLLMRequest):
     if local_tools:
         # 本机工具说明只在真的有 run_shell/read_file 时才注入，否则等于骗模型去调不存在的工具
         system_prompt = (system_prompt + AGENT_TOOLS_SYSTEM_HINT).strip()
-    system_prompt = (system_prompt + AGENT_WEB_SYSTEM_HINT + AGENT_VIDEO_SYSTEM_HINT).strip()
+    system_prompt = (system_prompt + agent_always_on_hints()).strip()
     upstream_messages = [{"role": "system", "content": system_prompt}] if system_prompt else []
     for item in payload.messages[-MAX_HISTORY_MESSAGES:]:
         role = item.get("role")
