@@ -1126,6 +1126,9 @@
                 const input = document.getElementById('promptInput');
                 const current = input.value.trim();
                 input.value = current ? `${current}\n${sentence}` : sentence;
+                if(REF_EDITOR_BRIDGE && window.parent !== window){
+                    window.parent.postMessage({ type:'xvai-ref-edited', url:(refs[edit.slot]?.url || REF_EDITOR_BRIDGE.src), slot:edit.slot, mode:'angle', prompt:sentence }, '*');
+                }
                 closeRefEditor();
                 return;
             }
@@ -1156,6 +1159,9 @@
                     refMaskBadge(slot);
                     edit.busy = false;
                     closeRefEditor();
+                    if(REF_EDITOR_BRIDGE && window.parent !== window){
+                        window.parent.postMessage({ type:'xvai-ref-editor-note', text:'遮罩局部重绘要用「在线生图」；小抽AI 这边先用扩图 / 视角 / 画笔' }, '*');
+                    }
                     toastSafe('遮罩已就绪：写清要改什么，直接点生成');
                 } catch(err) {
                     alert(err.message || '遮罩准备失败');
@@ -1187,19 +1193,23 @@
             const name = `${(refs[slot]?.name || 'ref').replace(/\.[^.]+$/, '')}_${mode}.png`;
             const file = await uploadRefBlob(blob, name);
             if(!file?.url){ alert('上传失败'); return; }
-            if(!(await replaceRefImage(slot, file, {width, height}))) return;
+            const snap = v => Math.max(64, Math.round(v / 16) * 16);
+            const outpaintHint = mode === 'outpaint' ? 'Remove white area and fill the scene' : '';
+            if(!(await replaceRefImage(slot, file, {width, height}, {
+                mode, prompt:outpaintHint,
+                width: mode === 'outpaint' ? snap(width) : width,
+                height: mode === 'outpaint' ? snap(height) : height
+            }))) return;
             if(mode === 'outpaint'){
                 // 尺寸切成扩后的像素（16 对齐），提示词补一句让模型把白边画满
-                const snap = v => Math.max(64, Math.round(v / 16) * 16);
                 resolution = 'custom';
                 ratio = '';
                 customWidth = snap(width);
                 customHeight = snap(height);
                 updateSizeUI();
                 const input = document.getElementById('promptInput');
-                const hint = 'Remove white area and fill the scene';
-                if(!input.value.toLowerCase().includes(hint.toLowerCase())){
-                    input.value = input.value.trim() ? `${input.value.trim()}\n${hint}` : hint;
+                if(!input.value.toLowerCase().includes(outpaintHint.toLowerCase())){
+                    input.value = input.value.trim() ? `${input.value.trim()}\n${outpaintHint}` : outpaintHint;
                 }
             }
             closeRefEditor();
@@ -1981,7 +1991,7 @@
                 return data?.files?.[0] || null;
             } catch(err) { return null; }
         }
-        async function replaceRefImage(slot, file, dim){
+        async function replaceRefImage(slot, file, dim, extra){
             if(!file?.url) return false;
             refs[slot] = {...(refs[slot] || {}), ...file};
             const prev = document.getElementById(`prev${slot}`);
@@ -1995,7 +2005,8 @@
             refMaskBadge(slot);
             updateSizeUI();
             if(REF_EDITOR_BRIDGE && window.parent !== window){
-                window.parent.postMessage({ type:'xvai-ref-edited', url:file.url, slot }, '*');
+                // 外部页面要靠这条消息把「图 + 该配的提示词」一起填进输入栏，只给图等于让用户自己猜要说什么
+                window.parent.postMessage({ type:'xvai-ref-edited', url:file.url, slot, ...(extra || {}) }, '*');
             }
             return true;
         }

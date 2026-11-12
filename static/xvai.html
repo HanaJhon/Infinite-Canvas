@@ -1456,13 +1456,20 @@
         const onMsg = ev => {
             const data = ev.data || {};
             if(data.type === 'xvai-ref-editor-closed'){ close(); return; }
+            if(data.type === 'xvai-ref-editor-note'){ setHint(data.text || ''); return; }
             if(data.type !== 'xvai-ref-edited') return;
             close();
             if(!data.url) return;
-            addRef({ url:data.url, name:'edited.png' });
-            state.messages.push({ role:'assistant', content:'已把编辑结果放进参考图，可以直接说要把这块改成什么。', image_urls:[data.url] });
-            renderThread();
-            renderOutputs();
+            // 和在线生图「应用」后的效果一致：编辑结果 + 该配的提示词一起填进输入栏，
+            // 只塞图不给话术，用户还得自己想该说什么（扩图会出白边、视角得写出机位）。
+            const prompt = String(data.prompt || '').trim();
+            const text = readInput();
+            const next = prompt ? (text ? `${text}\n${prompt}` : prompt) : text;
+            const refs = inputRefs();
+            if(!refs.some(ref => ref.url === data.url)) refs.push({ url:data.url, name:'edited.png' });
+            setInputContent(next, refs);
+            focusInputEnd();
+            setHint(data.mode === 'angle' ? '视角要求已写进输入栏，直接发送即可' : '编辑结果已放进输入栏，补一句话就能发送');
         };
         function close(){
             window.removeEventListener('message', onMsg);
