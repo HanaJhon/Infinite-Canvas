@@ -131,6 +131,34 @@
         .xv-progress-step { display:inline-flex; align-items:center; height:22px; padding:0 9px; border-radius:999px; background:var(--soft); color:var(--muted); font-size:11px; }
         .xv-progress-step.active { background:var(--strong); color:var(--strong-text); }
         /* 执行过程：思考 / 搜索 / 浏览 / 浏览器动作逐条实时列出（对齐参考产品的 trace 列表） */
+        /* 模型回复的 Markdown 排版（表格 / 代码块 / 标题 / 列表）——照参考产品那种可读性 */
+        .xv-md { font-size:13.5px; line-height:1.7; color:var(--text); }
+        .xv-md p { margin:0 0 10px; }
+        .xv-md p:last-child { margin-bottom:0; }
+        .xv-md h3, .xv-md h4, .xv-md h5, .xv-md h6 { margin:16px 0 8px; font-size:14px; font-weight:700; line-height:1.5; }
+        .xv-md h3 { font-size:15.5px; }
+        .xv-md ul, .xv-md ol { margin:0 0 10px; padding-left:20px; }
+        .xv-md ul { list-style:disc; }
+        .xv-md ol { list-style:decimal; }
+        .xv-md li::marker { color:var(--faint); }
+        .xv-msg .xv-bubble:not(:only-child) { flex:1 1 auto; min-width:0; }
+        .xv-msg.user .xv-bubble { flex:0 1 auto; }
+        .xv-md li { margin:3px 0; }
+        .xv-md strong { font-weight:700; }
+        .xv-md code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px; background:var(--soft); border-radius:5px; padding:1px 5px; }
+        .xv-md a { color:var(--text); text-decoration:underline; text-underline-offset:2px; }
+        .xv-md hr { border:none; border-top:1px solid var(--line); margin:14px 0; }
+        .xv-md-table { overflow-x:auto; margin:10px 0 12px; border:1px solid var(--line); border-radius:12px; }
+        .xv-md-table table { width:100%; border-collapse:collapse; font-size:12.5px; }
+        .xv-md-table th, .xv-md-table td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+        .xv-md-table th { background:var(--soft); font-weight:700; white-space:nowrap; }
+        .xv-md-table tr:last-child td { border-bottom:none; }
+        .xv-code { margin:10px 0 12px; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--soft); }
+        .xv-code-head { display:flex; align-items:center; justify-content:space-between; padding:6px 10px; font-size:11px; color:var(--muted); border-bottom:1px solid var(--line); }
+        .xv-code-copy { border:none; background:transparent; color:var(--muted); font-size:11px; cursor:pointer; padding:2px 6px; border-radius:6px; }
+        .xv-code-copy:hover { background:var(--line); color:var(--text); }
+        .xv-code pre { margin:0; padding:11px 12px; overflow-x:auto; }
+        .xv-code code { background:transparent; padding:0; font-size:12.5px; line-height:1.65; }
         .xv-trace { display:flex; flex-direction:column; gap:6px; margin:2px 0 8px; }
         .xv-trace-row { display:flex; align-items:flex-start; gap:7px; font-size:12px; line-height:1.6; color:var(--muted); }
         .xv-trace-row svg { width:13px; height:13px; flex:0 0 auto; margin-top:3px; opacity:.75; }
@@ -891,6 +919,90 @@
             if(num) num.textContent = String(data.balance ?? '--');
         } catch(e) {}
     }
+    // ---------- Markdown（模型回复排版）----------
+    // ponytail: 自带一个百来行的子集渲染器，不引 marked/DOMPurify —— 发布包是离线的，
+    // 多两个 vendor 文件就多两处要维护的版本。先做模型最常用的语法；贴上来前先 esc，无注入面。
+    function mdInline(text){
+        let out = esc(text);
+        out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+        out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+        out = out.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
+            '<a href="$2" target="_blank" rel="noopener">$1</a>');
+        return out;
+    }
+    function mdRowCells(line){
+        return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+    }
+    function mdTable(headLine, rowLines){
+        const head = mdRowCells(headLine).map(c => `<th>${mdInline(c)}</th>`).join('');
+        const body = rowLines.map(r => `<tr>${mdRowCells(r).map(c => `<td>${mdInline(c)}</td>`).join('')}</tr>`).join('');
+        return `<div class="xv-md-table"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+    }
+    function renderMarkdown(src){
+        const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
+        const out = [];
+        let list = '';
+        const closeList = () => { if(list){ out.push(list === 'ul' ? '</ul>' : '</ol>'); list = ''; } };
+        let i = 0;
+        while(i < lines.length){
+            const line = lines[i];
+            let m = line.match(/^\s*```\s*([\w+-]*)\s*$/);
+            if(m){
+                closeList();
+                const lang = m[1] || '';
+                const buf = [];
+                i++;
+                while(i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
+                i++;
+                out.push(`<div class="xv-code"><div class="xv-code-head"><span>${esc(lang || 'text')}</span>` +
+                    `<button type="button" class="xv-code-copy" data-xv-code-copy>复制</button></div>` +
+                    `<pre><code>${esc(buf.join('\n'))}</code></pre></div>`);
+                continue;
+            }
+            if(line.includes('|') && i + 1 < lines.length && /-/.test(lines[i + 1])
+                && /^\s*\|?[\s:|-]+\|[-\s:|]*$/.test(lines[i + 1])){
+                closeList();
+                const rows = [];
+                const headLine = line;
+                i += 2;
+                while(i < lines.length && lines[i].trim() && lines[i].includes('|')) rows.push(lines[i++]);
+                out.push(mdTable(headLine, rows));
+                continue;
+            }
+            m = line.match(/^(#{1,4})\s+(.*)$/);
+            if(m){
+                closeList();
+                const lv = Math.min(4, m[1].length) + 2;
+                out.push(`<h${lv}>${mdInline(m[2])}</h${lv}>`);
+                i++;
+                continue;
+            }
+            if(/^\s*(-{3,}|\*{3,})\s*$/.test(line)){ closeList(); out.push('<hr>'); i++; continue; }
+            m = line.match(/^\s*([-*+]|\d+\.)\s+(.*)$/);
+            if(m){
+                const kind = /\d/.test(m[1]) ? 'ol' : 'ul';
+                if(list !== kind){ closeList(); out.push(kind === 'ul' ? '<ul>' : '<ol>'); list = kind; }
+                out.push(`<li>${mdInline(m[2])}</li>`);
+                i++;
+                continue;
+            }
+            if(!line.trim()){ closeList(); i++; continue; }
+            const buf = [line];
+            i++;
+            while(i < lines.length && lines[i].trim()
+                && !/^\s*```/.test(lines[i]) && !/^#{1,4}\s/.test(lines[i])
+                && !/^\s*([-*+]|\d+\.)\s+/.test(lines[i])
+                && !(lines[i].includes('|') && /-/.test(lines[i]))){
+                buf.push(lines[i++]);
+            }
+            closeList();
+            out.push(`<p>${mdInline(buf.join('\n'))}</p>`);
+        }
+        closeList();
+        return out.join('');
+    }
+
     // ---------- 执行过程（trace）----------
     function toolTraceItems(msg){
         return ((msg && msg.tool_events) || []).map(e => ({
@@ -959,7 +1071,8 @@
                 ? `<div class="xv-msg-atts">${(msg.attachments || []).map(a =>
                     `<img src="${esc(a.url)}" alt="${esc(a.name || '')}" loading="lazy" data-xv-zoom="${esc(a.url)}">`).join('')}</div>`
                 : '';
-            const bubble = `<div class="xv-bubble">${mine ? '' : traceHtml(toolTraceItems(msg))}${esc(msg.content || '')}${atts}${cards}${creditsChip(msg)}</div>`;
+            const body = mine ? esc(msg.content || '') : `<div class="xv-md">${renderMarkdown(msg.content || '')}</div>`;
+            const bubble = `<div class="xv-bubble">${mine ? '' : traceHtml(toolTraceItems(msg))}${body}${atts}${cards}${creditsChip(msg)}</div>`;
             return `<div class="xv-msg ${mine ? 'user' : 'assistant'}">
                 <div class="xv-avatar">${mine ? '我' : 'AI'}</div>
                 ${bubble}
@@ -1481,6 +1594,17 @@
         if(item) openPreview(item.url, item.name);
     });
     $('xvThread').addEventListener('click', ev => {
+        const codeCopy = ev.target.closest('[data-xv-code-copy]');
+        if(codeCopy){
+            const pre = codeCopy.closest('.xv-code')?.querySelector('pre');
+            if(pre && navigator.clipboard){
+                navigator.clipboard.writeText(pre.innerText || '').then(() => {
+                    codeCopy.textContent = '已复制';
+                    setTimeout(() => { codeCopy.textContent = '复制'; }, 1400);
+                }).catch(() => {});
+            }
+            return;
+        }
         const zoom = ev.target.closest('[data-xv-zoom]');
         if(zoom){ openPreview(zoom.dataset.xvZoom, fileName(zoom.dataset.xvZoom)); return; }
         // 回溯：点「编辑」把这条 user 消息（含附件）搬回输入栏，改完直接发送
