@@ -16,7 +16,6 @@ import time
 import traceback
 import shutil
 import ssl
-import browser_control as browser_ctl
 import glob
 import asyncio
 import logging
@@ -53,6 +52,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+import browser_control as browser_ctl
 import hunyuan3d_client
 from hunyuan3d_client import Hunyuan3DBrowserClient, Hunyuan3DError, Hunyuan3DNeedLogin
 
