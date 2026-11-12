@@ -246,6 +246,20 @@
         .xv-hist-title { font-size:12.5px; font-weight:700; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .xv-hist-sub { font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .xv-hist-empty { padding:22px 14px; font-size:12px; color:var(--muted); text-align:center; }
+        /* 内置浏览器：右侧滑出，画面按帧回传，点/滚/打字都能接管 */
+        .xv-browser { position:fixed; top:0; right:0; width:min(640px, 52vw); height:100vh; background:var(--bg); border-left:1px solid var(--line); display:flex; flex-direction:column; transform:translateX(102%); transition:transform .24s ease; z-index:70; }
+        .xv-browser.open { transform:none; box-shadow:var(--shadow-card); }
+        .xv-browser-bar { display:flex; align-items:center; gap:6px; padding:10px 12px; border-bottom:1px solid var(--line); }
+        .xv-browser-url { flex:1 1 auto; min-width:0; height:28px; border:1px solid var(--line); border-radius:8px; background:var(--soft); padding:0 10px; font-size:12px; color:var(--text); outline:none; }
+        .xv-browser-url:focus { border-color:var(--faint); background:var(--bg); }
+        .xv-browser-live { width:7px; height:7px; border-radius:50%; background:var(--text); opacity:.22; flex:0 0 auto; }
+        .xv-browser-live.on { opacity:1; animation:xvPulse 1.2s ease-in-out infinite; }
+        .xv-browser-body { position:relative; flex:1 1 auto; overflow:hidden; background:var(--soft); }
+        .xv-browser-body img { width:100%; height:100%; object-fit:contain; display:block; cursor:pointer; outline:none; }
+        .xv-browser-body img[hidden] { display:none; }
+        .xv-browser-empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:12px; color:var(--muted); text-align:center; padding:24px; line-height:1.7; }
+        .xv-browser-empty[hidden] { display:none; }
+        @media (max-width: 900px) { .xv-browser { width:100vw; } }
         .xv-hist-run { width:6px; height:6px; border-radius:50%; background:var(--text); display:inline-block; margin-right:6px; animation:xvPulse 1.2s ease-in-out infinite; }
         @keyframes xvPulse { 0%,100% { opacity:.25 } 50% { opacity:1 } }
     </style>
@@ -260,7 +274,7 @@
             </div>
             <div class="xv-head-right">
                 <span class="xv-balance" id="xvBalance" title="积分余额"><i data-lucide="wallet" style="width:13px;height:13px"></i><span id="xvBalanceNum">--</span></span>
-                <button class="xv-btn" type="button" id="xvBrowserBtn" title="允许 Agent 操作本机浏览器（真实 Edge 窗口）">
+                <button class="xv-btn" type="button" id="xvBrowserBtn" title="打开内置浏览器：能看见 AI 正在操作什么">
                     <i data-lucide="mouse-pointer-click"></i><span>浏览器</span>
                 </button>
                 <button class="xv-btn" type="button" id="xvHistory" title="历史对话">
@@ -401,6 +415,21 @@
 </div>
 
 <div class="xv-hist-mask" id="xvHistMask"></div>
+<section class="xv-browser" id="xvBrowser" aria-hidden="true">
+    <div class="xv-browser-bar">
+        <button class="xv-icon-btn" type="button" data-xv-bn="back" title="后退"><i data-lucide="arrow-left"></i></button>
+        <button class="xv-icon-btn" type="button" data-xv-bn="forward" title="前进"><i data-lucide="arrow-right"></i></button>
+        <button class="xv-icon-btn" type="button" data-xv-bn="reload" title="刷新"><i data-lucide="rotate-cw"></i></button>
+        <input class="xv-browser-url" id="xvBrowserUrl" placeholder="输入网址后回车" spellcheck="false" autocomplete="off">
+        <span class="xv-browser-live" id="xvBrowserLive" title="AI 正在操作"></span>
+        <button class="xv-icon-btn" type="button" id="xvBrowserClose" title="关闭内置浏览器"><i data-lucide="x"></i></button>
+    </div>
+    <div class="xv-browser-body" id="xvBrowserBody">
+        <img id="xvBrowserImg" alt="内置浏览器画面" tabindex="0" hidden>
+        <div class="xv-browser-empty" id="xvBrowserEmpty">正在启动内置浏览器…</div>
+    </div>
+</section>
+
 <aside class="xv-hist" id="xvHist">
     <div class="xv-hist-head">
         <b>历史对话</b>
@@ -1057,6 +1086,7 @@
         const live = r ? isActiveRun(r) : true;
         const list = run.trace || (run.trace = []);
         if(ev.type === 'tool_start'){
+            if((ev.name || '') === 'browser') openBrowserPanel();
             list.push({ kind:'tool', label:ev.label || ev.name || '工具',
                 summary: ev.args ? `正在执行 · ${ev.args}` : '正在执行…', running:true });
             run.label = `正在执行 · ${ev.label || ev.name || '工具'}`;
@@ -1585,42 +1615,114 @@
         else send();
     });
 
-    // 浏览器控制授权：开关在后端（data/browser_control.json），刷新/换标签页都保持。
-    // 关闭时后端会把受控窗口一起关掉，不留后台进程。
-    function paintBrowserBtn(on){
-        const btn = $('xvBrowserBtn');
-        if(!btn) return;
-        btn.classList.toggle('on', !!on);
-        btn.title = on
-            ? '已授权：Agent 需要时会操作本机浏览器（点此关闭）'
-            : '允许 Agent 操作本机浏览器（真实 Edge 窗口）';
+    /* ---------- 内置浏览器：画面按帧回传，Agent 和自己都能在里面操作 ---------- */
+    const browserView = { es: null, w: 0, h: 0, url: '' };
+    function setBrowserEmpty(text){
+        const box = $('xvBrowserEmpty');
+        if(!box) return;
+        if(!text){ box.hidden = true; return; }
+        box.hidden = false;
+        box.textContent = text;
     }
-    async function loadBrowserControl(){
-        try {
-            const res = await fetch('/api/browser/control', { cache:'no-store' });
-            if(!res.ok) return;
-            const data = await res.json();
-            paintBrowserBtn(data.enabled);
-        } catch(e) {}
+    function openBrowserPanel(){
+        const box = $('xvBrowser');
+        if(!box || box.classList.contains('open')) return;
+        box.classList.add('open');
+        box.setAttribute('aria-hidden', 'false');
+        $('xvBrowserBtn').classList.add('on');
+        $('xvBrowserImg').hidden = true;
+        setBrowserEmpty('正在启动内置浏览器…');
+        startBrowserStream();
     }
-    $('xvBrowserBtn').addEventListener('click', async () => {
-        const btn = $('xvBrowserBtn');
-        const next = !btn.classList.contains('on');
+    function closeBrowserPanel(){
+        const box = $('xvBrowser');
+        if(!box) return;
+        box.classList.remove('open');
+        box.setAttribute('aria-hidden', 'true');
+        $('xvBrowserBtn').classList.remove('on');
+        $('xvBrowserLive').classList.remove('on');
+        if(browserView.es){ browserView.es.close(); browserView.es = null; }
+    }
+    function startBrowserStream(){
+        if(browserView.es) return;
+        const es = new EventSource('/api/browser/live');
+        browserView.es = es;
+        es.onmessage = ev => {
+            let d;
+            try { d = JSON.parse(ev.data); } catch(e) { return; }
+            if(d.event === 'error'){ setBrowserEmpty('内置浏览器没起来：' + (d.detail || '未知错误')); return; }
+            if(d.event === 'frame') paintFrame(d);
+        };
+        // 断线由 EventSource 自己重连；面板关掉时我们主动 close 掉
+    }
+    function paintFrame(d){
+        if(!d || !d.image) return;
+        browserView.w = Number(d.width) || browserView.w;
+        browserView.h = Number(d.height) || browserView.h;
+        browserView.url = d.url || browserView.url;
+        const img = $('xvBrowserImg');
+        img.src = 'data:image/jpeg;base64,' + d.image;
+        if(img.hidden){ img.hidden = false; setBrowserEmpty(''); }
+        const bar = $('xvBrowserUrl');
+        if(document.activeElement !== bar && browserView.url) bar.value = browserView.url;
+    }
+    async function browserInput(payload){
         try {
-            const res = await fetch('/api/browser/control', {
+            await fetch('/api/browser/input', {
                 method:'POST',
                 headers:{'Content-Type':'application/json'},
-                body: JSON.stringify({ enabled: next })
+                body: JSON.stringify(payload)
             });
-            if(!res.ok) throw new Error(`设置失败（${res.status}）`);
-            const data = await res.json();
-            paintBrowserBtn(data.enabled);
-            setHint(data.enabled ? '已授权操作浏览器：需要时会自动打开受控 Edge 窗口' : '已关闭浏览器控制');
-        } catch(err) {
-            setHint(err.message || '设置失败');
+        } catch(e) {}
+    }
+    function browserPoint(ev){
+        const img = $('xvBrowserImg');
+        const rect = img.getBoundingClientRect();
+        if(!rect.width || !browserView.w || !browserView.h) return null;
+        return {
+            x: Math.round((ev.clientX - rect.left) * browserView.w / rect.width),
+            y: Math.round((ev.clientY - rect.top) * browserView.h / rect.height)
+        };
+    }
+    $('xvBrowserBtn').addEventListener('click', () => {
+        if($('xvBrowser').classList.contains('open')) closeBrowserPanel();
+        else openBrowserPanel();
+    });
+    $('xvBrowserClose').addEventListener('click', async () => {
+        closeBrowserPanel();
+        try { await fetch('/api/browser/close', { method:'POST' }); } catch(e) {}
+    });
+    $('xvBrowser').addEventListener('click', ev => {
+        const btn = ev.target.closest('[data-xv-bn]');
+        if(!btn) return;
+        browserInput({ type: btn.dataset.xvBn });
+    });
+    $('xvBrowserImg').addEventListener('click', ev => {
+        const p = browserPoint(ev);
+        if(p) browserInput({ type:'click', x:p.x, y:p.y });
+    });
+    $('xvBrowserImg').addEventListener('wheel', ev => {
+        const p = browserPoint(ev);
+        if(!p) return;
+        ev.preventDefault();
+        browserInput({ type:'wheel', x:p.x, y:p.y, delta: Math.round(ev.deltaY) || 600 });
+    }, { passive:false });
+    const BROWSER_KEYS = ['Enter','Tab','Escape','Backspace','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Delete','Home','End','PageUp','PageDown'];
+    $('xvBrowserImg').addEventListener('keydown', ev => {
+        if(BROWSER_KEYS.indexOf(ev.key) >= 0){
+            ev.preventDefault();
+            browserInput({ type:'key', key: ev.key });
+        } else if(ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey){
+            ev.preventDefault();
+            browserInput({ type:'text', text: ev.key });
         }
     });
-    loadBrowserControl();
+    $('xvBrowserUrl').addEventListener('keydown', ev => {
+        if(ev.key !== 'Enter') return;
+        const url = String(ev.currentTarget.value || '').trim();
+        if(url) browserInput({ type:'goto', url });
+        ev.currentTarget.blur();
+    });
 
     // 上下文到阈值后端会把较早的消息压成一条摘要（status 里带 auto_compressed）。
     // 只加一条一次性提示，不写进对话记录 —— 刷新后以服务端摘要为准。

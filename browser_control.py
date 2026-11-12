@@ -1,4 +1,8 @@
-"""小抽AI 的浏览器控制通道 —— 用 CDP 驱动 Edge，让 Agent 真的能点网页。
+"""小抽AI 的内置浏览器 —— 用 CDP 驱动无头 Edge，画面实时回传给页面显示。
+
+它是「可视化内置浏览器」：浏览器进程在服务端跑（默认无头），小抽AI 页面
+右侧面板按帧显示它的画面，用户能直接看到 Agent 正在点哪里、填了什么；
+同一个面板也能自己动手（点、滚动、打字都由页面把坐标转给 CDP）。
 
 为什么是 CDP 而不是扩展 / Playwright
 -----------------------------------
@@ -7,11 +11,11 @@
 
 🚨 「控制当前打开的那个浏览器窗口」有个硬前提：那个进程必须带
    `--remote-debugging-port` 启动，否则浏览器不对外暴露 CDP，谁也连不上
-   （这是浏览器的安全边界，不是我们没做）。所以本模块的策略是：
-     1. 已经有我们（或用户）开的受控窗口 → 直接复用；
+   （这是浏览器的安全边界，不是我们没做）。所以本模块自己起一个浏览器：
+     1. 已经有我们开的浏览器 → 直接复用；
      2. 环境变量 `BROWSER_CDP_URL` 指到某个调试端口 → 接上去；
-     3. 都没有 → 起一个**可见的** Edge 受控窗口（独立 profile，登录一次就记住）。
-   用户看到的就是一个普通 Edge 窗口，Agent 在里面点。
+     3. 都没有 → 起一个无头 Edge（独立 profile，登录一次就记住）。
+   想要一个真的窗口盯着看，设 `BROWSER_VISIBLE=1` 就带窗口启动。
 
 设计约束：
   * 一个进程一个 profile，同一时刻只有一个标签页被驱动（串行锁）；
@@ -81,19 +85,22 @@ class _CDP:
     def __init__(self, ws):
         self.ws = ws
         self._id = 0
+        # 收帧（SSE）和 Agent 的动作会同时打进来，一条连接只能一问一答 ⇒ 排队
+        self._lock = asyncio.Lock()
 
     async def send(self, method: str, params: Optional[dict] = None, timeout: float = ACTION_TIMEOUT):
-        self._id += 1
-        mid = self._id
-        await self.ws.send(json.dumps({"id": mid, "method": method, "params": params or {}}))
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            raw = await asyncio.wait_for(self.ws.recv(), timeout=max(1.0, deadline - time.time()))
-            msg = json.loads(raw)
-            if msg.get("id") == mid:
-                if "error" in msg:
-                    raise BrowserControlError(f"浏览器执行 {method} 失败：{msg['error']}")
-                return msg.get("result")
+        async with self._lock:
+            self._id += 1
+            mid = self._id
+            await self.ws.send(json.dumps({"id": mid, "method": method, "params": params or {}}))
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                raw = await asyncio.wait_for(self.ws.recv(), timeout=max(1.0, deadline - time.time()))
+                msg = json.loads(raw)
+                if msg.get("id") == mid:
+                    if "error" in msg:
+                        raise BrowserControlError(f"浏览器执行 {method} 失败：{msg['error']}")
+                    return msg.get("result")
         raise BrowserControlError(f"浏览器执行 {method} 超时")
 
     async def eval(self, expression: str, timeout: float = ACTION_TIMEOUT):
@@ -144,9 +151,13 @@ class BrowserSession:
             f"--user-data-dir={self.profile_dir}",
             "--no-first-run",
             "--no-default-browser-check",
-            "--window-size=1280,900",
-            "about:blank",
+            "--window-size=1280,860",
+            # 默认无头：画面回传给小抽AI 页面显示，不在桌面上另开窗口
+            "--hide-scrollbars",
         ]
+        if not os.getenv("BROWSER_VISIBLE"):
+            args.append("--headless=new")
+        args.append("about:blank")
         # 剥掉代理环境变量（本机代理会让浏览器访问外网变慢）；Edge 自己读系统代理，不受影响
         env = dict(os.environ)
         for key in _PROXY_ENV_KEYS:
@@ -315,6 +326,49 @@ class BrowserSession:
         await self.cdp.eval(f"window.scrollBy(0, {int(delta_y)})")
         await asyncio.sleep(0.2)
         return await self.read()
+
+    # ---------------------------------------------------------------- 画面与真人操作
+
+    async def capture(self, quality: int = 50) -> Dict[str, Any]:
+        """取一帧 JPEG（base64），顺带把地址和视口尺寸带回去给页面换算坐标。"""
+        res = await self.cdp.send("Page.captureScreenshot", {
+            "format": "jpeg", "quality": int(quality), "captureBeyondViewport": False,
+        }, timeout=15)
+        vp = await self.cdp.eval(
+            "(() => ({ w: window.innerWidth, h: window.innerHeight,"
+            " url: location.href, title: document.title }))()"
+        ) or {}
+        return {
+            "image": (res or {}).get("data") or "",
+            "width": int(vp.get("w") or 0),
+            "height": int(vp.get("h") or 0),
+            "url": vp.get("url") or "",
+            "title": vp.get("title") or "",
+        }
+
+    async def click_at(self, x: float, y: float) -> None:
+        for kind in ("mouseMoved", "mousePressed", "mouseReleased"):
+            await self.cdp.send("Input.dispatchMouseEvent", {
+                "type": kind, "x": float(x), "y": float(y), "button": "left", "clickCount": 1,
+            })
+
+    async def wheel(self, x: float, y: float, delta: int) -> None:
+        await self.cdp.send("Input.dispatchMouseEvent", {
+            "type": "mouseWheel", "x": float(x), "y": float(y),
+            "deltaX": 0, "deltaY": int(delta), "button": "none",
+        })
+
+    async def reload_page(self) -> None:
+        await self.cdp.send("Page.reload", {})
+        await self._wait_ready()
+
+    async def go_back(self) -> None:
+        await self.cdp.eval("history.back()")
+        await self._wait_ready(timeout=8)
+
+    async def go_forward(self) -> None:
+        await self.cdp.eval("history.forward()")
+        await self._wait_ready(timeout=8)
 
     async def screenshot(self, path: str) -> Dict[str, Any]:
         res = await self.cdp.send("Page.captureScreenshot", {"format": "png"})
