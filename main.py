@@ -4569,9 +4569,19 @@ class ChatRequest(BaseModel):
     rewind_message_id: str = ""   # 回溯编辑：先丢掉这条 user 消息及其之后的全部消息，再重新提问
     reasoning_effort: str = ""   # 思考强度：空/auto=跟随模型默认；minimal/low/medium/high 透传上游
 
+def current_time_block():
+    """模型自己不知道今天几号，不告诉它就会按训练数据里的年份瞎猜。"""
+    now = datetime.datetime.now()
+    weekday = "一二三四五六日"[now.weekday()]
+    return (
+        "\n\n【当前时间】" + now.strftime("%Y年%m月%d日 %H:%M") + "（星期" + weekday + "）。"
+        "凡是涉及「今天/昨天/明天/本周/上个月/最新/今年」的说法，一律以上面这个时间为准，"
+        "不要用你训练数据里的日期去推断。"
+    )
+
 def chat_system_prompt(payload):
     prompt = str(getattr(payload, "system_prompt", "") or "").strip()
-    return prompt or SYSTEM_PROMPT
+    return (prompt or SYSTEM_PROMPT) + current_time_block()
 
 class MsGenerateRequest(BaseModel):
     prompt: str
