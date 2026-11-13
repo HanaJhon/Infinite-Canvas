@@ -6930,12 +6930,22 @@ _DDG_SNIPPET_RE = re.compile(r"class='result-snippet'>(.*?)</td>", re.S)
 _BING_BLOCK_RE = re.compile(r'<li class="b_algo".*?(?=<li class="b_algo"|</ol>)', re.S)
 _BING_TITLE_RE = re.compile(r'<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S)
 _BING_CAPTION_RE = re.compile(r'<div class="b_caption"[^>]*>(.*?)</div>', re.S)
+# 搜狗（中文主力）：<div class="vrwrap">…<h3><a href="/link?url=…">标题</a></h3><div class="fz-mid space-txt">摘要
+# 🚨 搜狗的 href 是 /link?url=<加密串>，不是真地址；必须再请求一次那 330 字节的
+#    `window.location.replace("…")` 页面才拿得到真 URL，否则 web_read 读到的是跳转脚本。
+_SOGOU_BLOCK_RE = re.compile(r'<div class="vrwrap"[^>]*>(.*?)(?=<div class="vrwrap"|<div class="page"|</body)', re.S)
+_SOGOU_TITLE_RE = re.compile(r'<h3[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S)
+_SOGOU_SNIP_RE = re.compile(r'class="fz-mid space-txt"[^>]*>(.*?)</div>', re.S)
+_SOGOU_REAL_RE = re.compile(r'location\.replace\("([^"]+)"\)|URL=\'([^\']+)\'')
 
 # 搜索后端：每个引擎一个主入口，主入口失败才在**同一线程内**换备用入口。
 # 🚨 不要同时打 cn.bing 和 www.bing —— 并发请求同一家会触发限流，请求一起挂死。
 AGENT_WEB_SEARCH_BACKENDS = (
     ("bing", ("https://cn.bing.com/search?q={q}&form=QBLH",
               "https://www.bing.com/search?q={q}&form=QBLH")),
+    # 搜狗排在 ddg 前：ddg 对脚本请求经常直接甩「请证明你不是机器人」的验证页
+    # （实测本机 100% 命中 challenge，解析 0 条），而搜狗在这台机器的出口 IP 上稳定可用。
+    ("sogou", ("https://www.sogou.com/web?query={q}",)),
     ("ddg", ("https://lite.duckduckgo.com/lite/?q={q}",
              "https://html.duckduckgo.com/html/?q={q}")),
 )
@@ -6986,6 +6996,26 @@ def _parse_ddg_lite(page):
     return results
 
 
+_BING_CK_RE = re.compile(r"[?&]u=a1([A-Za-z0-9_\-]+)")
+
+
+def _bing_real_url(url):
+    """必应结果里的 https://www.bing.com/ck/a?...&u=a1<base64url> 是点击统计壳，
+    换成真地址再交给模型（否则 web_read 读到的是壳页里的跳转脚本）。"""
+    import base64
+    if "bing.com/ck/a" not in url:
+        return url
+    m = _BING_CK_RE.search(url)
+    if not m:
+        return url
+    raw = m.group(1)
+    try:
+        target = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)).decode("utf-8", "ignore")
+    except Exception:
+        return url
+    return target if target.startswith("http") else url
+
+
 def _parse_bing(page):
     """解析 Bing 结果页。结果块是 <li class="b_algo">，标题在 h2>a，摘要在 .b_caption。
 
@@ -6997,7 +7027,7 @@ def _parse_bing(page):
         title_m = _BING_TITLE_RE.search(block)
         if not title_m:
             continue
-        url = _url_unescape(title_m.group(1))
+        url = _bing_real_url(_url_unescape(title_m.group(1)))
         title = _html_unescape(title_m.group(2))
         if not url.startswith("http") or not title:
             continue
@@ -7010,6 +7040,78 @@ def _parse_bing(page):
             "snippet": _html_unescape(cap_m.group(1)) if cap_m else "",
         })
     return results
+
+
+def _parse_sogou(page):
+    """解析搜狗结果页。块内没有 h3 的是广告/聚合横幅，直接跳过。"""
+    import urllib.parse as _up
+    results = []
+    for block in _SOGOU_BLOCK_RE.findall(page):
+        m = _SOGOU_TITLE_RE.search(block)
+        if not m:
+            continue
+        href = _url_unescape(m.group(1))
+        title = _html_unescape(m.group(2))
+        if not title:
+            continue
+        snip = _SOGOU_SNIP_RE.search(block)
+        snippet = re.sub(r"\s+", " ", _html_unescape(snip.group(1))) if snip else ""
+        results.append({"title": title, "url": href, "snippet": snippet, "_sogou": True})
+        if len(results) >= 10:
+            break
+    # 真链还原只做前 6 条，且每条只给 4s：一条慢链不能拖垮整次搜索
+    # （实测全量重建时个别链要 20s，直接把搜索引擎超时吃满 ⇒ 表现为「部分引擎超时」）。
+    for item in results:
+        item.pop("_sogou", None)
+    # 六条真链并发去解（串行时最坏 6×4s，直接把 15s 的搜索预算吃光）。
+    targets = [item for item in results[:6] if item["url"].startswith("/link?")]
+    if targets:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(targets)) as pool:
+            real = list(pool.map(lambda it: _sogou_target(it["url"]), targets))
+        for item, target in zip(targets, real):
+            item["url"] = target or ""
+    # 还没还原 / 还原失败的条目直接丢：留着搜狗的 /link 壳，模型读到的只有跳转脚本。
+    return [item for item in results if item["url"].startswith("http")]
+
+
+def _sogou_target(href, timeout=4):
+    """把搜狗的 /link?url=<加密串> 换成真实网址（330 字节跳转页里那个 location.replace）。"""
+    try:
+        page = _web_get("https://www.sogou.com" + href, timeout=timeout)
+    except Exception:
+        return ""
+    m = _SOGOU_REAL_RE.search(page.decode("utf-8", "ignore"))
+    if not m:
+        return ""
+    return _url_unescape(m.group(1) or m.group(2) or "")
+
+
+# 没有加锁：两个线程同时过期最多多握一次手，比为此引入 threading 干净。
+_BING_COOKIE = {"value": "", "ts": 0.0}
+
+
+def _bing_cookie_header():
+    """先访问一次 bing 首页拿 cookie，再带着它去搜。
+
+    🚨 不带 cookie 直接打 /search 时，必应会返回**跟查询无关的泛结果**（实测搜
+    「周星驰 喜剧之王 剧版」返回日文站群），被 _filter_relevant 全部筛掉 ⇒ 表现为
+    「解析不到结果」。带了首页 cookie 才给真结果。缓存 10 分钟，别每次都握手。
+    """
+    now = time.time()
+    if _BING_COOKIE["value"] and now - _BING_COOKIE["ts"] < 600:
+        return _BING_COOKIE["value"]
+    try:
+        req = urllib.request.Request("https://www.bing.com/", headers=dict(AGENT_WEB_HEADERS_BASE))
+        with _WEB_DIRECT_OPENER.open(req, timeout=AGENT_WEB_ENGINE_TIMEOUT) as resp:
+            raw = resp.headers.get_all("Set-Cookie") or []
+    except Exception:
+        return ""
+    pairs = [str(c).split(";", 1)[0] for c in raw if "=" in str(c)]
+    cookie = "; ".join(pairs)
+    _BING_COOKIE["value"] = cookie
+    _BING_COOKIE["ts"] = now
+    return cookie
 
 
 def _query_tokens(query):
@@ -7078,6 +7180,17 @@ def _web_get(url, timeout=AGENT_WEB_TIMEOUT, headers=None):
     raise last_exc
 
 
+def _search_headers(kind):
+    """每个引擎的请求头：必应要浏览器指纹 + 首页 cookie，搜狗带 UA 就够。"""
+    if kind == "bing":
+        merged = dict(AGENT_BING_EXTRA_HEADERS)
+        cookie = _bing_cookie_header()
+        if cookie:
+            merged["Cookie"] = cookie
+        return merged
+    return None
+
+
 def _search_one_backend(kind, templates, query):
     """跑一个引擎：按备用入口顺序试，第一个能解析出结果的直接用。"""
     from urllib.parse import quote
@@ -7087,12 +7200,12 @@ def _search_one_backend(kind, templates, query):
             page = _web_get(
                 tpl.format(q=quote(query)),
                 timeout=AGENT_WEB_ENGINE_TIMEOUT,
-                headers=AGENT_BING_EXTRA_HEADERS if kind == "bing" else None,
+                headers=_search_headers(kind),
             )
         except Exception as exc:
             last = f"{type(exc).__name__}: {exc}"
             continue
-        parser = _parse_bing if kind == "bing" else _parse_ddg_lite
+        parser = {"bing": _parse_bing, "sogou": _parse_sogou}.get(kind, _parse_ddg_lite)
         items = _filter_relevant(parser(page.decode("utf-8", "ignore")), _query_tokens(query))
         if items:
             return items
@@ -7171,6 +7284,8 @@ def web_search_sync(query, limit=6, engine=""):
         index += 1
     if not results:
         detail = "；".join(errors) if errors else "解析不到结果（可能被限流或改版）"
+        if errors and all("解析不到结果" in e or "超时" in e for e in errors):
+            detail += "（各引擎都返回了验证页/泛结果，通常是被限流，等几秒再搜）"
         # 失败时给模型一条明确的下一步：换引擎重搜一次就够，别再硬刚，也别编答案
         hint = ("；可换 engine 再搜一次" if not want
                 else ("；可改用 engine:\"ddg\" 再搜一次" if want == "bing"
