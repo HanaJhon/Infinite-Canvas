@@ -1934,7 +1934,10 @@ function activeComposerNode(){
 }
 function persistActiveSmartSettings(){
     if(!composer?.classList?.contains('open')) return;
-    const subject = activeComposerNode();
+    // activeComposerNode() 依赖 lastComposerNodeId，个别路径（连锁静默选中等）会把它清空。
+    // 那时也要把参数落到选中的节点上，否则「关掉 LLM」这次切换直接丢，
+    // 下一次运行又从节点 runSettings 里读回 llmEnabled:true，看起来就是自动套用上次的 LLM 结果。
+    const subject = activeComposerNode() || (isSmartRunnableNode(selectedNode()) ? selectedNode() : null);
     if(!subject) return;
     subject.runSettings = settingsForStorage(settings);
     rememberRecentSmartSettings(settings, subject);
@@ -21692,7 +21695,8 @@ function textForNode(node, ctx=smartLoopContext){
     if(node.type === 'smart-loop') return smartLoopPrompt(node, ctx);
     // 上传/生成节点作为上游时，只交出它自己 LLM 处理出的最终提示词（用户原文留在它自己那栏，
     // 别把同一句话在下游再拼一遍）；没有最终提示词就当没有文本（老板 2026-11-05）。
-    if(node.type === 'smart-image') return nodeLlmFinalPrompt(node);
+    // 关掉 LLM 的图片节点不该再把自己的旧 LLM 结果交给下游（老板 2026-11-13）
+    if(node.type === 'smart-image') return nodeLlmSwitchOn(node) ? nodeLlmFinalPrompt(node) : '';
     if(node.type === 'smart-group'){
         // 分组自己的提示词（优先 LLM 最终输出）也要能被下游/同组节点当成上游输入，
         // 否则分组里的上传节点永远拿不到「图2的上游输入」（老板 2026-11-05）。
@@ -24230,6 +24234,14 @@ function applyMinimaxH3Context(message, systemMode, s, mediaRefs){
 }
 // 节点自己 LLM 跑出来的「最终提示词」。草稿被改过就视为过期（等下次运行重跑 LLM）。
 // 老板 2026-11-05：生图要优先按 LLM 处理完的最终提示词来，没有才用用户提示词。
+function nodeLlmSwitchOn(node){
+    if(!node) return false;
+    if(node.type === 'smart-prompt') return promptNodeLlmActive(node);
+    // 绝大多数节点跑过一次就有 runSettings，直接读，别在渲染里反复 clone 设置对象
+    const stored = node?.runSettings?.llmEnabled;
+    if(typeof stored === 'boolean') return stored;
+    try { return Boolean(smartSettingsForNode(node)?.llmEnabled); } catch(e) { return false; }
+}
 function nodeLlmFinalPrompt(node){
     const out = String(node?.llmOutputText || '').trim();
     if(!out) return '';
@@ -24265,7 +24277,9 @@ async function resolvePromptWithLlmIfNeeded(prompt, refs, node, runSettings=sett
     // 遮罩局部重绘一律不扩写：扩成整图描述会把重绘带偏（LLM 入口此时也已隐藏）
     if(llmBlockedByInpaint(node)) return prompt;
     const readyFinal = nodeLlmFinalPrompt(node);
-    if(!s?.llmEnabled) return readyFinal || prompt;
+    // 关掉 LLM 就用用户当前这栏的提示词。以前这里 return readyFinal || prompt，
+    // 会把上一次 LLM 的结果又拿去生图（老板 2026-11-13 反馈）。
+    if(!s?.llmEnabled) return prompt;
     // 只有「这段输入」已经处理出的最终提示词才直接拿来生图；输入/上游变了就必须重新跑 LLM
     // （老板 2026-11-05：图生图不能跳过 LLM，也不能拿旧输出当上游提示词）
     const cachedOutput = String(node?.llmOutputText || '').trim();
