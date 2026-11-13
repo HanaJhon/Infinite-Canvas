@@ -393,7 +393,9 @@ body.ct-running .ct-badge{ opacity:0 !important; pointer-events:none !important;
 .ct-hub{
     position:fixed;
     right:22px;
-    bottom:18px;
+    /* 2026-11-13 老板：右下角被「小抽AI Chat」胶囊占着，「?」抬到它上方（胶囊 18px 起、34px 高，
+       66px 正好在顶边上方留 16px），别再互相遮挡。 */
+    bottom:66px;
     z-index:2147482500;
     font-family:inherit;
 }
