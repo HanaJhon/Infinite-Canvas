@@ -9786,14 +9786,12 @@ def installed_skills_prompt_block(query=None):
 # --- 对话上下文压缩 + 主动激活 Skill（聊天 Agent 的 / 命令）---
 
 AUTO_COMPRESS_TOKEN_THRESHOLD = int(os.getenv("AUTO_COMPRESS_TOKEN_THRESHOLD", "192000"))
-COMPRESS_KEEP_RECENT = int(os.getenv("COMPRESS_KEEP_RECENT", "6"))
+COMPRESS_KEEP_RECENT = int(os.getenv("COMPRESS_KEEP_RECENT", "2"))
 
-# ---------- 上下文压缩阈值：按模型实际窗口动态计算（2026-10-19）----------
-# 🚨 老板要求「到 1000K 才压缩」，但多数对话模型的窗口远小于 1000K（常见 128K~200K）。
-#    真等到 1000K，请求早就被服务端 400 拒绝了。所以改成：
-#      阈值 = min(模型窗口 × 80%, 1000K)
-#    —— 小窗口模型及时压缩，大窗口模型（≥1M）才用到 1000K 这个上限。
-AUTO_COMPRESS_MAX_TOKENS = 256_000       # 上限兜底（老板要的 256K）
+# ---------- 上下文压缩阈值：按模型实际窗口动态计算 ----------
+# 🚨 阈值 = 模型窗口 × 80%，**不再封顶**：老板要的是"缓存用到 80% 就压"，封顶会让
+#    1M 窗口的模型拖到 25% 才压，压缩时机跟窗口大小脱钩。小窗口模型本来就按 80% 提前压。
+#    压缩时只留最近 COMPRESS_KEEP_RECENT(2) 条 + 一条摘要 —— 压就压到最低，不养着旧对话。
 AUTO_COMPRESS_RATIO = 0.8                # 用掉窗口 80% 就压，留出工具输出/系统提示的余量
 DEFAULT_CONTEXT_WINDOW = 128_000         # 认不出来时按保守值算（宁可早压，不要被 400）
 
@@ -9819,7 +9817,7 @@ def model_context_window(model: str) -> int:
 
 
 def auto_compress_threshold(model: str = "") -> int:
-    """自动压缩阈值 = min(模型窗口 × 80%, 1000K)。
+    """自动压缩阈值 = 模型窗口 × 80%（不封顶）。
 
     显式设置环境变量 AUTO_COMPRESS_TOKEN_THRESHOLD 时以它为准（排障 / 强制固定阈值用）。
     """
@@ -9829,7 +9827,7 @@ def auto_compress_threshold(model: str = "") -> int:
             return max(1000, int(env))
         except ValueError:
             pass
-    return min(int(model_context_window(model) * AUTO_COMPRESS_RATIO), AUTO_COMPRESS_MAX_TOKENS)
+    return int(model_context_window(model) * AUTO_COMPRESS_RATIO)
 
 _CJK_TOKEN_RE = re.compile(r'[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef\u3040-\u30ff\u31f0-\u31ff]')
 

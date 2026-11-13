@@ -1,6 +1,6 @@
 """上下文自动压缩阈值 + 联网搜索的代理绕过。
 
-老板要求：上下文到 256K 自动压缩（大窗口模型），小窗口模型仍按窗口 80% 提前压，
+老板要求：上下文缓存用到窗口 80% 就自动压缩，并压到最低（只留最近 2 条 + 摘要），
 否则请求会被上游 400。另：搜索必须绕开系统代理，本机代理会让一次必应请求慢到 30s+。
 """
 import sys
@@ -14,10 +14,10 @@ import main
 
 
 class AutoCompressTests(unittest.IsolatedAsyncioTestCase):
-    def test_threshold_capped_at_256k(self):
-        # 1M 窗口的模型封顶 256K；128K 窗口按 80% 提前压
-        self.assertEqual(main.auto_compress_threshold("gpt-5"), 256_000)
-        self.assertEqual(main.auto_compress_threshold("gemini-2.5-pro"), 256_000)
+    def test_threshold_is_80_percent_of_window(self):
+        # 缓存用到窗口 80% 就压，不封顶：1M 窗口 800K，128K 窗口 102.4K
+        self.assertEqual(main.auto_compress_threshold("gpt-5"), 800_000)
+        self.assertEqual(main.auto_compress_threshold("gemini-2.5-pro"), 800_000)
         self.assertEqual(main.auto_compress_threshold("deepseek-chat"), 102_400)
 
     async def test_compress_triggers_and_keeps_recent(self):
