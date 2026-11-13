@@ -218,7 +218,8 @@
         .xv-filecard .xv-filecard-name { font-size:13px; font-weight:700; word-break:break-all; }
         .xv-filecard .xv-filecard-tip { font-size:11px; color:var(--muted); line-height:1.7; }
         .xv-filecard-acts { display:flex; gap:8px; }
-        .xv-btn.xv-btn-primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+        .xv-btn.xv-btn-primary { background:var(--accent); color:var(--strong-text); border-color:var(--accent); }
+        .xv-btn.xv-btn-primary:hover { background:var(--strong); color:var(--strong-text); }
 
         /* 历史对话抽屉：左侧滑出，点条目换对话 */
         .xv-hist-mask { position:fixed; inset:0; z-index:70; background:rgba(2,6,23,.28); opacity:0; pointer-events:none; transition:opacity .18s; }
@@ -1159,7 +1160,6 @@
     }
 
     // ---------- 预览 ----------
-    const PREVIEW_TEXT_EXTS = new Set(['txt','md','markdown','json','csv','tsv','log','py','js','ts','css','xml','yaml','yml','ini','bat','sh']);
     const PREVIEW_OFFICE_EXTS = new Set(['xlsx','xlsm','xltx','docx','pptx']);
     function fileExt(url){ const m = String(url || '').split('?')[0].match(/\.([a-z0-9]+)$/i); return m ? m[1].toLowerCase() : ''; }
     // 能直接在对话里给卡片、不吵闹的文件类型（.py/.json 这类中间产物不上台面）
@@ -1251,18 +1251,21 @@
                 return;
             }
         }
-        if(PREVIEW_TEXT_EXTS.has(ext)){
-            try {
-                const res = await fetch(url);
-                const text = await res.text();
-                body.innerHTML = `<pre>${esc(text.slice(0, 200000))}</pre>`;
-            } catch(e) {
-                body.innerHTML = fileCard(url, '打不开这个文件');
-            }
-            icons();
-            return;
+        // 其余一律先当文本试：不看扩展名，没后缀的文件（如 8wbtbzmpCR2s）也要能直接看
+        try {
+            const res = await fetch(url);
+            if(!res.ok) throw new Error('打不开这个文件');
+            const buf = await res.arrayBuffer();
+            const head = new Uint8Array(buf.slice(0, 4096));
+            let nuls = 0;
+            for(let i = 0; i < head.length; i++) if(head[i] === 0){ nuls++; break; }
+            const text = new TextDecoder('utf-8').decode(buf);
+            const bad = (text.match(/\uFFFD/g) || []).length;
+            if(nuls || bad > Math.max(4, text.length * 0.01)) throw new Error('这个文件不是文本，没法在这里预览');
+            body.innerHTML = `<pre>${esc(text.slice(0, 200000))}</pre>`;
+        } catch(e) {
+            body.innerHTML = fileCard(url, e.message || '打不开这个文件');
         }
-        body.innerHTML = fileCard(url);
         icons();
     }
     function closePreview(){
