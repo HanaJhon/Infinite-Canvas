@@ -25,7 +25,7 @@
     </script>
     <script src="/static/vendor/js/tailwindcss-cdn.js?v=1.3.7.1767196800"></script>
     <script src="/static/js/theme.js?v=1.3.7.1794556649"></script>
-    <script src="/static/js/i18n.js?v=1.3.7.1794291244"></script>
+    <script src="/static/js/i18n.js?v=1.3.7.1794574164"></script>
     <style>
         @import url('/static/vendor/css/fonts.css?v=1.3.7.1767196800');
 
@@ -1600,6 +1600,95 @@
             font-size: 13px; font-weight: 600; line-height: 1;
         }
 
+        /* 2026-11-13：一级页面改成「我的」（资料卡 + 设置列表，老板要求） */
+        .mhome-profile {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 16px;
+            box-sizing: border-box;
+            border-radius: 18px;
+            background: var(--mhome-card);
+            box-shadow: var(--mhome-shadow);
+        }
+        .mhome-avatar {
+            flex: 0 0 auto;
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            font-weight: 700;
+            color: #fff;
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        }
+        .mhome-profile-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .mhome-profile-name { font-size: 16px; font-weight: 650; color: var(--mhome-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mhome-profile-role { font-size: 12px; color: var(--mhome-muted); }
+        .mhome-group {
+            display: flex;
+            flex-direction: column;
+            border-radius: 18px;
+            background: var(--mhome-card);
+            box-shadow: var(--mhome-shadow);
+            overflow: hidden;
+        }
+        .mhome-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            width: 100%;
+            min-height: 50px;
+            padding: 0 16px;
+            box-sizing: border-box;
+            border: 0;
+            background: transparent;
+            color: var(--mhome-ink);
+            font-size: 14px;
+            text-align: left;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .mhome-row + .mhome-row { border-top: 1px solid var(--mhome-line); }
+        .mhome-row:active { background: rgba(99, 102, 241, .07); }
+        .mhome-row svg { flex: 0 0 auto; width: 18px; height: 18px; color: #6366f1; }
+        .mhome-row > span { flex: 1 1 auto; min-width: 0; }
+        .mhome-row-value { flex: 0 0 auto; font-size: 12.5px; font-weight: 500; color: var(--mhome-muted); }
+        .mhome-chev { flex: 0 0 auto; font-size: 18px; font-weight: 400; line-height: 1; color: #c3c8d2; }
+        .mhome-switch {
+            position: relative;
+            flex: 0 0 auto;
+            width: 42px;
+            height: 24px;
+            border-radius: 999px;
+            background: #e2e5ee;
+            transition: background .16s;
+        }
+        .mhome-switch::after {
+            content: '';
+            position: absolute;
+            top: 3px;
+            left: 3px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #fff;
+            box-shadow: 0 1px 3px rgba(15, 23, 42, .22);
+            transition: transform .16s;
+        }
+        .mhome-switch.on { background: #6366f1; }
+        .mhome-switch.on::after { transform: translateX(18px); }
+        .mhome-row.is-danger {
+            justify-content: center;
+            border-radius: 18px;
+            background: var(--mhome-card);
+            box-shadow: var(--mhome-shadow);
+            color: #e5484d;
+            font-weight: 600;
+        }
+        .mhome-row.is-danger > span { flex: 0 0 auto; }
         body.mobile-portrait .mobile-tabs {
             position: fixed;
             left: 0; right: 0; bottom: 0;
@@ -1752,46 +1841,70 @@
                         <p class="mhome-sub" data-i18n="home.subtitle">创作、对话、生图一站式工作台</p>
                     </div>
                 </header>
-                <div class="mhome-cards">
-                    <article class="mhome-card" style="--card-accent:#5b5bd6;--card-accent-soft:#ececff" onclick="mobileTabGo('xvai')">
-                        <div class="mhome-icon">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5z"></path></svg>
-                        </div>
-                        <h2 class="mhome-card-title" data-i18n="home.aiChat">AI Chat</h2>
-                        <p class="mhome-card-desc" data-i18n="home.aiChatDesc">智能问答、文案生成、创作建议</p>
-                        <button class="mhome-btn" type="button" data-i18n="home.startChat">开始对话</button>
-                    </article>
-                    <article class="mhome-card" style="--card-accent:#4a9fe0;--card-accent-soft:#e6f3fc" onclick="mobileTabGo('online')">
-                        <div class="mhome-icon">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"></rect><circle cx="8.5" cy="8.5" r="1.6"></circle><path d="M21 15l-5-5L5 21"></path></svg>
-                        </div>
-                        <h2 class="mhome-card-title" data-i18n="nav.online">在线生图</h2>
-                        <p class="mhome-card-desc" data-i18n="home.onlineDesc">文字生成图片、风格转换、视觉创作</p>
-                        <button class="mhome-btn" type="button" data-i18n="home.startGenerate">开始生图</button>
-                    </article>
-                    <article class="mhome-card" style="--card-accent:#3b82f6;--card-accent-soft:#e8f0fe" onclick="mobileTabGo('asset-manager')">
-                        <div class="mhome-icon">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V6.8A2.8 2.8 0 0 1 6.8 4h10.4A2.8 2.8 0 0 1 20 6.8v12.7"></path><path d="M7 8h10M7 12h10M7 16h6"></path></svg>
-                        </div>
-                        <h2 class="mhome-card-title" data-i18n="nav.assetManager">素材库</h2>
-                        <p class="mhome-card-desc" data-i18n="home.assetsDesc">图片、音频、模板资源统一管理</p>
-                        <button class="mhome-btn" type="button" data-i18n="home.browseAssets">浏览素材</button>
-                    </article>
+                <section class="mhome-profile">
+                    <div class="mhome-avatar" id="mhomeAvatar">·</div>
+                    <div class="mhome-profile-info">
+                        <strong class="mhome-profile-name" id="mhomeName">未登录</strong>
+                        <span class="mhome-profile-role" id="mhomeRole">—</span>
+                    </div>
+                </section>
+
+                <div class="mhome-group">
+                    <button class="mhome-row" type="button" id="mhomeRowAccount" onclick="mobileOpenAccounts()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                        <span data-i18n="me.account">账号管理</span>
+                        <b class="mhome-chev">›</b>
+                    </button>
+                    <button class="mhome-row" type="button" onclick="mobileOpenCredits()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M9 8.5h6M9 12h6M12 8.5V16"></path></svg>
+                        <span data-i18n="me.credits">我的积分</span>
+                        <b class="mhome-row-value" id="mhomeCredits">—</b>
+                        <b class="mhome-chev">›</b>
+                    </button>
+                    <button class="mhome-row" type="button" id="mhomeRowApi" onclick="mobileOpenApi()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"></path><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"></path></svg>
+                        <span data-i18n="common.apiSettings">API 设置</span>
+                        <b class="mhome-chev">›</b>
+                    </button>
                 </div>
+
+                <div class="mhome-group">
+                    <button class="mhome-row" type="button" onclick="mobileToggleTheme()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+                        <span data-i18n="common.darkMode">黑夜模式</span>
+                        <b class="mhome-switch" id="mhomeThemeSwitch"></b>
+                    </button>
+                    <button class="mhome-row" type="button" onclick="mobileToggleLang()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20"></path><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                        <span data-i18n="me.language">语言</span>
+                        <b class="mhome-row-value" id="mhomeLangValue">中文</b>
+                        <b class="mhome-chev">›</b>
+                    </button>
+                    <button class="mhome-row" type="button" onclick="mobileCheckUpdate()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"></path><path d="M21 3v6h-6"></path></svg>
+                        <span data-i18n="me.update">检查更新</span>
+                        <b class="mhome-row-value" id="mhomeVersion">—</b>
+                        <b class="mhome-chev">›</b>
+                    </button>
+                </div>
+
+                <button class="mhome-row is-danger" type="button" onclick="mobileLogout()">
+                    <span data-i18n="me.logout">退出登录</span>
+                </button>
             </section>
             <iframe id="frame-online" data-src="/static/online.html?v=1.3.7.1794557467" scrolling="yes"></iframe>
             <iframe id="frame-xvai" data-src="/static/xvai.html?v=1.3.7.1794557467" scrolling="yes"></iframe>
             <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=1.3.7.1794557467" scrolling="yes"></iframe>
-            <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=1.3.7.1794557467" scrolling="yes"></iframe>
-            <iframe id="frame-canvas" class="active" src="/static/canvas-list.html?v=1.3.7.1794557467" scrolling="yes"></iframe>
+            <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=1.3.7.1794575391" scrolling="yes"></iframe>
+            <iframe id="frame-canvas" class="active" src="/static/canvas-list.html?v=1.3.7.1794575391" scrolling="yes"></iframe>
 
         </main>
 
         <!-- 竖屏底部标签栏：和一级页面配套，横屏隐藏 -->
         <nav class="mobile-tabs" id="mobileTabs" aria-label="主导航">
             <button class="mtab active" type="button" data-tab="home" onclick="mobileTabGo('home')">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5.5 9.5V21h13V9.5"></path></svg>
-                <span data-i18n="home.tabHome">首页</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"></circle><path d="M4.5 20a7.5 7.5 0 0 1 15 0"></path></svg>
+                <span data-i18n="me.tab">我的</span>
             </button>
             <button class="mtab" type="button" data-tab="xvai" onclick="mobileTabGo('xvai')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5z"></path></svg>
@@ -2089,10 +2202,91 @@
             document.body.classList.add('mhome-on');
             document.querySelectorAll('.stage iframe').forEach(f => f.classList.remove('active'));
             mobileSetTabActive('home');
+            renderMobileMe();
         }
 
         function hideMobileHome() {
             document.body.classList.remove('mhome-on');
+        }
+
+        // 「我的」页：资料卡 + 设置入口（老板 2026-11-13）
+        function syncMobileToggles() {
+            const dark = window.StudioTheme ? window.StudioTheme.get() === 'dark' : document.documentElement.classList.contains('theme-dark');
+            const sw = document.getElementById('mhomeThemeSwitch');
+            if(sw) sw.classList.toggle('on', !!dark);
+            const lang = document.getElementById('mhomeLangValue');
+            if(lang) lang.textContent = (window.StudioI18n && window.StudioI18n.lang && window.StudioI18n.lang() === 'en') ? 'English' : '中文';
+            const ver = document.getElementById('mhomeVersion');
+            if(ver) ver.textContent = appInfo && appInfo.version ? versionLabel(appInfo.version) : '—';
+        }
+
+        function renderMobileMe() {
+            syncMobileToggles();
+            fetch('/api/app-info', { cache: 'no-store' })
+                .then(r => r.ok ? r.json() : null)
+                .then(d => {
+                    if(!d || !d.version) return;
+                    appInfo = { ...appInfo, ...d };
+                    syncMobileToggles();
+                })
+                .catch(() => {});
+            fetch('/api/auth/me', { credentials: 'same-origin' })
+                .then(r => r.ok ? r.json() : null)
+                .then(d => {
+                    const u = d && d.user;
+                    if(!u) return;
+                    const name = String(u.name || '').trim() || '账号';
+                    const nameEl = document.getElementById('mhomeName');
+                    if(nameEl) nameEl.textContent = name;
+                    const avatar = document.getElementById('mhomeAvatar');
+                    if(avatar) avatar.textContent = name.slice(0, 1).toUpperCase();
+                    const role = document.getElementById('mhomeRole');
+                    if(role) {
+                        const parts = [u.role === 'admin' ? '管理员' : '成员'];
+                        if(u.seq) parts.unshift('#' + u.seq);
+                        if(typeof u.credits === 'number') parts.push(Math.round(u.credits * 100) / 100 + ' 积分');
+                        role.textContent = parts.join(' · ');
+                    }
+                    const credits = document.getElementById('mhomeCredits');
+                    if(credits && typeof u.credits === 'number') credits.textContent = Math.round(u.credits * 100) / 100;
+                    const isAdmin = u.role === 'admin';
+                    const acc = document.getElementById('mhomeRowAccount');
+                    if(acc) acc.style.display = isAdmin ? '' : 'none';
+                    const api = document.getElementById('mhomeRowApi');
+                    if(api) api.style.display = isAdmin ? '' : 'none';
+                })
+                .catch(() => {});
+        }
+
+        function mobileOpenCredits() { location.href = '/credits.html'; }
+        function mobileOpenAccounts() { location.href = '/accounts.html'; }
+
+        function mobileOpenApi() {
+            // 侧边栏没有 api-settings 的 nav-item，沿用账号弹层里的临时按钮做法
+            const proxy = document.createElement('button');
+            proxy.dataset.page = 'api-settings';
+            switchUI(proxy, 'api-settings');
+        }
+
+        function mobileToggleTheme() {
+            toggleTheme();
+            setTimeout(syncMobileToggles, 80);
+        }
+
+        function mobileToggleLang() {
+            toggleLanguage();
+            setTimeout(syncMobileToggles, 80);
+        }
+
+        function mobileCheckUpdate() { checkForUpdates(true); }
+
+        function mobileLogout() {
+            const ask = (window.StudioI18n && window.StudioI18n.lang && window.StudioI18n.lang() === 'en')
+                ? 'Sign out now?' : '要退出登录吗？';
+            if(!confirm(ask)) return;
+            fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' })
+                .catch(() => {})
+                .then(() => location.replace('/login.html'));
         }
 
         function mobileTabGo(page) {

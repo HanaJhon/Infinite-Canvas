@@ -1,6 +1,7 @@
 """竖屏一级页面（手机形态）的静态约定。
 
-老板 2026-11-13：检测到页面画幅比例变成竖屏时，把侧边栏换成一级页面（首页/三张卡/底部标签栏）。
+老板 2026-11-13：检测到页面画幅比例变成竖屏时，把侧边栏换成一级页面；一级页面改成「我的」
+（资料卡 + 设置列表 + 底部标签栏）。
 这里只钉最容易在后续改动中被悄悄弄坏的几处，不测视觉。
 """
 import io
@@ -21,7 +22,6 @@ def test_index_shell():
     # 一级页面 + 底部标签栏标记
     assert 'id="mobileHome"' in html
     assert 'id="mobileTabs"' in html
-    assert html.count('class="mhome-card"') == 3, html.count('class="mhome-card"')
     for tab in ('home', 'xvai', 'online', 'asset-manager'):
         assert f'data-tab="{tab}"' in html
 
@@ -46,18 +46,52 @@ def test_index_shell():
     assert "const MOBILE_TAB_PAGES = ['xvai', 'online', 'asset-manager'];" in html
 
 
+def test_me_page():
+    """一级页面 = 我的：资料卡 + 设置行（老板 2026-11-13 第二次改）。"""
+    html = read('static/index.html')
+
+    # 三张功能卡已撤掉，换成资料卡 + 两个分组
+    assert 'class="mhome-cards"' not in html
+    assert 'class="mhome-profile"' in html
+    assert html.count('class="mhome-group"') == 2, html.count('class="mhome-group"')
+
+    for rid in ('mhomeAvatar', 'mhomeName', 'mhomeRole', 'mhomeCredits',
+                'mhomeThemeSwitch', 'mhomeLangValue', 'mhomeVersion',
+                'mhomeRowAccount', 'mhomeRowApi'):
+        assert f'id="{rid}"' in html, rid
+
+    # 七个设置入口：账号 / 积分 / API / 黑夜 / 语言 / 更新 / 退出
+    for fn in ('mobileOpenAccounts()', 'mobileOpenCredits()', 'mobileOpenApi()',
+               'mobileToggleTheme()', 'mobileToggleLang()', 'mobileCheckUpdate()',
+               'mobileLogout()'):
+        assert f'onclick="{fn}"' in html, fn
+    assert html.count('class="mhome-row') >= 7
+
+    # 进一级页面要拉一次账号信息，否则名字/积分是空的
+    show = html.split('function showMobileHome()', 1)[1].split('function hideMobileHome', 1)[0]
+    assert 'renderMobileMe();' in show
+    assert "fetch('/api/auth/me'" in html
+    # 名字由接口填充：不能再挂 data-i18n（否则会被「未登录」盖回去）
+    assert 'id="mhomeName" data-i18n' not in html
+
+    # 底部第一个标签改成「我的」
+    assert 'data-i18n="me.tab"' in html
+    assert '"me.tab":' in read('static/js/i18n/common.js')
+
+
 def test_i18n_keys():
     common = read('static/js/i18n/common.js')
-    for key in ('home.title', 'home.subtitle', 'home.tabHome', 'home.aiChat',
-                'home.aiChatDesc', 'home.startChat', 'home.onlineDesc',
-                'home.startGenerate', 'home.assetsDesc', 'home.browseAssets'):
+    for key in ('home.title', 'home.subtitle', 'home.aiChat',
+                'me.tab', 'me.notLoggedIn', 'me.account', 'me.credits',
+                'me.language', 'me.update', 'me.logout'):
         assert f'"{key}":' in common, key
     # 每条都要中英双份
-    for m in re.finditer(r'"(home\.[A-Za-z]+)":\s*\{([^}]*)\}', common):
+    for m in re.finditer(r'"((?:home|me)\.[A-Za-z]+)":\s*\{([^}]*)\}', common):
         assert 'zh:' in m.group(2) and 'en:' in m.group(2), m.group(1)
 
 
 if __name__ == '__main__':
     test_index_shell()
+    test_me_page()
     test_i18n_keys()
     print('OK mobile-portrait-home')
