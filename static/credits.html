@@ -136,16 +136,43 @@
       var b = document.createElement('button');
       b.type = 'button';
       b.className = 'preset' + (p.id === selectedPreset ? ' on' : '');
+      var own = boundPayment(p.id);
       b.innerHTML = '<b>' + fmt(p.credits) + ' 积分</b><span>' + (p.label || '') + '</span>'
         + '<span style="display:block;margin-top:4px">￥' + fmt(p.price_cny) + (p.price_usd ? ' / $' + fmt(p.price_usd) : '') + '</span>';
-      b.onclick = function () { selectedPreset = p.id; renderPresets(); };
+      if (own) {
+        var tag = document.createElement('span');
+        tag.style.cssText = 'display:block;margin-top:4px;font-size:11px;opacity:.72';
+        tag.textContent = own.kind === 'link' ? '点我直接去付款 →' : '点我出专属收款码';
+        b.appendChild(tag);
+      }
+      b.onclick = function () {
+        selectedPreset = p.id;
+        renderPresets();
+        renderPayments();
+        // 绑了链接的套餐：点一下直接跳去付款；绑了二维码的就在下面出码
+        if (own && own.kind === 'link' && own.value) window.open(own.value, '_blank', 'noopener');
+      };
       box.appendChild(b);
     });
   }
 
+  // 当前套餐绑定的专属收款方式（没绑就用全部收款方式）
+  function boundPayment(presetId) {
+    var payId = ((data.public.presets || []).filter(function (p) { return p.id === presetId; })[0] || {}).pay_id;
+    if (!payId) return null;
+    return (data.public.payments || []).filter(function (m) { return m.id === payId; })[0] || null;
+  }
+
   function renderPayments() {
     var box = $('payments');
-    var list = (data.public.payments || []);
+    var own = boundPayment(selectedPreset);
+    var list = own ? [own] : (data.public.payments || []);
+    var hint = $('topupHint');
+    if (hint) {
+      hint.textContent = own
+        ? '当前套餐已选定专属收款方式：' + (own.kind === 'qr' ? '扫码付款后提交申请。' : '点链接付款后提交申请。')
+        : '选择下面的额度，扫码或联系管理员付款后提交申请，管理员确认后积分到账。';
+    }
     box.innerHTML = '';
     if (!list.length) {
       box.innerHTML = '<div class="empty">管理员还没有上传收款二维码，请联系管理员付款。</div>';
@@ -257,8 +284,11 @@
     if (!selectedPreset) { alert('请先选择一个充值额度'); return; }
     var preset = (data.public.presets || []).filter(function (p) { return p.id === selectedPreset; })[0];
     var methods = data.public.payments || [];
-    var method = 'other';
-    if (methods.length) {
+    var own = boundPayment(selectedPreset);
+    var method = own ? own.method : 'other';
+    if (own) {
+      // 套餐绑定了专属收款方式就不用再问用哪个渠道
+    } else if (methods.length) {
       var names = methods.map(function (m) { return METHOD_LABEL[m.method] || m.method; }).join(' / ');
       var picked = prompt('用哪种方式付款？\n' + names, METHOD_LABEL[methods[0].method] || methods[0].method);
       if (picked === null) return;

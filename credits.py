@@ -274,6 +274,8 @@ def normalize_settings(raw: Any) -> Dict[str, Any]:
             "credits": credits,
             "price_cny": _round(item.get("price_cny")),
             "price_usd": _round(item.get("price_usd")),
+            # 这个套餐专属的收款方式（payments[].id）——没绑就用全部收款方式
+            "pay_id": str(item.get("pay_id") or "").strip(),
         })
     base["topup"]["presets"] = presets[:24]
 
