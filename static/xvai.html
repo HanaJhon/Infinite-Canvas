@@ -18,7 +18,7 @@
     </script>
     <script src="/static/vendor/js/tailwindcss-cdn.js?v=1.3.7.1767196800"></script>
     <script src="/static/vendor/js/lucide.js?v=1.3.7.1767196800"></script>
-    <script src="/static/js/theme.js?v=1.3.7.1793681298"></script>
+    <script src="/static/js/theme.js?v=1.3.7.1794551830"></script>
     <script src="/static/js/i18n.js?v=1.3.7.1794291244"></script>
     <link rel="stylesheet" href="/static/css/xvai-agent.css?v=1.3.7.1794456584">
     <style>
@@ -82,6 +82,9 @@
         .xv-chip-name { max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .xv-chip-x { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:50%; color:var(--muted); cursor:pointer; font-size:11px; line-height:1; }
         .xv-chip-x:hover { background:rgba(15,23,42,.14); color:var(--text); }
+        /* 发送后的用户气泡：附件按输入时的位置内联显示，不再统一挪到句末（老板 2026-11-13） */
+        .xv-inline-img { display:inline-block; width:26px; height:26px; margin:0 3px; border-radius:7px; object-fit:cover;
+            vertical-align:-8px; border:1px solid var(--line); cursor:zoom-in; background:var(--soft); }
 
         /* 技能面板 */
         .xv-skill-panel { min-width:320px; max-width:min(440px, calc(100vw - 60px)); padding:10px; gap:8px; }
@@ -641,6 +644,8 @@
         const chip = document.createElement('span');
         chip.className = 'xv-chip';
         chip.contentEditable = 'false';
+        chip.draggable = true;
+        chip.title = '拖动可以把这张图挪到句子里的其它位置';
         chip.dataset.url = ref.url;
         chip.dataset.name = ref.name || fileName(ref.url);
         chip.innerHTML = `<span class="xv-chip-name">${esc(chip.dataset.name)}</span><span class="xv-chip-x" role="button" title="移除">×</span>`;
@@ -651,10 +656,37 @@
         return Array.from($('agentInput').querySelectorAll('.xv-chip'))
             .map(chip => ({ url: chip.dataset.url, name: chip.dataset.name, kind:'image' }));
     }
-    function addRef(ref){
+    // 老板 2026-11-13：附件要落在光标处，不能一律甩到句末
+    function caretInsideInput(){
         const input = $('agentInput');
-        input.appendChild(document.createTextNode(input.childNodes.length ? ' ' : ''));
-        input.appendChild(chipNode(ref));
+        const sel = window.getSelection();
+        if(!sel || !sel.rangeCount) return null;
+        const range = sel.getRangeAt(0);
+        return input.contains(range.commonAncestorContainer) ? range : null;
+    }
+    function insertNodeAtCaret(node, trailingSpace){
+        const input = $('agentInput');
+        const range = caretInsideInput();
+        if(!range){
+            if(input.childNodes.length) input.appendChild(document.createTextNode(' '));
+            input.appendChild(node);
+            if(trailingSpace) input.appendChild(document.createTextNode(' '));
+            return;
+        }
+        range.deleteContents();
+        range.insertNode(node);
+        if(trailingSpace) node.parentNode.insertBefore(document.createTextNode(' '), node.nextSibling);
+        try {
+            const sel = window.getSelection();
+            const after = document.createRange();
+            after.setStartAfter(trailingSpace ? node.nextSibling : node);
+            after.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(after);
+        } catch(e) {}
+    }
+    function addRef(ref){
+        insertNodeAtCaret(chipNode(ref), true);
         syncInputEmpty(); scheduleSendCredit();
     }
     async function uploadRefs(files){
@@ -684,6 +716,32 @@
         }
         const chip = ev.target.closest('.xv-chip');
         if(chip && chip.dataset.url) openPreview(chip.dataset.url, chip.dataset.name);
+    });
+    // 拖动胶囊在句子里换位置（老板 2026-11-13：附件位置不能固定死）
+    let dragChip = null;
+    $('agentInput').addEventListener('dragstart', ev => {
+        const chip = ev.target.closest && ev.target.closest('.xv-chip');
+        if(!chip) return;
+        dragChip = chip;
+        try { ev.dataTransfer.setData('text/xv-chip', '1'); ev.dataTransfer.effectAllowed = 'move'; } catch(e) {}
+    });
+    $('agentInput').addEventListener('dragover', ev => { if(dragChip) ev.preventDefault(); });
+    $('agentInput').addEventListener('dragend', () => { dragChip = null; });
+    $('agentInput').addEventListener('drop', ev => {
+        const chip = dragChip;
+        dragChip = null;
+        if(!chip) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const pos = document.caretRangeFromPoint ? document.caretRangeFromPoint(ev.clientX, ev.clientY) : null;
+        if(!pos || !$('agentInput').contains(pos.startContainer.parentNode || pos.startContainer)) return;
+        pos.deleteContents();
+        pos.insertNode(chip);
+        const next = chip.nextSibling;
+        if(!(next && next.nodeType === 3 && /^\s/.test(next.nodeValue))){
+            chip.parentNode.insertBefore(document.createTextNode(' '), chip.nextSibling);
+        }
+        syncInputEmpty(); scheduleSendCredit();
     });
 
     // ---------- 拖入 / 粘贴文件（照画布 Agent：整页可拖，附件落成胶囊） ----------
@@ -1111,6 +1169,24 @@
         if(live) renderThread();
     }
 
+    // 正文里的 [图N] 就地渲染成缩略图；剩下没被引用的附件（老消息）还是挂在气泡下面
+    function userBodyHtml(msg){
+        const atts = msg.attachments || [];
+        return esc(msg.content || '').replace(/\[图(\d+)\]/g, (m, n) => {
+            const item = atts[Number(n) - 1];
+            if(!item || !item.url) return m;
+            return `<img class="xv-inline-img" src="${esc(item.url)}" alt="${esc(item.name || '')}" loading="lazy" data-xv-zoom="${esc(item.url)}">`;
+        });
+    }
+    function userAttsHtml(msg){
+        const atts = (msg.attachments || []).filter(a => a && a.url);
+        const text = String(msg.content || '');
+        const rest = atts.filter((a, i) => text.indexOf('[图' + (i + 1) + ']') < 0);
+        if(!rest.length) return '';
+        return `<div class="xv-msg-atts">${rest.map(a =>
+            `<img src="${esc(a.url)}" alt="${esc(a.name || '')}" loading="lazy" data-xv-zoom="${esc(a.url)}">`).join('')}</div>`;
+    }
+
     function renderThread(){
         const thread = $('xvThread');
         if(!state.messages.length){
@@ -1133,11 +1209,8 @@
                 <button class="xv-mini" type="button" data-xv-copy="${idx}" title="复制"><i data-lucide="copy"></i></button>
                 <button class="xv-mini" type="button" data-xv-edit-msg="${idx}" title="回到这条消息继续编辑重发"><i data-lucide="pencil"></i></button>
             </div>`;
-            const atts = mine && (msg.attachments || []).length
-                ? `<div class="xv-msg-atts">${(msg.attachments || []).map(a =>
-                    `<img src="${esc(a.url)}" alt="${esc(a.name || '')}" loading="lazy" data-xv-zoom="${esc(a.url)}">`).join('')}</div>`
-                : '';
-            const body = mine ? esc(msg.content || '') : `<div class="xv-md">${renderMarkdown(msg.content || '')}</div>`;
+            const atts = mine ? userAttsHtml(msg) : '';
+            const body = mine ? userBodyHtml(msg) : `<div class="xv-md">${renderMarkdown(msg.content || '')}</div>`;
             const files = mine ? '' : fileListHtml(messageFiles(msg));
             const bubble = `<div class="xv-bubble">${mine ? '' : traceHtml(toolTraceItems(msg))}${body}${atts}${cards}${files}${creditsChip(msg)}</div>`;
             return `<div class="xv-msg ${mine ? 'user' : 'assistant'}">
@@ -1283,23 +1356,42 @@
     }
 
     // ---------- 输入 ----------
-    /* 读正文时要跳过附件胶囊：胶囊隐藏后 innerText 就不含它们的名字了。
-       不用 cloneNode —— 脱离文档的元素取 innerText 会丢掉换行。 */
+    /* 读正文时把附件胶囊就地换成 [图N]（老板 2026-11-13：附件位置要跟着句子走，
+       以前把胶囊整个隐藏、附件单独挂到句末）。就地换节点而不是 cloneNode ——
+       脱离文档的元素取 innerText 会丢掉换行。 */
     function readInput(){
         const input = $('agentInput');
         const chips = Array.from(input.querySelectorAll('.xv-chip'));
-        chips.forEach(chip => { chip.style.display = 'none'; });
+        const swaps = chips.map((chip, i) => {
+            const mark = document.createTextNode('[图' + (i + 1) + ']');
+            chip.parentNode.replaceChild(mark, chip);
+            return { chip, mark };
+        });
         const text = (input.innerText || '').replace(/\u00a0/g, ' ').trim();
-        chips.forEach(chip => { chip.style.display = ''; });
+        swaps.forEach(({ chip, mark }) => { if(mark.parentNode) mark.parentNode.replaceChild(chip, mark); });
         return text;
     }
     function clearInput(){ $('agentInput').innerHTML = ''; syncInputEmpty(); updateSendCredit(); }
-    // 回溯用：正文 + 当时的附件一起放回输入栏
+    // 回溯用：正文 + 当时的附件一起放回输入栏（附件按 [图N] 的位置还原，没标记的补在末尾）
     function setInputContent(text, refs){
         const input = $('agentInput');
         input.innerHTML = '';
-        if(text) input.appendChild(document.createTextNode(text));
-        (refs || []).filter(ref => ref && ref.url).forEach(ref => {
+        const list = (refs || []).filter(ref => ref && ref.url);
+        const raw = String(text || '');
+        const used = new Set();
+        let cursor = 0;
+        raw.replace(/\[图(\d+)\]/g, (m, n, offset) => {
+            const ref = list[Number(n) - 1];
+            if(!ref) return m;
+            input.appendChild(document.createTextNode(raw.slice(cursor, offset)));
+            input.appendChild(chipNode(ref));
+            used.add(Number(n));
+            cursor = offset + m.length;
+            return m;
+        });
+        if(cursor < raw.length) input.appendChild(document.createTextNode(raw.slice(cursor)));
+        list.forEach((ref, i) => {
+            if(used.has(i + 1)) return;
             if(input.childNodes.length) input.appendChild(document.createTextNode(' '));
             input.appendChild(chipNode(ref));
         });
