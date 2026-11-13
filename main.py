@@ -6944,6 +6944,22 @@ def agent_always_on_hints():
     return AGENT_WEB_SYSTEM_HINT + AGENT_VIDEO_SYSTEM_HINT
 
 
+# 画布 Agent 的「要不要给联网工具」判断（2026-11-13 老板：画布小抽AI 也要能联网）。
+# 只是**决定这一轮给不给工具**，不替模型决定搜不搜 —— 给了工具它就自己会调 web_search。
+_WEB_LOOKUP_HINTS = (
+    "联网", "上网", "搜索", "搜一下", "搜下", "查一下", "查查", "查询",
+    "最新", "最近", "今天", "本周", "今年", "实时", "当前",
+    "新闻", "官网", "价格", "多少钱", "发布", "版本", "更新", "天气", "股价", "汇率", "排名", "评测",
+    "latest", "news", "search", "price", "today", "current", "release", "version",
+)
+
+
+def agent_needs_web_lookup(text: str) -> bool:
+    """消息里出现「实时外部信息」的迹象就给联网工具；纯创作/画布操作不触发。"""
+    t = (text or "").lower()
+    return any(hint in t for hint in _WEB_LOOKUP_HINTS)
+
+
 AGENT_ALWAYS_ON_TOOL_SPECS = AGENT_WEB_TOOL_SPECS + AGENT_VIDEO_TOOL_SPECS
 AGENT_ALWAYS_ON_TOOL_NAMES = [spec["name"] for spec in AGENT_ALWAYS_ON_TOOL_SPECS]
 
@@ -23524,7 +23540,9 @@ async def canvas_llm_stream(task_id: str, payload: CanvasLLMRequest):
         return await canvas_llm(payload)
     # 本机工具是 tool-calling 循环（多轮往返），与逐 token 流式无法混用：
     # 开启工具时整体走非流式实现，拿到最终结果后一次性广播，前端表现一致。
-    if load_agent_tools_settings().get("enabled"):
+    # 2026-11-13：光开本机工具才带工具是不对的 —— web_search / web_read 是按「常开」设计的，
+    # 用户问「最新版本/价格/新闻」时模型必须能查，不能只凭训练记忆编。
+    if load_agent_tools_settings().get("enabled") or agent_needs_web_lookup(payload.message):
         result = await canvas_llm(payload)
         text = str(result.get("text") or "")
         if text:

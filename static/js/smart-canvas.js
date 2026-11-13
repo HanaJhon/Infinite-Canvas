@@ -31628,6 +31628,11 @@ function agentRetryMessage(msgId){
    事实类内容（节点清单/模型清单）每轮都会变，所以每次调用都现算，不做缓存。 */
 function agentOrchestrationContext(){
     const blocks = [];
+    /* 联网能力（2026-11-13 老板：画布 Agent 也要能联网）。
+       以前这里一个字都没提，模型不知道有 web_search，只能拿训练记忆硬答。 */
+    blocks.push(`【联网能力】需要「实时/最新」的外部信息时（版本号、价格、新闻、活动、官网说法、某人近况、某库的最新用法等），
+**直接调用 web_search 工具去查**，不要凭记忆猜，也不要回答「我无法联网」；查完再给结论，并说明信息来自哪些网页。
+不需要查的情况：纯创作、写提示词、画布操作、以及用户自己上传的素材。`);
     // ---- 1. 可用生图能力 ----
     const providers = agentGenProviders();
     if(providers.length){
