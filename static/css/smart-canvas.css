@@ -154,7 +154,7 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity:0 !impo
 .image-node.smart-group-member-node .node-hint { display:none !important; }
 .image-node.smart-group-member-node .loop-smart-card::before { content:"Loop"; width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:10px; font-weight:900; background:var(--soft); }
 .prompt-node-card { width:100%; height:100%; min-height:0; display:flex; flex-direction:column; gap:7px; }
-.prompt-node-panes { flex:1 1 auto; min-height:0; display:flex; gap:7px; }
+.prompt-node-panes { position:relative; flex:1 1 auto; min-height:0; display:flex; gap:7px; }
 /* 右栏是只读文本，要能选中复制：.image-node 默认 user-select:none + cursor:move，这里必须覆盖 */
 .prompt-node-output { display:none; flex:1 1 0; min-width:0; overflow:auto; white-space:pre-wrap; overflow-wrap:break-word; border:1px solid rgba(148,163,184,.32); border-radius:13px; background:var(--soft); color:var(--text); padding:10px; font-size:11.2px; line-height:1.45; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent; cursor:text; user-select:text; -webkit-user-select:text; }
 .prompt-node-output::selection, .prompt-node-output *::selection { background:rgba(59,130,246,.28); }
@@ -187,9 +187,11 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity:0 !impo
 .prompt-node-pill { height:24px; padding:0 8px; border-radius:9px; border:1px solid rgba(148,163,184,.34); background:rgba(255,255,255,.62); color:var(--muted); display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:650; }
 .theme-dark .prompt-node-pill { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.26); }
 .prompt-node-pill i,.prompt-node-pill svg { width:12px; height:12px; }
-.prompt-node-copy { width:24px; padding:0; justify-content:center; cursor:pointer; }
-.prompt-node-copy:hover { color:var(--text); border-color:var(--text); }
-.prompt-node-copy.copied { color:#12b76a; }
+.prompt-node-pane-copy { position:absolute; left:8px; bottom:8px; z-index:4; width:22px; height:22px; padding:0; display:inline-flex; align-items:center; justify-content:center; border:1px solid rgba(148,163,184,.34); border-radius:7px; background:rgba(255,255,255,.82); color:var(--faint); cursor:pointer; opacity:.6; transition:opacity .14s ease, color .14s ease, border-color .14s ease; }
+.theme-dark .prompt-node-pane-copy { background:rgba(15,23,42,.6); border-color:rgba(148,163,184,.26); }
+.prompt-node-pane-copy:hover { opacity:1; color:var(--text); border-color:var(--text); }
+.prompt-node-pane-copy i, .prompt-node-pane-copy svg { width:12px; height:12px; }
+.prompt-node-panes.is-split .prompt-node-pane-copy.copy-final { left:calc(50% + 8px); }
 .prompt-node-pill.active { background:var(--strong); color:var(--strong-text); border-color:var(--strong); }
 /* LLM 关闭时「图片描述」仍可点（点它自动开 LLM），用虚线边提示会顺带打开 LLM */
 .prompt-node-pill.prompt-desc-insert.is-llm-off { border-style:dashed; color:var(--faint); }

@@ -9934,14 +9934,15 @@ function promptNodeBodyHtml(node){
         <div class="prompt-node-panes ${llmEnabled ? 'is-split' : ''}">
         <textarea class="prompt-node-text prompt-node-control ${node.llmProcessing ? 'llm-blur' : ''}" placeholder="${escapeHtml(tr('smart.promptPlaceholderNode'))}">${escapeHtml(node.text || '')}</textarea>
         ${llmEnabled ? `<div class="prompt-node-output" data-placeholder="${escapeHtml(tr('smart.promptOutputPlaceholder'))}">${escapeHtml(String(node.llmOutputText || '').trim())}</div>` : ''}
+        <!-- 复制按钮贴各自提示词栏左下角（老板 2026-11-13：别在工具条里飘着，要落在提示词栏上） -->
+        <button class="prompt-node-pane-copy prompt-node-control copy-user" type="button" title="复制提示词" aria-label="复制提示词"><i data-lucide="copy"></i></button>
+        ${llmEnabled ? `<button class="prompt-node-pane-copy prompt-node-control copy-final" type="button" title="复制最终提示词" aria-label="复制最终提示词"><i data-lucide="copy"></i></button>` : ''}
         </div>
         <div class="prompt-processing-overlay" style="${node.llmProcessing ? 'display:flex' : 'display:none'}">
             <i data-lucide="loader-2" class="prompt-processing-spinner"></i>
             <span class="prompt-processing-text">运行中</span>
         </div>
         <div class="prompt-node-tools">
-            <button class="prompt-node-pill prompt-node-control prompt-node-copy copy-user" type="button" title="复制提示词" aria-label="复制提示词"><i data-lucide="copy"></i></button>
-            ${llmEnabled ? `<button class="prompt-node-pill prompt-node-control prompt-node-copy copy-final" type="button" title="复制最终提示词" aria-label="复制最终提示词"><i data-lucide="copy"></i></button>` : ''}
             <button class="prompt-node-pill prompt-node-control prompt-preset-edit ${templateActive ? 'active' : ''}" type="button"><i data-lucide="library"></i><span>模板库</span></button>
             <button class="prompt-node-pill prompt-node-control prompt-split-toggle ${node.promptSplitEnabled ? 'active' : ''}" type="button"><i data-lucide="split"></i><span>分隔符</span></button>
             <button class="prompt-node-pill prompt-node-control prompt-desc-insert${llmEnabled ? '' : ' is-llm-off'}" type="button" title="${llmEnabled ? '填入「图片描述」预设提示词' : '填入「图片描述」预设提示词并启用 LLM'}"><i data-lucide="image"></i><span>图片描述</span></button>
@@ -15463,7 +15464,7 @@ function bindPromptNodeControls(el, node){
         editPromptPresetForNode(node);
     };
     // 提示词节点复制：用户提示词 / 最终提示词各一个（老板 2026-11-13：提示词节点也要有复制）
-    el.querySelectorAll('.prompt-node-copy').forEach(btn => {
+    el.querySelectorAll('.prompt-node-pane-copy').forEach(btn => {
         btn.onclick = async e => {
             e.preventDefault();
             e.stopPropagation();
