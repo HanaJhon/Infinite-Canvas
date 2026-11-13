@@ -17502,7 +17502,7 @@ async def decide_chat_agent_action(payload, conversation, refs):
         return fallback
 
 def agent_tool_label(name):
-    for spec in AGENT_TOOL_SPECS + AGENT_ALWAYS_ON_TOOL_SPECS + AGENT_BROWSER_TOOL_SPECS:
+    for spec in AGENT_TOOL_SPECS + AGENT_ALWAYS_ON_TOOL_SPECS:
         if spec["name"] == name:
             return spec["label"]
     return name or "工具"
