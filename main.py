@@ -6844,7 +6844,7 @@ AGENT_WEB_TOOL_SPECS = [
         "desc": (
             "在互联网上搜索，返回标题 + 链接 + 摘要。用于查询实时信息、"
             "产品/模型的最新动态、行业资料、他人评价等你自己不知道或可能过时的内容。"
-            "默认走内置的 argo 多引擎搜索；结果不理想时可用 engine 参数换必应/搜狗/DuckDuckGo 重搜。"
+            "走内置的 argo 多引擎搜索，一般直接调用即可，不需要指定引擎。"
         ),
         "parameters": {
             "type": "object",
@@ -6853,8 +6853,8 @@ AGENT_WEB_TOOL_SPECS = [
                 "limit": {"type": "integer", "description": f"返回条数，默认 6，最大 {AGENT_WEB_RESULT_LIMIT + 2}"},
                 "engine": {
                     "type": "string",
-                    "enum": ["", "argo", "bing", "ddg"],
-                    "description": "搜索引擎：留空=自动（argo 优先，失败回落到必应/搜狗/DDG）；bing 强制必应；ddg 强制 DuckDuckGo",
+                    "enum": ["", "argo"],
+                    "description": "留空即可（内部固定走 argo；几个公共搜索引擎对脚本请求限流，指过去只会失败）",
                 },
             },
             "required": ["query"],
@@ -7291,9 +7291,9 @@ def _cache_web_result(cache_key, data):
 
 
 def web_search_sync(query, limit=6, engine=""):
-    """多引擎搜索：Bing + DuckDuckGo 并行跑，按 URL 去重后轮转合并。
+    """联网搜索：先走内置 argo 多引擎；argo 不出结果才回落到自研的必应/搜狗/DDG 解析。
 
-    engine 传 "bing" / "ddg" 可只跑某一个（结果不理想时给模型一个换引擎重搜的入口）。
+    engine 只作兼容保留（传什么都不影响 argo 先行），别再给模型「换引擎重搜」的暗示。
     """
     import concurrent.futures
     q = str(query or "").strip()
@@ -7309,10 +7309,11 @@ def web_search_sync(query, limit=6, engine=""):
     if cached and time.time() - cached["ts"] < AGENT_WEB_CACHE_TTL:
         return cached["data"]
     argo_error = ""
-    if not want or want == "argo":
-        argo_items, argo_error = _argo_search(q, limit)
-        if argo_items:
-            return _cache_web_result(cache_key, _web_results_payload(argo_items[:limit], "argo"))
+    # argo 永远先跑，engine 参数不能跳过它：必应/DDG 现在多半直接回验证页或泛结果，
+    # 让模型「换引擎重搜」只会白烧一轮（2026-11-13 实测连续两条失败就是这么来的）。
+    argo_items, argo_error = _argo_search(q, limit)
+    if argo_items:
+        return _cache_web_result(cache_key, _web_results_payload(argo_items[:limit], "argo"))
     backends = [item for item in AGENT_WEB_SEARCH_BACKENDS if not want or item[0] == want]
     if not backends:
         backends = list(AGENT_WEB_SEARCH_BACKENDS)
@@ -7370,10 +7371,8 @@ def web_search_sync(query, limit=6, engine=""):
             detail = argo_error + "；" + detail
         if errors and all("解析不到结果" in e or "超时" in e for e in errors):
             detail += "（各引擎都返回了验证页/泛结果，通常是被限流，等几秒再搜）"
-        # 失败时给模型一条明确的下一步：换引擎重搜一次就够，别再硬刚，也别编答案
-        hint = ("；可换 engine 再搜一次" if not want
-                else ("；可改用 engine:\"ddg\" 再搜一次" if want == "bing"
-                      else "；可改用 engine:\"bing\" 再搜一次"))
+        # 失败时给模型一条明确的下一步：换个关键词或过几秒重搜一次，别再硬刚，也别编答案
+        hint = "；过几秒换个说法重搜一次；还是不行就告诉用户「网上没搜到」，别凭记忆编"
         return {"ok": False, "summary": f"搜索失败：{detail}{hint}",
                 "output": "", "results": []}
     used = "/".join(kind for kind in order if per_engine.get(kind))
