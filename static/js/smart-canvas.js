@@ -6678,8 +6678,11 @@ function creditsFormat(value){
     if(!n) return '';
     // 小额单价（生图 0.015、LLM 0.00008）两位/三位小数会把差别抹平，1 积分以下一律留 4 位有效小数（老板 m22860）
     if(n >= 1) return String(Math.round(n * 100) / 100);
-    const fixed = n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
-    return (fixed && fixed !== '0') ? fixed : '<0.0001';
+    // 1 积分以下按量级给有效位数：0.000006 和 0.000024 都得能看出差别，别一起抹成 <0.0001
+    // （提示词节点的 LLM 单价就是这么小，老板 2026-11-13 才以为「换模型积分没变」）
+    const digits = n >= 0.001 ? 4 : 6;
+    const fixed = n.toFixed(digits).replace(/0+$/, '').replace(/\.$/, '');
+    return (fixed && fixed !== '0') ? fixed : ('<' + (1 / Math.pow(10, digits)));
 }
 function loadCreditsPublic(force=false){
     if(creditsPublicLoading) return;
@@ -6763,6 +6766,24 @@ function creditsVideoPerSecond(table, resolution){
 }
 function creditsNodeCost(node){
     if(!node) return null;
+    /* 提示词节点的「运行」只跑一次理解模型生成文本，不出图。
+       原来这里沿用画布记住的生图设置（model=nano-banana-pro 之类），预估变成「一张图 + 一点点 LLM」，
+       怎么换理解模型都显示同一个 0.18xx（老板 2026-11-13 反馈）。只按 LLM 单价算。 */
+    if(node.type === 'smart-prompt'){
+        const llmEntry = creditsEntryFor(String(node.llmModel || '').trim(), String(node.llmProvider || '').trim());
+        if(!llmEntry) return null;
+        const sysText = String(node.llmSystemPrompt || '');
+        const userText = String(node.promptDraftText || node.text || '');
+        let ctxText = '';
+        try { ctxText = String(inputPromptTextFor(node) || ''); } catch(e) { ctxText = ''; }
+        const promptLlm = creditsLlmCost(llmEntry, {
+            inputText: (sysText + '\n' + userText).trim(),
+            contextText: ctxText,
+        });
+        const promptCredits = creditsNumber(promptLlm ? promptLlm.credits : 0);
+        if(!promptCredits) return null;
+        return {credits: promptCredits, kind: 'llm', model: String(node.llmModel || ''), base: promptCredits, llmCredits: 0};
+    }
     let settings = {};
     try { settings = smartSettingsForNode(node) || {}; } catch(e) { settings = {}; }
     // 视频跑的是 videoModel/videoProvider，跟生图的 model/provider_id 不是同一个字段
@@ -15448,6 +15469,8 @@ function bindPromptNodeControls(el, node){
     if(modelEl) modelEl.onchange = e => {
         e.stopPropagation();
         node.llmModel = e.target.value;
+        // 运行键上的预估挂在节点 DOM 里，换理解模型后要重渲染才会变（原来不重渲染 ⇒ 永远显示旧值）
+        render();
         refreshNodeCreditBadges(node);
         scheduleSave();
     };
