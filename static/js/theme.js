@@ -256,16 +256,27 @@
     // 每个功能页右下角的「小抽AI Chat」入口，跳到独立页 /ai
     function mountXvaiEntry() {
         if (document.getElementById('xvai-entry')) return;
+        // 🚨 被首页 shell 用 iframe 内嵌时必须跳过：index.html 的 stage 有 16px 外边距，
+        // iframe 里的胶囊会右上错开 16px，和外层那颗叠成「重影」（2026-11-13 老板反馈「重叠」）。
+        if (isFramed()) return;
         const path = (location.pathname || '').replace(/\/+$/, '');
         if (path === '/ai' || /\/xvai\.html$/.test(path)) return;
+        // 2026-11-13 老板：原来的青→靛渐变胶囊跟整体风格格格不入，屏幕上还会出现一层重影。
+        // 两条教训：
+        // ① 颜色写死，不要用 var(--card)/var(--line) —— 这些变量在部分页面只定义在 body 上，
+        //    胶囊挂在 <html> 上就取不到，背景变全透明，看着像个鬼影。
+        // ② 不要 backdrop-filter / transition / 大投影 —— 透明底 + 阴影会再叠一层轮廓。
         const style = document.createElement('style');
-        style.textContent = '#xvai-entry{position:fixed;right:20px;bottom:20px;z-index:9998;display:inline-flex;'
-            + 'align-items:center;gap:6px;height:36px;padding:0 15px;border-radius:999px;'
-            + 'background:linear-gradient(120deg,#06b6d4,#4f46e5);color:#fff;font:600 13px/1 '
-            + 'Inter,system-ui,"Microsoft YaHei",sans-serif;text-decoration:none;'
-            + 'box-shadow:0 6px 18px rgba(29,78,216,.28);transition:transform .16s ease,box-shadow .16s ease}'
-            + '#xvai-entry:hover{transform:translateY(-1px);box-shadow:0 10px 22px rgba(29,78,216,.34)}'
-            + '#xvai-entry i{font-style:normal;font-size:13px;line-height:1}';
+        style.textContent = '#xvai-entry{position:fixed;right:18px;bottom:18px;z-index:9998;display:inline-flex;'
+            + 'align-items:center;gap:6px;height:34px;padding:0 13px;border-radius:12px;'
+            + 'border:1px solid #e2e8f0;background:#fff;color:#0f172a;'
+            + 'font:600 12.5px/1 Inter,system-ui,"Microsoft YaHei",sans-serif;text-decoration:none;'
+            + 'box-shadow:0 2px 8px rgba(15,23,42,.06)}'
+            + '#xvai-entry:hover{border-color:#cbd5e1;background:#f8fafc}'
+            + '#xvai-entry i{font-style:normal;font-size:13px;line-height:1}'
+            + '#xvai-entry span{white-space:nowrap}'
+            + 'html.theme-dark #xvai-entry{border-color:#2a3446;background:#1b2130;color:#e8eefc}'
+            + 'html.theme-dark #xvai-entry:hover{border-color:#3b475c;background:#222a3a}';
         document.head.appendChild(style);
         const a = document.createElement('a');
         a.id = 'xvai-entry';
