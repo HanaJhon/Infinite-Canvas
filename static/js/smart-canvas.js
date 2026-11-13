@@ -169,6 +169,10 @@ const composerStylePanel = document.getElementById('composerStylePanel');
 const composerLlmSection = document.getElementById('composerLlmSection');
 const promptRow = document.querySelector('.prompt-row');
 const promptOutputPane = document.getElementById('promptOutputPane');
+// 复制提示词：单栏一个按钮，LLM 双栏时左右各一个（老板 2026-11-13）
+const composerCopyBtn = document.getElementById('composerCopyBtn');
+const copyUserPromptBtn = document.getElementById('copyUserPromptBtn');
+const copyFinalPromptBtn = document.getElementById('copyFinalPromptBtn');
 const composerLlmProvider = document.getElementById('composerLlmProvider');
 const composerLlmModel = document.getElementById('composerLlmModel');
 const composerLlmInstruction = document.getElementById('composerLlmInstruction');
@@ -20568,6 +20572,27 @@ function renderPromptOutputPane(node){
     promptOutputPane.classList.toggle('has-text', Boolean(text));
     promptOutputPane.scrollTop = 0;
 }
+// 复制提示词：which='user' 取左栏用户原文，'final' 取右栏 LLM 最终提示词。
+// 走项目里的 copyTextToClipboard（兼容局域网 http 这种非安全上下文，navigator.clipboard 不可用）。
+async function copyPromptPane(which, btn){
+    const node = activeComposerNode() || (isSmartRunnableNode(selectedNode()) ? selectedNode() : null);
+    const text = which === 'final'
+        ? String(node?.llmOutputText || promptOutputPane?.textContent || '').trim()
+        : String(promptInput?.innerText || '').trim();
+    if(!text){ toast(which === 'final' ? '还没有最终提示词' : '提示词还是空的'); return; }
+    const ok = await copyTextToClipboard(text);
+    toast(ok ? '已复制提示词' : '复制失败，请手动选中文本');
+    if(!ok || !btn) return;
+    const icon = btn.querySelector('i');
+    const prev = icon?.getAttribute('data-lucide') || 'copy';
+    btn.classList.add('copied');
+    if(icon){ icon.setAttribute('data-lucide', 'check'); refreshIcons(); }
+    clearTimeout(btn._copyTimer);
+    btn._copyTimer = setTimeout(() => {
+        btn.classList.remove('copied');
+        if(icon){ icon.setAttribute('data-lucide', prev); refreshIcons(); }
+    }, 1200);
+}
 function renderComposerLlmSection(node){
     if(!composerLlmSection || !composerLlmToggleBtn) return;
     // 遮罩（局部重绘）下 LLM 扩写会把「这里改成什么」扩成整图描述，必须关掉并隐藏入口
@@ -27186,6 +27211,21 @@ if(composerHistoryBtn) composerHistoryBtn.onclick = event => {
     event.preventDefault();
     event.stopPropagation();
     toggleComposerHistoryPanel();
+};
+if(composerCopyBtn) composerCopyBtn.onclick = event => {
+    event.preventDefault();
+    event.stopPropagation();
+    copyPromptPane('user', composerCopyBtn);
+};
+if(copyUserPromptBtn) copyUserPromptBtn.onclick = event => {
+    event.preventDefault();
+    event.stopPropagation();
+    copyPromptPane('user', copyUserPromptBtn);
+};
+if(copyFinalPromptBtn) copyFinalPromptBtn.onclick = event => {
+    event.preventDefault();
+    event.stopPropagation();
+    copyPromptPane('final', copyFinalPromptBtn);
 };
 if(composerStyleBtn) composerStyleBtn.onclick = event => {
     event.preventDefault();
