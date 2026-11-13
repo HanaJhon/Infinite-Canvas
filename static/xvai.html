@@ -912,12 +912,15 @@
     }
     // 本次消耗（后端 chat_agent 显式扣费后写进消息里，见 main.py「小抽AI 计费」块）
     function creditsChip(msg){
-        const c = msg && msg.credits;
-        if(!c) return '';
-        const u = c.usage || {};
+        const c = (msg && msg.credits) || {};
+        // 用量单独挂在 msg.usage 上：没配计价 / 余额不足 / 扣费失败时，token 统计照样要显示
+        const u = c.usage || (msg && msg.usage) || {};
         const bits = [];
         if(c.charged) bits.push(`本次消耗 ${esc(String(c.credits))} 积分 · 余额 ${esc(String(c.balance))}`);
-        if(u.input_tokens || u.output_tokens) bits.push(`输入 ${fmtNum(u.input_tokens)} / 输出 ${fmtNum(u.output_tokens)} tokens`);
+        if(u.input_tokens || u.output_tokens){
+            const tilde = u.estimated ? '~' : '';
+            bits.push(`输入 ${tilde}${fmtNum(u.input_tokens)} / 输出 ${tilde}${fmtNum(u.output_tokens)} tokens`);
+        }
         if(u.count) bits.push(`${esc(String(u.count))} 张图`);
         return bits.length ? `<div class="xv-cost">${bits.join(' · ')}</div>` : '';
     }
@@ -1606,7 +1609,8 @@
             image_urls: m.image_urls || (m.image_url ? [m.image_url] : []),
             attachments: m.attachments,
             tool_events: m.tool_events,
-            credits: m.credits
+            credits: m.credits,
+            usage: m.usage
         }));
     }
     async function loadConversationById(id){

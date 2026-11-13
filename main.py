@@ -26003,17 +26003,23 @@ async def chat_agent_events(payload: ChatRequest, request: Request, user_id: str
                 "reason": "小抽AI 对话",
             }
         yield {"event": "stage", "key": "settle", "label": "结算积分"}
-        credits_info = _credits_store.spend(user_id, charge_payload)
-        # 把这次的用量也带上（页面要显示「输入 x / 输出 y tokens · 本次消耗 z 积分」）
+        # usage 独立算一份：计价没配、余额不够、甚至扣费抛错，用量统计也得照常显示。
+        # 上游不给 usage 时用正文长度估，别让页面空着（老板 m09022「缺少 token 消耗统计」）。
         if charge_payload.get("kind") == "image":
-            credits_info["usage"] = {"count": max(1, len(local_urls) or 1), "model": model}
+            usage_info = {"count": max(1, len(local_urls) or 1), "model": model}
         else:
-            credits_info["usage"] = {
-                "input_tokens": int(charge_payload.get("input_tokens") or 0),
-                "output_tokens": int(charge_payload.get("output_tokens") or 0),
+            usage_info = {
+                "input_tokens": int(charge_payload.get("input_tokens") or 0)
+                or _credits.estimate_tokens(payload.message or ""),
+                "output_tokens": int(charge_payload.get("output_tokens") or 0)
+                or _credits.estimate_tokens(assistant_message.get("content") or ""),
                 "cache_tokens": int(charge_payload.get("cache_tokens") or 0),
                 "model": charge_payload.get("model") or "",
+                "estimated": not (usage.get("prompt_tokens") or usage.get("input_tokens")),
             }
+        assistant_message["usage"] = usage_info
+        credits_info = _credits_store.spend(user_id, charge_payload)
+        credits_info["usage"] = usage_info
         if credits_info.get("charged"):
             print(f"[credits] 小抽AI 扣 {credits_info.get('credits')} 积分"
                   f"（{charge_payload.get('kind')} · {charge_payload.get('model')}）余额 {credits_info.get('balance')}")
