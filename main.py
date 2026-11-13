@@ -52,7 +52,6 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-import browser_control as browser_ctl
 import hunyuan3d_client
 from hunyuan3d_client import Hunyuan3DBrowserClient, Hunyuan3DError, Hunyuan3DNeedLogin
 
@@ -6915,68 +6914,8 @@ AGENT_VIDEO_TOOL_SPECS = [
         },
     },
 ]
-# ---- 内置浏览器：Agent 在里面操作网页，画面实时回传给小抽AI 页面 -----------
-# 🚨 浏览器必须带 --remote-debugging-port 才能被驱动（浏览器安全边界）；没开就用
-#    browser_control 自己起一个**无头** Edge，小抽AI 右侧面板按帧显示它的画面，
-#    用户能看见 Agent 正在点什么，也能自己在面板里接管操作。
-BROWSER_PROFILE_DIR = os.path.join(DATA_DIR, "browser_profile")
-_BROWSER_LOCK = asyncio.Lock()
-BROWSER_FRAME_INTERVAL = 0.55   # 回传帧间隔（秒）：够顺滑，又不把 CPU 烧穿
-BROWSER_FRAME_QUALITY = 50      # JPEG 质量，1280 宽一帧约 40-70KB
-
-AGENT_BROWSER_TOOL_SPECS = [
-    {
-        "name": "browser",
-        "label": "浏览器操作",
-        "desc": (
-            "操作内置浏览器（服务端跑的 Edge，小抽AI 右侧面板实时显示画面，用户能看见你每一步）："
-            "打开网页、读正文、点按钮、填输入框、滚动、截图。需要登录才能看的页面、"
-            "要在网站上提交表单/查后台数据、或者 web_read 拿不到内容时用它。"
-            "一次只做一步，做完看返回的正文再决定下一步。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["goto", "read", "click", "type", "key", "scroll", "screenshot"],
-                    "description": "动作：goto 打开网址；read 读当前页正文；click 点击元素；"
-                                   "type 输入文字；key 按键；scroll 滚动；screenshot 截图",
-                },
-                "url": {"type": "string", "description": "goto 用：网址"},
-                "selector": {"type": "string", "description": "click/type 用：CSS 选择器（优先用 text）"},
-                "text": {"type": "string", "description": "click 用：要点的按钮/链接上的文字"},
-                "value": {"type": "string", "description": "type 用：要输入的文字"},
-                "key": {"type": "string", "description": "key 用：Enter/Tab/Escape/ArrowDown 等"},
-                "delta": {"type": "integer", "description": "scroll 用：滚动像素，正数向下，默认 600"},
-            },
-            "required": ["action"],
-        },
-    },
-]
-
-AGENT_BROWSER_SYSTEM_HINT = (
-    "\n\n你有一个内置浏览器（工具 browser），画面会实时显示在小抽AI 右侧面板里，用户看得见你的每一步。"
-    "\n- 需要登录态的网站、要真实点击/填写才出结果的页面 → 用 browser：先 goto，再用 read 看正文，"
-    "按页面文字决定 click 哪个按钮 / type 进哪个输入框。"
-    "\n- 每次只做一个动作，等返回的正文再决定下一步；点不到就换个更短的关键词当 text，别乱猜坐标。"
-    "\n- 页面正文很长，返回会被截断 —— 需要细节就再 read 一次或 scroll 往下看。"
-    "\n- 涉及付款、删除账号、发消息给他人这类不可撤销的操作，先向用户说明并等确认，不要自己点下去。"
-)
-
-
-class BrowserInputRequest(BaseModel):
-    type: str = ""
-    x: float = 0
-    y: float = 0
-    delta: int = 0
-    key: str = ""
-    text: str = ""
-    url: str = ""
-
-
 def agent_always_on_hints():
-    return AGENT_WEB_SYSTEM_HINT + AGENT_VIDEO_SYSTEM_HINT + AGENT_BROWSER_SYSTEM_HINT
+    return AGENT_WEB_SYSTEM_HINT + AGENT_VIDEO_SYSTEM_HINT
 
 
 AGENT_ALWAYS_ON_TOOL_SPECS = AGENT_WEB_TOOL_SPECS + AGENT_VIDEO_TOOL_SPECS
@@ -7284,38 +7223,8 @@ async def agent_tool_web_read(args):
     return await asyncio.to_thread(web_read_sync, args.get("url"), args.get("max_chars"))
 
 
-async def agent_tool_browser(args):
-    """驱动内置浏览器。"""
-    action = str(args.get("action") or "read").strip().lower()
-    try:
-        session = browser_ctl.get_session(BROWSER_PROFILE_DIR)
-        async with _BROWSER_LOCK:
-            await session.ensure()
-            if action == "goto":
-                return await session.goto(str(args.get("url") or ""))
-            if action == "click":
-                return await session.click(str(args.get("selector") or ""), str(args.get("text") or ""))
-            if action == "type":
-                return await session.type_text(str(args.get("value") or ""), str(args.get("selector") or ""))
-            if action == "key":
-                return await session.key(str(args.get("key") or "Enter"))
-            if action == "scroll":
-                return await session.scroll(int(args.get("delta") or 600))
-            if action == "screenshot":
-                name = f"shot_{now_ms()}.png"
-                result = await session.screenshot(os.path.join(AGENT_FILES_DIR, "browser", name))
-                result["url"] = f"/output/agent/browser/{name}"
-                result["output"] = result["url"]
-                return result
-            return await session.read()
-    except browser_ctl.BrowserControlError as exc:
-        return {"ok": False, "summary": f"浏览器操作失败：{exc}", "output": ""}
-    except Exception as exc:
-        return {"ok": False, "summary": f"浏览器操作异常：{exc}", "output": ""}
-
-
 def agent_always_on_tool_schemas():
-    specs = list(AGENT_ALWAYS_ON_TOOL_SPECS) + list(AGENT_BROWSER_TOOL_SPECS)
+    specs = list(AGENT_ALWAYS_ON_TOOL_SPECS)
     return [
         {
             "type": "function",
@@ -8045,9 +7954,6 @@ async def run_agent_tool(name, args):
     tool_name = str(name or "").strip()
     if not isinstance(args, dict):
         args = {}
-    # 浏览器控制单独一条：开关在用户手里，agent_tool_browser 内部自己校验授权
-    if tool_name == "browser":
-        return await agent_tool_browser(args)
     # 常驻工具单独放行：不受「本机工具」开关与权限档位约束（只读联网 / 只做 ffmpeg 编码）
     if tool_name in AGENT_ALWAYS_ON_TOOL_NAMES:
         try:
@@ -19460,92 +19366,6 @@ async def codex_permissions_set(payload: CodexPermissionRequest):
     data = codex_permission_payload()
     data["saved"] = True
     return data
-
-@app.get("/api/browser/state")
-async def browser_state():
-    """内置浏览器是不是开着。面板打开前先问一句，避免白连。"""
-    session = browser_ctl._SESSION
-    running = bool(session and session.proc)
-    url = ""
-    if running:
-        try:
-            url = await asyncio.wait_for(session.current_url(), timeout=3)
-        except Exception:
-            url = ""
-    return {"running": running, "url": url}
-
-
-@app.get("/api/browser/live")
-async def browser_live():
-    """把内置浏览器的画面按帧推给页面（SSE）。断开就停，不在后台空转。"""
-    session = browser_ctl.get_session(BROWSER_PROFILE_DIR)
-
-    async def frames():
-        try:
-            async with _BROWSER_LOCK:
-                await session.ensure()
-            while True:
-                try:
-                    async with _BROWSER_LOCK:
-                        shot = await session.capture(BROWSER_FRAME_QUALITY)
-                except asyncio.CancelledError:
-                    break
-                except Exception as exc:
-                    yield f"data: {json.dumps({'event': 'error', 'detail': str(exc)})}\n\n"
-                    break
-                yield f"data: {json.dumps({'event': 'frame', **shot})}\n\n"
-                await asyncio.sleep(BROWSER_FRAME_INTERVAL)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            yield f"data: {json.dumps({'event': 'error', 'detail': str(exc)})}\n\n"
-
-    return StreamingResponse(frames(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-@app.post("/api/browser/input")
-async def browser_input(payload: BrowserInputRequest):
-    """用户在面板里接管：点、滚、打字、跳转都转成 CDP 动作。"""
-    kind = str(payload.type or "").strip().lower()
-    session = browser_ctl.get_session(BROWSER_PROFILE_DIR)
-    try:
-        async with _BROWSER_LOCK:
-            await session.ensure()
-            if kind == "click":
-                await session.click_at(payload.x, payload.y)
-            elif kind == "wheel":
-                await session.wheel(payload.x, payload.y, payload.delta or 600)
-            elif kind == "key":
-                await session.key(payload.key or "Enter")
-            elif kind == "text":
-                await session.type_text(payload.text or "")
-            elif kind == "goto":
-                await session.goto(payload.url or "")
-            elif kind == "back":
-                await session.go_back()
-            elif kind == "forward":
-                await session.go_forward()
-            elif kind == "reload":
-                await session.reload_page()
-            else:
-                return {"ok": False, "detail": f"不认识的动作：{kind}"}
-    except browser_ctl.BrowserControlError as exc:
-        return {"ok": False, "detail": str(exc)}
-    except Exception as exc:
-        return {"ok": False, "detail": f"浏览器操作异常：{exc}"}
-    return {"ok": True}
-
-
-@app.post("/api/browser/close")
-async def browser_close():
-    """把内置浏览器关掉（面板上「关闭浏览器」）。"""
-    try:
-        await browser_ctl.shutdown_session()
-    except Exception as exc:
-        print(f"[browser] 关闭内置浏览器失败: {exc}")
-    return {"ok": True}
-
 
 @app.get("/api/agent/tools")
 async def agent_tools_get():
