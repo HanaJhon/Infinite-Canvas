@@ -28204,7 +28204,16 @@ function loadAgentState(){
             const data = JSON.parse(raw);
             if(data && typeof data === 'object') agentState = {...agentState, ...data, messages:Array.isArray(data.messages) ? data.messages : []};
         }
-    } catch(e) { agentState = agentDefaultState(); }
+    } catch(e) {
+        /* 🚨 解析失败绝不静默重置（老板 2026-11-13）：先把原文另存到备份钥匙，
+           再退默认值；接着标记为「本次不写盘」，免得默认值把还能人工抢救的原文盖掉。 */
+        try {
+            const brokenRaw = localStorage.getItem(agentStorageKey());
+            if(brokenRaw) localStorage.setItem(agentStorageKey() + '__bak__', brokenRaw);
+        } catch(_e) { /* 写满就算了 */ }
+        agentState = agentDefaultState();
+        agentState._storageUnreadable = true;
+    }
     // 旧数据迁移：单个 skill 对象 → skills 数组
     if(agentState.skill && !Array.isArray(agentState.skills)){
         agentState.skills = [agentState.skill];
@@ -28447,7 +28456,20 @@ function saveAgentState(){
                 if(conv) conv.messages = (agentState.messages || []).slice(-AGENT_MSG_MAX);
             }
             const data = {...agentState, messages:(agentState.messages || []).slice(-AGENT_MSG_MAX)};
-            localStorage.setItem(agentStorageKey(), JSON.stringify(data));
+            /* 🚨 覆盖前保护：这一份一条对话都没有、旧的那份却有 → 先把旧的存进备份钥匙。
+               只在「要清空」这一种情况下多做一次 parse，正常保存不多花时间。 */
+            if(!(data.conversations || []).length && !(data.messages || []).length && !agentState._storageUnreadable){
+                try {
+                    const oldRaw = localStorage.getItem(agentStorageKey());
+                    if(oldRaw && (JSON.parse(oldRaw).conversations || []).length){
+                        localStorage.setItem(agentStorageKey() + '__bak__', oldRaw);
+                    }
+                } catch(_e) { /* 忽略 */ }
+            }
+            // 原文解析失败的那次会话不写盘：宁可这条消息不落盘，也不覆盖可能还能抢救的记录
+            if(!agentState._storageUnreadable){
+                localStorage.setItem(agentStorageKey(), JSON.stringify(data));
+            }
             // Skill 另存一份全局的 —— 换画布打开时从这把钥匙读回来
             try {
                 localStorage.setItem(AGENT_SKILLS_GLOBAL_KEY, JSON.stringify(agentState.skills || []));

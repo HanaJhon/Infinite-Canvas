@@ -19645,6 +19645,20 @@ async def agent_state_get(canvas_id: str):
     return {"state": raw if isinstance(raw, dict) else None}
 
 
+@app.get("/api/agent/state/{canvas_id}/bak")
+async def agent_state_get_backup(canvas_id: str):
+    """读上一次被「清空覆盖」前的备份（PUT 时自动留的 .bak）。用于人工救回对话记录。"""
+    path = _agent_state_path(canvas_id) + ".bak"
+    if not os.path.exists(path):
+        return {"state": None}
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            raw = json.load(f)
+    except Exception:
+        return {"state": None}
+    return {"state": raw if isinstance(raw, dict) else None}
+
+
 @app.put("/api/agent/state/{canvas_id}")
 async def agent_state_put(canvas_id: str, payload: dict = Body(...)):
     """整份覆盖写入某张画布的 Agent 对话状态。先写临时文件再 os.replace，避免读到写了一半的 JSON。"""
@@ -19656,6 +19670,22 @@ async def agent_state_put(canvas_id: str, payload: dict = Body(...)):
         raise HTTPException(status_code=413, detail=f"对话状态超过 {AGENT_STATE_MAX_BYTES // (1024 * 1024)}MB，无法保存")
     path = _agent_state_path(canvas_id)
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    # 🚨 覆盖前保护（老板 2026-11-13：任何修改都不能动到对话记录）
+    # 新状态一条对话都没有、磁盘上那份却有 → 先把旧的留一份 .bak 再写。
+    # 不拦写入（用户可能真的清空了），但绝不让上一次的记录凭空消失。
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8-sig") as f:
+                old_state = json.load(f)
+            if isinstance(old_state, dict):
+                old_convs = old_state.get("conversations") or []
+                old_msgs = sum(len(c.get("messages") or []) for c in old_convs if isinstance(c, dict))
+                new_convs = state.get("conversations") or []
+                new_msgs = sum(len(c.get("messages") or []) for c in new_convs if isinstance(c, dict))
+                if (old_convs or old_msgs) and not (new_convs or new_msgs):
+                    shutil.copy2(path, path + ".bak")
+    except Exception:
+        pass
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(body)
