@@ -51,6 +51,9 @@
         .xv-main { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; }
         .xv-head { flex:0 0 auto; display:flex; align-items:center; gap:12px; padding:12px 20px; border-bottom:1px solid var(--line); background:var(--bg); }
         /* 标题与副标题并成一行（老板 2026-11-11：图1 那两块别叠两行） */
+        /* 左上角回无限画布（老板 2026-11-13）：这两个页面常来回切，别再让人翻地址栏 */
+        .xv-home { text-decoration:none; flex:0 0 auto; }
+        .xv-home svg { width:14px; height:14px; }
         .xv-brand { display:flex; align-items:baseline; gap:8px; min-width:0; }
         .xv-title { font-size:14px; font-weight:600; letter-spacing:-.01em; flex:0 0 auto; }
         .xv-sub { font-size:12px; font-weight:400; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -255,6 +258,9 @@
 <div class="xv-shell">
     <div class="xv-main">
         <div class="xv-head">
+            <a class="xv-btn xv-home" href="/" title="返回无限画布">
+                <i data-lucide="layout-grid"></i><span>无限画布</span>
+            </a>
             <div class="xv-brand">
                 <span class="xv-title" data-i18n="xvai.title">小抽AI</span>
                 <span class="xv-sub" data-i18n="xvai.subtitle">对话生成 · 产物实时预览</span>
