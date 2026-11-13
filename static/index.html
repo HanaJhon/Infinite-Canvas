@@ -24,7 +24,7 @@
         })();
     </script>
     <script src="/static/vendor/js/tailwindcss-cdn.js?v=1.3.7.1767196800"></script>
-    <script src="/static/js/theme.js?v=1.3.7.1793681298"></script>
+    <script src="/static/js/theme.js?v=1.3.7.1794556649"></script>
     <script src="/static/js/i18n.js?v=1.3.7.1794291244"></script>
     <style>
         @import url('/static/vendor/css/fonts.css?v=1.3.7.1767196800');
@@ -1498,6 +1498,128 @@
         .sidebar.is-collapsing:hover .update-now-text {
             max-width: 42px;
         }
+
+        /* ===== 竖屏一级页面（手机形态）：侧边栏整体换成一级页面 + 底部标签栏 =====
+           触发条件由 syncPortraitNav() 在 body 上打 mobile-portrait / mhome-on 两个类。 */
+        .mhome, .mobile-tabs { display: none; }
+        body.mobile-portrait {
+            --mhome-bg: #f2f3f5;
+            --mhome-card: #ffffff;
+            --mhome-ink: #16181d;
+            --mhome-muted: #6b7280;
+            --mhome-line: rgba(15, 23, 42, .06);
+            --mhome-shadow: 0 6px 22px rgba(15, 23, 42, .06);
+        }
+        html.theme-dark body.mobile-portrait,
+        body.theme-dark.mobile-portrait {
+            --mhome-bg: #0e1014;
+            --mhome-card: #171a20;
+            --mhome-ink: #e8ecf4;
+            --mhome-muted: #97a0b0;
+            --mhome-line: rgba(255, 255, 255, .07);
+            --mhome-shadow: 0 6px 22px rgba(0, 0, 0, .35);
+        }
+        html.studio-ui-scaled body.mobile-portrait {
+            width: 100% !important;
+            height: 100vh !important;
+            min-height: 100vh !important;
+            transform: none !important;
+        }
+        html.studio-ui-scaled body.mobile-portrait > .app-shell { height: 100vh !important; }
+        body.mobile-portrait .sidebar { display: none !important; }
+        body.mobile-portrait .app-shell { height: 100vh; display: block; }
+        body.mobile-portrait .stage,
+        body.mobile-portrait.studio-scale-host .stage {
+            margin: 0 !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            background: var(--mhome-bg);
+            /* 让出底部标签栏，舞台整体变矮，iframe 铺满剩下的区域 */
+            height: calc(100vh - 62px - env(safe-area-inset-bottom, 0px));
+        }
+        /* 竖屏不需要那颗悬浮胶囊（底部标签栏已经能回到小抽AI）。
+           胶囊是 theme.js 挂到 <html> 上的（不是 body 的子元素），所以用兄弟选择器。 */
+        body.mobile-portrait #xvai-entry,
+        body.mobile-portrait ~ #xvai-entry { display: none !important; }
+
+        body.mobile-portrait .mhome {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            padding: 20px 16px 26px;
+            box-sizing: border-box;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            background: var(--mhome-bg);
+            color: var(--mhome-ink);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .25s var(--fluid-ease);
+        }
+        body.mobile-portrait.mhome-on .mhome { opacity: 1; pointer-events: auto; }
+
+        .mhome-head { display: flex; align-items: center; gap: 12px; padding: 6px 2px 4px; }
+        .mhome-logo {
+            width: 46px; height: 46px; border-radius: 14px; flex: 0 0 auto;
+            background: #101114; object-fit: contain; padding: 6px; box-sizing: border-box;
+        }
+        .mhome-title { margin: 0; font-size: 21px; font-weight: 800; letter-spacing: -.2px; }
+        .mhome-sub { margin: 4px 0 0; font-size: 12.5px; color: var(--mhome-muted); }
+
+        .mhome-cards { display: flex; flex-direction: column; gap: 14px; }
+        .mhome-card {
+            position: relative;
+            background: var(--mhome-card);
+            border: 1px solid var(--mhome-line);
+            border-radius: 22px;
+            padding: 18px 18px 16px;
+            box-shadow: var(--mhome-shadow);
+            cursor: pointer;
+            transition: transform .16s var(--fluid-ease), box-shadow .16s var(--fluid-ease);
+        }
+        .mhome-card:hover { box-shadow: 0 10px 28px rgba(15, 23, 42, .1); }
+        .mhome-card:active { transform: scale(.985); }
+        .mhome-icon {
+            width: 56px; height: 56px; border-radius: 18px;
+            display: grid; place-items: center;
+            color: var(--card-accent);
+            background: var(--card-accent-soft);
+            margin-bottom: 14px;
+        }
+        .mhome-icon svg { width: 28px; height: 28px; }
+        html.theme-dark .mhome-icon { background: rgba(255, 255, 255, .08); }
+        .mhome-card-title { margin: 0; font-size: 19px; font-weight: 800; letter-spacing: -.2px; }
+        .mhome-card-desc { margin: 6px 0 14px; font-size: 12.5px; line-height: 1.5; color: var(--mhome-muted); }
+        .mhome-btn {
+            display: block; margin-left: auto;
+            border: 0; cursor: pointer;
+            padding: 10px 20px; border-radius: 999px;
+            background: var(--card-accent); color: #fff;
+            font-size: 13px; font-weight: 600; line-height: 1;
+        }
+
+        body.mobile-portrait .mobile-tabs {
+            position: fixed;
+            left: 0; right: 0; bottom: 0;
+            z-index: 60;
+            display: flex;
+            height: calc(62px + env(safe-area-inset-bottom, 0px));
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+            box-sizing: border-box;
+            background: var(--mhome-card);
+            border-top: 1px solid var(--mhome-line);
+        }
+        .mtab {
+            flex: 1;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+            border: 0; background: none; padding: 0; cursor: pointer;
+            color: var(--mhome-muted);
+            font-size: 10.5px; font-weight: 500; line-height: 1;
+        }
+        .mtab svg { width: 22px; height: 22px; }
+        .mtab.active { color: #5b5bd6; font-weight: 700; }
     </style>
     <link rel="stylesheet" href="/static/css/liquid-glass.css?v=1.3.7.1793776698">
 </head>
@@ -1621,13 +1743,69 @@
         </script>
 
         <main class="stage">
-            <iframe id="frame-online" data-src="/static/online.html?v=1.3.7.1794393064" scrolling="yes"></iframe>
-            <iframe id="frame-xvai" data-src="/static/xvai.html?v=1.3.7.1794393716" scrolling="yes"></iframe>
-            <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=1.3.7.1794313676" scrolling="yes"></iframe>
-            <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=1.3.7.1794313676" scrolling="yes"></iframe>
-            <iframe id="frame-canvas" class="active" src="/static/canvas-list.html?v=1.3.7.1794313676" scrolling="yes"></iframe>
+            <!-- 竖屏一级页面（2026-11-13 老板：检测到竖屏就把侧边栏改成一级页面） -->
+            <section class="mhome" id="mobileHome">
+                <header class="mhome-head">
+                    <img class="mhome-logo" src="/static/images/logo.png?v=1.3.7" alt="" aria-hidden="true" draggable="false">
+                    <div class="mhome-heading">
+                        <h1 class="mhome-title" data-i18n="home.title">老抽的无限画布</h1>
+                        <p class="mhome-sub" data-i18n="home.subtitle">创作、对话、生图一站式工作台</p>
+                    </div>
+                </header>
+                <div class="mhome-cards">
+                    <article class="mhome-card" style="--card-accent:#5b5bd6;--card-accent-soft:#ececff" onclick="mobileTabGo('xvai')">
+                        <div class="mhome-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5z"></path></svg>
+                        </div>
+                        <h2 class="mhome-card-title" data-i18n="home.aiChat">AI Chat</h2>
+                        <p class="mhome-card-desc" data-i18n="home.aiChatDesc">智能问答、文案生成、创作建议</p>
+                        <button class="mhome-btn" type="button" data-i18n="home.startChat">开始对话</button>
+                    </article>
+                    <article class="mhome-card" style="--card-accent:#4a9fe0;--card-accent-soft:#e6f3fc" onclick="mobileTabGo('online')">
+                        <div class="mhome-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"></rect><circle cx="8.5" cy="8.5" r="1.6"></circle><path d="M21 15l-5-5L5 21"></path></svg>
+                        </div>
+                        <h2 class="mhome-card-title" data-i18n="nav.online">在线生图</h2>
+                        <p class="mhome-card-desc" data-i18n="home.onlineDesc">文字生成图片、风格转换、视觉创作</p>
+                        <button class="mhome-btn" type="button" data-i18n="home.startGenerate">开始生图</button>
+                    </article>
+                    <article class="mhome-card" style="--card-accent:#3b82f6;--card-accent-soft:#e8f0fe" onclick="mobileTabGo('asset-manager')">
+                        <div class="mhome-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V6.8A2.8 2.8 0 0 1 6.8 4h10.4A2.8 2.8 0 0 1 20 6.8v12.7"></path><path d="M7 8h10M7 12h10M7 16h6"></path></svg>
+                        </div>
+                        <h2 class="mhome-card-title" data-i18n="nav.assetManager">素材库</h2>
+                        <p class="mhome-card-desc" data-i18n="home.assetsDesc">图片、音频、模板资源统一管理</p>
+                        <button class="mhome-btn" type="button" data-i18n="home.browseAssets">浏览素材</button>
+                    </article>
+                </div>
+            </section>
+            <iframe id="frame-online" data-src="/static/online.html?v=1.3.7.1794557467" scrolling="yes"></iframe>
+            <iframe id="frame-xvai" data-src="/static/xvai.html?v=1.3.7.1794557467" scrolling="yes"></iframe>
+            <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=1.3.7.1794557467" scrolling="yes"></iframe>
+            <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=1.3.7.1794557467" scrolling="yes"></iframe>
+            <iframe id="frame-canvas" class="active" src="/static/canvas-list.html?v=1.3.7.1794557467" scrolling="yes"></iframe>
 
         </main>
+
+        <!-- 竖屏底部标签栏：和一级页面配套，横屏隐藏 -->
+        <nav class="mobile-tabs" id="mobileTabs" aria-label="主导航">
+            <button class="mtab active" type="button" data-tab="home" onclick="mobileTabGo('home')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5.5 9.5V21h13V9.5"></path></svg>
+                <span data-i18n="home.tabHome">首页</span>
+            </button>
+            <button class="mtab" type="button" data-tab="xvai" onclick="mobileTabGo('xvai')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5z"></path></svg>
+                <span data-i18n="home.aiChat">AI Chat</span>
+            </button>
+            <button class="mtab" type="button" data-tab="online" onclick="mobileTabGo('online')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"></rect><circle cx="8.5" cy="8.5" r="1.6"></circle><path d="M21 15l-5-5L5 21"></path></svg>
+                <span data-i18n="nav.online">在线生图</span>
+            </button>
+            <button class="mtab" type="button" data-tab="asset-manager" onclick="mobileTabGo('asset-manager')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V6.8A2.8 2.8 0 0 1 6.8 4h10.4A2.8 2.8 0 0 1 20 6.8v12.7"></path><path d="M7 8h10M7 12h10M7 16h6"></path></svg>
+                <span data-i18n="nav.assetManager">素材库</span>
+            </button>
+        </nav>
     </div>
 
     <div id="project-update-modal" class="studio-modal" hidden role="dialog" aria-modal="true" aria-labelledby="project-update-title">
@@ -1819,6 +1997,9 @@
             if(!PAGE_IDS.includes(id)) id = DEFAULT_PAGE_ID;
             document.querySelectorAll('.nav-item,.side-pill').forEach(n => n.classList.remove('active'));
             if(el) el.classList.add('active');
+            // 竖屏：切到具体功能页就收一级页面（首页由 mobileTabGo('home') 再打开）
+            document.body.classList.remove('mhome-on');
+            mobileSetTabActive(id);
             document.querySelectorAll('iframe').forEach(f => f.classList.remove('active'));
             const target = document.getElementById('frame-' + id);
             target.classList.add('active');
@@ -1894,21 +2075,52 @@
             studioApiChannel.onmessage = event => forwardStudioApiChange(event.data);
         } catch(e) {}
 
-        // 小抽AI 只在竖屏出现：高 > 宽 即视为竖屏，尺寸变化时实时切换
+        // 竖屏（高 > 宽）= 手机形态：侧边栏整体换成一级页面 + 底部标签栏（老板 2026-11-13）
+        // 一级页面里可进的三个功能页，和底部四个标签一一对应（画布竖屏放不下，不给入口）
+        const MOBILE_TAB_PAGES = ['xvai', 'online', 'asset-manager'];
+
+        function mobileSetTabActive(id) {
+            document.querySelectorAll('#mobileTabs .mtab').forEach(tab => {
+                tab.classList.toggle('active', tab.dataset.tab === (id || 'home'));
+            });
+        }
+
+        function showMobileHome() {
+            document.body.classList.add('mhome-on');
+            document.querySelectorAll('.stage iframe').forEach(f => f.classList.remove('active'));
+            mobileSetTabActive('home');
+        }
+
+        function hideMobileHome() {
+            document.body.classList.remove('mhome-on');
+        }
+
+        function mobileTabGo(page) {
+            if(!page || page === 'home') { showMobileHome(); return; }
+            const el = document.querySelector(`.nav-item[onclick*="'${page}'"]`);
+            switchUI(el, page);
+        }
+
         function syncPortraitNav() {
             const portrait = window.innerHeight > window.innerWidth;
+            document.body.classList.toggle('mobile-portrait', portrait);
             const item = document.getElementById('nav-xvai');
             if(item) item.style.display = portrait ? '' : 'none';
-            // 竖屏是手机形态，无限画布的大画布放不下：隐藏入口，人留在小抽AI
+            // 竖屏是手机形态，无限画布的大画布放不下：隐藏入口
             const canvasItem = document.getElementById('nav-canvas');
             if(canvasItem) canvasItem.style.display = portrait ? 'none' : '';
             const page = localStorage.getItem(ACTIVE_PAGE_KEY);
-            if(portrait && page === 'canvas') {
-                switchUI(document.getElementById('nav-xvai'), 'xvai');
-            }
-            if(!portrait && page === 'xvai') {
-                // 横屏后入口消失，别把用户留在看不见的页面上
-                switchUI(document.getElementById('nav-canvas'), 'canvas');
+            if(portrait) {
+                // 竖屏首次进来（还停在画布等横屏页）→ 先给一级页面
+                if(!MOBILE_TAB_PAGES.includes(page)) showMobileHome();
+                else mobileSetTabActive(page);
+            } else {
+                hideMobileHome();
+                if(page === 'xvai' || !PAGE_IDS.includes(page) || !document.querySelector('.stage iframe.active')) {
+                    // 横屏后竖屏专属入口消失 / 之前停在一级页面上（没有激活的 iframe），
+                    // 别把用户留在空舞台或看不见的页面上
+                    switchUI(document.getElementById('nav-canvas'), 'canvas');
+                }
             }
         }
         let portraitNavTimer = 0;
@@ -1926,6 +2138,8 @@
             restoreSidebarSettings(id);
             const trigger = document.querySelector(`[onclick*="'${id}'"],[onclick*='"${id}"']`);
             switchUI(trigger, id, { skipRemember:true });
+            // switchUI 会收起一级页面，恢复完当前页要再按竖屏状态摆一次
+            syncPortraitNav();
             document.documentElement.classList.remove('studio-route-booting');
         }
         document.addEventListener('DOMContentLoaded', restoreActivePage, { once:true });
