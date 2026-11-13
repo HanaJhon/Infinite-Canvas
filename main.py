@@ -10034,6 +10034,17 @@ async def handle_chat_slash_command(raw, payload, conversation, user_id):
                 target = s
                 break
         if not target:
+            # 随程序分发的内置 Skill（ego-browser / office-* / ponytail …）不在「已安装」里，
+            # 但照样可以被 /skill 点名激活，否则 / 面板里列出来点了也报错。
+            low = arg.lower()
+            for b in load_builtin_skills():
+                if low in (str(b.get("name") or "").lower(), str(b.get("id") or "").lower(),
+                           str(b.get("title") or "").lower()):
+                    conversation["active_skill"] = {"id": b["id"], "title": b["title"],
+                                                    "name": b.get("name") or "", "text": b.get("content") or ""}
+                    if user_id:
+                        save_conversation(user_id, conversation)
+                    return _assistant_note(f"✅ 已激活内置 Skill：{b['title']}\n后续对话将优先依据该 Skill 的指引。发送 /skill off 可关闭。")
             return _assistant_note(f"未找到已安装的 Skill：「{arg}」。请先在 Skill 市场安装，或输入 / 查看可调用列表。")
         sid = str(target["id"])
         path = os.path.join(agent_skill_dir(sid), "SKILL.md")
@@ -19661,6 +19672,16 @@ async def skills_i18n(payload: SkillI18nRequest):
     真正会用到它的是**全站搜索**搜出来的、离线表之外的新 Skill。
     """
     return await translate_skill_summaries(payload.items)
+
+@app.get("/api/skills/builtin")
+async def skills_builtin():
+    """随程序分发的内置 Skill（skills/<id>/SKILL.md），给 / 面板列出来用。
+
+    只下发 id / name / title —— 正文留在服务端，点选时由 /skill 去读，
+    避免把几万字的内置 Skill 全塞进一次面板请求。
+    """
+    return {"skills": [{"id": b["id"], "name": b.get("name") or "", "title": b["title"], "builtin": True}
+                       for b in load_builtin_skills()]}
 
 @app.get("/api/skills/installed")
 async def skills_installed():

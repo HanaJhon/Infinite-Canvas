@@ -723,10 +723,18 @@
     const slashEl = $('xvSlashPalette');
     async function loadSlashSkills(){
         if(slashSkills) return slashSkills;
+        // 两拨 Skill：市场里装的（data/agent_skills）和随程序分发的内置（skills/<id>/SKILL.md）。
+        // 内置的（ego-browser / office-* / ponytail …）以前不在这个列表里，用户根本点不到。
         try {
-            const res = await fetch('/api/skills/installed', { cache:'no-store' });
-            const data = await res.json();
-            slashSkills = Array.isArray(data.skills) ? data.skills : [];
+            const [a, b] = await Promise.all([
+                fetch('/api/skills/installed', { cache:'no-store' }).then(r => r.json()).catch(() => ({})),
+                fetch('/api/skills/builtin', { cache:'no-store' }).then(r => r.json()).catch(() => ({}))
+            ]);
+            const installed = Array.isArray(a.skills) ? a.skills : [];
+            const builtin = (Array.isArray(b.skills) ? b.skills : [])
+                .filter(s => s.name !== 'canvas-agent')   // 画布专用，小抽AI 用不上
+                .map(s => ({ id: s.id, name: s.name || s.id, title: s.title || s.name, builtin: true }));
+            slashSkills = installed.concat(builtin);
         } catch(e){ slashSkills = []; }
         return slashSkills;
     }
@@ -750,8 +758,10 @@
         ].filter(b => !q || b.label.toLowerCase().includes(q) || b.keys.includes(q));
         slashItems = builtins.concat(skills
             .filter(s => !q || String(s.name || s.title || s.id || '').toLowerCase().includes(q))
-            .slice(0, 8)
-            .map(s => ({ label: s.title || s.name || s.id, id: s.id, desc: '激活这个 Skill', insert: '/skill ' + (s.name || s.id) })));
+            .slice(0, 10)
+            .map(s => ({ label: s.title || s.name || s.id, id: s.id,
+                         desc: (s.builtin ? '内置技能 · ' : '') + '激活这个 Skill',
+                         insert: '/skill ' + (s.name || s.id) })));
         slashItems.push({ label: '关闭主动 Skill', desc: '/skill off', insert: '/skill off' });
         // 同名 Skill 装过多次时只留一条，免得列表里两个一模一样的选项
         const seen = new Set();
