@@ -17704,12 +17704,21 @@ async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, 
     stream_ok = not is_apimart
     async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
         for round_index in range(rounds + 1):
+            # 最后一轮把工具撤掉，逼模型用已经搜到的东西给结论。
+            # 否则它会一直搜下去，8 轮跑完只丢下一句「已达到轮数上限」，等于整轮白跑。
+            final_round = round_index >= rounds
+            if final_round:
+                upstream_messages.append({
+                    "role": "system",
+                    "content": "工具轮数已用完。请立刻基于上面已经拿到的结果给出最终结论："
+                               "说清哪些有依据、哪些查不到，不要再要求调用工具。",
+                })
             req_body = apply_reasoning_effort(
                 {"model": model, "messages": upstream_messages},
                 getattr(payload, "reasoning_effort", ""),
             )
             use_stream = stream_ok
-            if tools:
+            if tools and not final_round:
                 req_body["tools"] = tools
                 req_body["tool_choice"] = "auto"
             if use_stream:
@@ -17763,7 +17772,7 @@ async def build_chat_text_reply_with_tools(payload, conversation, provider_cfg, 
             except httpx.HTTPError as exc:
                 raise HTTPException(status_code=502, detail=friendly_upstream_http_error(exc)) from exc
             tool_calls = message.get("tool_calls") or []
-            if tool_calls and tools:
+            if tool_calls and tools and not final_round:
                 upstream_messages.append({
                     "role": "assistant",
                     "content": message.get("content") or "",
@@ -23622,13 +23631,21 @@ async def canvas_llm(payload: CanvasLLMRequest):
     exhausted = False
     async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
         for round_index in range(rounds + 1):
+            # 同小抽AI：最后一轮撤掉工具，逼模型拿已有结果给结论，别只回一句「轮数上限」
+            final_round = round_index >= rounds
+            if final_round:
+                upstream_messages.append({
+                    "role": "system",
+                    "content": "工具轮数已用完。请立刻基于上面已经拿到的结果给出最终结论："
+                               "说清哪些有依据、哪些查不到，不要再要求调用工具。",
+                })
             req_body = apply_reasoning_effort(
                 {"model": model, "messages": upstream_messages},
                 getattr(payload, "reasoning_effort", ""),
             )
             if _is_apimart:
                 req_body["stream"] = False   # APIMart 默认流式，强制关闭
-            if tools:
+            if tools and not final_round:
                 req_body["tools"] = tools
                 req_body["tool_choice"] = "auto"
             try:
