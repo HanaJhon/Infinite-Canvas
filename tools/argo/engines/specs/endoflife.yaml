@@ -1,0 +1,36 @@
+# endoflife.date — 产品生命周期（200+ 产品，免认证）
+# 查询词 = 产品 slug（python/nodejs/go/kubernetes/ubuntu…）；API 无搜索端点，
+# slug 提取取查询里第一个 ASCII 词。未识别产品诚实返回空。
+# 验证:
+#   python3 scripts/engine_validate.py --engine endoflife --stage all --admit --write-doc
+
+engine_id: endoflife
+type: http
+enabled: true
+cost_tier: free
+timeout: 10
+method: GET
+url: "https://endoflife.date/api/{query_slug}.json"
+headers:
+  Accept: "application/json"
+url_template: "https://endoflife.date/{cycle}"
+format_is_query_param: false
+output_map:
+  items: .
+  # 原 builder 的标题是 `{slug} {cycle}（最新）`、URL 是产品页 `endoflife.date/{slug}`。
+  # slug 来自查询词（已用于拼 API URL），条目里没有该字段，故 URL 用 spec 级
+  # url_template（同一 slug 对所有条目一致，与产品页语义相符）。
+  item_title: cycle
+  # 拼接模板：原 builder 的 `最新 X · 发布 X · 全支持至 X · EOL X`
+  item_summary_template: "最新 {latest} · 发布 {releaseDate} · 全支持至 {support} · EOL {eol}"
+  item_published_at: latestReleaseDate
+canary_query: "python 生命周期"
+desc: "产品生命周期（版本/最新/支持期/EOL，endoflife.date 200+ 产品）"
+coverage: [tech]
+recommended: false
+latency_ms: 2000
+
+quality_queries:
+  - query: "python 生命周期"
+  - query: "nodejs"
+  - query: "kubernetes EOL"

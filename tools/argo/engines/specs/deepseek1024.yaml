@@ -1,0 +1,46 @@
+# deepseek1024 — 由 `argo engine add` 接入（2026-10-26）。
+# 字段说明见 docs/ADDING_NEW_ENGINE.md；路由元数据（family/coverage/langs/
+# domain_hints）由 engine_add 自动派生，可手工微调。
+engine_id: deepseek1024
+type: http
+enabled: true
+cost_tier: free
+label: DeepSeek1024 插件目录
+family: misc_vertical
+priority: 60
+qps: 2
+period: minute
+limit: null
+cost_per_call: 0.0
+cost_unit: free
+method: GET
+url: https://api.deepseek1024.com/v1/plugins/search
+timeout: 15
+canary_query: memory
+coverage:
+- developer
+- tech
+- skill
+desc: DSH 插件目录（13855 条，免认证，带安装命令与安装量/星数/增长口径）
+format: json
+query_param: q
+extra_params:
+  limit: '{n}'
+  sortBy: stars
+output_map:
+  items: results
+  item_title: name
+  item_url: url
+  item_summary: description.zh
+  item_upstream: install
+  item_published_at: pushedAt
+quality_queries:
+- query: memory
+- query: git
+- query: ui theme
+langs:
+- en
+domain_hints:
+- skill_search
+- rfc_search
+- energy_grid

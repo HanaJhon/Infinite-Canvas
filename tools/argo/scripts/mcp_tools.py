@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+"""mcp_tools.py — MCP 工具 schema 唯一来源（P2-4 拆分自 mcp_server.py）。
+
+工具数以 len(TOOLS) 为唯一事实（2026-09-26 起 19 个，与 CLI 能力面对齐：
+extract/preflight/answer/watch/cite 补齐）；mcp_transport 的 tools/list 与
+mcp_server 的兼容导出均从本模块取。改 schema 只动这一个文件。
+
+tools/list 默认只注入 CORE 4 个正交集（search/fetch/research/screenshot，
+约 5KB/轮）；全量设 ARGO_MCP_TOOLS=all。execute_tool / --call / DSH 原生规格
+仍吃全量 TOOLS，能力不删。未知名单不回退成全量（同类：过滤失败吐全量）。
+
+CORE 集合的变更必须同步四处（少一处就有一处文案在骗人）：本文件的
+CORE_TOOL_NAMES、mcp_transport 的 initialize instructions、
+references/operations.md 的工具清单节、docs/MCP_SETUP.md 的状态行。
+机械对拍见 tests/test_mcp_consolidated_tools.py::test_instructions_matches_core。
+
+schema 设计原则（质量第一，token 第二，严格兼容）：
+- 工具 description：第一句「做什么」，第二句「何时用 / 关键注意」。
+  删除内部实现机制（引擎数、TF-IDF/RRF、协议文件引用）——模型不靠这些决策。
+- 参数 description：语义 + 何时用 + 默认值与范围（如需）。
+  第一性原理与奥卡姆剃刀（issue #46）：MaaS / OpenAI 严格网关会拦截 JSON Schema
+  中的 default、minimum、maximum、minItems 等非标注解（报 400 The request is invalid）。
+  因此默认值与范围一律在 description 明确说明，schema 只保留最纯粹的
+  type / description / enum / properties / required / items。
+- 调试/运行配置（pretty / skip_cache / timeout）不暴露给模型：
+  这些不是模型决策输入，由 server 层环境变量接管（见 mcp_handlers.execute_tool：
+  ARGO_MCP_PRETTY / ARGO_MCP_SKIP_CACHE / ARGO_MCP_TIMEOUT[_CRAWL|_FETCH]）。
+  功能参数全部保留，质量不受影响。
+"""
+
+from __future__ import annotations
+
+import copy
+import os
+from typing import Any
+
+# 日常高频与核心闭环工具（极简 3+1 正交集：Search 统一检索、Fetch 统一抓取/解析、Research 深度取证、Screenshot 视觉快照）
+CORE_TOOL_NAMES = ("argo_search", "argo_fetch", "argo_research", "argo_screenshot")
+
+# MaaS / OpenAI Function Calling 严格网关禁止的校验与注解键（见 issue #46：
+# 火山引擎方舟/腾讯云 MaaS 等严格网关遇到即报 400 The request is invalid）。
+FORBIDDEN_SCHEMA_KEYS = frozenset({
+    "default",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "minItems",
+    "maxItems",
+    "minLength",
+    "maxLength",
+    "pattern",
+})
+
+
+def sanitize_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """将 JSON Schema 净化为严格兼容 OpenAI / MaaS 网关的标准形式。
+
+    第一性原理与奥卡姆剃刀：
+      网关是白名单式语法解析器，非标注解（default/minimum/maximum/minItems 等）
+      会被严格网关直接判 400 阻断（issue #46）。模型阅读参数语义依赖
+      description 与 enum，默认值与范围已内嵌于 description 中，后端
+      执行层（mcp_handlers）自带默认值与 _clamp_int 兜底。
+
+      本函数做纯函数递归净化：
+        1. 剥离 FORBIDDEN_SCHEMA_KEYS 中所有非核心校验注解；
+        2. 若 type == 'object'，确保 properties 为 dict、required 为 list
+           （无必填项时显式补齐 required: []，防止网关报缺少字段）；
+        3. 递归清洗 properties 内每个字段及 items 结构。
+
+    **必须挂在 tools/list 出口**（mcp_transport.handle_rpc）：只在源头写干净
+    schema 是「现在没问题」，挂上净化是「以后有人加回 default 也不会打到
+    严格网关」。本函数曾只被自己的测试调用——宣称修了 MaaS 兼容，实际是
+    一个没人调用的纯函数（2026-11-11 审计）。接线检查见
+    tests/test_mcp_schema_maas_compliance.py::test_sanitize_schema_is_wired。
+    """
+    if not isinstance(schema, dict):
+        return schema
+    out: dict[str, Any] = {}
+    for k, v in schema.items():
+        if k in FORBIDDEN_SCHEMA_KEYS:
+            continue
+        if k == "properties" and isinstance(v, dict):
+            out[k] = {pk: sanitize_schema(pv) for pk, pv in v.items()}
+        elif k == "items" and isinstance(v, dict):
+            out[k] = sanitize_schema(v)
+        else:
+            out[k] = v
+    if out.get("type") == "object":
+        if "properties" not in out:
+            out["properties"] = {}
+        if "required" not in out:
+            out["required"] = []
+    return out
+
+
+def sanitize_tool(tool: dict[str, Any]) -> dict[str, Any]:
+    """单个工具的净化出口：只动 inputSchema，其余键原样。
+
+    单独成函数是为了让「接线」在 tools/list 里是一行可读的调用，而不是一段
+    内联的字典推导——内联形态下「有没有真的净化」要靠读代码判断。
+    """
+    if not isinstance(tool, dict):
+        return tool
+    schema = tool.get("inputSchema")
+    if not isinstance(schema, dict):
+        return tool
+    return {**tool, "inputSchema": sanitize_schema(schema)}
+
+
+TOOLS = [
+    {
+        "name": "argo_search",
+        "description": "统一搜索（网络/社交/招聘/本地）：多引擎融合、支持时间过滤与域名过滤。默认网络搜索；按 domain 可切换社交 UGC、岗位招聘或本机文件。查资料、找答案、找人找帖的首选工具。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索查询词"},
+                "domain": {"type": "string", "enum": ["web", "social", "job", "local"], "description": "搜索领域：web 统一网络搜索（默认），social 社交媒体/论坛讨论，job 招聘岗位聚合，local 本机文件搜索"},
+                "engine": {"type": "string", "description": "指定搜索引擎（auto 自动选择；可选 octen/anysearch/exa/zhihu/eastmoney/arxiv/byted/bocha/tavily/deepseek_search/github/wikipedia/semantic_scholar/local_search 等，默认 auto；deepseek_search 为按次计费的官方 DeepSeek 搜索，结果带权威分级与发布时间，新闻时事类查询优先考虑）"},
+                "max_results": {"type": "integer", "description": "返回结果条数（1-20，默认 5）"},
+                "depth": {"type": "string", "enum": ["fast", "balanced", "deep"], "description": "搜索深度：fast 快、deep 全（慢），默认 fast"},
+                "mode": {"type": "string", "enum": ["fast", "auto", "deep", "budget", "sentiment"], "description": "预算模式：fast=免费优先, auto=成本感知, deep=质量优先, budget=配额控制，默认 auto；仅 domain=social 时可写 sentiment（舆情聚合），其余 domain 不认"},
+                "since": {"type": "string", "description": "发布时间下限，如 7d / 2026-08-01"},
+                "until": {"type": "string", "description": "发布时间上限，如 7d / 2026-08-01"},
+                "sort": {"type": "string", "enum": ["relevance", "oldest", "newest"], "description": "排序：relevance=相关度, oldest=最早在前, newest=最新在前，默认 relevance"},
+                "include_domains": {"type": "array", "items": {"type": "string"}, "description": "仅保留这些域名（含子域），如 [\"github.com\"]"},
+                "exclude_domains": {"type": "array", "items": {"type": "string"}, "description": "排除这些域名（含子域），如 [\"pinterest.com\"]"},
+                "include_local": {"type": "boolean", "description": "并入本机文件命中（seek 结果尾部，source=local_files，不参与融合评分；默认开）"},
+                "summary": {"type": "boolean", "description": "精简输出：截断摘要、去掉重字段，省 token（默认开）"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "argo_local_search",
+        "description": "本机文件/笔记/代码搜索（非联网）：返回文件路径与行号。搜本地资料时用，与网络搜索互补。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索查询词（中文自动扩展召回）"},
+                "path": {"type": "string", "description": "搜索目录；缩小范围更快更准（默认 \"~\"）"},
+                "max_results": {"type": "integer", "description": "返回结果条数（1-20，默认 5）"},
+                "exact": {"type": "boolean", "description": "精确匹配，关闭中文扩展（默认关）"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "argo_local_read",
+        "description": "读取白名单内的本地文本文件（预览，非全文）：用于分析本地数据/笔记/研究成果。白名单目录由 ARGO_LOCAL_READ_DIRS 配置（逗号分隔），未配置或路径越权时拒绝（默认拒绝）。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "文件路径（必须位于白名单目录内）"},
+                "max_chars": {"type": "integer", "description": "预览字符数上限（200-20000，默认 4000）"},
+                "line_start": {"type": "integer", "description": "起始行号（1 基，可选）"},
+                "line_end": {"type": "integer", "description": "结束行号（可选）"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "argo_recompute",
+        "description": "可复算执行器（默认拒绝）：在受限子进程中运行计算脚本（只读白名单输入、断网、超时硬杀、内存软限），验证本地数据重算出的数值。用于结论承重要重算数字时；默认拒绝，需显式授权。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "script": {"type": "string", "description": "要运行的计算代码（Python）"},
+                "file_inputs": {"type": "string", "description": "白名单输入文件 JSON 数组：[{\"path\":\"...\",\"role\":\"原始数据\"}]"},
+                "timeout_s": {"type": "integer", "description": "超时秒数（1-120，默认 30）"},
+                "max_mem_mb": {"type": "integer", "description": "内存上限 MB（尽力而为，默认 512）"},
+                "allow_exec": {"type": "boolean", "description": "是否授权运行（不授权就不执行；未授权时返回 skipped_reason，默认关）"},
+            },
+            "required": ["script"],
+        },
+    },
+    {
+        "name": "argo_research",
+        "description": "深度研究取证：多子查询并行检索，返回带来源/覆盖/缺口/质量门禁的 dossier。适合复杂、多步骤、需要交叉验证的研究问题；简单快问用 argo_search。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "研究问题（可以是复杂、多步骤的）"},
+                "topic": {"type": "string", "description": "选题 profile：ai/investment/finance/academic/tech/tool/internet/social；省略则自动推断"},
+                "auto_topic": {"type": "boolean", "description": "无 topic 时是否自动推断（默认开）"},
+                "num_sub_queries": {"type": "integer", "description": "子查询数量（2-8；有 work_packages 时忽略）"},
+                "max_results": {"type": "integer", "description": "每个子查询的结果条数（默认 5）"},
+                "depth": {"type": "string", "enum": ["fast", "balanced", "deep"], "description": "搜索深度（默认 balanced）"},
+                "mode": {"type": "string", "enum": ["fast", "auto", "deep", "budget", "social-sentiment"], "description": "预算/模式；社交舆情用 social-sentiment，默认 auto"},
+                "work_packages": {"type": "string", "description": "工作包 JSON 数组：id, question, query?, file_inputs?(本地一手数据, 白名单制), recompute?({script,budget{timeout_s,max_mem_mb}}), depends_on?。有则跳过扩词，按依赖分阶段取证"},
+                "allow_recompute": {"type": "boolean", "description": "授权执行工作包 recompute 计算脚本（不授权就不执行；未授权时 recompute 跳过并触发 recompute_skipped 门禁，默认关）"},
+                "platforms": {"type": "string", "description": "social-sentiment 平台列表，逗号分隔"},
+                "summary": {"type": "boolean", "description": "精简研究包，省 token（默认开）"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "argo_evidence",
+        "description": "来源可信度评估：对搜索结果做权威性+时效性+交叉验证评分，输出逐条可信度分解。用于事实核查、高后果决策、学术引用。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索查询词（用于交叉验证）"},
+                "results_json": {"type": "string", "description": "待评估的搜索结果 JSON（为空时自动搜索）。格式：{\"results\": [{\"title\":\"...\",\"url\":\"...\",\"snippet\":\"...\",\"source\":\"...\",\"score\":0.8}]}"},
+                "max_results": {"type": "integer", "description": "自动搜索时的结果条数（默认 10）"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "argo_clarify",
+        "description": "意图消歧：识别查询中的歧义词与多义实体，给出意图分类与推荐搜索策略。查询含歧义词（苹果=公司/水果）或意图不明时用。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "需要消歧的查询"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "argo_crawl",
+        "description": "站点级爬取：按 sitemap 或 BFS 批量抓取整站页面，返回 URL、正文片段与深度。适合整站内容审计、站内多页对比。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "站点根 URL"},
+                "strategy": {"type": "string", "enum": ["sitemap", "bfs"], "description": "爬取策略，默认 bfs"},
+                "max_pages": {"type": "integer", "description": "最大抓取页数（1-50，默认 10）"},
+                "max_depth": {"type": "integer", "description": "BFS 最大深度（1-5，默认 2）"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "argo_fetch",
+        "description": "智能页面/长文/PDF抓取：HTTP 优先，遇反爬自动升级反检测浏览器；微信公众号文章（mp.weixin.qq.com）与 PDF 自动感知适配解析；支持 BM25 聚焦提取（focus 省 80%+ token）与结构化提取（mode=extract 抽表格/元数据/JSON-LD）。通读正文与获取文档的首选工具。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "目标 URL 或本地 PDF 路径"},
+                "mode": {"type": "string", "enum": ["text", "extract", "article", "pdf"], "description": "抓取模式：text=正文/聚焦文本（默认 text）, extract=结构化提取, article=公众号全文, pdf=PDF解析。微信与PDF链接自动识别"},
+                "extract_mode": {"type": "string", "enum": ["tables", "metadata", "jsonld", "all"], "description": "mode=extract 时的提取子模式，默认 all"},
+                "focus": {"type": "string", "description": "BM25 聚焦查询词：只返回相关段落，省 token（仅 mode=text）"},
+                "max_chars": {"type": "integer", "description": "返回正文最大字符数（500-50000，默认 8000）"},
+                "use_browser": {"type": "boolean", "description": "强制用反检测浏览器（HTTP 失败时已自动升级，默认关）"},
+                "include_links": {"type": "boolean", "description": "附带正文内链接（最多 30 条；默认只回 links_count，省 token，默认关）"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "argo_screenshot",
+        "description": "网页截图（PNG）：分析页面布局、验证渲染结果、存档快照。支持全页与视口截图。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "目标 URL"},
+                "full_page": {"type": "boolean", "description": "全页截图（默认仅当前视口，默认关）"},
+                "output_path": {"type": "string", "description": "输出路径（默认写入系统临时目录：<temp>/argo_screenshot_<timestamp>.png）"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "argo_pdf",
+        "description": "PDF 结构化提取：转为 Markdown（含表格、目录、元数据），支持 URL 下载与本地文件。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "PDF URL 或本地文件路径"},
+                "pages": {"type": "string", "description": "页码范围，如 \"1-5\" 或 \"1,3,5\"（默认全部）"},
+                "password": {"type": "string", "description": "加密 PDF 密码"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "argo_social_search",
+        "description": "社交平台搜索：知乎、Hacker News、B站、V2EX、Twitter/X、Reddit、小红书、微博等 UGC 内容。mode=sentiment 输出舆情聚合。注意：hackernews/v2ex/zhihu/bilibili 零密钥可用；twitter/reddit/weibo/xiaohongshu 依赖登录态或第三方 API，可能返回空。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索查询词"},
+                "mode": {"type": "string", "enum": ["text", "sentiment"], "description": "text=帖子列表, sentiment=舆情聚合分析，默认 text"},
+                "platforms": {"type": "string", "description": "平台列表，逗号分隔；可选 hackernews,v2ex,zhihu,bilibili,twitter,reddit,xiaohongshu,weibo，默认 hackernews,zhihu,bilibili"},
+                "max_results": {"type": "integer", "description": "每个平台的结果条数（1-20，默认 5）"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "argo_article",
+        "description": "微信公众号文章全文抓取：标题/作者/发布时间/正文纯文本/图片列表。仅支持 mp.weixin.qq.com 链接；要读公众号文章全文时用（普通网页走 argo_fetch）。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "mp.weixin.qq.com 文章链接"},
+                "max_chars": {"type": "integer", "description": "返回正文最大字符数（500-50000，默认 20000）"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "argo_job",
+        "description": "招聘岗位多平台聚合：BOSS直聘/猎聘/智联/前程无忧/597/今日招聘，职位+地区并发搜索，三级地区命中判定+结构化字段（薪资/学历/经验）+跨平台去重。招聘市场调研时用。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "职位关键词，如：工艺工程师、会计、电工"},
+                "city": {"type": "string", "description": "地区：省/市/县或海外城市（成都、昆山、新加坡…），空=不过滤地区"},
+                "num": {"type": "integer", "description": "每后端条数（1-20，默认 5）"},
+                "platforms": {"type": "string", "description": "逗号分隔平台: zhipin,liepin,zhaopin,51job,597,jrzp；空=全部"},
+                "loose": {"type": "boolean", "description": "宽松：异地岗位也保留；默认严格地区过滤（默认关）"},
+                "fetch_detail": {"type": "integer", "description": "对前 N 条高命中结果抓详情页补全结构化字段（0=仅 snippet 提取，范围 0-10，默认 0）"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "argo_extract",
+        "description": "网页结构化提取：表格、Meta 元数据（og:/description）、JSON-LD 结构化数据。要拿页面的表格数据或结构化字段时用；正文通读走 argo_fetch。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "目标网页链接"},
+                "mode": {"type": "string", "enum": ["tables", "metadata", "jsonld", "all"], "description": "提取内容：tables=HTML表格, metadata=Meta元数据, jsonld=JSON-LD, all=全部，默认 all"},
+                "max_chars": {"type": "integer", "description": "抓取页面最大字符数（1000-200000，默认 50000）"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "argo_preflight",
+        "description": "批量 URL 预检：把候选链接分类为可用/登录墙/已失效/需联网确认，probe 开启时实测存活。引用或抓取一批来源前先过一遍，避免把死链和登录墙当信源。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "urls": {"type": "array", "items": {"type": "string"}, "description": "待预检的 URL 列表"},
+                "probe": {"type": "boolean", "description": "联网探测存活（404/410 判死；默认纯本地规则，默认关）"},
+            },
+            "required": ["urls"],
+        },
+    },
+    {
+        "name": "argo_answer",
+        "description": "直答：对事实型问题返回带引用的合成答案与置信口径。要一句话答案而非链接列表时用；开放式调研走 argo_research。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "要回答的问题"},
+                "scope": {"type": "string", "description": "答案域（如 news）；空=默认"},
+                "model": {"type": "string", "description": "答案模型；空=默认"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "argo_watch",
+        "description": "网页变化监控：对关注页面做快照并在复查时报告变化。add 登记关注、check 复查变化、list 看清单、remove 取消；适合盯价格/公告/版本发布页。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["add", "check", "list", "remove"], "description": "add=登记快照, check=复查变化（可指定单个 url）, list=看清单, remove=取消关注"},
+                "url": {"type": "string", "description": "目标页面（add/remove 必填；check 可选=只查这一条）"},
+                "note": {"type": "string", "description": "备注（add 可选，默认空）"},
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "argo_cite",
+        "description": "DOI → 引用条目：GB/T 7714 / 顺序编码 / APA / BibTeX 四格式，Crossref+OpenAlex 免 key。论文引用、参考文献列表生成时用。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dois": {"type": "array", "items": {"type": "string"}, "description": "DOI 列表，如 [\"10.1038/s41586-024-0001-x\"]"},
+                "style": {"type": "string", "enum": ["gbt7714", "numeric", "apa", "bibtex"], "description": "引用格式，默认 gbt7714"},
+            },
+            "required": ["dois"],
+        },
+    },
+]
+
+
+def listed_tools(spec: str | None = None) -> list[dict]:
+    """tools/list 返回集。默认 CORE 4 个正交集；all 全量；逗号名单按名取。
+
+    未知名字忽略，空结果也不回退成全量——曾经「过滤失败吐全量」把 12KB
+    schema 砸进每一轮。execute_tool 不受此限制。
+    """
+    raw = spec if spec is not None else os.environ.get("ARGO_MCP_TOOLS", "")
+    raw = (raw or "").strip().lower()
+    by_name = {t["name"]: t for t in TOOLS}
+    if raw in ("", "core", "default"):
+        return [by_name[n] for n in CORE_TOOL_NAMES if n in by_name]
+    if raw in ("all", "*"):
+        return list(TOOLS)
+    out: list[dict] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        name = part.strip()
+        if not name:
+            continue
+        key = name if name in by_name else (
+            f"argo_{name}" if f"argo_{name}" in by_name else None
+        )
+        if key and key not in seen:
+            out.append(by_name[key])
+            seen.add(key)
+    return out

@@ -1,0 +1,492 @@
+#!/usr/bin/env python3
+"""
+tfidf_router.py — Unified Search v2 TF-IDF 语义路由引擎
+
+原理：
+  1. 加载各引擎的领域文档，构建语料库
+  2. 对每个引擎计算 TF-IDF 向量（代表该领域的"语义中心"）
+  3. 新查询来了，向量化后与各引擎算余弦相似度
+  4. 结合 boost_keywords / boost_combos / 配额状态打分
+
+增强（v2）：
+  - 成本感知：free=1.0 / low=0.85 / paid=0.6
+  - 延迟感知：基于 adaptive.py 历史数据微调
+  - 返回带 reason 的决策说明
+
+所有计算纯本地，零 API 开销，典型延迟 <5ms。
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import re
+from collections import Counter
+from pathlib import Path
+from typing import Optional
+
+import argo_paths as _paths
+
+# ── 路径 ──────────────────────────────────────────────────────────────────────
+
+SKILL_DIR = Path(__file__).parent.parent
+BACKENDS_DIR = SKILL_DIR / "backends"
+DOMAIN_PROFILES_PATH = BACKENDS_DIR / "domain_profiles.json"
+
+# ── 分词 ──────────────────────────────────────────────────────────────────────
+
+_TOKEN_PATTERN = re.compile(r"[一-鿿\u3040-\u30ff\uac00-\ud7af]|[a-zA-Z0-9]+")
+
+# 通用搜索泛域（与 route_combo._GENERAL_ENGINES 的 catch-all 部分对齐，但不含
+# arxiv/wikipedia 这类有明确用途的宽域源）：这些引擎的 domain_profiles 文档
+# 覆盖大量通用词，概念向量对它们几乎恒为高值，会挤掉垂直引擎。
+_CATCH_ALL_CONCEPT = frozenset({
+    "anysearch", "byted", "bocha", "octen", "local_search", "zhihu",
+    "wechat_sogou", "uapi", "tavily", "brave", "bocha_ai", "seltz",
+})
+
+
+def tokenize(text: str) -> list[str]:
+    """简单分词：中文/日文/韩文单字 + 英文单词，统一小写。
+
+    扩展 v2.8：并入假名（\\u3040-\\u30ff）与谚文（\\uac00-\\ud7af），否则韩/日
+    查询 tokenize 恒空、TF-IDF 语义路由对多语言整体失明。单字拉丁仍丢弃（词袋无关）。
+    """
+    tokens = []
+    for match in _TOKEN_PATTERN.finditer(text.lower()):
+        token = match.group()
+        if len(token) > 1:
+            tokens.append(token)
+        elif len(token) == 1:
+            ch = token[0]
+            if ('一' <= ch <= '鿿' or '\u3040' <= ch <= '\u30ff'
+                    or '\uac00' <= ch <= '\ud7af'):
+                tokens.append(ch)
+    return tokens
+
+
+def tokenize_with_bigrams(text: str) -> list[str]:
+    """分词 + 二元组，捕捉短语信息。"""
+    unigrams = tokenize(text)
+    bigrams = [f"{unigrams[i]}_{unigrams[i+1]}" for i in range(len(unigrams) - 1)]
+    return unigrams + bigrams
+
+
+# ── TF-IDF 计算 ────────────────────────────────────────────────────────────────
+
+class TfidfVectorizer:
+    """轻量 TF-IDF 向量化器，不需要 sklearn。"""
+
+    def __init__(self):
+        self.idf: dict[str, float] = {}
+        self.vocab: set[str] = set()
+
+    def fit(self, documents: list[str]) -> None:
+        """从文档集合计算 IDF。"""
+        df: Counter = Counter()
+        total = len(documents)
+        for doc in documents:
+            tokens = set(tokenize_with_bigrams(doc))
+            self.vocab.update(tokens)
+            for token in tokens:
+                df[token] += 1
+        for token, count in df.items():
+            self.idf[token] = math.log((total + 1) / (count + 1)) + 1
+
+    def transform(self, text: str, *, sublinear: bool = False) -> dict[str, float]:
+        """把文本转为 TF-IDF 向量（查询侧可选 sublinear BM25 词频饱和抑制重复词劫持）。"""
+        tokens = tokenize_with_bigrams(text)
+        tf = Counter(tokens)
+        total = len(tokens) if tokens else 1
+        if not sublinear:
+            return {token: (count / total) * self.idf[token]
+                    for token, count in tf.items() if token in self.idf}
+        return {token: (((2.2 * count) / (1.2 + count)) / total) * self.idf[token]
+                for token, count in tf.items() if token in self.idf}
+
+
+# ── 余弦相似度 ─────────────────────────────────────────────────────────────────
+
+def cosine_similarity(vec_a: dict[str, float], vec_b: dict[str, float]) -> float:
+    """两个稀疏向量的余弦相似度（按较短向量遍历避免全集交集构造）。"""
+    if not vec_a or not vec_b:
+        return 0.0
+    short, long_v = (vec_a, vec_b) if len(vec_a) <= len(vec_b) else (vec_b, vec_a)
+    dot = sum(v * long_v[k] for k, v in short.items() if k in long_v)
+    if dot == 0.0:
+        return 0.0
+    norm_a = math.sqrt(sum(v * v for v in vec_a.values()))
+    norm_b = math.sqrt(sum(v * v for v in vec_b.values()))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+# ── 配额 / 成本（mtime 缓存，避免 route 每次为每个引擎读盘） ──────────────────
+
+_quota_state_cache: dict | None = None
+_quota_state_mtime: float = -1.0
+_cost_profiles_cache: dict | None = None
+_cost_profiles_mtime: float = -1.0
+
+
+def _load_quota_state() -> dict:
+    """加载配额状态文件（mtime 缓存）。"""
+    global _quota_state_cache, _quota_state_mtime
+    quota_path = _paths.state_path("quota.json")
+    try:
+        mtime = quota_path.stat().st_mtime
+    except OSError:
+        return {}
+    if _quota_state_cache is not None and mtime == _quota_state_mtime:
+        return _quota_state_cache
+    try:
+        data = json.loads(quota_path.read_bytes())
+    except (json.JSONDecodeError, OSError):
+        data = {}
+    _quota_state_cache = data if isinstance(data, dict) else {}
+    _quota_state_mtime = mtime
+    return _quota_state_cache
+
+
+def _quota_ratio(engine: str, quota_state: dict,
+                 profiles: dict | None = None) -> float:
+    """计算配额剩余比例。返回 0.0-1.0，无记录时默认 1.0。
+
+    limit 的唯一来源是 quota_profiles.json（声明文件）；配额状态文件里只有
+    用量计数。此前本函数只读 state["limit"]，而写入方（quota.record）恒填 0，
+    于是 limit<=0 走「无限配额」分支恒返回 1.0——配额感知惩罚（<0.2 砍到
+    2×qr、<0.5 乘 0.5+qr）从来没生效过。与 quota.get_remaining_ratio 的
+    profile.get("limit") 计算方式保持一致，缺省才回落到 state 里的值。
+    """
+    info = quota_state.get(engine) or {}
+    profile = (profiles if profiles is not None else _load_cost_profiles()).get(engine) or {}
+    limit = profile.get("limit")
+    if not isinstance(limit, (int, float)) or limit <= 0:
+        limit = info.get("limit")
+    if limit is None or limit <= 0:
+        # 无限配额 / 脏数据（limit=0）不当作耗尽
+        return 1.0
+    used = info.get("used", 0) or 0
+    return max(0.0, float(limit - used) / float(limit))
+
+
+def _load_cost_profiles() -> dict:
+    global _cost_profiles_cache, _cost_profiles_mtime
+    tiers_path = BACKENDS_DIR / "quota_profiles.json"
+    try:
+        mtime = tiers_path.stat().st_mtime
+    except OSError:
+        return {}
+    if _cost_profiles_cache is not None and mtime == _cost_profiles_mtime:
+        return _cost_profiles_cache
+    try:
+        data = json.loads(tiers_path.read_bytes())
+    except (json.JSONDecodeError, OSError):
+        data = {}
+    _cost_profiles_cache = data if isinstance(data, dict) else {}
+    _cost_profiles_mtime = mtime
+    return _cost_profiles_cache
+
+
+def _cost_factor(engine: str, profiles: dict | None = None) -> float:
+    """获取引擎成本因子：free=1.0, low=0.85, paid=0.6。"""
+    if profiles is None:
+        profiles = _load_cost_profiles()
+    profile = profiles.get(engine, {})
+    if not isinstance(profile, dict):
+        return 1.0
+    tier = profile.get("cost_tier", "free")
+    # 成本因子查 config 的唯一来源（此前本模块自带一张表，与 config 的值不一致）
+    try:
+        from config import _COST_FACTOR_BY_TIER
+        return _COST_FACTOR_BY_TIER.get(tier, 1.0)
+    except Exception:
+        return 1.0
+
+
+# ── 主路由引擎 ─────────────────────────────────────────────────────────────────
+
+class SemanticRouter:
+    """TF-IDF 语义路由引擎（v2 增强版）。"""
+
+    def __init__(self):
+        self.vectorizer = TfidfVectorizer()
+        self.engine_names: list[str] = []
+        self.engine_vectors: dict[str, dict[str, float]] = {}
+        self.boost_keywords: dict[str, dict[str, float]] = {}
+        self.boost_combos: dict[str, dict[str, float]] = {}
+        self._postings: dict[str, list[tuple[str, float]]] = {}
+        self._boost_kw_norm: dict[str, list[tuple[str, str, float]]] = {}
+        self._boost_combo_norm: dict[str, list[tuple[str, tuple[str, ...], float]]] = {}
+        self._loaded = False
+        self._profiles_mtime: float = 0.0
+
+    def _ensure_loaded(self) -> None:
+        """懒加载领域文档并预编译 AC-IGTR 稀疏倒排表与归一化触发词。"""
+        if self._loaded:
+            try:
+                mtime = DOMAIN_PROFILES_PATH.stat().st_mtime
+                if mtime == self._profiles_mtime:
+                    return
+            except OSError:
+                return
+            self._loaded = False
+            self.engine_names.clear()
+            self.engine_vectors.clear()
+            self.boost_keywords.clear()
+            self.boost_combos.clear()
+            self._postings.clear()
+            self._boost_kw_norm.clear()
+            self._boost_combo_norm.clear()
+        if not DOMAIN_PROFILES_PATH.exists():
+            self._loaded = True
+            # mtime 一并复位：留着旧值的话，文件以原 mtime 还原（回收站恢复/
+            # 原子写回滚）时会被上面判成「未变化」，路由带着已清空的 vectors
+            # 永久空转——静默，无任何报错。
+            self._profiles_mtime = 0.0
+            return
+        try:
+            profiles = json.loads(DOMAIN_PROFILES_PATH.read_bytes())
+        except (json.JSONDecodeError, OSError):
+            self._loaded = True
+            self._profiles_mtime = 0.0  # 同上：坏文件不占住旧 mtime
+            return
+
+        corpus = []
+        for name, profile in profiles.items():
+            if name.startswith("_"):
+                continue
+            self.engine_names.append(name)
+            b_kw = profile.get("boost_keywords", {})
+            b_cb = profile.get("boost_combos", {})
+            self.boost_keywords[name] = b_kw
+            self.boost_combos[name] = b_cb
+            self._boost_kw_norm[name] = [
+                (kw, kw.lower(), weight - 1.0) for kw, weight in b_kw.items()
+            ]
+            self._boost_combo_norm[name] = [
+                (combo, tuple(w.lower() for w in combo.split()), bonus)
+                for combo, bonus in b_cb.items()
+            ]
+            corpus.append(" ".join(profile.get("documents", [])))
+
+        if corpus:
+            self.vectorizer.fit(corpus)
+            postings: dict[str, list[tuple[str, float]]] = {}
+            for i, name in enumerate(self.engine_names):
+                vec = self.vectorizer.transform(corpus[i])
+                self.engine_vectors[name] = vec
+                norm = math.sqrt(sum(v * v for v in vec.values()))
+                if norm > 0:
+                    inv_n = 1.0 / norm
+                    for tok, val in vec.items():
+                        postings.setdefault(tok, []).append((name, val * inv_n))
+            self._postings = postings
+        self._profiles_mtime = DOMAIN_PROFILES_PATH.stat().st_mtime
+        self._loaded = True
+
+    def route(self, query: str, top_k: int = 3,
+              quota_aware: bool = True) -> list[tuple[str, float, str]]:
+        """
+        路由查询到最匹配的引擎（AC-IGTR 倒排稀疏张量积 + 信息增益特异性共振）。
+
+        返回: [(engine_name, score, reason), ...] 按分数降序。
+        """
+        self._ensure_loaded()
+        if not self.engine_names:
+            return [("anysearch", 0.0, "无领域文档，回退 AnySearch")]
+
+        query_vec = self.vectorizer.transform(query, sublinear=True)
+        q_norm = math.sqrt(sum(v * v for v in query_vec.values())) if query_vec else 0.0
+        sim_by_eng: dict[str, float] = {}
+        if q_norm > 0.0 and self._postings:
+            inv_qn = 1.0 / q_norm
+            for tok, qv in query_vec.items():
+                posts = self._postings.get(tok)
+                if not posts:
+                    continue
+                q_unit = qv * inv_qn
+                for eng_name, e_unit in posts:
+                    sim_by_eng[eng_name] = sim_by_eng.get(eng_name, 0.0) + q_unit * e_unit
+
+        # P2: 静态概念语义向量 (Model2Vec 思想，零依赖快速查表)
+        concept_vec = None
+        cl = None
+        try:
+            from concept_lookup import (
+                get_concept_lookup,
+                concept_router_enabled,
+                strip_context_dims,
+            )
+            if concept_router_enabled():
+                cl = get_concept_lookup()
+                if cl.is_available:
+                    # 地名维清零：避免含地名的查询被航空/测绘类引擎凭地名重叠拉高
+                    concept_vec = strip_context_dims(cl.text_vector(query))
+        except Exception:
+            concept_vec = None
+
+        scores = []
+        quota_state = _load_quota_state() if quota_aware else {}
+        cost_profiles = _load_cost_profiles()
+        q_lower = query.lower()  # 一次即可，避免每个引擎重复 lower
+        use_postings = bool(self._postings)
+
+        for name in self.engine_names:
+            if use_postings:
+                sim = sim_by_eng.get(name, 0.0)
+            else:
+                sim = cosine_similarity(query_vec, self.engine_vectors.get(name, {}))
+            eff_sim = sim
+            c_sim = 0.0
+            if concept_vec is not None and cl is not None:
+                eng_cvec = cl.get_stripped_engine_vector(name)
+                if eng_cvec is not None:
+                    c_sim = cl.vector_cosine(concept_vec, eng_cvec)
+                    catch_all = name in _CATCH_ALL_CONCEPT
+                    if c_sim >= 0.75:
+                        if catch_all:
+                            # 泛域引擎词表覆盖面广，概念相似度易虚高，只作弱辅助；
+                            # 无词面交集时不允许概念单独把它拉上第一
+                            eff_sim = (max(sim, 0.90 * sim + 0.10 * c_sim)
+                                       if sim > 0 else sim)
+                        elif sim > 0:
+                            eff_sim = max(sim, 0.70 * sim + 0.30 * c_sim)
+                        else:
+                            eff_sim = c_sim * 0.50
+                    elif sim > 0 and c_sim > 0.40:
+                        if catch_all:
+                            eff_sim = max(sim, 0.95 * sim + 0.05 * c_sim)
+                        else:
+                            eff_sim = max(sim, 0.80 * sim + 0.20 * c_sim)
+
+            parts = []
+            if c_sim >= 0.75 and sim <= 0:
+                parts.append(f"concept={c_sim:.2f}")
+
+            # boost 加权（使用预编译小写词表）
+            boost = 1.0
+            hit_kws = []
+            kw_entries = self._boost_kw_norm.get(name)
+            if kw_entries is not None:
+                for kw, kw_low, delta in kw_entries:
+                    if kw_low in q_lower:
+                        boost += delta
+                        hit_kws.append(kw)
+            else:
+                for kw, weight in self.boost_keywords.get(name, {}).items():
+                    if kw.lower() in q_lower:
+                        boost += weight - 1.0
+                        hit_kws.append(kw)
+            if hit_kws:
+                parts.append(f"boost关键词:{','.join(hit_kws)}")
+
+            # 组合关键词加成（使用预切分小写词元组）
+            hit_combos = []
+            combo_entries = self._boost_combo_norm.get(name)
+            if combo_entries is not None:
+                for combo, words_low, bonus in combo_entries:
+                    if all(w in q_lower for w in words_low):
+                        boost += bonus
+                        hit_combos.append(combo)
+            else:
+                for combo, bonus in self.boost_combos.get(name, {}).items():
+                    if all(w.lower() in q_lower for w in combo.split()):
+                        boost += bonus
+                        hit_combos.append(combo)
+            if hit_combos:
+                parts.append(f"combo:{','.join(hit_combos)}")
+
+            final_score = eff_sim * boost
+
+            # 成本感知（profiles 已缓存，不再每引擎读盘）
+            cf = _cost_factor(name, cost_profiles)
+            if cf < 1.0:
+                final_score *= cf
+                parts.append(f"cost={cf}")
+
+            # 配额感知惩罚
+            if quota_aware and quota_state:
+                qr = _quota_ratio(name, quota_state, cost_profiles)
+                if qr < 0.2:
+                    final_score *= qr * 2
+                    parts.append(f"配额紧张({qr:.0%})")
+                elif qr < 0.5:
+                    final_score *= 0.5 + qr
+                    parts.append(f"配额偏低({qr:.0%})")
+
+            reason = f"sim={eff_sim:.3f}" + (f", {', '.join(parts)}" if parts else "")
+            scores.append((name, round(final_score, 4), reason))
+
+        scores.sort(key=lambda x: -x[1])
+        return scores[:top_k]
+
+    def should_parallel(self, query: str, scores: list[tuple[str, float, str]]) -> bool:
+        """判断是否需要多路并行搜索。"""
+        research_signals = [
+            "分析", "研究", "格局", "趋势", "深度", "全面", "详细",
+            "research", "analysis", "comprehensive", "deep",
+            "对比", "评测", "推荐", "review", "comparison"
+        ]
+        if any(kw in query.lower() for kw in research_signals):
+            return True
+        if not scores or scores[0][1] < 0.15:
+            return True
+        if len(scores) >= 2 and scores[0][1] > 0:
+            gap = (scores[0][1] - scores[1][1]) / scores[0][1]
+            if gap < 0.2:
+                return True
+        return False
+
+
+# ── 模块级单例 ─────────────────────────────────────────────────────────────────
+
+_router: Optional[SemanticRouter] = None
+
+
+def get_router() -> SemanticRouter:
+    global _router
+    if _router is None:
+        _router = SemanticRouter()
+    return _router
+
+
+def semantic_route(query: str, top_k: int = 3) -> list[tuple[str, float, str]]:
+    """便捷函数：语义路由。"""
+    return get_router().route(query, top_k=top_k)
+
+
+def semantic_route_auto(query: str) -> str:
+    """便捷函数：返回最优引擎名。"""
+    scores = semantic_route(query, top_k=1)
+    return scores[0][0] if scores else "anysearch"
+
+
+# ── CLI 测试 ──────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import sys
+
+    test_queries = sys.argv[1:] if len(sys.argv) > 1 else [
+        "英伟达最新财报",
+        "Python 异步编程最佳实践",
+        "2026年AI芯片行业竞争格局",
+        "美联储加息对股市影响",
+        "笔记本电脑推荐 2026",
+        "小米汽车销量",
+        "latest AI research papers",
+        "transformer attention mechanism paper",
+        "北京旅游攻略",
+        "基金定投策略",
+    ]
+
+    router = get_router()
+    print(f"{'查询':<35} {'最优引擎':<12} {'分数':<8} {'Top-3':<35}")
+    print("-" * 100)
+
+    for q in test_queries:
+        scores = router.route(q, top_k=3)
+        best = scores[0] if scores else ("?", 0, "")
+        top3 = ", ".join(f"{n}:{s:.3f}" for n, s, _ in scores[:3])
+        print(f"{q:<35} {best[0]:<12} {best[1]:<8.4f} {top3:<35}")

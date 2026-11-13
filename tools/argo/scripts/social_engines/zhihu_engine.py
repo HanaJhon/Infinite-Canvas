@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""知乎搜索引擎（知乎开放平台 zhihu_search API）
+
+密钥：环境变量 ZHIHU_ACCESS_SECRET（或 ARGO_ZHIHU_ACCESS_SECRET），
+未配置时返回空列表（不抛错、不静默假成功——error 由调用侧显示）。
+保持一致 social_engines 统一 schema，sentiment 聚合按 social_meta 直接可用。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+import urllib.error
+import urllib.parse
+from typing import Any
+
+# 出口调度唯一入口（issue #13 同类修复）：urlopen 不认 config.yaml 的
+# network.proxy，裸用会在「必须经代理才能出网」的环境里整源连不上。
+import sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from net_proxy import http_get  # noqa: E402
+
+ZHIHU_API = "https://developer.zhihu.com/api/v1/content/zhihu_search"
+
+
+def _secret() -> str:
+    # 走 engine_env 规范访问器：os.environ 优先，~/.config/argo/env 热读保底
+    # （密钥轮换改文件即生效，无需重启）
+    try:
+        from engine_env import get_env
+        return get_env(["ARGO_ZHIHU_ACCESS_SECRET", "ZHIHU_ACCESS_SECRET"])
+    except ImportError:
+        return os.environ.get("ZHIHU_ACCESS_SECRET") or os.environ.get("ARGO_ZHIHU_ACCESS_SECRET", "")
+
+
+def search(query: str, n: int = 5) -> list[dict[str, Any]]:
+    """通过知乎开放平台 zhihu_search 搜索站内内容。"""
+    if not query or not query.strip():
+        return []
+    secret = _secret()
+    if not secret:
+        return []
+
+    params = urllib.parse.urlencode({
+        "Query": query.strip(),
+        "Count": str(max(1, min(int(n), 20))),
+        "SearchDB": "zhihu",
+    })
+    url = f"{ZHIHU_API}?{params}"
+    headers = {
+        "Authorization": f"Bearer {secret}",
+        "Content-Type": "application/json",
+        "X-Request-Timestamp": str(int(time.time())),
+        "User-Agent": "argo-search/2.6 (unified-search@local)",
+    }
+    try:
+        body, _ = http_get(url, headers, timeout=10)
+        data = json.loads(body.decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        # 密钥无效/过期（401/403）等必须暴露为 auth-failed，而不是静默
+        # no-results——调用侧把「没配置」「没结果」区分开才可行动
+        return [{"error": f"zhihu API HTTP {e.code}", "source": "zhihu"}]
+    except Exception as e:
+        return [{"error": f"zhihu API {type(e).__name__}: {e}", "source": "zhihu"}]
+
+    if data.get("Code") not in (0, None):
+        return [{"error": f"zhihu API Code={data.get('Code')} "
+                          f"{str(data.get('Message') or '')[:100]}",
+                 "source": "zhihu"}]
+
+    results: list[dict[str, Any]] = []
+    items = (data.get("Data") or {}).get("Items") or []
+    for item in items[:n]:
+        if not isinstance(item, dict):
+            continue
+        title = (item.get("Title") or "").strip()
+        # API 标题统一带「 - 知乎」尾巴：截断前剥掉（先剥再切，尾巴不占正文）
+        if title.endswith(" - 知乎"):
+            title = title[: -len(" - 知乎")].rstrip()
+        url_ = item.get("Url") or ""
+        snippet = (item.get("ContentText") or title or "")[:300]
+        if not title and not url_:
+            continue
+        content_id = str(item.get("ContentID") or "")
+        author = item.get("AuthorName") or ""
+        likes = item.get("VoteUpCount") or 0
+        comments = item.get("CommentCount") or 0
+        edit_ts = item.get("EditTime")
+        published = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(edit_ts)) if edit_ts else None
+
+        results.append({
+            "title": title[:100] + ("..." if len(title) > 100 else ""),
+            "url": url_,
+            "snippet": snippet,
+            "source": "zhihu",
+            "score": max(1.0 - len(results) * 0.1, 0.1),
+            "published_at": published,
+            "social_meta": {
+                "platform": "zhihu",
+                "content_type": (item.get("ContentType") or "answer").lower(),
+                "id": content_id,
+                "author": author,
+                "likes": likes,
+                "comments": comments,
+                "provider": "zhihu_openapi",
+            },
+        })
+    return results
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Zhihu search engine (zhihu_openapi)")
+    parser.add_argument("action", nargs="?", default="search")
+    parser.add_argument("query", nargs="?")
+    parser.add_argument("-n", type=int, default=5)
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+
+    if not args.query:
+        print("[]")
+        return
+    results = search(args.query, args.n)
+    if args.json:
+        print(json.dumps(results, ensure_ascii=False))
+    else:
+        for i, r in enumerate(results, 1):
+            meta = r.get("social_meta") or {}
+            print(f"### {i}. {r['title']}")
+            print(f"- **URL**: {r['url']}")
+            print(f"- {r['snippet'][:200]}")
+            print(f"- likes={meta.get('likes')} comments={meta.get('comments')} @{meta.get('author', '')}")
+            print()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,56 @@
+# Tavily 免 key 通道（官方 keyless 匿名额度）
+#
+# 为什么与 tavily 并列而不是合并：两者同上游、不同经济模型——tavily 用
+# ARGO_TAVILY_API_KEY 走账号档（额度高、结果稳），本引擎走官方 keyless
+# 头（x-tavily-access-mode），不读任何 key。计费语义不同，合并会让
+# 「免费源不当计费源」的检查失真（与 parallel / parallel_free 同一处理）。
+#
+# 端点语义（2026-10-21 实测）：POST /search，带 `x-tavily-access-mode: keyless`
+# 且不带 Authorization，返回与账号档同构的 {results:[{title,url,content,score}]}。
+# 匿名额度有 IP 级限流；失效时返回 4xx，由调度层换源，不静默伪装成空结果。
+#
+# 验证:
+#   python3 scripts/engine_validate.py --engine tavily_free --stage health --admit
+#   argo search "OpenAI" --engine tavily_free --json
+
+engine_id: tavily_free
+type: http
+enabled: true
+cost_tier: free
+label: Tavily (keyless)
+family: web_general
+priority: 56
+qps: 1
+period: second
+cost_per_call: 0.0
+cost_unit: free
+recommended: false
+
+method: POST
+url: https://api.tavily.com/search
+timeout: 15
+
+headers:
+  Content-Type: application/json
+  x-tavily-access-mode: keyless
+
+body:
+  query: "{query}"
+  max_results: "{n}"
+  search_depth: basic
+  include_answer: false
+
+output_map:
+  items: results
+  item_title: title
+  item_url: url
+  item_summary: content
+  item_published_at: published_date
+
+canary_query: OpenAI
+desc: "Tavily 官方免 key 匿名通道（通用网页搜索，无需注册）"
+coverage: [general, english, chinese]
+
+quality_queries:
+  - query: OpenAI
+  - query: 人工智能 应用

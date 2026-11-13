@@ -1,0 +1,36 @@
+# Keenable 免 key 通道（官方 MCP 匿名额度）
+#
+# 与 keenable 并列而不是合并：keyenable 的 REST 通道按 ARGO_KEENABLE_API_KEY
+# 计 credits，本通道走官方 MCP 匿名池、不读任何 key。两条通道额度模型不同，
+# 分开注册才能让「免费源不当计费源」的检查各自成立（同 tavily / parallel 先例）。
+#
+# 端点语义（2026-10-21 实测）：POST https://api.keenable.ai/mcp，
+# JSON-RPC tools/call → search_web_pages {query, mode:"realtime"}；
+# 返回 content[0].text 为纯文本块（Title/URL/Published/Snippets，`---` 分隔）。
+# 匿名池按 IP 限流，失效时返回 4xx/空块，由调度层换源。
+#
+# 验证:
+#   python3 scripts/engine_validate.py --engine keenable_free --stage health --admit
+#   argo search "OpenAI latest news" --engine keenable_free --json
+
+engine_id: keenable_free
+type: keenable_free
+enabled: true
+cost_tier: free
+label: Keenable (keyless)
+family: web_general
+priority: 57
+qps: 1
+period: second
+cost_per_call: 0.0
+cost_unit: free
+recommended: false
+
+timeout: 20
+canary_query: OpenAI
+desc: "Keenable 官方免 key 匿名通道（通用网页搜索，无需注册）"
+coverage: [general, english, chinese]
+
+quality_queries:
+  - query: OpenAI latest news
+  - query: 人工智能 最新进展

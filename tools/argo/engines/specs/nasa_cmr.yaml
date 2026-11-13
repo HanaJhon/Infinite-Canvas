@@ -1,0 +1,26 @@
+engine_id: nasa_cmr
+enabled: true
+label: NASA CMR 地球数据
+cost_tier: free
+qps: 2
+priority: 12
+period: second
+cost_per_call: 0.0
+cost_unit: free
+coverage:
+- science
+- earth
+desc: NASA CMR 地球科学数据目录（MODIS/遥感，cmr.earthdata.nasa.gov 免认证）
+timeout: 12
+type: http
+method: GET
+url: "https://cmr.earthdata.nasa.gov/search/collections.json"
+query_param: keyword
+headers:
+  Accept: "application/json"
+format_is_query_param: false
+output_map:
+  items: feed.entry
+  item_title: title
+  item_summary: summary
+  url_template: "https://search.earthdata.nasa.gov/search/granules?p={id}"

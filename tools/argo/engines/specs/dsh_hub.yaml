@@ -1,0 +1,44 @@
+# dsh_hub — 由 `argo engine add` 接入（2026-10-26）。
+# 字段说明见 docs/ADDING_NEW_ENGINE.md；路由元数据（family/coverage/langs/
+# domain_hints）由 engine_add 自动派生，可手工微调。
+engine_id: dsh_hub
+type: http
+enabled: true
+cost_tier: free
+label: DSH Hub 插件市场
+family: misc_vertical
+priority: 55
+qps: 2
+period: minute
+limit: null
+cost_per_call: 0.0
+cost_unit: free
+method: GET
+url: https://dsh-hub.cc/api/v1/plugins
+timeout: 15
+canary_query: memory
+coverage:
+- developer
+- tech
+- skill
+desc: DSH 插件市场（18933 条，免认证，带社区评分与可安装性判定）
+format: json
+query_param: q
+extra_params:
+  limit: '{n}'
+output_map:
+  items: items
+  item_title: name
+  item_url: repositoryUrl
+  item_summary: description
+  item_published_at: pushedAt
+quality_queries:
+- query: memory
+- query: git
+- query: ui theme
+langs:
+- en
+domain_hints:
+- skill_search
+- rfc_search
+- energy_grid

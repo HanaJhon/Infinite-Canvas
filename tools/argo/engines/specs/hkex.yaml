@@ -1,0 +1,40 @@
+# 港交所披露易（HKEXnews）公告检索（免 key）
+#
+# 补的盲区：**港股一手公告**。A 股有巨潮（cninfo）、美股有 SEC EDGAR，
+# 港股此前没有对应源——查「腾讯回购」「某股供股」只能落到网页搜索。
+# 披露易是港交所官方发布渠道，公告原文 PDF 直链可用。
+#
+# 端点语义（2026-10-21 实测）：两个接口组合。
+#   1) 代码/公司名解析：/search/prefix.do?...&name=<代码或名称>&market=SEHK
+#      → callback({stockInfo:[{stockId, code, name}]})，stockId 是内部 ID
+#   2) 公告检索：/search/titleSearchServlet.do?...&stockId=…&title=…&searchType=…
+#      → {result: "<JSON 字符串>"}，逐条含 TITLE/STOCK_CODE/DATE_TIME/FILE_LINK
+# 文档标题是繁体中文，builder 对高频简体词做了映射；纯简体生僻词可能 0 结果，
+# 此时用代码查询仍可命中（如「00700 回购」）。
+#
+# 验证:
+#   python3 scripts/engine_validate.py --engine hkex --stage health --admit
+#   argo search "00700 回购" --engine hkex --json
+
+engine_id: hkex
+type: hkex
+enabled: true
+cost_tier: free
+label: 港交所披露易
+family: finance_market
+priority: 50
+qps: 1
+period: second
+cost_per_call: 0.0
+cost_unit: free
+recommended: false
+
+timeout: 20
+canary_query: "00700"
+desc: "港交所披露易公告检索（港股一手公告 PDF，代码/公司名/标题关键词，免 key）"
+coverage: [finance, stock, hk_stock, legal, official]
+
+quality_queries:
+  - query: "00700 回购"
+  - query: 腾讯 公告
+  - query: 汇丰 业绩

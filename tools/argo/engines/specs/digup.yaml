@@ -1,0 +1,36 @@
+# DigUp 本地文件语义搜索（CLI 桥接）——默认关闭，按需启用
+#
+# 它搜什么：本机文件按「内容」而不是文件名——照片/截图按画面与图内文字、
+# PDF 按页、文档按块、音频/视频按 30s 窗口与抽帧（命中精确到页/秒/行）。
+# 模型 EmbeddingGemma 2 在设备端跑（llama.cpp/Metal），索引与检索全程离线。
+#
+# 前提（一次性）：
+#   1. digup CLI 就位（桥按此序自动定位，也可 $DIGUP_BIN / --bin 指定）：
+#      PATH 里的 digup > /Applications/DigUp.app/Contents/Helpers/digup
+#      （brew install --cask arahim3/tap/digup 或 DMG 装的 App 自带）
+#   2. 建索引：digup index <文件夹>…（或开 DigUp.app 选文件夹；索引默认
+#      ~/Library/Application Support/DigUp/index.noindex，$DIGUP_INDEX 可覆盖）
+#   3. 启用：本文件 enabled 改 true，然后跑一次健康门
+#      python3 scripts/engine_validate.py --engine digup --stage health --admit
+#      （canary 需命中你索引里真实存在的内容，可用 --query 覆盖探针词）
+#
+# 调用：argo search "<用大白话描述文件内容>" --engine digup
+# 口径：强项是语义/多模态/跨语言召回；中文关键词精确查找仍以主链为准，
+# 两路结果在融合层按名次合并，本引擎不做额外降权。
+engine_id: digup
+type: cli
+enabled: false         # ← 默认关；开启步骤见文件头
+disabled_reason: 按需启用的本地引擎——需先装 digup CLI 并建索引（文件头三步），装好把 enabled 改 true 后跑 engine_validate 健康门；本机不装不影响任何主链功能
+cost_tier: free
+label: 本地文件语义搜索
+desc: DigUp（EmbeddingGemma 2 本地多模态嵌入，全程离线）——照片/截图/PDF/文档/音视频按内容检索
+canary_query: "test"
+relevance_check: false  # 本地索引内容因机而异，词面交集不是有效健康判据（schema+非空已够）
+cmd:
+- python3
+- scripts/digup_bridge.py
+search_args:
+- '{query}'
+- -n
+- '{n}'
+timeout: 30             # digup 首查冷启要加载 ~250MB text 模型（实测 0.4–0.8s），留足

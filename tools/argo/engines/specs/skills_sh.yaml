@@ -1,0 +1,32 @@
+# skills_sh — 由 `argo engine add` 接入（2026-10-26）。
+# 字段说明见 docs/ADDING_NEW_ENGINE.md；路由元数据（family/coverage/langs/
+# domain_hints）由 engine_add 自动派生，可手工微调。
+engine_id: skills_sh
+type: skills_sh
+enabled: true
+cost_tier: free
+label: skills.sh 技能目录
+family: misc_vertical
+priority: 51
+qps: 2
+period: minute
+limit: null
+cost_per_call: 0.0
+cost_unit: free
+timeout: 15
+canary_query: git commit
+coverage:
+- skill
+- developer
+- tech
+desc: skills.sh 技能目录（57k+，免认证，Vercel 官方安装遥测）
+quality_queries:
+- query: git commit
+- query: code review
+- query: pdf
+langs:
+- en
+domain_hints:
+- skill_search
+- dsh_plugin_search
+- rfc_search

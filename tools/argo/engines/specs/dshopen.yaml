@@ -1,0 +1,32 @@
+# dshopen — 由 `argo engine add` 接入（2026-10-26）。
+# 字段说明见 docs/ADDING_NEW_ENGINE.md；路由元数据（family/coverage/langs/
+# domain_hints）由 engine_add 自动派生，可手工微调。
+engine_id: dshopen
+type: dshopen
+enabled: true
+cost_tier: free
+label: dshopen 插件目录
+family: misc_vertical
+priority: 58
+qps: 2
+period: minute
+limit: null
+cost_per_call: 0.0
+cost_unit: free
+timeout: 20
+canary_query: memory
+coverage:
+- developer
+- tech
+- skill
+desc: DSH 插件精选目录（894 条，免认证，本地匹配，带分类与 DSH 版本约束）
+quality_queries:
+- query: memory
+- query: git
+- query: ui theme
+langs:
+- en
+domain_hints:
+- skill_search
+- rfc_search
+- energy_grid

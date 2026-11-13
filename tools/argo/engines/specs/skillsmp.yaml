@@ -1,0 +1,52 @@
+# SkillsMP — Agent Skills 聚合目录（skill 域跨生态技能索引，GET JSON，keyless）
+# 技能域的广覆盖目录源：独立索引 200 万+ 开源技能，支持语言/职业过滤，
+# 与 redskill（小红书生态 47650 技能本地缓存）互补不重复（不同上游、不同生态）。
+# 免费 REST API 无需密钥（bearerAuth 仅用于提额）；sortBy=stars 按仓库热度排序。
+#
+# 为什么是 L3（2026-10-26 从 L1 声明式改过来）：
+#   上游有 `stars`（源仓库星数）与 `githubUrl`（**能安装**的 GitHub 目录），
+#   而 L1 的 output_map 只能把单字段映射成 summary——星数与「哪个地址能装」
+#   这两个最有用的维度都透不出来。改 builder 后：摘要前缀带 ★ 星数，
+#   url 优先给 githubUrl（缺失时回落市场页 skillUrl）。
+#
+# 口径：stars 是**源仓库星数**（不是安装量），与 skills.sh 的 Vercel 遥测、
+#   explainx 的平台统计、ClawHub 的生态下载量互不可比，别混用。
+# 可选过滤参数（builder 未接，按需加）：language（ISO 码，如 zh）、category、occupation。
+#
+# 实现: scripts/engines_builders_skill.py::_build_skillsmp_engine
+# 验证:
+#   python3 scripts/engine_validate.py --engine skillsmp --stage all --admit --write-doc
+
+engine_id: skillsmp
+type: skillsmp
+enabled: true
+cost_tier: free
+label: SkillsMP 技能目录
+family: misc_vertical
+priority: 50
+qps: 2
+period: second
+limit: null
+cost_per_call: 0.0
+cost_unit: free
+timeout: 15
+canary_query: "git commit"
+coverage:
+- skill
+- developer
+- tech
+desc: "SkillsMP Agent 技能聚合目录（200万+ 开源技能独立索引，免认证，带仓库星数与可安装的 GitHub 目录）"
+# 可验证出处声明（L3 builder 自行拼字段，不读本表；保留它是为了把「这个源
+# 必须给出能装的地址」写成声明，由 tests/test_skill_registry_contract.py 把守）。
+# builder 侧对应实现：url 优先 githubUrl（缺失回落 skillUrl），摘要前缀带星数。
+output_map:
+  items: data.skills
+  item_title: name
+  item_url: skillUrl
+  item_summary: description
+  item_upstream: githubUrl
+  item_published_at: updatedAt
+quality_queries:
+  - query: "git commit"
+  - query: "code review"
+  - query: "pdf"

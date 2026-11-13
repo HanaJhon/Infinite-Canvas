@@ -61,6 +61,51 @@ def test_parse_handles_garbage():
         assert parser("<html><body>\u8bf7\u9a8c\u8bc1\u4f60\u662f\u4eba\u7c7b</body></html>") == []
 
 
+ARGO_STUB = """
+import json, sys
+print(json.dumps({"count": 2, "engines_used": ["anysearch"], "results": [
+    {"title": "A", "url": "https://a.example/x", "snippet": "snip a"},
+    {"title": "B", "url": "not-a-url", "snippet": "drop me"},
+    {"title": "", "url": "https://b.example/y", "snippet": ""},
+]}))
+"""
+
+
+def test_argo_parse_and_filter():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        runner = os.path.join(tmp, "runner.py")
+        with open(runner, "w", encoding="utf-8") as fh:
+            fh.write(ARGO_STUB)
+        original = main.ARGO_RUNNER
+        main.ARGO_RUNNER = runner
+        try:
+            items, error = main._argo_search("x", 5)
+        finally:
+            main.ARGO_RUNNER = original
+    # 非 http 的条目要丢掉；空 title 用 url 顶上，别让模型看到空标题
+    assert error == "", error
+    assert [i["url"] for i in items] == ["https://a.example/x", "https://b.example/y"]
+    assert items[1]["title"] == "https://b.example/y"
+
+
+def test_argo_missing_runner_degrades():
+    original = main.ARGO_RUNNER
+    main.ARGO_RUNNER = os.path.join(main.BASE_DIR, "tools", "__nope__.py")
+    try:
+        items, error = main._argo_search("x")
+    finally:
+        main.ARGO_RUNNER = original
+    assert items == [] and error  # 装不上 argo 也要能回落到原引擎，不能抛
+
+
+def test_result_payload_format():
+    data = main._web_results_payload(
+        [{"title": "T", "url": "https://t", "snippet": "s"}], "argo")
+    assert data["ok"] and data["engine"] == "argo"
+    assert "1. T" in data["output"] and "https://t" in data["output"]
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

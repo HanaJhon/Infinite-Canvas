@@ -1,0 +1,55 @@
+# GLEIF — 全球法人识别编码（LEI）注册库（免 key）
+#
+# 补的盲区：**「这家公司到底是谁」的跨境法人底稿**。现有 company 源里
+# opencorporates 需要 token（本机实测 401）、SEC EDGAR 只覆盖美国上市公司，
+# GLEIF 是唯一全球口径、免认证的法人主数据：LEI、法定名称、注册地、
+# 总部地址、注册状态、母公司关系（直接/最终母公司）。
+#
+# 端点语义（2026-10-21 实测）：fulltext 全文过滤（legalName 过滤器是精确匹配，
+# 「Tencent Holdings」会 0 条；fulltext 能命中「騰訊控股有限公司」），支持中英文原文。
+#   GET /api/v1/lei-records?filter[fulltext]=Tencent&page[size]=5
+#   → data[].attributes.entity.legalName.name / legalAddress / registration.status
+# 人名/品牌名可能召回近似主体，是「按名检索」的固有限制，不是脏数据。
+#
+# 验证:
+#   python3 scripts/engine_validate.py --engine gleif --stage health --admit
+#   argo search "Tencent" --engine gleif --json
+
+engine_id: gleif
+type: http
+enabled: true
+cost_tier: free
+label: GLEIF 法人标识
+family: knowledge
+priority: 55
+qps: 2
+period: second
+cost_per_call: 0.0
+cost_unit: free
+recommended: false
+
+method: GET
+url: https://api.gleif.org/api/v1/lei-records
+query_param: "filter[fulltext]"
+extra_params:
+  "page[size]": "{n}"
+timeout: 15
+
+canary_query: Tencent
+desc: "GLEIF 全球法人 LEI 注册库（法定名称/注册地/状态/母公司，免 key）"
+coverage: [company, business, legal, org_entity]
+
+headers:
+  User-Agent: argo-search/2.9 (+gleif)
+  Accept: application/json
+
+output_map:
+  items: data
+  item_title: attributes.entity.legalName.name
+  item_summary: attributes.entity.legalAddress.addressLines.0
+  url_template: https://api.gleif.org/api/v1/lei-records/{id}
+
+quality_queries:
+  - query: Tencent
+  - query: Siemens
+  - query: 阿里巴巴

@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""extract.py — 结构化数据提取（抓取走 fetch_v3 降级链）"""
+import json, re, sys
+from html.parser import HTMLParser
+from cli_io import dumps, dumps_pretty
+# fetch_v3：UA 轮换 + TLS 指纹 + Wayback/浏览器降级，反爬站可抓。
+# 单页场景保留浏览器降级（use_browser_fallback=True 默认）。
+from fetch_v3 import fetch_v3 as _fetch3
+
+
+def _extract_fetch(url: str, max_chars: int, timeout: int, raw: bool = True) -> dict:
+    """兼容旧 fetch_page 签名：返回 {success, html, content, url, error}。
+
+    need_html=raw：结构化提取（表格 / Meta / JSON-LD）全部依赖原始 HTML，
+    而 fetch_v3 默认会把 html 字段剥掉。此前这里没传，于是 `argo extract`
+    恒拿不到 HTML、tables/metadata/jsonld 永远是空的——参数叫 raw 却只影响
+    出参、不影响取数，正是「开关看着接上了、其实没接」的形态。
+    另：need_html=True 时内容协商自动停用，该路径不会拿到 Markdown。
+    """
+    r = _fetch3(url, max_chars=max_chars, timeout=float(timeout),
+                need_html=raw)
+    out = {"url": r["url"], "content": r.get("content", ""),
+           "success": r["success"], "error": r.get("error", "")}
+    if raw:
+        out["html"] = r.get("html", "")
+    return out
+
+class TableExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tables = []
+        self._table_depth = 0
+        self._rows = []
+        self._row = []
+        self._cell = []
+        self._in_cell = False
+    def handle_starttag(self, tag, attrs):
+        if tag == 'table':
+            self._table_depth += 1
+            if self._table_depth == 1:
+                self._rows = []
+        elif self._table_depth == 1 and tag in ('td','th'):
+            self._in_cell = True; self._cell = []
+        elif self._table_depth == 1 and tag == 'tr':
+            self._row = []
+    def handle_endtag(self, tag):
+        if tag in ('td','th') and self._in_cell:
+            self._in_cell = False; self._row.append(''.join(self._cell).strip())
+        elif tag == 'tr' and self._table_depth == 1 and self._row:
+            self._rows.append(self._row)
+        elif tag == 'table' and self._table_depth:
+            self._table_depth -= 1
+            if self._table_depth == 0 and self._rows:
+                headers = self._rows[0]
+                table = [{headers[i]: row[i] if i < len(row) else '' for i in range(len(headers))} for row in self._rows[1:]]
+                self.tables.append(table)
+    def handle_data(self, data):
+        if self._in_cell: self._cell.append(data)
+
+def extract_tables(html):
+    ext = TableExtractor(); ext.feed(html); return ext.tables
+
+def extract_metadata(html):
+    meta = {}
+    title_m = re.search(r'<title>(.*?)</title>', html, re.I|re.S)
+    if title_m: meta['title'] = title_m.group(1).strip()
+    for pattern in [r'<meta\s+name=["\']description["\']\s+content=["\'](.*?)["\']', r'<meta\s+content=["\'](.*?)["\']\s+name=["\']description["\']']:
+        m = re.search(pattern, html, re.I)
+        if m: meta['description'] = m.group(1).strip(); break
+    for prop in ['og:title','og:description','og:image']:
+        m = re.search(rf'property=["\']{prop}["\']\s+content=["\'](.*?)["\']', html, re.I)
+        if m: meta[prop] = m.group(1).strip()
+    return meta
+
+def extract_jsonld(html):
+    results = []
+    for m in re.finditer(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, re.S|re.I):
+        try: results.append(json.loads(m.group(1)))
+        except Exception: pass  # 非 JSON 的 ld+json 块跳过；裸 except 会连 Ctrl-C 一起吞
+    return results
+
+if __name__ == '__main__':
+    import argparse
+    p = argparse.ArgumentParser()
+    # 位置参数与 --url 等价：bin/argo 的 usage 写的是 `argo extract "url"`，
+    # 而入口原先只认 --url —— 照文档敲直接报「--url required」（2026-09-15
+    # 实测）。保留 --url 兼容既有调用，两者都接受。
+    p.add_argument('target', nargs='?', metavar='URL')
+    p.add_argument('--url')
+    p.add_argument('--mode', default='all', choices=['tables','metadata','jsonld','all'])
+    # 同 crawl：bin/argo 的 usage 承诺 Common flags「--json」，此前 parser 里
+    # 没有它，照文档传参报 unrecognized arguments。默认 3000 字符截断预览，
+    # --json 输出完整可解析 JSON。
+    p.add_argument('--json', action='store_true',
+                   help='输出完整 JSON（默认为 3000 字符截断预览）')
+    args = p.parse_args()
+    url = args.url or args.target
+    if not url:
+        p.error('需要 URL：argo extract <url>，或 --url <url>')
+    result = _extract_fetch(url, 50000, 15)
+    if not result['success']: print(dumps({'error': result.get('error')})); sys.exit(1)
+    html = result.get('html') or result.get('content') or ''
+    output = {}
+    if args.mode in ('tables','all'): output['tables'] = extract_tables(html)
+    if args.mode in ('metadata','all'): output['metadata'] = extract_metadata(html)
+    if args.mode in ('jsonld','all'): output['jsonld'] = extract_jsonld(html)
+    out = dumps(output)
+    print(out if args.json else out[:3000])

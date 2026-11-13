@@ -1,0 +1,3853 @@
+_generated: 由 scripts/sync_backends.py 从运行时引擎声明派生，勿手工修改。
+version: 2
+engines:
+- name: aljazeera
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - arab
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 半岛电视台阿语（半岛阿语版，阿拉伯世界一手视角，免 key）
+- name: animetrace
+  tier: T1
+  type: animetrace
+  coverage:
+  - image
+  - reverse_image
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: AnimeTrace 动漫角色识别（query 为图片 URL 或本地图片路径，免 key，给作品名与角色名，按 IP 限频）
+- name: antara
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - indonesia
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 安塔拉通讯社（印尼国家通讯社（ANTARA），免 key）
+- name: anysearch
+  tier: T1
+  type: anysearch
+  coverage:
+  - general
+  - tech
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 通用搜索主力，进程内 JSON-RPC（HttpClient），零 token
+- name: archive_org
+  tier: T1
+  type: http
+  coverage:
+  - archive
+  - history
+  - reference
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Internet Archive 高级搜索（免认证）
+- name: artic
+  tier: T1
+  type: http
+  coverage:
+  - art
+  - museum
+  - culture
+  - image
+  latency_ms: 2500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 芝加哥艺术博物馆馆藏（免认证，含 IIIF 图像）
+- name: arxiv
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: arXiv 论文搜索
+- name: aviation_weather
+  tier: T1
+  type: http
+  coverage:
+  - aviation
+  - weather
+  - forecast
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 航空气象（METAR 实时例行天气报告，按 ICAO 机场代码查询）
+- name: baidu_baike
+  tier: T1
+  type: baidu_baike
+  coverage:
+  - chinese
+  - encyclopedia
+  - reference
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 百度百科词条（suggest + OpenAPI 卡片，免认证）
+- name: baidu_hot
+  tier: T1
+  type: baidu_hot
+  coverage:
+  - chinese
+  - hot
+  - trending
+  - realtime
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 百度热搜（实时热搜榜，HTML 解析，免认证）
+- name: bangumi
+  tier: T1
+  type: bangumi
+  coverage:
+  - anime
+  - game
+  - chinese
+  - media
+  latency_ms: 1500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: Bangumi 番剧仓库（动画/漫画/游戏条目元数据，官方开放 API，免认证）
+- name: bilibili
+  tier: T1
+  type: cli
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: B站
+- name: bilibili_hot
+  tier: T1
+  type: bilibili_hot
+  coverage:
+  - chinese
+  - hot
+  - trending
+  - bilibili
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: B站热搜（search/square 热搜词，免认证）
+- name: bing_rss
+  tier: T1
+  type: bing_rss
+  coverage:
+  - web
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: Bing 网页搜索 RSS 出口（免 key 免 HTML 解析；local_bing 改版/风控时的稳定备胎）
+- name: biorxiv
+  tier: T1
+  type: biorxiv
+  coverage:
+  - academic
+  - science
+  latency_ms: 3000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: bioRxiv/medRxiv 预印本（DOI 单篇详情 / 最近 3 天列表）
+- name: bocha
+  tier: T1
+  type: bocha
+  coverage:
+  - chinese
+  - general
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 博查搜索 API（中文，freshness 按查询时效动态化）
+- name: bocha_ai
+  tier: T1
+  type: bocha_ai
+  coverage:
+  - chinese
+  - general
+  - vertical
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 博查 AI 搜索（ai-search 端点网页结果直连）
+- name: brave
+  tier: T1
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: api
+  status: disabled
+  recommended: true
+  explicit_only: false
+  desc: Brave Search API
+- name: byted
+  tier: T1
+  type: http
+  coverage:
+  - general
+  - news
+  - chinese
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 字节搜索 API，中文通用/news
+- name: carbon_intensity
+  tier: T1
+  type: http
+  coverage:
+  - environment
+  - energy
+  - realtime
+  - official
+  latency_ms: 1200
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 英国电网碳强度与发电结构（国家电网官方，免认证）
+- name: cfets
+  tier: T1
+  type: cfets
+  coverage:
+  - finance
+  - macro
+  - china
+  - official
+  - realtime
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 中国外汇交易中心人民币中间价（25 个币种，官方授权口径，免 key）
+- name: clawhub
+  tier: T1
+  type: clawhub
+  coverage:
+  - skill
+  - developer
+  - tech
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: ClawHub 技能生态聚合（OpenClaw + skills.sh 条目，免认证，带生态下载量与官方标记）
+- name: cleveland
+  tier: T1
+  type: http
+  coverage:
+  - art
+  - museum
+  - culture
+  - image
+  latency_ms: 2500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 克利夫兰艺术博物馆（CC0 开放图像，免认证）
+- name: clinicaltrials
+  tier: T1
+  type: http
+  coverage:
+  - medical
+  - clinical
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: ClinicalTrials.gov v2 临床试验（免认证）
+- name: cls_telegraph
+  tier: T1
+  type: cls_telegraph
+  coverage:
+  - chinese
+  - news
+  - telegraph
+  - realtime
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 财联社电报（全市场实时快讯，v1 API+本地签名零key）
+- name: cn_ai_news
+  tier: T1
+  type: http
+  coverage:
+  - chinese
+  - news
+  - ml
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 中文 AI 垂直资讯检索（模型/产品/行业/论文，含发布时间与上游来源）
+- name: cnii
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - japanese
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 日本国立情报学研究所学术总库（论文/博士论文/科研项目，JSON-LD）
+- name: cninfo
+  tier: T1
+  type: cninfo
+  coverage:
+  - finance
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 巨潮资讯网官方公告（A股公告第一官方源，免认证）
+- name: coingecko
+  tier: T1
+  type: http
+  coverage:
+  - crypto
+  - finance
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: CoinGecko 币种搜索（免认证；上游 429 限流较严，qps 压到 1 避免连发被封）
+- name: core
+  tier: T1
+  type: core
+  coverage:
+  - academic
+  - science
+  latency_ms: 4000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: CORE 开放获取全文（含 PDF 直链，覆盖机构仓储灰色文献）
+- name: courtlistener
+  tier: T1
+  type: courtlistener
+  coverage:
+  - law
+  - legal
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: CourtListener 美国判例全文检索（匿名可用，2026-05 起约 5 次/分限额）
+- name: crates
+  tier: T1
+  type: http
+  coverage:
+  - code
+  - rust
+  - package
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: crates.io Rust 包搜索（免认证，需 UA）
+- name: crossref
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Crossref DOI 元数据 API（免认证，礼貌池 mailto）
+- name: crt_sh
+  tier: T1
+  type: http
+  coverage:
+  - security
+  - tech
+  latency_ms: 15000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: crt.sh 证书透明度日志（子域名/证书情报，免认证，响应较慢）
+- name: csdn
+  tier: T1
+  type: csdn
+  coverage:
+  - chinese
+  - tech
+  - community
+  - blog
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: CSDN 搜索（so.csdn.net v3 JSON，免认证；标题与摘要的高亮标签、URL 追踪参数在引擎内清洗）
+- name: ct24
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - czech
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 捷克电视台24（ČT24，捷克公共电视新闻，免 key）
+- name: datacite
+  tier: T1
+  type: http
+  coverage:
+  - dataset
+  - academic
+  - opendata
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: DataCite 科研数据集搜索（Dryad/Figshare/Dataverse/OSF 等仓储，免认证）
+- name: datagov_uk
+  tier: T1
+  type: http
+  coverage:
+  - opendata
+  - government
+  - dataset
+  - uk
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: true
+  desc: data.gov.uk 英国政府开放数据目录（CKAN，免 key）
+- name: dblp
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - cs
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: DBLP 计算机科学文献（免认证，偶发 SSL 抖动）
+- name: dbpedia
+  tier: T1
+  type: http
+  coverage:
+  - knowledge
+  - entity
+  - reference
+  - english
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: DBpedia 维基百科结构化知识图谱与实体消歧（JSON 免认证）
+- name: ddgs_images
+  tier: T1
+  type: cli
+  coverage:
+  - image
+  - media
+  - web
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 通用图片搜索（免 Key，覆盖全网图片；无版权标注，发布前须自行核对）
+- name: deepseek1024
+  tier: T1
+  type: http
+  coverage:
+  - developer
+  - tech
+  - skill
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: DSH 插件目录（13855 条，免认证，带安装命令与安装量/星数/增长口径）
+- name: deepseek_search
+  tier: T1
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: DeepSeek Search（http）
+- name: deezer
+  tier: T1
+  type: http
+  coverage:
+  - media
+  - music
+  - entertainment
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 音乐艺人/专辑（Deezer，免认证）
+- name: defillama
+  tier: T1
+  type: defillama
+  coverage:
+  - crypto
+  - finance
+  - blockchain
+  - defi
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: DeFiLlama 协议 TVL（8700+ 协议资金规模/24h 与 7d 变化，免 key）
+- name: deps_dev
+  tier: T1
+  type: deps_dev
+  coverage:
+  - code
+  - package
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: deps.dev 包依赖（npm/pypi/go/maven/cargo；版本/弃用/发布时间）
+- name: devto
+  tier: T1
+  type: http
+  coverage:
+  - tech
+  - community
+  - english
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: DEV.to 技术文章搜索（免认证）
+- name: digup
+  tier: T1
+  type: cli
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: disabled
+  recommended: true
+  explicit_only: false
+  desc: DigUp（EmbeddingGemma 2 本地多模态嵌入，全程离线）——照片/截图/PDF/文档/音视频按内容检索
+- name: dnb
+  tier: T1
+  type: dnb
+  coverage:
+  - books
+  - german
+  - bibliography
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 德语出版物最全书目（SRU/RDF XML）
+- name: doaj
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - open_access
+  - global
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 开放获取期刊全球总库（80+ 语种，元数据统一英文）
+- name: docker_hub
+  tier: T1
+  type: http
+  coverage:
+  - code
+  - infra
+  - package
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Docker Hub 镜像搜索（免认证）
+- name: doi
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - metadata
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: DOI 内容协商（doi.org 官方解析器，Accept 头直出 CSL JSON 结构化元数据，keyless 免 key 免限次，查询词传裸
+    DOI）
+- name: douban_book
+  tier: T1
+  type: douban_book
+  coverage:
+  - book
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 豆瓣读书搜索（评分/出版社/年份/价格，免认证）
+- name: douban_movie
+  tier: T1
+  type: douban_movie
+  coverage:
+  - film
+  - chinese
+  - media
+  latency_ms: 1000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 豆瓣电影搜索（中文片名/年份/类型，免认证，suggest 接口）
+- name: douyin_hot
+  tier: T1
+  type: douyin_hot
+  coverage:
+  - chinese
+  - hot
+  - trending
+  - realtime
+  - video
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 抖音热榜（iesdouyin word_list JSON，免认证）
+- name: dsh_hub
+  tier: T1
+  type: http
+  coverage:
+  - developer
+  - tech
+  - skill
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: DSH 插件市场（18933 条，免认证，带社区评分与可安装性判定）
+- name: dshopen
+  tier: T1
+  type: dshopen
+  coverage:
+  - developer
+  - tech
+  - skill
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: DSH 插件精选目录（894 条，免认证，本地匹配，带分类与 DSH 版本约束）
+- name: dw_news
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - world
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 德国之声英语版 RSS（德语区/欧洲公共广播视角，条目数最多的一档）
+- name: eastmoney
+  tier: T1
+  type: eastmoney
+  coverage:
+  - finance
+  - stock
+  - fund
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 东方财富，金融数据首选
+- name: ecosia
+  tier: T1
+  type: ecosia
+  coverage:
+  - english
+  - general
+  latency_ms: 2000
+  cost: free
+  status: disabled
+  recommended: true
+  explicit_only: true
+  desc: Ecosia（ecosia.org HTML 解析），环保隐私取向通用网页
+- name: egov_law
+  tier: T1
+  type: egov_law
+  coverage:
+  - legal
+  - law_text
+  - japanese
+  - official
+  latency_ms: 3000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 日本法令检索（e-Gov 官方全文，免认证）
+- name: electricity_maps
+  tier: T1
+  type: electricity_maps
+  coverage:
+  - energy
+  - carbon
+  - environment
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 全球电网分区目录（zones 免 key）
+- name: elpais
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - spain
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 西班牙国家报（El País，西语世界发行量最大的日报，免 key）
+- name: em_flow
+  tier: T1
+  type: em_flow
+  coverage:
+  - finance
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 东财资金流向（个股主力/北向/板块，push2.eastmoney.com 免认证）
+- name: em_global_news
+  tier: T1
+  type: em_global_news
+  coverage:
+  - chinese
+  - news
+  - global
+  - finance
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 东财全球资讯（7×24 财经快讯）
+- name: em_miaoxiang
+  tier: T1
+  type: em_miaoxiang
+  coverage:
+  - finance
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 东财妙想搜索（官方研报/公告/政策，需 EASTMONEY_APIKEY）
+- name: endoflife
+  tier: T1
+  type: http
+  coverage:
+  - tech
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 产品生命周期（版本/最新/支持期/EOL，endoflife.date 200+ 产品）
+- name: energy_charts
+  tier: T1
+  type: energy_charts
+  coverage:
+  - energy
+  - environment
+  - statistics
+  - europe
+  latency_ms: 2500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: Energy-Charts 欧洲发电结构/可再生占比（Fraunhofer ISE，免认证）
+- name: eu_opendata
+  tier: T1
+  type: http
+  coverage:
+  - opendata
+  - europe
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 欧盟开放数据目录（24 语言元数据）
+- name: europeana
+  tier: T1
+  type: http
+  coverage:
+  - culture
+  - europe
+  - heritage
+  latency_ms: 2000
+  cost: free
+  status: disabled
+  recommended: true
+  explicit_only: false
+  desc: 欧洲 27 国文化遗产聚合（官方公开 demo key）
+- name: europepmc
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - biomedical
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Europe PMC 生物医学文献（免认证，SS 429 后备）
+- name: eurostat
+  tier: T1
+  type: eurostat
+  coverage:
+  - macro
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 欧盟统计局宏观数据（EU 国家 GDP/人均GDP/失业率/人口，ec.europa.eu SDMX 免认证）
+- name: exa
+  tier: T1
+  type: exa
+  coverage:
+  - semantic
+  - general
+  - english
+  - chinese
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Exa 语义搜索（embedding 匹配 + 内容摘要，新户 $20 赠金 + 每月 $10 赠金）
+- name: explainx
+  tier: T1
+  type: explainx
+  coverage:
+  - skill
+  - developer
+  - tech
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: explainx 技能目录（12075 条，免认证，带安装量/分类/官方标记）
+- name: factcheck_org
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - verification
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: FactCheck.org（美国事实核查：声明级真伪判定，摘要密度仅次于卫报）
+- name: faz
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - germany
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 法兰克福汇报（FAZ，德国全国性日报，免 key）
+- name: federal_register
+  tier: T1
+  type: http
+  coverage:
+  - legal
+  - regulation
+  - us
+  latency_ms: 1200
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 美国联邦公报全文检索（行政法规/提案/通告原文，免 key；一手法规源）
+- name: feed
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: true
+  desc: RSS 种子注册表（美联储新闻稿、Nature 期刊新闻、Lobsters、Solidot；固定窗口本地过滤，显式调用）
+- name: felo
+  tier: T1
+  type: http
+  coverage:
+  - general
+  - tech
+  latency_ms: 2000
+  cost: api
+  status: disabled
+  recommended: true
+  explicit_only: false
+  desc: Felo AI 搜索 API
+- name: figshare
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - dataset
+  - research
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 科研数据集检索（论文/数据/图表）
+- name: finviz
+  tier: T1
+  type: finviz
+  coverage:
+  - finance
+  - us_stock
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Finviz 美股快照（HTML，免认证）
+- name: firecrawl
+  tier: T1
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Firecrawl 云搜索（search+全文markdown，JS渲染/学术/PDF垂直，keyless 免费层 1000 credits/月）
+- name: flk_law
+  tier: T1
+  type: flk_law
+  coverage:
+  - legal
+  - law
+  - chinese
+  - gov
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 国家法律法规数据库（法律/行政法规/司法解释全文，权威法条源，免认证）
+- name: folha
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - brazil
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 巴西页报（Folha de S.Paulo，巴西最大日报，免 key）
+- name: fourget
+  tier: T1
+  type: http
+  coverage:
+  - web
+  - privacy
+  - general
+  latency_ms: 2000
+  cost: free
+  status: disabled
+  recommended: true
+  explicit_only: false
+  desc: 4get 极简无状态隐私元搜索引擎（支持自建节点，替代重型 SearXNG）
+- name: fr_opendata
+  tier: T1
+  type: http
+  coverage:
+  - opendata
+  - french
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 法国政府开放数据目录（data.gouv.fr）
+- name: france24
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - world
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: France 24 英语版 RSS（法语区一手的国际新闻实时流，免 key）
+- name: frankfurter
+  tier: T1
+  type: frankfurter
+  coverage:
+  - macro
+  - finance
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: Frankfurter ECB 官方参考汇率（免认证，2026-10-06 接入）
+- name: fred
+  tier: T1
+  type: fred
+  coverage:
+  - finance
+  - macro
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: FRED 宏观时序数据（CPI/失业率/国债收益率/GDP/M2，免认证）
+- name: free_dictionary
+  tier: T1
+  type: free_dictionary
+  coverage:
+  - dictionary
+  - english
+  - word
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: dictionaryapi.dev 英英词典（免认证，响应为数组）
+- name: full_fact
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - verification
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: Full Fact（英国事实核查：与 FactCheck.org 分属英美两法域口径）
+- name: fx_rate
+  tier: T1
+  type: fx_rate
+  coverage:
+  - finance
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 实时汇率（open.er-api.com 免认证）
+- name: fxtwitter
+  tier: T1
+  type: http
+  coverage:
+  - social
+  - english
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: FxTwitter 公开 API：X/Twitter 推文搜索（零认证，含互动元数据）
+- name: gbfs_nyc
+  tier: T1
+  type: http
+  coverage:
+  - transport
+  - geo
+  - realtime
+  - open_data
+  latency_ms: 1500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: GBFS 共享单车站点（NYC Citi Bike，通用规范，免认证）
+- name: gbif
+  tier: T1
+  type: gbif
+  coverage:
+  - science
+  - biology
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 全球生物多样性物种检索（学名/俗名，api.gbif.org 免认证）
+- name: gdacs
+  tier: T1
+  type: gdacs
+  coverage:
+  - earth_science
+  - disaster
+  - environment
+  - official
+  latency_ms: 3000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: GDACS 全球多灾种预警（洪水/台风/野火/地震，EU JRC 官方，免认证）
+- name: gdelt
+  tier: T1
+  type: http
+  coverage:
+  - news
+  - world
+  - multilingual
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: true
+  desc: GDELT 全球新闻事件流（75+ 语言跨国媒体扫描，带域名/语言/国家标注）
+- name: github
+  tier: T1
+  type: github
+  coverage:
+  - code
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: GitHub 代码搜索 API
+- name: gleif
+  tier: T1
+  type: http
+  coverage:
+  - company
+  - business
+  - legal
+  - org_entity
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: GLEIF 全球法人 LEI 注册库（法定名称/注册地/状态/母公司，免 key）
+- name: google_lens
+  tier: T1
+  type: google_lens
+  coverage:
+  - image
+  - reverse_image
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: Google Lens 通用视觉反查（query 为公网图片 URL 或本地图片路径，本地图经 SerpAPI Image API 上传，付费档 250
+    次/月免费额度，回精确匹配/视觉相似/相关网页三档）；cost_per_call ¥0.11 按 Developer 计划 $75/5000 次折算，仅面板估算，不代表实扣
+- name: google_news
+  tier: T1
+  type: google_news
+  coverage:
+  - news
+  - realtime
+  - english
+  - international
+  latency_ms: 1500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 'Google News RSS（多语言新闻，免认证，支持时间窗与 site: 限定）'
+- name: google_patents
+  tier: T1
+  type: google_patents
+  coverage:
+  - patent
+  - tech
+  - ip
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Google Patents 专利搜索（技术尽调/竞品分析，免认证）
+- name: google_scholar
+  tier: T1
+  type: google_scholar
+  coverage:
+  - academic
+  - paper
+  - research
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Google Scholar（学术论文搜索，HTTP 页面解析）
+- name: gov_policy
+  tier: T1
+  type: http
+  coverage:
+  - policy
+  - gov
+  - chinese
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 中国政府网政策文件库（国务院文件，带发布日期）
+- name: gov_regulations
+  tier: T1
+  type: http
+  coverage:
+  - legal
+  - policy
+  - gov
+  - chinese
+  latency_ms: 1500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 中国政府网规章库（部门规章/地方政府规章，免认证）
+- name: grep_app
+  tier: T1
+  type: grep_app
+  coverage:
+  - code
+  - github
+  - search
+  - dev
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Grep.app 全球百万 GitHub 核心代码正则检索（官方 MCP 传输免认证）
+- name: guardian_rss
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - world
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 卫报世界版 RSS（一手国际新闻实时流；摘要密度最高的一档，免 key）
+- name: gutenberg
+  tier: T1
+  type: gutenberg
+  coverage:
+  - books
+  - literature
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Project Gutenberg 公版书全文检索（gutendex.com 免认证）
+- name: hackernews
+  tier: T1
+  type: http
+  coverage:
+  - tech
+  - news
+  - discussion
+  - english
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Hacker News（Algolia API，科技新闻+讨论）
+- name: hal
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - french
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 法国全国科研机构开放仓储（Solr JSON）
+- name: hatena_bookmark
+  tier: T1
+  type: hatena_bookmark
+  coverage:
+  - tech
+  - japanese
+  - bookmark
+  - trending
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 日本技术圈书签搜索（RDF RSS，带收藏日期）
+- name: hf_datasets
+  tier: T1
+  type: http
+  coverage:
+  - dataset
+  - ml
+  - data
+  - huggingface
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Hugging Face 数据集搜索（免认证，含 likes/作者/更新时间）
+- name: hf_papers
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - paper
+  - ml
+  - social
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Hugging Face Papers 论文检索（免认证，含 upvotes/作者/发布日期，arXiv 与 OpenAlex 无的社交信号）
+- name: hkex
+  tier: T1
+  type: hkex
+  coverage:
+  - finance
+  - stock
+  - hk_stock
+  - legal
+  - official
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 港交所披露易公告检索（港股一手公告 PDF，代码/公司名/标题关键词，免 key）
+- name: huggingface
+  tier: T1
+  type: http
+  coverage:
+  - ml
+  - model
+  - dataset
+  - code
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Hugging Face 模型搜索（免认证）
+- name: hurriyet
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - turkey
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 自由报（Hürriyet，土耳其主流日报，免 key）
+- name: imdb
+  tier: T1
+  type: imdb
+  coverage:
+  - film
+  - movie
+  - tv
+  - media
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: IMDb suggestion API（电影/剧集/人物，免认证）
+- name: iplant
+  tier: T1
+  type: iplant
+  coverage:
+  - species
+  - botany
+  - chinese
+  - science
+  latency_ms: 1200
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: iPlant 植物智（中文植物名/俗名 → 学名 + 分类，中科院植物所，免认证）
+- name: itotii
+  tier: T1
+  type: itotii
+  coverage:
+  - chinese
+  - meme
+  - slang
+  - culture
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: itotii 梗百科（中文流行语/网络梗溯源，WordPress REST，免认证）
+- name: itunes
+  tier: T1
+  type: itunes
+  coverage:
+  - media
+  - music
+  - movie
+  - podcast
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: iTunes Search API（音乐/专辑、播客节目与单集（含集数/时长/发布日期）；中文 country=cn，免认证）
+- name: jikan
+  tier: T1
+  type: http
+  coverage:
+  - anime
+  - media
+  - entertainment
+  - japanese
+  latency_ms: 2500
+  cost: free
+  status: disabled
+  recommended: false
+  explicit_only: false
+  desc: 动漫元数据（Jikan/MyAnimeList，免认证，含评分与集数）
+- name: jin10
+  tier: T1
+  type: jin10
+  coverage:
+  - finance
+  - news
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 金十数据财经快讯（免认证）
+- name: jolpica
+  tier: T1
+  type: jolpica
+  coverage:
+  - sports
+  - racing
+  - statistics
+  latency_ms: 2500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: F1 车手积分榜/赛程（Jolpica，Ergast 继任，免认证）
+- name: juejin
+  tier: T1
+  type: juejin
+  coverage:
+  - chinese
+  - tech
+  - community
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 掘金技术文章搜索（免认证）
+- name: k10plus
+  tier: T1
+  type: k10plus
+  coverage:
+  - book
+  - library
+  - academic
+  - german
+  latency_ms: 2500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: K10plus 联合目录（德国最大图书馆联合目录，SRU，免认证）
+- name: kaggle
+  tier: T1
+  type: http
+  coverage:
+  - dataset
+  - ml
+  - data
+  - kaggle
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Kaggle 数据集搜索（免认证，含许可证/大小/版本/URL 结构化元数据）
+- name: keenable
+  tier: T1
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Keenable 通用网页搜索（ranked results，含 published_at，按 credits 计费）
+- name: keenable_free
+  tier: T1
+  type: keenable_free
+  coverage:
+  - general
+  - english
+  - chinese
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: Keenable 官方免 key 匿名通道（通用网页搜索，无需注册）
+- name: know_your_meme
+  tier: T1
+  type: html
+  coverage:
+  - english
+  - meme
+  - culture
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Know Your Meme（英文 meme 词条溯源，HTML 解析）
+- name: kor_law
+  tier: T1
+  type: kor_law
+  coverage:
+  - legal
+  - korean
+  - case
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 韩国国家法令信息中心判例全文检索（官方公开 demo 账号，韩文 XML）
+- name: lefigaro
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - france
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 费加罗报（Le Figaro，法国主流日报，免 key）
+- name: lieu
+  tier: T1
+  type: lieu
+  coverage:
+  - web
+  - indie
+  - webring
+  - english
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: webring 专用搜索（只索引加入 webring 的小众站点，HTML 解析）
+- name: listenbrainz
+  tier: T1
+  type: listenbrainz
+  coverage:
+  - media
+  - music
+  - statistics
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 音乐收听趋势榜（ListenBrainz，免认证）
+- name: local_arxiv
+  tier: T2
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: arXiv本地（http）
+- name: local_baidu
+  tier: T2
+  type: html
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: 百度本地（html）
+- name: local_bing
+  tier: T2
+  type: html
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Bing本地（html）
+- name: local_bing_news
+  tier: T2
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: disabled
+  recommended: true
+  explicit_only: false
+  desc: Bing News本地（http）
+- name: local_crossref
+  tier: T2
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Crossref本地（http）
+- name: local_github
+  tier: T2
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: GitHub本地（http）
+- name: local_gitlab
+  tier: T2
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: GitLab本地（http）
+- name: local_goodreads
+  tier: T2
+  type: html
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: disabled
+  recommended: true
+  explicit_only: false
+  desc: Goodreads本地（html）
+- name: local_google_news
+  tier: T2
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Google News本地（http）
+- name: local_imdb
+  tier: T2
+  type: imdb
+  coverage:
+  - film
+  - movie
+  - tv
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: IMDb suggestion API（local-search 垂直别名，与 imdb 同源）
+- name: local_npm
+  tier: T2
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: NPM本地（http）
+- name: local_openstreetmap
+  tier: T2
+  type: http
+  coverage:
+  - geo
+  - places
+  - map
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Nominatim 地理编码/地点搜索（OSM，免认证，须带 User-Agent）
+- name: local_pubmed
+  tier: T2
+  type: pubmed
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: PubMed本地（pubmed）
+- name: local_search
+  tier: T2
+  type: cli
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Local Search 聚合
+- name: local_seek
+  tier: T2
+  type: cli
+  coverage:
+  - local
+  - file
+  - code
+  latency_ms: 300
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: true
+  desc: 本机技能与文件检索（seek.py，rg/fd/Spotlight，毫秒级免网络）
+- name: local_semantic_scholar
+  tier: T2
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Semantic Scholar本地（http）
+- name: local_sogou
+  tier: T2
+  type: html
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 搜狗本地（html）
+- name: local_stackoverflow
+  tier: T2
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: StackOverflow本地（http）
+- name: local_wikipedia
+  tier: T2
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Wikipedia本地（http）
+- name: local_wikiquote
+  tier: T2
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Wikiquote本地（http）
+- name: local_wiktionary
+  tier: T2
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Wiktionary本地（http）
+- name: local_yandex
+  tier: T2
+  type: cli
+  coverage:
+  - web
+  - general
+  - multilingual
+  - japanese
+  - korean
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: true
+  desc: Yandex 本地通道（local-search 实测最稳后端，多语言兜底）
+- name: marginalia
+  tier: T1
+  type: marginalia
+  coverage:
+  - web
+  - longtail
+  - indie
+  - english
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Marginalia 独立爬虫索引（非大厂代理，专挖长尾非商业页面；old-search 两步 sst 流程）
+- name: matichon
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - thailand
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 泰国民族报（Matichon，泰国主流日报，免 key）
+- name: maven
+  tier: T1
+  type: http
+  coverage:
+  - code
+  - java
+  - package
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Maven Central 包搜索（Java/JVM，官方权威，含最新版本/版本数/发布时间）
+- name: mdn
+  tier: T1
+  type: http
+  coverage:
+  - docs
+  - web
+  - javascript
+  - css
+  - html
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: MDN Web Docs 搜索（en/官方 API，免认证）
+- name: met_museum
+  tier: T1
+  type: met_museum
+  coverage:
+  - art
+  - museum
+  - culture
+  - media
+  - image
+  latency_ms: 3000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: Met Museum 藏品库（艺术/博物馆藏品，两跳搜索，免认证；公版件带高清直链与许可）
+- name: metaso
+  tier: T1
+  type: http
+  coverage:
+  - chinese
+  - general
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 秘塔搜索 API（中文 AI 搜索）
+- name: metaso_doc
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - paper
+  - document
+  - chinese
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: 秘塔文档（原文）（http）
+- name: metaso_image
+  tier: T1
+  type: http
+  coverage:
+  - image
+  - media
+  - web
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: 秘塔搜索（图片）（http）
+- name: metaso_podcast
+  tier: T1
+  type: http
+  coverage:
+  - media
+  - culture
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: 秘塔搜索（播客）（http）
+- name: metaso_scholar
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - paper
+  - chinese
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: 秘塔学术（题录）（http）
+- name: metaso_video
+  tier: T1
+  type: http
+  coverage:
+  - tv
+  - media
+  - entertainment
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: 秘塔搜索（视频）（http）
+- name: models_dev
+  tier: T1
+  type: models_dev
+  coverage:
+  - ml
+  - model
+  - pricing
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: models.dev AI 模型目录（全量缓存，免认证）
+- name: moegirl
+  tier: T1
+  type: html
+  coverage:
+  - chinese
+  - anime
+  - acg
+  - wiki
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 萌娘百科（zh.moegirl.org.cn 搜索页 HTML 解析，免认证）
+- name: mojeek
+  tier: T1
+  type: http
+  coverage:
+  - web
+  - privacy
+  - indie
+  - english
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Mojeek 独立爬虫搜索引擎（百亿级自主索引，非大厂代理，零用户画像）
+- name: musicbrainz
+  tier: T1
+  type: http
+  coverage:
+  - music
+  - artist
+  - metadata
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: MusicBrainz 音乐人/作品元数据（免认证，限速 1rps）
+- name: mwmbl
+  tier: T1
+  type: http
+  coverage:
+  - web
+  - longtail
+  - indie
+  - english
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Mwmbl 开源非盈利独立搜索引擎（免 key，JSON API，零用户画像，标题与摘要结构化返回）
+- name: nasa_cmr
+  tier: T1
+  type: http
+  coverage:
+  - science
+  - earth
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: NASA CMR 地球科学数据目录（MODIS/遥感，cmr.earthdata.nasa.gov 免认证）
+- name: nasa_images
+  tier: T1
+  type: http
+  coverage:
+  - earth_science
+  - media
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: NASA 图像视频库（公开航天影像，免认证，匿名约 30 req/h）
+- name: nbs_stats
+  tier: T1
+  type: nbs_stats
+  coverage:
+  - finance
+  - macro
+  latency_ms: 2000
+  cost: free
+  status: disabled
+  recommended: true
+  explicit_only: false
+  desc: 国家统计局分省/全国宏观数据（GDP/CPI/PPI/人口，data.stats.gov.cn V2 免认证）
+- name: ncpssd
+  tier: T1
+  type: cli
+  coverage:
+  - chinese
+  - academic
+  - paper
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: NCPSSD（国家哲学社会科学文献中心）——中文期刊/集刊题录与摘要，命中常带全文 PDF 直链（表单 POST 经 CLI 桥）
+- name: ndl
+  tier: T1
+  type: ndl
+  coverage:
+  - books
+  - japanese
+  - bibliography
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 全日本出版物书目总汇（OpenSearch RSS）
+- name: netease_music
+  tier: T1
+  type: http
+  coverage:
+  - media
+  - chinese
+  latency_ms: 1000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 网易云音乐搜索（中文曲库/专辑元数据，免认证，非官方接口）
+- name: nhk
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - japan
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: NHK 新闻（日本放送协会主要新闻，公共广播一手源，免 key）
+- name: nhtsa_vpic
+  tier: T1
+  type: nhtsa_vpic
+  coverage:
+  - shopping
+  - vehicle
+  - reference
+  - official
+  latency_ms: 2500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 车辆厂商/车型本体（NHTSA vPIC，免认证）
+- name: noaa_swpc
+  tier: T1
+  type: noaa_swpc
+  coverage:
+  - astronomy
+  - space
+  - science
+  - official
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 空间天气（NOAA SWPC，Kp 指数/太阳活动区，官方免认证）
+- name: npm
+  tier: T1
+  type: http
+  coverage:
+  - code
+  - javascript
+  - package
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 'npm 包搜索（registry.npmjs.org，免认证，支持 keywords: 等限定符按生态收窄）'
+- name: nuget
+  tier: T1
+  type: http
+  coverage:
+  - code
+  - dotnet
+  - package
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: NuGet 包搜索（.NET，官方权威，含版本/下载量/认证/漏洞标记）
+- name: nvd
+  tier: T1
+  type: http
+  coverage:
+  - security
+  - tech
+  latency_ms: 2500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: NVD 漏洞情报（CVE 编号/描述/CVSS 与 KEV 标记；免认证 5 请求/30 秒）
+- name: obis
+  tier: T1
+  type: obis
+  coverage:
+  - species
+  - marine
+  - science
+  - open_data
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: OBIS 海洋物种观测（IOC/UNESCO 官方，2.29 亿条记录，免认证）
+- name: octen
+  tier: T1
+  type: octen
+  coverage:
+  - general
+  - tech
+  - semantic
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Octen AI 高速搜索（需 OCTEN_API_KEY；支持 broad-search）
+- name: open_library
+  tier: T1
+  type: open_library
+  coverage:
+  - book
+  - library
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Open Library 图书搜索（免认证）
+- name: open_meteo
+  tier: T1
+  type: open_meteo
+  coverage:
+  - weather
+  - global
+  - forecast
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 全球天气（城市/地名 → 坐标 → 当前天气，免认证）
+- name: openaire
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - science
+  - paper
+  latency_ms: 3000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: OpenAIRE 学术聚合（EU 资助项目维度，免 key，DOI 入口）
+- name: openalex
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: OpenAlex 2.5亿+论文索引（免认证，礼貌池 mailto）
+- name: opencitations
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - citation
+  latency_ms: 800
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: true
+  desc: OpenCitations 引用计数（DOI → 被引次数，免 key 无限次；查询词传裸 DOI）
+- name: opencorporates
+  tier: T1
+  type: opencorporates
+  coverage:
+  - company
+  - business
+  - legal
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: OpenCorporates 全球公司注册（尽调/反欺诈，需 api_token）
+- name: openf1
+  tier: T1
+  type: openf1
+  coverage:
+  - sports
+  - racing
+  - realtime
+  latency_ms: 2500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: F1 车手/车队/赛程数据（OpenF1，免认证，社区维护）
+- name: openfda
+  tier: T1
+  type: openfda
+  coverage:
+  - medical
+  - drug
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: openFDA 药品标签（免认证）
+- name: openfoodfacts
+  tier: T1
+  type: http
+  coverage:
+  - food
+  - nutrition
+  - product
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: Open Food Facts 全球食品成分库（200+ 国家，多语言，免 key）
+- name: openligadb
+  tier: T1
+  type: openligadb
+  coverage:
+  - sports
+  - football
+  - realtime
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 德甲/欧洲联赛赛程比分（OpenLigaDB，免认证）
+- name: openreview
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  latency_ms: 3000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: OpenReview 顶会论文（含评审可见性与 PDF，AI/ML 研究为主）
+- name: opensky
+  tier: T1
+  type: opensky
+  coverage:
+  - flight
+  - realtime
+  - aviation
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 全球 ADS-B 实时航班（主要都会区 bbox，免 key）
+- name: openstd
+  tier: T1
+  type: openstd
+  coverage:
+  - standards
+  - tech
+  - chinese
+  latency_ms: 2500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 国家标准全文公开系统（GB 全文预览入口，HTML 解析，免认证）
+- name: openverse
+  tier: T1
+  type: http
+  coverage:
+  - image
+  - media
+  - cc
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Openverse 开放版权图库（免认证，CC 素材）
+- name: parallel
+  tier: T1
+  type: parallel
+  coverage:
+  - general
+  - chinese
+  - english
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Parallel AI 批量搜索（excerpts 长文摘录，结果自带正文省 fetch）
+- name: parallel_free
+  tier: T1
+  type: parallel_free
+  coverage:
+  - general
+  - chinese
+  - english
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Parallel 免费搜索（官方免费 MCP 端点 search.parallel.ai，无账号无 key；excerpts 长文摘录省 fetch；与按量计费的
+    parallel REST 通道分立，作其缺位时的补位）
+- name: people_daily
+  tier: T1
+  type: people_daily
+  coverage:
+  - news
+  - chinese
+  - realtime
+  latency_ms: 1200
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 人民网搜索（权威综合中文新闻，官方接口，免认证）
+- name: pixiv
+  tier: T1
+  type: pixiv
+  coverage:
+  - image
+  - media
+  - web
+  latency_ms: 2500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: true
+  desc: Pixiv 作品检索：关键词搜图或按画师（user:<id>、画师主页链接、画师:<名>）列作品；结果标通道，默认过滤 R-18
+- name: polymarket
+  tier: T1
+  type: http
+  coverage:
+  - prediction
+  - social
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Polymarket 预测市场搜索（叙事源，非事实真值）
+- name: pubchem
+  tier: T1
+  type: pubchem
+  coverage:
+  - science
+  - chem
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 化学/药学化合物检索（分子式/分子量/IUPAC/SMILES，pubchem.ncbi.nlm.nih.gov 免认证）
+- name: pypi
+  tier: T1
+  type: pypi
+  coverage:
+  - code
+  - python
+  - package
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: PyPI 包查询（/pypi/{name}/json 精确解析，免认证）
+- name: qiita
+  tier: T1
+  type: http
+  coverage:
+  - tech
+  - japanese
+  - community
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Qiita 日本最大技术社区（匿名 60 req/h）
+- name: qq_music
+  tier: T1
+  type: qq_music
+  coverage:
+  - music
+  - song
+  - chinese
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: QQ 音乐曲库搜索（歌手/歌曲/专辑）
+- name: qwant
+  tier: T1
+  type: qwant
+  coverage:
+  - english
+  - general
+  latency_ms: 2000
+  cost: free
+  status: disabled
+  recommended: true
+  explicit_only: true
+  desc: Qwant（qwant.com HTML 解析），欧盟 GDPR 合规通用网页
+- name: qweather
+  tier: T1
+  type: qweather
+  coverage:
+  - weather
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 和风天气实时天气（需 QWEATHER_KEY）
+- name: rcsb_pdb
+  tier: T1
+  type: rcsb_pdb
+  coverage:
+  - science
+  - biology
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: RCSB PDB 蛋白质结构检索（search.rcsb.org v2 免认证）
+- name: realtime_index
+  tier: T1
+  type: cli
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: disabled
+  recommended: true
+  explicit_only: false
+  desc: 实时索引数据源（免 Key，结构化输出，带发布时间维度与时间窗过滤）
+- name: reddit
+  tier: T1
+  type: cli
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Reddit
+- name: redskill
+  tier: T1
+  type: cli
+  coverage:
+  - chinese
+  - skill
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 小红书 REDSkill 排行榜与全量技能检索（47650 技能，data.json 本地缓存，免认证）
+- name: repology
+  tier: T1
+  type: repology
+  coverage:
+  - code
+  - package
+  - linux
+  - dev
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Repology 全网 Linux/UNIX 跨包管理器生态版本真相（Debian/Arch/Nix/Homebrew 等，免认证）
+- name: rfc_editor
+  tier: T1
+  type: rfc_editor
+  coverage:
+  - tech
+  - standards
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: RFC/互联网标准文档检索（datatracker.ietf.org 免认证）
+- name: ror
+  tier: T1
+  type: ror
+  coverage:
+  - org_entity
+  - academic
+  - reference
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: ROR 研究机构标识（含域名映射，免认证）
+- name: satnogs
+  tier: T1
+  type: satnogs
+  coverage:
+  - astronomy
+  - space
+  - satellites
+  - open_data
+  latency_ms: 2500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 卫星目录（SatNOGS DB，NORAD ID 精确查/默认列表，免认证；上游搜索过滤已失效）
+- name: saucenao
+  tier: T1
+  type: saucenao
+  coverage:
+  - image
+  - reverse_image
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: SauceNAO 二次元图源反查（query 为图片 URL 或本地图片路径，免费 key 150 次/日，给相似度与 Pixiv 等出处页）
+- name: sciverse
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - paper
+  - english
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: Sciverse（题录）（http）
+- name: searchmysite
+  tier: T1
+  type: searchmysite
+  coverage:
+  - web
+  - indie
+  - blog
+  - english
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 人工审核准入的个人独立站索引（非商业博客，HTML 解析）
+- name: searxng
+  tier: T1
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: disabled
+  recommended: true
+  explicit_only: false
+  desc: SearXNG 直连（已废弃，由 T3 替代）
+- name: sec_companyfacts
+  tier: T1
+  type: sec_companyfacts
+  coverage:
+  - finance
+  - us_stock
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: SEC XBRL companyfacts 年度结构化财务（营收/净利/资产/EPS，免认证）
+- name: sec_edgar
+  tier: T1
+  type: http
+  coverage:
+  - finance
+  - us_stock
+  - legal
+  - company
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: SEC EDGAR 美国证监会官方全文检索（公司/财报/申报，免认证）
+- name: seeking_alpha
+  tier: T1
+  type: seeking_alpha
+  coverage:
+  - finance
+  - us_stock
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Seeking Alpha 美股分析（HTML，反爬较强）
+- name: seltz
+  tier: T1
+  type: seltz
+  coverage:
+  - news
+  - english
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Seltz 搜索（英文主力，news 语料；结果带发布日期与正文摘录；中文无召回价值已用 langs 排除）
+- name: semantic_scholar
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Semantic Scholar API（备选）
+- name: shenma
+  tier: T1
+  type: shenma
+  coverage:
+  - chinese
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 神马搜索（m.sm.cn/s 移动端 HTML 解析），中文通用网页
+- name: shfe
+  tier: T1
+  type: shfe
+  coverage:
+  - finance
+  - futures
+  - commodity
+  - china
+  - official
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 上海期货交易所日行情（铜/铝/黄金/螺纹钢等品种，官方一手，免 key）
+- name: sina_quote
+  tier: T1
+  type: sina_quote
+  coverage:
+  - stock
+  - finance
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 新浪实时行情快照（现价/涨跌/成交量，免认证）
+- name: skills_sh
+  tier: T1
+  type: skills_sh
+  coverage:
+  - skill
+  - developer
+  - tech
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: skills.sh 技能目录（57k+，免认证，Vercel 官方安装遥测）
+- name: skillsmp
+  tier: T1
+  type: skillsmp
+  coverage:
+  - skill
+  - developer
+  - tech
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: SkillsMP Agent 技能聚合目录（200万+ 开源技能独立索引，免认证，带仓库星数与可安装的 GitHub 目录）
+- name: so
+  tier: T1
+  type: so
+  coverage:
+  - chinese
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 360 搜索（so.com/s HTML 解析），中文通用网页
+- name: sogou_weixin_browser
+  tier: T1
+  type: cli
+  coverage:
+  - chinese
+  - wechat
+  - article
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 搜狗微信搜索·浏览器兜底通道（ego-browser 真实会话，HTTP 车道被反爬时保底；中间链会话内解析为微信真实链接）
+- name: soilgrids
+  tier: T1
+  type: soilgrids
+  coverage:
+  - earth_science
+  - agriculture
+  - environment
+  latency_ms: 4000
+  cost: free
+  status: disabled
+  recommended: false
+  explicit_only: false
+  desc: 全球土壤属性（ISRIC SoilGrids，逐点栅格，免认证）
+- name: sspai
+  tier: T1
+  type: http
+  coverage:
+  - chinese
+  - tech
+  - article
+  latency_ms: 1000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 少数派搜索（中文效率/数码/软件文章，免认证）
+- name: stackexchange
+  tier: T1
+  type: http
+  coverage:
+  - english
+  - tech
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: StackExchange API 族（StackOverflow 等 180+ 问答站结构化检索，匿名 300/天/IP，免费 key 可提额 10000/天）
+- name: stackoverflow
+  tier: T1
+  type: stackoverflow
+  coverage:
+  - code
+  - programming
+  - qa
+  - english
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Stack Overflow（Stack Exchange API，编程问答）
+- name: std_samr
+  tier: T1
+  type: std_samr
+  coverage:
+  - standards
+  - tech
+  - chinese
+  latency_ms: 1500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 全国标准信息公共服务平台（国标检索，标准号/状态/日期，免认证）
+- name: steam
+  tier: T1
+  type: http
+  coverage:
+  - game
+  - media
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Steam 商店搜索（免认证）
+- name: tass
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - russia
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 塔斯社（俄罗斯国家通讯社（ТАСС），俄语一手新闻，免 key）
+- name: tatoeba
+  tier: T1
+  type: http
+  coverage:
+  - language
+  - translation
+  - sentence
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 400+ 语言对真实句子语料（翻译/语言学习）
+- name: tavily
+  tier: T1
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Tavily AI 搜索 API（免费层 1000 次/月，超出按美元计费；与 exa 同为 api 档）
+- name: tavily_free
+  tier: T1
+  type: http
+  coverage:
+  - general
+  - english
+  - chinese
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: Tavily 官方免 key 匿名通道（通用网页搜索，无需注册）
+- name: tencent_kline
+  tier: T1
+  type: tencent_kline
+  coverage:
+  - stock
+  - kline
+  - chinese
+  - chart
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 腾讯财经前复权日 K 线（A股+港股+美股）
+- name: tencent_quote
+  tier: T1
+  type: tencent_quote
+  coverage:
+  - finance
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 腾讯实时行情（qt.gtimg.cn 免认证，含换手率/市盈率/五档）
+- name: thesportsdb
+  tier: T1
+  type: thesportsdb
+  coverage:
+  - sports
+  - athlete
+  - team
+  - league
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: TheSportsDB 球员/球队/赛事（公开 test key，免认证）
+- name: ths_hot
+  tier: T1
+  type: ths_hot
+  coverage:
+  - chinese
+  - stock
+  - hot
+  - theme
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 同花顺热点（当日强势股+题材归因，独家能力）
+- name: tinyfish
+  tier: T1
+  type: http
+  coverage:
+  - general
+  - english
+  - chinese
+  - news
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: TinyFish 实时网页搜索（免费，浏览器渲染，结果含原文摘要，X-API-Key 认证）
+- name: tinyfish_news
+  tier: T1
+  type: http
+  coverage:
+  - news
+  - english
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: TinyFish 实时新闻搜索（免费，含 publisher 与发布日期）
+- name: tinyfish_paper
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - english
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: TinyFish 学术论文搜索（免费，含作者/发表处/年份/被引/pdf_url）
+- name: tle_mirror
+  tier: T1
+  type: tle_mirror
+  coverage:
+  - astronomy
+  - space
+  - satellites
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: TLE 轨道根数镜像（第三方，Celestrak 不可达时替代，免认证）
+- name: toutiao_hot
+  tier: T1
+  type: toutiao_hot
+  coverage:
+  - chinese
+  - hot
+  - trending
+  - realtime
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 今日头条热榜（hot-board JSON，免认证）
+- name: tracemoe
+  tier: T1
+  type: tracemoe
+  coverage:
+  - image
+  - reverse_image
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: true
+  desc: trace.moe 动画场景识别（query 为图片 URL，免 key，给作品名+集数+时间点，按出口 IP 限频）
+- name: train
+  tier: T1
+  type: cli
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 火车余票/中转/经停查询（免 Key：12306 官方接口）
+- name: tvmaze
+  tier: T1
+  type: http
+  coverage:
+  - film
+  - tv
+  - media
+  - entertainment
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 电视剧元数据（TVMaze，免认证，含首播/语言/评分）
+- name: twitter
+  tier: T1
+  type: cli
+  coverage:
+  - social
+  - english
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: X/Twitter 关键词搜索（ego-browser 通道，原生布尔语法 from:/-is:retweet/lang:）
+- name: twitter_syndication
+  tier: T1
+  type: twitter_syndication
+  coverage:
+  - social
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: true
+  desc: X/Twitter 单条推文（syndication 通道，免登录零 key，含正文/作者/时间/媒体计数）
+- name: uapi
+  tier: T1
+  type: http
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: UAPI 聚合搜索
+- name: un_comtrade
+  tier: T1
+  type: un_comtrade
+  coverage:
+  - macro
+  - finance
+  latency_ms: 4000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: UN Comtrade 双边贸易（国家+HS 码+年份+流向；preview 免 key）
+- name: uniprot
+  tier: T1
+  type: uniprot
+  coverage:
+  - science
+  - biology
+  - bio
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: UniProt 蛋白质/基因组检索（rest.uniprot.org 免认证）
+- name: unpaywall
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - open_access
+  latency_ms: 900
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: true
+  desc: Unpaywall 开放获取定位（DOI → 是否有合法免费全文及链接；需 ARGO_UNPAYWALL_EMAIL）
+- name: urban_dictionary
+  tier: T1
+  type: http
+  coverage:
+  - english
+  - slang
+  - meme
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Urban Dictionary（英文俚语定义与例句，官方 API）
+- name: usda
+  tier: T1
+  type: http
+  coverage:
+  - food
+  - nutrition
+  - health
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 美国农业部食品营养成分（官方 DEMO_KEY）
+- name: usgs
+  tier: T1
+  type: usgs
+  coverage:
+  - science
+  - geo
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: USGS 地震目录（最近 30 天 M2.5+，earthquake.usgs.gov 免认证）
+- name: v2ex
+  tier: T1
+  type: v2ex
+  coverage:
+  - chinese
+  - tech
+  - community
+  - discussion
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: V2EX（中文技术社区，官方 API 候选池 + 本地相关性过滤）
+- name: vam
+  tier: T1
+  type: vam
+  coverage:
+  - art
+  - museum
+  - culture
+  - image
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: V&A 博物馆馆藏（免 key，装饰艺术/设计，IIIF 直链 800px；images_exist=1 只回有图件）
+- name: vnpress
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - vietnam
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: VnExpress（越南最大网络新闻，免 key）
+- name: wallhaven
+  tier: T1
+  type: http
+  coverage:
+  - image
+  - media
+  - web
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Wallhaven 壁纸图库（免 key，匿名仅 SFW，45 req/min；原图直链+分辨率，无许可标注）
+- name: wallstreetcn
+  tier: T1
+  type: wallstreetcn
+  coverage:
+  - chinese
+  - finance
+  - news
+  - telegraph
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 华尔街见闻快讯（lives 直播流 JSON，免认证；全量流 + 本地关键词过滤）
+- name: wayback_cdx
+  tier: T1
+  type: wayback_cdx
+  coverage:
+  - archive
+  - web
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Wayback Machine CDX 历史快照检索（web.archive.org 免认证）
+- name: weather
+  tier: T1
+  type: cli
+  coverage:
+  - weather
+  - forecast
+  - geo
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 天气查询（免 Key：wttr.in 主用 + Open-Meteo 兜底，当前+未来预报）
+- name: weather_cn
+  tier: T1
+  type: weather_cn
+  coverage:
+  - chinese
+  - weather
+  - realtime
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 中国天气网城市实况（城市联想取 cityid → sk JSON，免认证，两步）
+- name: wechat_sogou
+  tier: T1
+  type: wechat_sogou
+  coverage:
+  - chinese
+  - wechat
+  - article
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 搜狗微信搜索引擎（公众号文章，免登录，中间链自动解析为微信真实链接可引用；fast 跳过解析）
+- name: weibo
+  tier: T1
+  type: cli
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 微博
+- name: weibo_hot
+  tier: T1
+  type: weibo_hot
+  coverage:
+  - chinese
+  - hot
+  - trending
+  - realtime
+  - social
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 微博热搜榜（side/hotSearch JSON，免登录，需 Referer）
+- name: wenshu
+  tier: T1
+  type: wenshu
+  coverage:
+  - legal
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 中国裁判文书网（反爬较强，尽力而为）
+- name: weread
+  tier: T1
+  type: weread
+  coverage:
+  - book
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 微信读书图书搜索（中文书目/评分/在读，需 WEREAD_API_KEY）
+- name: who_don
+  tier: T1
+  type: who_don
+  coverage:
+  - medical
+  - health
+  - news
+  - official
+  latency_ms: 2500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: WHO 疫情暴发通报（世卫官方公共卫生事件，免认证 OData）
+- name: who_gho
+  tier: T1
+  type: who_gho
+  coverage:
+  - medical
+  - health
+  - statistics
+  - official
+  latency_ms: 2500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: WHO GHO 全球卫生指标（世卫官方统计目录，免认证）
+- name: wiby
+  tier: T1
+  type: wiby
+  coverage:
+  - web
+  - longtail
+  - classic
+  - english
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Wiby 老式手工网页索引（专收非商业化页面，JSON 免认证）
+- name: wikidata
+  tier: T1
+  type: http
+  coverage:
+  - entity
+  - knowledge
+  - wiki
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Wikidata 实体搜索（wbsearchentities，免认证，限流较严）
+- name: wikimedia_commons
+  tier: T1
+  type: wikimedia_commons
+  coverage:
+  - image
+  - media
+  - cc
+  - reference
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Wikimedia Commons 通用图库（免 key，CC 素材，原图直链+许可+宽高）
+- name: wikipedia
+  tier: T1
+  type: http
+  coverage:
+  - wiki
+  - factual
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Wikipedia API（T2 替代）
+- name: wikisource
+  tier: T1
+  type: wikisource
+  coverage:
+  - reference
+  - chinese
+  - classic
+  latency_ms: 800
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 维基文库（古文/公版文献全文检索，中文引文溯源，免认证）
+- name: wolframalpha
+  tier: T1
+  type: http
+  coverage:
+  - factual
+  - math
+  latency_ms: 2000
+  cost: free
+  status: disabled
+  recommended: true
+  explicit_only: false
+  desc: WolframAlpha 计算知识引擎
+- name: worldbank
+  tier: T1
+  type: worldbank
+  coverage:
+  - finance
+  - macro
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 世界银行宏观指标（GDP/通胀/失业/人口，api.worldbank.org 免认证）
+- name: worms
+  tier: T1
+  type: worms
+  coverage:
+  - species
+  - marine
+  - science
+  - reference
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: WoRMS 海洋物种权威命名（分类学标准，免认证）
+- name: x_trending
+  tier: T1
+  type: cli
+  coverage:
+  - general
+  - social
+  - trending
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: true
+  desc: X (Twitter) Trending 全球热榜（ego-browser 浏览器通道，带分类与排名；显式调用）
+- name: xiaohongshu
+  tier: T1
+  type: cli
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 小红书
+- name: yahoo_finance
+  tier: T1
+  type: yahoo_finance
+  coverage:
+  - finance
+  - us_stock
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: Yahoo Finance 美股代码解析+实时行情（search/chart 免认证，2026-10-06 接入）
+- name: yna
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - korea
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 韩联社（韩国国家通讯社（연합뉴스），韩半岛一手新闻，免 key）
+- name: ynet
+  tier: T1
+  type: rss_feed
+  coverage:
+  - news
+  - israel
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: Ynet 新闻（以色列最大新闻站，希伯来语一手源，免 key）
+- name: you
+  tier: T1
+  type: you
+  coverage:
+  - general
+  - news
+  - english
+  - chinese
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: You.com 网页+新闻搜索（时效性强，官方一手源，web/news 合并）
+- name: yuanbao
+  tier: T1
+  type: yuanbao
+  coverage:
+  - web
+  - chinese
+  - news
+  - official
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 腾讯元宝搜索（yuanbao）
+- name: zbmath
+  tier: T1
+  type: http
+  coverage:
+  - academic
+  - math
+  - paper
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: true
+  desc: zbMATH Open 数学文献索引（含 MSC 分类号，免 key）
+- name: zdic
+  tier: T1
+  type: zdic
+  coverage:
+  - dictionary
+  - chinese
+  - reference
+  latency_ms: 1500
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 汉典（中文字词典：字义/音韵/字源，HTML 解析，免认证）
+- name: zenodo
+  tier: T1
+  type: http
+  coverage:
+  - dataset
+  - academic
+  - opendata
+  - paper
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: Zenodo 科研数据集搜索（CERN 托管，免认证，DOI 可引用）
+- name: zh_wikipedia
+  tier: T1
+  type: http
+  coverage:
+  - chinese
+  - wiki
+  - factual
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 中文维基百科（MediaWiki API，与 en.wikipedia 同构）
+- name: zhihu
+  tier: T1
+  type: http
+  coverage:
+  - chinese
+  - review
+  - opinion
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 知乎搜索，中文观点/评测
+- name: zhihu_global
+  tier: T1
+  type: zhihu_global
+  coverage:
+  - general
+  - chinese
+  - web
+  latency_ms: 2000
+  cost: api
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 知乎开放平台全网搜索（SearchDB=all 全网索引 + Filter host== 站点限定；需 ZHIHU_ACCESS_SECRET）
+- name: zhihu_hot
+  tier: T1
+  type: http
+  coverage:
+  - chinese
+  - hot
+  - trending
+  - realtime
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 知乎开放平台热榜 hot_list（日配额约 100；需 ZHIHU_ACCESS_SECRET；原 zhihu skill 迁入）
+- name: zhihu_hot_app
+  tier: T1
+  type: http
+  coverage:
+  - chinese
+  - hot
+  - trending
+  - realtime
+  latency_ms: 800
+  cost: free
+  status: ok
+  recommended: false
+  explicit_only: false
+  desc: 知乎热榜匿名通道（App JSON，免密钥；开放平台 hot_list 的免费替代）
+- name: zhihu_user
+  tier: T1
+  type: zhihu_user
+  coverage:
+  - general
+  latency_ms: 2000
+  cost: free
+  status: ok
+  recommended: true
+  explicit_only: false
+  desc: 知乎个人数据（本人创作内容/收藏/关注；Access Secret 直查本人无需 OAuth，user_data 池 10000/天）

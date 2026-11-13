@@ -1,0 +1,39 @@
+# 上海期货交易所（SHFE）日行情（免 key）
+#
+# 补的盲区：**商品期货此前零源**。现有 finance 源覆盖 A/美/港股票、基金、
+# 债券、汇率，唯独没有商品——「铜价」「螺纹钢主力」「黄金期货」这类问题
+# 只能落到网页搜索，拿二手解读。SHFE 是官方一手日行情。
+#
+# 端点语义（2026-10-21 实测）：按交易日全量文件，不支持关键词查询，
+# 所以按「品种」本地过滤（铜/铝/锌/铅/镍/锡/黄金/白银/螺纹钢/热卷/原油等）。
+#   GET /data/tradedata/future/dailydata/kxYYYYMMDD.dat
+#   → o_curinstrument[]：PRODUCTNAME/PRODUCTGROUPID/DELIVERYMONTH/
+#     CLOSEPRICE/SETTLEMENTPRICE/VOLUME/OPENINTEREST
+# 周末与节假日文件不存在，builder 会自动往前找最近一个交易日（最多 12 天）。
+#
+# 验证:
+#   python3 scripts/engine_validate.py --engine shfe --stage health --admit
+#   argo search "沪铜主力" --engine shfe --json
+
+engine_id: shfe
+type: shfe
+enabled: true
+cost_tier: free
+label: 上期所行情
+family: finance_market
+priority: 52
+qps: 2
+period: second
+cost_per_call: 0.0
+cost_unit: free
+recommended: false
+
+timeout: 20
+canary_query: 铜
+desc: "上海期货交易所日行情（铜/铝/黄金/螺纹钢等品种，官方一手，免 key）"
+coverage: [finance, futures, commodity, china, official]
+
+quality_queries:
+  - query: 沪铜主力
+  - query: 螺纹钢 期货
+  - query: 黄金 期货 收盘

@@ -1,0 +1,33 @@
+# 克利夫兰艺术博物馆（CC0 开放图像，免认证）
+# 与 artic/met_museum 互补：CC0 授权可直接取图，含 tombstone 完整著录。
+# 验证:
+#   python3 scripts/engine_validate.py --engine cleveland --stage all --admit --write-doc
+
+engine_id: cleveland
+type: http
+enabled: true
+cost_tier: free
+timeout: 20
+method: GET
+url: "https://openaccess-api.clevelandart.org/api/artworks/"
+query_param: q
+extra_params:
+  has_image: "1"
+format_is_query_param: false
+output_map:
+  items: data
+  item_title: title
+  item_url: url
+  # 拼接模板：原 builder 把 tombstone 与授权一起放进 snippet，单字段映射会丢授权。
+  item_summary_template: "{tombstone} · 授权 {share_license_status}（克利夫兰艺术博物馆）"
+  item_image: images.web.url
+  item_image_license: share_license_status
+canary_query: "monet"
+desc: "克利夫兰艺术博物馆（CC0 开放图像，免认证）"
+coverage: [art, museum, culture, image]
+recommended: false
+latency_ms: 2500
+
+quality_queries:
+  - query: "monet"
+  - query: "armor"

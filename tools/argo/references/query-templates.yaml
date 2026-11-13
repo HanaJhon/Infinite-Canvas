@@ -1,0 +1,118 @@
+# Argo 查询模板注册表（Query Template Registry）
+#
+# 用途：把「命名好的检索模式」沉淀成可复用、可组合、可扩展的数据。
+# 用户不必每次手打长串布尔查询，也不必记住哪套词组合最有效。
+#
+# 调用：argo template <id> [--add 词 ...] [--dry-run] [--list]
+#   例：argo template ai_model_release --add "GPT-5" -n 20
+#       → 展开 query 并把 --add 追加成 AND 项，转发给该模板的 command
+#
+# 字段：
+#   description  一句话说明（--list 显示）
+#   category     分组（--list 按它分组；任意字符串，用户可自定义）
+#   command      目标 argo 子命令，白名单：search | x-search（缺省 search）
+#   query        查询串（原样下推；X 原生语法见文末）
+#   tags         可选，检索/过滤用
+#   note         可选，给维护者/用户的提醒（--list --json 会带出）
+#
+# 扩展（不改本文件）：把同名文件放到 $XDG_CONFIG_HOME/argo/query-templates.yaml
+# （缺省 ~/.config/argo/query-templates.yaml），或用 ARGO_TEMPLATES_FILE 指路径。
+# 用户文件按 id 合并：新增即追加，同名即覆盖；`disabled: true` 可停用随包模板。
+# 这样新增领域（量子计算 / 生物医药 / 加密货币 …）零代码，只加几行 YAML。
+#
+# 随包模板源自宝玉（@dotey）《X AI 资讯检索》方法论，全部针对 X 原生搜索
+# （command: x-search），查询统一带 `-is:retweet`（去转发）与 `lang:`（语言）。
+
+version: 1
+
+templates:
+
+  # ── 模型发布 ────────────────────────────────────────────────────────────
+  ai_model_release:
+    description: 前沿模型发布/正式开放
+    category: AI 模型
+    command: x-search
+    tags: [ai, model, release]
+    query: '(GPT OR Claude OR Gemini OR Llama OR Grok OR Qwen OR DeepSeek OR Mistral) (release OR launch OR announce OR "now available") -is:retweet lang:en'
+
+  ai_new_model:
+    description: 新模型 / 开放权重 / 开源模型
+    category: AI 模型
+    command: x-search
+    tags: [ai, model, open-weights]
+    query: '("new model" OR "open weights" OR "open-source model") AI -is:retweet lang:en'
+
+  # ── 产品与 Agent ────────────────────────────────────────────────────────
+  ai_agent_product:
+    description: AI Agent / MCP / agent skills 发布
+    category: AI 产品
+    command: x-search
+    tags: [ai, agent, mcp]
+    query: '("AI agent" OR "coding agent" OR "agent skills" OR MCP) (launch OR ships OR introducing) -is:retweet lang:en'
+
+  ai_coding_agent:
+    description: 编码 Agent 更新（Cursor / Claude Code / Codex / Devin …）
+    category: AI 产品
+    command: x-search
+    tags: [ai, coding-agent]
+    query: '(Cursor OR "Claude Code" OR Codex OR Antigravity OR Devin) (launch OR update) -is:retweet lang:en'
+
+  # ── 行业大事 ────────────────────────────────────────────────────────────
+  ai_industry_funding:
+    description: 融资 / 并购 / 破产
+    category: AI 行业
+    command: x-search
+    tags: [ai, funding, ma]
+    query: 'AI (acquires OR acquisition OR "raises" OR bankruptcy OR "Series A" OR "Series B") -is:retweet lang:en'
+
+  ai_industry_policy:
+    description: 监管 / 诉讼 / 禁令 / 行政令
+    category: AI 行业
+    command: x-search
+    tags: [ai, policy, regulation]
+    query: 'AI (regulation OR lawsuit OR ban OR "executive order" OR "AI Act") -is:retweet lang:en'
+
+  ai_security:
+    description: 安全 / 漏洞 / 越狱 / 泄露
+    category: AI 行业
+    command: x-search
+    tags: [ai, security]
+    query: 'AI ("safety" OR "security" OR vulnerability OR jailbreak OR leak) -is:retweet lang:en'
+
+  # ── 爆料 ────────────────────────────────────────────────────────────────
+  ai_leak:
+    description: 爆料 / 泄露 / 即将发布
+    category: AI 爆料
+    command: x-search
+    tags: [ai, leak, rumor]
+    query: '(spotted OR leaked OR "coming soon") (GPT OR Claude OR Gemini) -is:retweet lang:en'
+
+  # ── 中文 ────────────────────────────────────────────────────────────────
+  ai_zh:
+    description: 中文 AI 资讯（发布 / 开源 / 上线）
+    category: AI 中文
+    command: x-search
+    tags: [ai, zh]
+    query: '(大模型 OR AI) (发布 OR 开源 OR 上线) lang:zh -is:retweet'
+
+  # ── 自定义方向示例 ──────────────────────────────────────────────────────
+  # 「使用者自己的方向」——按人调整（此处以 AI 语音/视频/媒体工具为例）。
+  # 想加自己的方向：复制本条目改 id 与 query 即可（用户注册表更佳，见文件头）。
+  ai_media_tools:
+    description: 语音/视频/媒体类 AI 工具发布（自定义方向示例）
+    category: 示例（自定义方向）
+    command: x-search
+    tags: [ai, media, tts, example]
+    note: 这是「按使用者方向调整」的样例，替换关键词即可变成你自己的方向。
+    query: '("text to speech" OR TTS OR "video editing" OR "speech to text") AI (release OR open) -is:retweet lang:en'
+
+# ── X 原生搜索语法速查（供改 query 时参考）─────────────────────────────────
+#   去转发         -is:retweet
+#   语言           lang:en / lang:zh
+#   盯人           from:OpenAI  （可 OR：from:OpenAI OR from:AnthropicAI）
+#   热度门         min_faves:100 / min_retweets:50
+#   时间窗         since:2026-10-01 until:2026-10-16
+#   排除回复       -filter:replies
+#   只要媒体       filter:media / filter:images / filter:videos
+#   布尔与分组     空格=AND，OR=或，-词=排除，( ) 分组
+#   示例：from:OpenAI -is:retweet min_faves:50 since:2026-10-01

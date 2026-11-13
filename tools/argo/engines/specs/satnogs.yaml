@@ -1,0 +1,24 @@
+# SatNOGS 卫星目录（免认证）
+# 补 astronomy 域的卫星目录维度（NORAD ID/发射信息），与 tle_mirror 配合
+# 组成「目录 + 轨道根数」。Celestrak 在本机不可达，SatNOGS 提供稳定替代。
+# 验证:
+#   python3 scripts/engine_validate.py --engine satnogs --stage all --admit --write-doc
+
+engine_id: satnogs
+type: satnogs
+enabled: true
+cost_tier: free
+timeout: 20
+canary_query: "ISS"
+# 词面门豁免：上游 search/name 过滤已失效（实测返回固定列表），查询只有
+# NORAD ID（纯数字）才被引擎采纳为精确过滤，其余查询进默认候选池——
+# 按设计忽略查询词的源，词面判据问错了问题（engine_validate declared_off 口径）
+relevance_check: false
+desc: "卫星目录（SatNOGS DB，NORAD ID 精确查/默认列表，免认证；上游搜索过滤已失效）"
+coverage: [astronomy, space, satellites, open_data]
+recommended: false
+latency_ms: 2500
+
+quality_queries:
+  - query: "ISS"
+  - query: "starlink"

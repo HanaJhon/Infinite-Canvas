@@ -1,0 +1,41 @@
+# 中国外汇交易中心（CFETS）人民币中间价（免 key）
+#
+# 补的盲区：**在岸人民币官方价**。现有汇率源都是离岸/聚合口径：
+# frankfurter 是 ECB 参考价、fx_rate 是 open.er-api 聚合价，都不是
+# 人民银行授权的中间价。CFETS 是每个交易日 9:15 公布的官方中间价，
+# 也是跨境结算与合同计价的口径来源。
+#
+# 端点语义（2026-10-21 实测）：按货币对 + 日期区间查历史，不支持自由文本。
+#   GET /ags/ms/cm-u-bk-ccpr/CcprHisNew?currency=USD/CNY&startDate=…&endDate=…
+#   → records[].date + values[]（values[0] 即该货币对中间价）
+# 币种覆盖 25 个（USD/EUR/100JPY/HKD/GBP/AUD/NZD/SGD/CHF/CAD/CNY-MOP…
+# CNY-MYR/RUB/ZAR/KRW/AED/SAR/HUF/PLN/DKK/SEK/NOK/TRY/MXN/THB）。
+# builder 负责把「美元」「日元」「USD/CNY」这类查询词解析成货币对；
+# 只说「人民币中间价」时按美元对（市场最常用口径）。
+#
+# 验证:
+#   python3 scripts/engine_validate.py --engine cfets --stage health --admit
+#   argo search "美元 人民币 中间价" --engine cfets --json
+
+engine_id: cfets
+type: cfets
+enabled: true
+cost_tier: free
+label: 人民币中间价
+family: finance_macro
+priority: 51
+qps: 2
+period: second
+cost_per_call: 0.0
+cost_unit: free
+recommended: false
+
+timeout: 15
+canary_query: 美元 人民币 中间价
+desc: "中国外汇交易中心人民币中间价（25 个币种，官方授权口径，免 key）"
+coverage: [finance, macro, china, official, realtime]
+
+quality_queries:
+  - query: 美元 人民币 中间价
+  - query: 日元 人民币 中间价
+  - query: CNY HKD mid rate

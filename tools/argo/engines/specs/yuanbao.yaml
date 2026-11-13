@@ -1,0 +1,93 @@
+# 腾讯元宝搜索（Tencent WSA SearchPro，需 key）——默认开，无 key 时路由自动跳过
+#
+# 它是什么：腾讯云「联网搜索」的元宝口径（POST api.wsa.cloud.tencent.com/SearchPro）。
+# 中文全网检索，返回**权威源占比很高**：实测「三星堆的由来」10 条里 8 条来自
+# 人民日报 / 新华网 / 国家文物局 / 住建部 / 国家民委 / 中国日报 / 中新网 /
+# 中国经济网，另 2 条为环球网与腾讯新闻。这与 bocha/byted 的「门户+自媒体」
+# 构成互补——同一个查询上，它更偏一手/官方口径。
+#
+# 返回字段（实测）：passage（摘要 ~800 字）、content（更长正文 ~2000 字）、
+# score（相关度 0.55-0.65 区间）、date（`YYYY/MM/DD HH:MM:SS`，东八区）、
+# title、url、site（站点中文名，如「人民日报」）、favicon、pics。
+# 搜索层只取 passage 当摘要，正文按需走 fetch/verify 链（与 DeepSeek 引擎同口径）。
+#
+# 为什么是独立 builder 而不是 type: http（四条声明式表达不了的事实）：
+#   1. Pages 是 **JSON 字符串数组**，要二次解析
+#   2. 错误全部走 HTTP 200 + Response.Error（鉴权/欠费/限流都是），
+#      声明式会把它当「0 结果」
+#   3. date 是斜杠格式，不是 argo 的 ISO 约定
+#   4. Cnt 只接受 10/20/30/50，传别的值回 "illegal Cnt"
+# 详见 scripts/engines_builders_batch15.py 的模块 docstring。
+#
+# 成本口径：**未知**。官方文档未公布单价，只有 ResourceUnavailable「请检查账号
+# 是否欠费」这一条侧面说明它按量计费。故 cost_per_call 记 0.0（预算层因此不会
+# 扣减），并用 explicit_only 把它挡在自动路由之外——在价格与额度未知之前，
+# 不让它进任何域 combo，避免「自动花钱却算不出花了多少」。补齐价格后再按
+# scripts/paid_policy.py 的既有做法决定是否放进白名单域的付费对冲位。
+#
+# 启用前提：
+#   1. 配置 key（两个名字都认）：
+#        ARGO_YUANBAO_API_KEY=<key>      # argo 推荐名
+#        TENCENTCLOUD_WSA_APIKEY=<key>   # 腾讯官方名（文档里的环境变量名）
+#      写进 ~/.config/argo/env 即可，只进环境不落仓库。
+#   2. 健康门：python3 scripts/engine_validate.py --engine yuanbao --stage all --admit
+#   3. 显式调用：argo search "三星堆的由来" --engine yuanbao --json --fields agent
+#
+# 实测（2026-10-21 本机）：单次 POST 0.44s，返回 10 条，响应体 ~90KB。
+engine_id: yuanbao
+type: yuanbao
+enabled: true
+# 额度是**按次**的（默认 2000/月），不是按钱的——用 limit + period 的计数档位，
+# 不用 budget.py 的金额档（金额档要单价，计数档不要；单价官方也没公布）。
+#
+# 「次数」的口径：quota.record_many 的 used 计的是**发出过的调用数（含失败）**，
+# 只有 cost_used 是成功才累加。对硬额度而言这是安全的一侧——本地宁可早停，
+# 不让远端 2000 次的硬上限被撞穿；反过来说，本地显示「已用 100 次」时上游
+# 可能只计了其中成功的那些。本轮不改这个口径（改它要动 record_many 的通用
+# 语义，影响全部引擎）。
+#
+# 额度用完即 is_hard_down（全模式排除，不是仅仅排除路由），到 30 天周期边界
+# 惰性自愈；想提前恢复用 `python3 scripts/quota.py reset yuanbao`。
+#
+# **进自动路由（无 explicit_only）**：2026-10-21 起作为 chinese_general 域的第
+# 2 位对冲位（config.yaml 该域的注释里有实测依据）。之所以敢进，是因为额度是
+# **硬上限 + 自动摘除**：耗尽后 is_hard_down 把它从 combo 里摘掉，组合回落到
+# 此前的 anysearch/zhihu_global 形态——降级是明确的一步，不是静默变窄。
+# 代价是额度按查询量线性消耗（中文通用查询每次 1 次调用），档位见下方 limit。
+cost_tier: api
+method: POST
+url: https://api.wsa.cloud.tencent.com/SearchPro
+timeout: 12
+canary_query: 三星堆的由来
+label: 腾讯元宝搜索
+family: web_general
+priority: 55
+# 上游有 RequestLimitExceeded，但公开文档未给具体 QPS；保守取 2，避免撞限流。
+# 限频与下面的 period 无关：qps 检查走硬编码 60 秒窗口（quota.py:585 的
+# `now - t < 60`），全仓没有限频器读 period。
+qps: 2
+# period 是**额度语义**，今天只影响两处 + 一处展示：
+#   1. 本地额度重置跨度：quota._period_elapsed（month → 30 天，否则 1 天）
+#   2. 远端耗尽冷却窗：quota._PERIOD_SECONDS（month → 30 天；表里查不到的值
+#      ——含 second/minute——落 86400，且「过短一律按 24h 保守处理」）
+#   3. ENGINE_CATALOG 的「频率上限」列展示
+# 本引擎限额是月度，故两处都应为 30 天 = month。
+period: month
+# 月度调用额度。默认按体验额度 2000 次/月；开通更高套餐时改本行 limit
+# （DSH 面板默认值也按 2000 显示，面板写入只覆盖当前环境，不改进本文件）。
+limit: 2000
+# 单价未知（官方未公布超额度后的计价），故不填金额，只由 limit 约束次数。
+cost_per_call: 0.0
+cost_unit: credit
+recommended: false
+
+# key 候选链：任一有值即视为就绪（解析见 engine_env.missing_env_for）
+required_env:
+  - [ARGO_YUANBAO_API_KEY, TENCENTCLOUD_WSA_APIKEY, YUANBAO_API_KEY]
+
+coverage: [web, chinese, news, official]
+
+quality_queries:
+  - query: 三星堆的由来
+  - query: 央行 降准 最新
+  - query: 国家统计局 一季度 GDP

@@ -1,0 +1,46 @@
+engine_id: kaggle
+type: http
+enabled: true
+label: Kaggle Datasets
+cost_tier: free
+family: dataset
+qps: 2
+priority: 46
+period: second
+cost_per_call: 0.0
+cost_unit: free
+coverage:
+- dataset
+- ml
+- data
+- kaggle
+desc: Kaggle 数据集搜索（免认证，含许可证/大小/版本/URL 结构化元数据）
+timeout: 12
+canary_query: "climate"
+quality_queries:
+  - query: "climate"
+    category: "dataset"
+  - query: "machine learning"
+    category: "dataset"
+  - query: "healthcare"
+    category: "dataset"
+method: GET
+url: "https://www.kaggle.com/api/v1/datasets/list"
+query_param: search
+extra_params:
+  page: 1
+output_map:
+  items: .
+  # Kaggle 的 Java 序列化遗留：Nullable 字段是主值，标准 output_map 直接可用。
+  item_title: titleNullable
+  item_url: urlNullable
+  # 拼接模板：原 builder 把 subtitle 与 license/大小一起放进 snippet。
+  # 许可证/大小是数据集的关键元数据，单字段映射会让「含许可证/大小/版本」的
+  # desc 承诺落空，故用模板恢复。
+  item_summary_template: "{subtitleNullable} · 许可 {licenseNameNullable} · {totalBytesNullable} bytes"
+  item_image: thumbnailImageUrlNullable
+format: json
+# format 是解析提示，不是 Kaggle 的查询参数（Kaggle API 会因未知参数 400）。
+format_is_query_param: false
+# 2026-11-10 P1-1 标准化试点：原 type=kaggle + custom builder 改为标准 http。
+# 原 builder 的 license/size 拼接逻辑改用 output_map 拼接模板声明。

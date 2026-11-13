@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""
+mcp_server.py — Argo MCP 服务入口（P2-4 拆分后为聚合薄壳）
+
+原 970 行单文件已拆为三模块，本文件只做聚合与兼容导出：
+  mcp_tools.py      工具 schema 唯一来源（19 个工具；tools/list 默认 CORE 4 个）
+  mcp_handlers.py   路径引导 + 延迟导入 + 结果压缩 + execute_tool + 预热
+  mcp_transport.py  JSON-RPC 分发（handle_rpc）+ stdio 帧协议（run_stdio）
+
+对外行为不变：`python3 mcp_server.py` 启动 stdio 服务，
+`--test` 走本地测试；`from mcp_server import TOOLS/execute_tool/handle_rpc`
+等历史 import 面照常可用。
+
+用法：
+  python3 mcp_server.py                    # 启动 MCP stdio 服务
+  python3 mcp_server.py --test             # 本地测试模式
+  python3 mcp_server.py --call <tool> '<json-args>'
+                                           # CLI 单发：与 stdio 共用 execute_tool
+                                           # （同引擎、同压缩、同守卫），供 DSH
+                                           # 原生工具等免帧协议调用方复用
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess  # noqa: F401  — 兼容面：测试 monkeypatch mcp_server.subprocess.run
+import sys
+
+from mcp_handlers import (
+    _module_cache,
+    _compact_research_result,
+    _compact_search_result,
+    _dumps,
+    _resolve_research_profile,
+    _search_social_platforms,
+    execute_tool,
+)
+from mcp_tools import TOOLS
+from mcp_transport import handle_rpc, run_stdio
+
+__all__ = [
+    "TOOLS",
+    "execute_tool",
+    "handle_rpc",
+    "run_stdio",
+    "_module_cache",
+    "_compact_search_result",
+    "_compact_research_result",
+    "_dumps",
+    "_resolve_research_profile",
+    "_search_social_platforms",
+]
+
+
+def test_mode():
+    """本地测试。"""
+    print("=== Argo MCP 工具测试 ===\n")
+
+    # 测试 search
+    print("--- argo_search 测试（fast模式）---")
+    result = execute_tool("argo_search", {
+        "query": "Python async best practices",
+        "max_results": 3,
+        "depth": "fast",
+        "mode": "fast",
+    })
+    print(result["content"][0]["text"][:500])
+    print()
+
+    # 测试 local search（本地文件）——路径用安装锚点（argo 根目录），
+    # 不写死 ~/.agents/skills 等主机路径（SKILL.md 禁止）。
+    argo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    print("--- argo_local_search 测试 ---")
+    result = execute_tool("argo_local_search", {
+        "query": "数据抓取",
+        "path": argo_root,
+        "max_results": 3,
+    })
+    print(result["content"][0]["text"][:500])
+    print()
+
+    # 测试 clarify
+    print("--- clarify 测试 ---")
+    result = execute_tool("argo_clarify", {"query": "Python 吞苹果 兼容吗"})
+    print(result["content"][0]["text"][:500])
+    print()
+
+    # 测试 research（快速模式）
+    print("--- research 测试（fast模式）---")
+    result = execute_tool("argo_research", {
+        "query": "React Server Components 2025 生产环境案例",
+        "num_sub_queries": 2,
+        "max_results": 3,
+        "depth": "fast",
+        "mode": "fast",
+    })
+    text = result["content"][0]["text"]
+    # 只打印前 500 字符
+    print(text[:500])
+    print()
+
+    # 测试 evidence
+    print("--- evidence 测试 ---")
+    sample_results = json.dumps({
+        "results": [
+            {"title": "Python docs", "url": "https://docs.python.org", "snippet": "Official Python documentation", "source": "wikipedia", "score": 0.9},
+            {"title": "Some blog", "url": "https://random-blog.com/python", "snippet": "Python tutorial", "source": "byted", "score": 0.6},
+        ]
+    })
+    result = execute_tool("argo_evidence", {"query": "Python tutorial", "results_json": sample_results})
+    print(result["content"][0]["text"][:500])
+
+
+def call_mode(tool: str, payload: str) -> int:
+    """CLI 单发（--call <tool> '<json-args>'）。
+
+    与 stdio 服务共用 execute_tool，stdout 只输出结果 JSON（isError 时
+    退出码 1）；不输出任何日志到 stdout，保证调用方解析不被污染。
+    """
+    try:
+        arguments = json.loads(payload) if payload.strip() else {}
+    except json.JSONDecodeError as e:
+        print(_dumps({"error": f"invalid --call payload: {e}"}))
+        return 2
+    if not isinstance(arguments, dict):
+        print(_dumps({"error": "--call payload must be a JSON object"}))
+        return 2
+    result = execute_tool(tool, arguments)
+    print(_dumps(result))
+    # isError 是工具级错误；裸 {"error": {...}} 是协议级错误（如未知工具）。
+    # 两者都必须非零退出，否则调用方（如 DSH 原生工具）把错误当成功渲染。
+    is_error = bool(result.get("isError")) or (
+        isinstance(result.get("error"), dict) and "content" not in result)
+    return 1 if is_error else 0
+
+
+# ── 入口 ──────────────────────────────────────────────────────────────────────
+
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    # Windows GBK 防线（PEP 540）：非 UTF-8 模式直接跑本文件时，重新以
+    # -X utf8 启动自己，保证中文 JSON 读取与 stderr 输出不因控制台编码崩。
+    if not sys.flags.utf8_mode and os.name == "nt":
+        import subprocess as _sp
+        _rc = _sp.run(
+            [sys.executable, "-X", "utf8", __file__, *args],
+            env={**os.environ, "PYTHONUTF8": "1"},
+        ).returncode
+        return _rc
+    # env 文件 → os.environ 同步（只填缺失，不覆盖已有值）：非 mcp_launch.sh
+    # 启动（直跑本文件/裸宿主直连）时密钥仍能到位，读取方零改动
+    try:
+        from engine_env import sync_envfile_to_environ
+        sync_envfile_to_environ()
+    except Exception as e:
+        # 静默 pass 的代价：env 文件同步失败（权限/格式/IO）时，所有需密钥
+        # 的引擎在此长驻进程里静默返回空——正是 engine_env 注释反复警惕的
+        # 「装了没通电」形态。失败不阻断启动，但必须可见。
+        import logging
+        logging.getLogger("unified_search").warning(
+            "env 文件同步失败（%s）：依赖密钥的引擎可能静默返回空——"
+            "请检查 ~/.config/argo/env 的权限与格式", e)
+    # 未知旗标显式报错（exit 2）：此前任何拼错的 flag 都静默落进 stdio 模式
+    # ——stdio 挂着等 stdin，调用方看到的是「卡死」而不是「参数错了」。
+    _skip = 0
+    for _a in args:
+        if _skip:
+            _skip -= 1
+            continue
+        if _a == "--call":
+            _skip = 2  # 工具名与 JSON payload 是它的操作数
+            continue
+        if _a.startswith("-") and _a != "--test":
+            print(_dumps({"error": f"未知参数: {_a}（支持 --test / --call <tool> [json]；无参数 = stdio 服务）"}))
+            return 2
+    if "--test" in args:
+        test_mode()
+        return 0
+    elif "--call" in args:
+        _i = args.index("--call")
+        _tool = args[_i + 1] if len(args) > _i + 1 else ""
+        if not _tool:
+            print(_dumps({"error": "usage: mcp_server.py --call <tool> [json-args]"}))
+            return 2
+        _payload = args[_i + 2] if len(args) > _i + 2 else "{}"
+        return call_mode(_tool, _payload)
+    else:
+        run_stdio()
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

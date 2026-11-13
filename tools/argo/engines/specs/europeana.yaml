@@ -1,0 +1,37 @@
+engine_id: europeana
+enabled: false
+disabled_reason: 72fd95a 源治理轮批量停用；官方 demo key 限额严、欧洲文化遗产覆盖窄，重开需自备 key 并实测
+label: Europeana 欧洲文化遗产
+cost_tier: free
+family: knowledge
+qps: 2
+priority: 51
+note: 官方 demo key (api2demo) 已失效 401；上游提供新 key 前禁用，避免路由选中空转
+period: second
+cost_per_call: 0.0
+cost_unit: free
+coverage:
+- culture
+- europe
+- heritage
+desc: 欧洲 27 国文化遗产聚合（官方公开 demo key）
+timeout: 12
+type: http
+method: GET
+url: "https://api.europeana.eu/record/v2/search.json"
+query_param: query
+extra_params:
+  wskey: api2demo
+  rows: 10
+format_is_query_param: false
+output_map:
+  items: items
+  # 上游 link 是记录 API 地址（原 builder 直接用）。
+  item_url: link
+  # 上游 title 有两种形态：数组（取首项）与多语言 dict（en 优先）。
+  # 数组形态无法用模板表达，故同时声明 item_title（数组走单字段映射取首项）
+  # 与 item_title_template（dict 形态走模板，非空时覆盖前者）。
+  item_title: title
+  item_title_template: "{title.en}"
+  # 拼接模板：原 builder 把 dataProvider 放进 snippet（provider: X）。
+  item_summary_template: "provider: {dataProvider.0}"

@@ -1,0 +1,818 @@
+#!/usr/bin/env python3
+"""search_cli.py — 搜索的 CLI 入口（参数解析、人读输出、本地 seek 合并）。
+
+从 search.py 拆出：那里是「执行流水线」（execute_search / super_search），这里是
+「怎么被调用、结果怎么打印」。分开的实际收益是 `--help`/参数校验这类改动的验证
+成本——它们不必跑整条流水线的测试，也不必读 2000 行的执行层。
+
+入口不变：`python3 scripts/search.py "查询"`（search.py 的 __main__ 转到这里）。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+from typing import Any
+
+from cli_io import dumps, ensure_utf8_stdio
+import engine_states  # 状态词表唯一真源（2026-11-09 收口）
+from engine_env import env_flag
+from stage_timing import StageTiming
+from time_utils import WINDOW_FORMATS_HINT, is_valid_time_window
+from search import (
+    available_engines,
+    execute_search,
+    format_text_output,
+    format_timing,
+    super_search,
+    _IMPORTS_DONE,
+    _MODULE_T0,
+    _strip_for_agent,
+)
+
+
+# 真值时点的交接槽。由 search.py 的 __main__ 块在跑完整条 import 链后写入
+# （见该文件底部），因为那一刻本模块的身份是 __main__，而 runpy 事后会把
+# sys.modules['__main__'] 恢复成原模块——事后从 __main__ 上取不到了。
+_TRUE_IMPORT_T0: float | None = None
+_TRUE_IMPORTS_DONE: float | None = None
+
+
+def _resolve_module_timing() -> tuple[float, float]:
+    """取 import 计时的两个时点。
+
+    三个来源按可靠性排序：
+
+    1. `_TRUE_IMPORT_T0` —— search.py 以 `__main__` 身份跑完整条 import 链
+       后写入的交接值，这是**真值**（约 30 ms）。
+    2. `sys.modules['__main__']` 上的同名属性 —— 直接 `python3 search.py` 时
+       成立。
+    3. 本模块 import 进来的 `search._MODULE_T0` —— **兜底，也是恒为 0 的那个**：
+       入口经 `bin/argo → runpy.run_module('search', run_name='__main__')`，
+       本模块执行 `from search import _MODULE_T0` 时，search 已以 __main__
+       跑过一遍，这是**第二次**导入，依赖全在 sys.modules 里，差值 ≈ 0。
+
+    走 3 正是 --explain-timing 的 import_ms 恒为 0.0 的原因，而它这一栏
+    恰恰是给「优化固定开销」用的——报 0 等于把优化者指向错误的数字。
+    """
+    if _TRUE_IMPORT_T0 is not None and _TRUE_IMPORTS_DONE is not None:
+        return _TRUE_IMPORT_T0, _TRUE_IMPORTS_DONE
+    main_mod = sys.modules.get("__main__")
+    if main_mod is not None:
+        t0 = getattr(main_mod, "_MODULE_T0", None)
+        done = getattr(main_mod, "_IMPORTS_DONE", None)
+        if isinstance(t0, float) and isinstance(done, float):
+            return t0, done
+    return _MODULE_T0, _IMPORTS_DONE
+
+
+# ── CLI 主入口 ─────────────────────────────────────────────────────────────────
+
+
+
+def _window_arg(value: str) -> str:
+    """argparse 的 `type=`：坏时间窗直接拒（判据在 time_utils，提示语同源）。
+
+    用 `ArgumentTypeError` 而不是裸 `ValueError`：两者的差别是**用户看不看得见
+    原因**——argparse 对 ValueError 只印 "invalid _window_arg value: 'garbage'"
+    并把说明丢掉，对 ArgumentTypeError 则原样印出我们的提示。
+    """
+    if not is_valid_time_window(value):
+        raise argparse.ArgumentTypeError(
+            f"无法解析的时间窗 {value!r}：{WINDOW_FORMATS_HINT}")
+    return value
+
+
+def _max_results_arg(value: str) -> int:
+    """argparse 的 `type=`：条数必须为非负整数。
+
+    负数不是「取前 N 条」而是「从尾部砍掉 |N| 条」——`merged[: -3]` 在 10 条
+    结果上返回 7 条，比不传 -n 的默认 5 条还多，与「限制条数」的语义正好相反。
+    0 保留为合法（显式要空结果），只拒负数。
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"条数必须是整数，收到 {value!r}") from None
+    if n < 0:
+        raise argparse.ArgumentTypeError(
+            f"条数不能为负（收到 {n}）：负数会从尾部截断，返回比不指定时更多的结果")
+    return n
+
+
+def _non_negative_int(value: str) -> int:
+    """argparse 的 `type=`：时长等非负整数（负值不是「不限」，是坏输入）。"""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"必须是整数，收到 {value!r}") from None
+    if n < 0:
+        raise argparse.ArgumentTypeError(f"不能为负（收到 {n}）")
+    return n
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """构造 CLI 参数解析器。
+
+    从 main 里抽出来的唯一理由：让「CLI 是否支持某个已文档化的开关」可以
+    对着**解析器对象**断言，而不是 grep 源码文本——后者在重构（如把 CLI
+    搬到另一个模块）时会假红，且断言的是字面量而不是行为。
+    """
+    parser = argparse.ArgumentParser(
+        description="Unified Search v2 — 统一搜索 CLI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例：
+  python3 search.py "python async"
+  python3 search.py "英伟达财报" --explain --json
+  python3 search.py "基金推荐" --mode fast
+  python3 search.py "AAPL" --engine anysearch --domain finance --sub_domain finance.us_stock
+        """,
+    )
+    parser.add_argument("query", nargs="?")
+    parser.add_argument("--engine", "-e", default="auto")
+    parser.add_argument("--max-results", "-n", type=_max_results_arg, default=5)
+    parser.add_argument("--depth", "-d", default="fast",
+                        choices=["fast", "balanced", "deep"])
+    parser.add_argument("--academic-deep", action="store_true",
+                        help="学术多源模式：自动设置 depth=deep + domain=academic，"
+                             "禁用 early-stop 让所有学术源参与（arxiv/openalex/"
+                             "local_pubmed/core 等），适合深度研究场景")
+    # --no-cache 与 ARGO_NO_CACHE 合并成一个判据。此前只有 flag：用户照文档
+    # 设 ARGO_NO_CACHE=1 却静默拿到缓存结果（cached=true、0 ms）——开关看着
+    # 生效、其实没生效，是最难查的一类问题。走 engine_env.env_flag 这一个
+    # 全仓统一的解析器，语义与其它 ARGO_* 开关一致。
+    parser.add_argument("--no-cache", action="store_true",
+                        default=env_flag("ARGO_NO_CACHE", False))
+    parser.add_argument("--explain", action="store_true")
+    parser.add_argument("--json", action="store_true", dest="json_output")
+    parser.add_argument("--timeout", "-t", type=int, default=10)
+    parser.add_argument("--list-engines", action="store_true",
+                        help="列出引擎；加 --detail 看 env/准入/routable 状态")
+    parser.add_argument("--detail", action="store_true",
+                        help="与 --list-engines 联用：输出详细状态")
+    parser.add_argument("--routable-only", action="store_true",
+                        help="与 --list-engines 联用：仅可自动路由的引擎")
+    parser.add_argument("--all", action="store_true", dest="list_all",
+                        help="与 --list-engines --detail 联用：输出全部引擎的"
+                             "逐条清单（默认只给分组摘要 + 非可路由项的成因）")
+    parser.add_argument("--mode", default="auto",
+                        choices=["fast", "auto", "deep", "budget"],
+                        help="预算模式: fast=免费优先, auto=成本感知, deep=质量优先, budget=配额控制")
+    parser.add_argument("--since", default=None,
+                        type=_window_arg,
+                        help="发布时间下限（7d / 2026-08-01），下推到支持时间窗的引擎")
+    parser.add_argument("--until", default=None,
+                        type=_window_arg,
+                        help="发布时间上限（7d / 2026-08-01），下推到支持时间窗的引擎")
+    parser.add_argument("--sort", default="relevance",
+                        choices=["relevance", "oldest", "newest"],
+                        help="时间排序：relevance=相关度（默认）, oldest=最早在前（溯源）, newest=最新在前")
+    parser.add_argument("--video", action="store_true",
+                        help="只搜视频源（B 站 + anysearch），并只保留视频结果；"
+                             "不带此开关时视频源只按显式意图路由进入 combo")
+    parser.add_argument("--min-duration", type=_non_negative_int, default=None,
+                        metavar="SEC",
+                        help="视频最短时长（秒）；B 站下推 duration 档位，"
+                             "其他源按已返回的时长字段后过滤，时长未知的保留")
+    parser.add_argument("--max-duration", type=_non_negative_int, default=None,
+                        metavar="SEC",
+                        help="视频最长时长（秒）；语义同 --min-duration")
+    parser.add_argument("--include-domains", default="",
+                        help="仅保留这些域名（含子域），逗号分隔，如 github.com,arxiv.org")
+    parser.add_argument("--exclude-domains", default="",
+                        help="排除这些域名（含子域），逗号分隔，如 pinterest.com")
+    parser.add_argument("--local-first", action="store_true",
+                        help="强制优先使用 local_search 零成本聚合引擎")
+    parser.add_argument(
+        "--include-local", action="store_true", default=None,
+        help="强制并入本机文件命中（source=local_files；fast/budget 模式默认已开）",
+    )
+    parser.add_argument(
+        "--no-local", action="store_true",
+        help="关闭本机文件命中（fast/budget 模式默认并入，此项退出）",
+    )
+    parser.add_argument("--domain", default="", help="AnySearch 垂直域")
+    parser.add_argument("--sub_domain", default="", help="AnySearch 子域")
+    parser.add_argument(
+        "--input-kind", default="auto",
+        choices=["auto", "keyword", "url-seed", "known-url"],
+        help="输入类型：known-url 默认不热搜；url-seed 只作发现线索",
+    )
+    parser.add_argument("--plan-only", action="store_true",
+                        help="仅输出离线计划（不联网）")
+    parser.add_argument("--force-search", action="store_true",
+                        help="known-url 也强制多引擎搜索（不推荐）")
+    parser.add_argument("--envelope", action="store_true",
+                        help="附加 candidates/sources/coverage（归档/来源追溯用；"
+                             "--archive 自动开启）")
+    parser.add_argument("--no-envelope", action="store_true",
+                        help="兼容保留：默认已不附加，此开关现在等同默认")
+    _tg = parser.add_mutually_exclusive_group()
+    _tg.add_argument(
+        "--timing", "--explain-timing", dest="timing",
+        action="store_true", default=True,
+        help="附加各阶段墙钟耗时（默认为开）：stages 按耗时降序带占比、"
+             "dispatch 给出引擎并发效率，另附固定开销与进程总计。"
+             "想知道「这次搜索慢在哪」直接看它",
+    )
+    _tg.add_argument(
+        "--no-timing", dest="timing", action="store_false",
+        help="不附加阶段耗时（省几百字节上下文）",
+    )
+    parser.add_argument(
+        "--fields", choices=("full", "agent"), default=None,
+        help="JSON 字段档位：full=全量；agent=只留答案内容（剥观测标量"
+             "与 null 键，每条 result 留 title/url/snippet/source/score 等；"
+             "fetch_required 保留）。默认 None=自动：stdout 非 tty 时"
+             "启用 agent 档（Agent 消费），否则 full",)
+    parser.add_argument(
+        "--archive",
+        action="store_true",
+        help="将本次搜索 envelope 落盘到工作区归档（不抓正文/不下载）",
+    )
+    parser.add_argument(
+        "--archive-dir",
+        type=str,
+        default=None,
+        help="归档根目录（默认 ARGO_ARCHIVE_ROOT 或 工作区/数据/argo-search-archive）",
+    )
+    parser.add_argument("--archive-tag", default=None, help="归档标签，便于 list 过滤")
+    parser.add_argument("--archive-note", default=None, help="归档备注")
+    parser.add_argument(
+        "--verify",
+        nargs="?",
+        const=3,
+        type=int,
+        default=None,
+        metavar="TOP_K",
+        help="证据核验：对 top-k 未核验结果 fetch 正文、回填证据分、输出 evidence_revision 分布（默认 3）",
+    )
+    parser.add_argument(
+        "--numverify",
+        nargs="?",
+        const=3,
+        type=int,
+        default=None,
+        metavar="TOP_K",
+        help="数值印证：对摘要含价格/百分比/日期的 top-k 结果 fetch 原文比对数字，"
+             "对不上者降权（missing 强降、partial 弱降，默认 3）",
+    )
+    parser.add_argument(
+        "--verify-with",
+        nargs="?",
+        const="auto",
+        default=None,
+        metavar="ENGINE",
+        help="核对配对：主查之外用指定引擎跑一次轻量核对，独立交付官方簇与域级"
+             "重叠（缺省 auto=按查询类型选，如价格类→exa；无规则命中则跳过）",
+    )
+
+    return parser
+
+
+# ── --list-engines --detail 无过滤时的摘要（2026-09-27）────────────────────────
+#
+# 逐条清单要回答的问题只有两个：**有多少源可用**、**不可用的那些为什么不可用**。
+# 245 个健康源逐条列出对这两个问题的贡献是零（每一条的答案都是「可用」），
+# 而代价是 54 KB ≈ 14k token 进上下文。所以默认给分组计数 + 只列非可路由项。
+
+# 不可自动路由的成因，顺序即优先级：一个源可能同时缺 env 又缺依赖，若把每种
+# 成立的理由都计一次，分组之和会大于「不可路由总数」，自相矛盾。只认第一个。
+_ENGINE_BLOCK_REASONS: tuple[tuple[str, str], ...] = (
+    (engine_states.ENGINE_BLOCK_DISABLED, "enabled=False（未启用）"),
+    (engine_states.ENGINE_BLOCK_MISSING_ENV, "缺环境变量（配好密钥即可用）"),
+    (engine_states.ENGINE_BLOCK_MISSING_DEPS, "缺可选依赖（装好即可用）"),
+    (engine_states.ENGINE_BLOCK_QUOTA_EXHAUSTED, "配额耗尽（等窗口重置）"),
+    (engine_states.ENGINE_BLOCK_NOT_ROUTABLE, "其它不可路由（见 --engine <名> 全量行）"),
+)
+
+
+def _engine_block_reason(row: dict[str, Any]) -> str | None:
+    """一条引擎记录「不可自动路由」的成因；可自动路由返回 None。"""
+    if not row.get("enabled", True):
+        return engine_states.ENGINE_BLOCK_DISABLED
+    if row.get("missing_env"):
+        return engine_states.ENGINE_BLOCK_MISSING_ENV
+    if row.get("missing_deps"):
+        return engine_states.ENGINE_BLOCK_MISSING_DEPS
+    if row.get("quota_exhausted"):
+        return engine_states.ENGINE_BLOCK_QUOTA_EXHAUSTED
+    if not row.get("routable", True):
+        return engine_states.ENGINE_BLOCK_NOT_ROUTABLE
+    return None
+
+
+def _summarize_engine_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """把逐条清单压成「计数 + 只列非可路由项」。"""
+    routable: list[str] = []
+    explicit_only: list[str] = []
+    blocked: list[dict[str, Any]] = []
+    by_reason: dict[str, int] = {}
+    for row in rows:
+        name = str(row.get("engine_id") or "")
+        if row.get("explicit_only"):
+            # 只能显式点名、不进自动路由——这是设计如此，不是故障，
+            # 所以单独一桶，不混进「不可用」，也不逐条展开。
+            explicit_only.append(name)
+            continue
+        reason = _engine_block_reason(row)
+        if reason is None:
+            routable.append(name)
+            continue
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+        blocked.append({
+            "engine_id": name,
+            "reason": reason,
+            **({"disabled_reason": row["disabled_reason"]} if row.get("disabled_reason") else {}),
+            **({"missing_env": row["missing_env"]} if row.get("missing_env") else {}),
+            **({"missing_deps": row["missing_deps"]} if row.get("missing_deps") else {}),
+            **({"status": row["status"]} if row.get("status") else {}),
+        })
+    return {
+        "total": len(rows),
+        "routable": len(routable),
+        "explicit_only": len(explicit_only),
+        "not_routable": len(blocked),
+        "by_reason": {k: by_reason[k] for k, _ in _ENGINE_BLOCK_REASONS
+                      if k in by_reason},
+        "reason_legend": {k: label for k, label in _ENGINE_BLOCK_REASONS},
+        "not_routable_engines": sorted(blocked, key=lambda r: r["reason"]),
+        "hint": "逐条全量清单加 --all；单引擎全量诊断用 --engine <名>",
+    }
+
+
+def _format_engine_summary(summary: dict[str, Any]) -> str:
+    """摘要的人类可读渲染（非 --json 时用）。"""
+    lines = [
+        f"引擎清单摘要：共 {summary['total']} 条，可自动路由 {summary['routable']} 条，"
+        f"仅显式点名 {summary['explicit_only']} 条，不可路由 {summary['not_routable']} 条",
+    ]
+    for reason, count in (summary.get("by_reason") or {}).items():
+        label = (summary.get("reason_legend") or {}).get(reason, reason)
+        lines.append(f"  · {reason:<16}{count:>4}  {label}")
+    blocked = summary.get("not_routable_engines") or []
+    if blocked:
+        lines.append("不可路由项：")
+        for row in blocked:
+            extra = ""
+            if row.get("missing_env"):
+                # 成因与细节可能同时成立（如「未启用」的源也缺密钥）：
+                # 用「另缺」而不是直接并列，避免读成两个互斥的原因。
+                extra = f"（另缺 {'/'.join(str(x) for x in row['missing_env'])}）"
+            elif row.get("missing_deps"):
+                extra = f"（另缺 {'/'.join(str(x) for x in row['missing_deps'])}）"
+            lines.append(f"  - {row['engine_id']:<28}{row['reason']}{extra}")
+    lines.append(str(summary.get("hint") or ""))
+    return "\n".join(lines)
+
+
+def _merge_verify_timing(timing: dict[str, Any], verify_ms: float,
+                         stage: str = "verify") -> None:
+    """把后处理（verify/numverify/verify_with）的墙钟并回 timing 三个总数。
+
+    why：这些后处理发生在主搜索快照之后。此前只并回 stages_ms/process_ms，
+    elapsed_ms 仍是主搜索的数（实测 1173 vs 10967），调用方最先读的总账
+    比它的分项之和还小 8 倍。三个数必须一起走，否则「这次为什么慢」会被
+    带偏到主搜索上。
+    """
+    total = float(timing.get("stages_ms") or 0) + verify_ms
+    timing.setdefault("stages", []).append({
+        "stage": stage,
+        "ms": round(verify_ms, 1),
+        "pct": round(verify_ms * 100.0 / total, 1) if total > 0 else 0.0,
+    })
+    timing["stages_ms"] = round(total, 1)
+    timing["process_ms"] = round(
+        float(timing.get("process_ms") or 0) + verify_ms, 1)
+    timing["elapsed_ms"] = round(
+        max(float(timing.get("elapsed_ms") or 0), total), 1)
+
+
+def main():
+    # 入口第一件事：钉住 stdout/stderr 编码（实现唯一，见 cli_io）。
+    # 放在这里而不是 import 期：本模块被 search.py 与 bin/argo 两条路调用，
+    # 入口点是唯一能覆盖两者的位置。
+    ensure_utf8_stdio()
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.json_output:
+        # issue #34 第 7 条：引擎 builder 的 logger.warning（如「OCTEN_API_KEY
+        # 未设置」）经 logging 的最后兜底 handler 打到 stderr，调用方一旦
+        # 2>&1 合并就解析失败。JSON 模式只留 ERROR：非致命告警静默，可行动
+        # 的告警走响应里的 warnings[] 字段（见 search.super_search 的 quiet）。
+        import logging
+        logging.disable(logging.WARNING)
+
+    if args.list_engines:
+        # 引擎状态行里含 runtime.failure.evidence 与 admission 等自由文本字段，
+        # 是 stdout 上唯一能带回真实凭据的出口（历史上引擎把 401 响应体原样
+        # 记进 failure.evidence）。--list-engines 在 search 之前就 return，
+        # 走不到文件底部那处脱敏，所以这里必须自带一层。
+        # 契约见 tests/test_redactor_guard.py::test_list_engines_output_is_redacted。
+        try:
+            from secret_guard import redact_data as _redact
+        except Exception:
+            def _redact(x):
+                return x
+
+        def _emit_json(obj: Any) -> None:
+            print(dumps(_redact(obj)))
+
+        def _emit_text(text: str) -> None:
+            print(_redact(text))
+
+        # --engine 兼作清单过滤（`--engine auto` 是搜索默认值，不算过滤）。
+        # 全量详细行 2026-09-16 实测 151 KB（runtime/admission 嵌套是大头），
+        # Agent 查单个引擎状态时不该付这个代价——实测此前
+        # `--list-engines --detail --engine egov_law` 忽略过滤、照样吐全量。
+        # 现无过滤时走 compact_engine_row 瘦身（~1/4 体积），有过滤给全量。
+        _wanted = None
+        if args.engine and args.engine != "auto":
+            _wanted = [e.strip() for e in args.engine.split(",") if e.strip()] or None
+        if args.detail:
+            try:
+                from engine_status import (list_engines_detail,
+                                           compact_engine_row,
+                                           compact_engine_table,
+                                           format_engines_table)
+                rows = list_engines_detail(routable_only=args.routable_only,
+                                           engines=_wanted)
+                if not _wanted:
+                    # 不带过滤时**默认不吐逐条清单**（2026-09-27 收紧）。
+                    #
+                    # 沿革：全量转储 151 KB → 瘦身投影 54 KB（compact_engine_row，
+                    # 2026-09-16）→ 仍在一次调用里塞 54 KB ≈ 14k token 进上下文。
+                    # 而这一档要回答的问题只有两个：**有多少源可用**、**不可用的
+                    # 那些为什么不可用**。逐条列出 245 个健康源，是对这两个问题
+                    # 的零贡献——它们每一个的答案都是「可用」。
+                    #
+                    # 所以默认改成「分组计数 + 只列非可路由项（带成因）」，
+                    # 实测 54 KB → 约 2 KB；要逐条全量照旧加 --all。
+                    # 单引擎全量诊断仍走 --engine <名>（不受本分支影响）。
+                    rows = [compact_engine_row(r) for r in rows]
+                if not _wanted and not args.list_all and args.json_output:
+                    _emit_json(_summarize_engine_rows(rows))
+                    return
+                if not _wanted and not args.list_all:
+                    _emit_text(_format_engine_summary(_summarize_engine_rows(rows)))
+                    return
+                if _wanted:
+                    # 未命中的名字要显式报出（走 stderr，保持 stdout 是纯 JSON）——
+                    # 否则「查了没输出」会被误读成「该引擎状态为空」。
+                    _got = {r.get("engine_id") for r in rows}
+                    _missing = [e for e in _wanted if e not in _got]
+                    if _missing:
+                        print(f"[list-engines] 未收录的引擎: {', '.join(_missing)}",
+                              file=sys.stderr)
+                if args.json_output:
+                    # --all 的 JSON 走列式投影（2026-11-10）：逐条对象在 301 个
+                    # 引擎上重复 15 个键名，键名本身就 70 KB，超过 64 KB 上限。
+                    # 列式把键名降到 1 份，实测 67.7 KB → 25.8 KB。
+                    # 单引擎诊断（--engine <名>）仍给逐条全量对象——那一档
+                    # 只有 1 条，键名成本可忽略，且需要嵌套的 runtime/admission。
+                    if not _wanted:
+                        _emit_json(compact_engine_table(rows))
+                    else:
+                        _emit_json(rows)
+                else:
+                    _emit_text(format_engines_table(rows))
+            except Exception as e:
+                _emit_json({"error": str(e), "engines": available_engines()})
+        else:
+            # 不包 try/except TypeError：available_engines 已收 routable_only
+            # （它当初没收，被这里的回退静默吞掉，于是 --routable-only 一直
+            # 返回全量）。契约见 test_engine_catalog 的签名用例。
+            names = available_engines(routable_only=args.routable_only)
+            if _wanted:
+                names = [n for n in names if n in set(_wanted)]
+            _emit_json(names)
+            # issue #34 第 6 条：本档只回答「有多少个有实现的源」，与
+            # `paths --check` 的 engines=<总收录> 天然不等——差额里是
+            # 停用/缺密钥/别名 spec。以前这层口径差没有任何对外说明，
+            # 被当成计数错误。提示走 stderr，stdout 保持纯 JSON 名单。
+            if not _wanted:
+                print(f"[list-engines] 有实现的源 {len(names)} 个（routes 实际可用数）"
+                      "；总收录与每个不可用项的成因见 --list-engines --detail，"
+                      "逐条全量清单加 --all；paths --check 的 engines= 是总收录口径",
+                      file=sys.stderr)
+        return
+
+    # 入口级引擎名校验（2026-10-10 方案甲）：无效名字此前只在执行层补 errors，
+    # status 仍是 completed、--plan-only 连 errors 都没有——「失败伪装成空结果」
+    # （09-20 实踩、10-10 复测仍在，与 #12 静默失效同类）。判据单点复用
+    # unknown_requested_engines；did-you-mean 给最近名。只在显式点名时付
+    # engines 模块的导入成本（~115ms），auto 默认零开销。
+    if args.engine and args.engine != "auto":
+        from engines import unknown_requested_engines
+        _unknown = unknown_requested_engines(args.engine)
+        if _unknown:
+            import difflib
+            # 别名导入：main 里 list 分支的 except 也引用 available_engines，
+            # 同名局部导入会把它遮成 UnboundLocalError（test_local_import_
+            # shadows_global 同款），必须换名。
+            from engines import available_engines as _avail_engines
+            _catalog = _avail_engines()
+            _hint = "; ".join(
+                f"{u}（最接近: {', '.join(difflib.get_close_matches(u, _catalog, n=3, cutoff=0.4)) or '无'}）"
+                for u in _unknown)
+            parser.error(f"未知引擎: {_hint} —— 全量名单见 --list-engines")
+
+    if not args.query:
+        parser.error("必须提供搜索关键词")
+    if (args.min_duration is not None and args.max_duration is not None
+            and args.min_duration > args.max_duration):
+        parser.error("--min-duration 不能大于 --max-duration")
+
+    # envelope 默认**关**，要时显式开（--envelope / --archive）。
+    #
+    # why（2026-09-17 实测）：默认附 envelope 时一次 5 条结果的 JSON 输出 15454 B，
+    # 其中 14117 B（82%）是同一批结果的三视图重复——snippet 被写三遍（5701 B，
+    # 占全文 40%），candidates 每条还重复一遍 query。而这三个视图的角色是
+    # **归档与来源追溯**：归档路径（--archive）本来就会把 candidates 落成
+    # candidates.jsonl、并在缺 sources 时从 results 回填，所以「归档要全量」
+    # 由 `or args.archive` 这一支保证，默认翻转**不损失任何能力**——需要
+    # provenance 的调用者加 --envelope 即可拿到与从前逐字节相同的文档。
+    #
+    # 之前的方向是「默认给全量、调用者自己记得减」（--no-envelope），
+    # 于是忘记加开关的调用者每次多付约 2.4k token。默认档应当服务最常见的
+    # 那个用途，而不是服务最重的那个用途。
+    use_envelope = args.envelope or args.archive
+    # 阶段耗时：**默认开**。它是「这次慢在哪」的自解释入口——不开的话，
+    # 想知道瓶颈只能外部计时 + 临时代码，等于把优化门槛抬到只有维护者能过。
+    _timing = StageTiming() if args.timing else None
+
+    # 路由预热（`_prewarm`）**已删除**（2026-09-27）。历史：daemon 线程版 →
+    # 同步版（「把 22ms 变成确定的支出」）→ 删除。
+    #
+    # 它建立在「预热的那笔钱 route 一定要付」这个前提上，而实测前提不成立：
+    #
+    #   1. **route-cache 命中时 route 根本不编译域正则**（生产默认，覆盖几乎
+    #      所有重复查询）。交替 5 组实测：route 阶段在有无预热下都是 4.2ms，
+    #      而整次调用的中位墙上时间 107.8ms → 68.9ms——预热是 100% 白付，
+    #      省下的 38.9ms（36%）正是这笔支出本身。
+    #   2. **未命中时也预付错了对象**。profile 显示 route_query 首次调用的
+    #      开销主要来自懒加载 import 与构建 249 个引擎的注册表；先预热再
+    #      `route_query`，route 阶段实测仍要 47–121ms。域编译只是其中一小截。
+    #   3. 未命中路径的总额不因删除而变：编译挪回 route 内部，同样只付一次。
+    #
+    # 想重新引入时先读这三条：任何「预热」都必须证明它预热的正是 route 会在
+    # 同一进程、同一路径上付的那一笔，否则只是把支出提前，不是省下。
+    # 回归守卫见 tests/test_plan_a_optimizations.py::TestNoUnconditionalPrewarm。
+    # --academic-deep：学术多源模式，自动设置 depth=deep + domain=academic
+    if args.academic_deep:
+        depth = "deep"
+        engine_domain = "academic"
+    else:
+        depth = args.depth
+        engine_domain = args.domain or None
+
+    results = super_search(
+        query=args.query,
+        engine=args.engine,
+        n=args.max_results,
+        explain=args.explain,
+        skip_cache=args.no_cache,
+        timeout=args.timeout,
+        depth=depth,
+        mode=args.mode,
+        local_first=args.local_first,
+        input_kind=args.input_kind,
+        plan_only=args.plan_only,
+        force_search=args.force_search,
+        envelope=use_envelope,
+        since=args.since,
+        until=args.until,
+        sort=args.sort,
+        video_only=args.video,
+        min_duration=args.min_duration,
+        max_duration=args.max_duration,
+        include_domains=[d for d in args.include_domains.split(",") if d.strip()] or None,
+        exclude_domains=[d for d in args.exclude_domains.split(",") if d.strip()] or None,
+        engine_domain=engine_domain,
+        engine_sub_domain=args.sub_domain or None,
+        timing=_timing,
+        # 三态：--include-local 强制开 / --no-local 强制关 / 都不给 = None
+        #（由 super_search 按模式自动解析，fast/budget 开）。本地命中并入
+        # 统一走 shape_response（search_output）——此前 CLI 在搜索结束后
+        # 串行补一次合并（白等一个 seek 子进程，且与库路径双份逻辑），
+        # 交回 super_search 后自动获得 L1 并行提交（与主搜索同时跑）。
+        include_local=(True if args.include_local
+                       else (False if args.no_local else None)),
+        # --json 时 stderr 会被调用方 2>&1 合并，非致命告警（缺 key、宽根跳过
+        # 等）一律不进 stderr（issue #34 第 7 条）；可行动的告警随响应
+        # 的 warnings[] 字段返回。
+        quiet=args.json_output,
+    )
+
+    # 固定开销（import + argparse + 收尾）：缓存命中时它占墙钟大头，而它不出现
+    # 在任何阶段里——不显式报出来，看的人会把「启动 80 ms」当成「搜索 80 ms」，
+    # 优化方向就找错了。
+    if _timing is not None and "timing" in results:
+        _mod_t0, _imports_done = _resolve_module_timing()
+        _now_ms = (time.perf_counter() - _mod_t0) * 1000.0
+        _stages = results["timing"].get("stages_ms") or 0
+        results["timing"]["import_ms"] = round(
+            (_imports_done - _mod_t0) * 1000.0, 1)
+        results["timing"]["overhead_ms"] = round(max(0.0, _now_ms - _stages), 1)
+        results["timing"]["process_ms"] = round(_now_ms, 1)
+
+    # 本地命中并入已上移进 super_search（shape_response 统一出口，L1 并行），
+    # 这里不再串行补合并——双份合并会让同一批命中出现两次。
+
+    if args.archive and results.get("status") != engine_states.PLAN_HANDOFF_REQUIRED:
+        try:
+            from archive_run import write_search_archive, resolve_archive_root
+            root = resolve_archive_root(args.archive_dir) if args.archive_dir else None
+            if args.archive_dir:
+                root = resolve_archive_root(args.archive_dir)
+            meta = write_search_archive(
+                results,
+                root=root,
+                tag=args.archive_tag,
+                note=args.archive_note,
+                source="argo_search",
+            )
+            if not args.json_output:
+                print(
+                    f"  [archive] {meta.get('run_id')} → {meta.get('run_dir')}",
+                    file=sys.stderr,
+                )
+        except Exception as e:
+            print(f"  [archive error] {type(e).__name__}: {e}", file=sys.stderr)
+
+    # 证据完整链路 P0：--verify 显式核验 top-k 未核验结果（fetch + 回填 + revision 分布）
+    _t_verify0 = time.perf_counter()
+    if args.verify:
+        try:
+            from evidence_loop import verify_results, reorder_by_evidence
+            v = verify_results(results.get("results") or [], args.query, top_k=args.verify)
+            results["verify"] = v
+            # A-3（2026-09-27）：正文级证据**回写排序**。此前 verify 只改字段不重排，
+            # 抓回的正文质量到不了排序器——花了 RTT 却不改结果次序。
+            try:
+                reorder = reorder_by_evidence(results.get("results") or [])
+                if reorder.get("reordered"):
+                    results["evidence_reorder"] = reorder
+            except Exception as _re:
+                print(f"  [verify reorder skipped] {type(_re).__name__}", file=sys.stderr)
+            results["fetch_required"] = bool(results.get("fetch_required"))
+            # verify 已回填/核验结果 → 刷新门控汇总，避免 suggested 含已核验 URL
+            try:
+                from evidence_loop import gate_results
+                gate = gate_results(results.get("results") or [], results.get("domain"))
+                results["evidence_loop"] = {
+                    "high_consequence_domain": gate["high_consequence_domain"],
+                    "suggested": gate["suggested"],
+                    "verified_count": gate["verified_count"],
+                    "pending_count": gate["pending_count"],
+                }
+            except Exception as _ge:
+                # 内层 pass 会把 evidence_loop 从 --json 输出里静默抹掉，
+                # 调用方无从得知门控汇总已缺失。与上方 verify reorder 同款：
+                # 打到 stderr，不打断主流程。
+                print(f"  [evidence_loop refresh skipped] {type(_ge).__name__}",
+                      file=sys.stderr)
+            if not args.json_output:
+                rs = v.get("revision_summary") or {}
+                print(
+                    f"  [verify] 核验 {rs.get('n', 0)} 条，"
+                    f"improved={rs.get('improved', 0)} unchanged={rs.get('unchanged', 0)} "
+                    f"degraded={rs.get('degraded', 0)} mean_delta={rs.get('mean_delta', 0)}",
+                    file=sys.stderr,
+                )
+                sem = v.get("semantic") or {}
+                if sem.get("contradiction_alert"):
+                    print(f"  ! [事实反驳预警] 检测到权威信源明确反驳查询前提（{sem.get('contradicts')} 条冲突）",
+                          file=sys.stderr)
+                if sem.get("primary_sources"):
+                    print(f"  * [一手源置顶] 识别到 {sem.get('primary_sources')} 条官方/一手公告并加权",
+                          file=sys.stderr)
+                if sem.get("substantive_discussions"):
+                    print(f"  * [深度探讨置顶] 识别到 {sem.get('substantive_discussions')} 条深度探讨内容并提权",
+                          file=sys.stderr)
+                if sem.get("passing_mentions"):
+                    print(f"  ~ [顺带提及校准] 识别到 {sem.get('passing_mentions')} 条仅顺带提及内容并去噪",
+                          file=sys.stderr)
+                ro = results.get("evidence_reorder") or {}
+                if ro.get("reordered"):
+                    print(f"  [verify] 证据回写排序：调整 {len(ro.get('adjusted') or [])} 条，"
+                          f"位次变动 {ro.get('moved', 0)} 处", file=sys.stderr)
+        except Exception as e:
+            print(f"  [verify error] {type(e).__name__}: {e}", file=sys.stderr)
+
+    # 数值印证切片：--numverify 对摘要含关键数字的 top-k fetch 原文比对，
+    # 冲突者降权（missing 强降/partial 弱降）。与 --verify 独立：verify 量
+    # 「正文吸收分」，这里量「摘要数字与原文对不对得上」——摘要里 5999 与
+    # 11999 打架、毒内容套医院域名讲 iPhone，都只有数字比对抓得住。
+    _t_numverify0 = time.perf_counter()
+    if args.numverify:
+        try:
+            from numeric_verify import numeric_verify_results, reorder_by_numeric
+            nv = numeric_verify_results(results.get("results") or [], args.query,
+                                        top_k=args.numverify)
+            if nv is not None:
+                results["numverify"] = nv
+                try:
+                    nre = reorder_by_numeric(results.get("results") or [])
+                    if nre.get("reordered"):
+                        results["numeric_reorder"] = nre
+                except Exception as _nre:
+                    print(f"  [numverify reorder skipped] {type(_nre).__name__}",
+                          file=sys.stderr)
+                if not args.json_output:
+                    ns = nv.get("summary") or {}
+                    print(f"  [numverify] 核对 {ns.get('checked', 0)} 条，"
+                          f"confirmed={ns.get('confirmed', 0)} partial={ns.get('partial', 0)} "
+                          f"missing={ns.get('missing', 0)} unfetchable={ns.get('unfetchable', 0)}",
+                          file=sys.stderr)
+                    nro = results.get("numeric_reorder") or {}
+                    if nro.get("reordered"):
+                        print(f"  [numverify] 冲突降权：调整 {len(nro.get('adjusted') or [])} 条，"
+                              f"位次变动 {nro.get('moved', 0)} 处", file=sys.stderr)
+        except Exception as e:
+            print(f"  [numverify error] {type(e).__name__}: {e}", file=sys.stderr)
+
+    # 核对配对：--verify-with 按查询类型用第二个引擎跑轻量核对，独立交付
+    # 官方簇与域级重叠（auto=规则表自动选，价格/规格类→exa）。不并入主排序：
+    # 核对簇的价值是给 Agent 一眼可对的第二意见，混排反而稀释。
+    _t_verifywith0 = time.perf_counter()
+    if args.verify_with is not None:
+        try:
+            from verify_with import attach_verify_with
+            vw = attach_verify_with(results, args.query, engine=args.verify_with)
+            results["verify_with"] = vw
+            if not args.json_output:
+                vwe = vw.get("engine")
+                if not vwe:
+                    print(f"  [verify-with] skipped: {vw.get('skipped')}",
+                          file=sys.stderr)
+                else:
+                    ov = (vw.get("overlap") or {})
+                    print(f"  [verify-with] {vwe} {vw.get('elapsed_ms', 0)}ms，"
+                          f"{len(vw.get('results') or [])} 条，"
+                          f"域级重叠 {ov.get('count', 0)}：{', '.join(ov.get('domains') or []) or '无'}",
+                          file=sys.stderr)
+        except Exception as e:
+            print(f"  [verify-with error] {type(e).__name__}: {e}", file=sys.stderr)
+
+    # 计时盲区修补（2026-09-29）：--verify 的 top-k fetch 发生在上面计时快照
+    # （process_ms 定格处）之后，净增 280–1160ms 完全不进任何账——实测
+    # wall 776–1746ms vs process_ms 494–701ms，「这次为什么慢」归因指错
+    # 方向。快照后移做不到（verify 是装配后的可选后处理），补一个 stage
+    # 并把耗时并回三个总数（stages_ms / process_ms / elapsed_ms），
+    # 三者保持自洽（2026-10-22 补 elapsed_ms）。
+    if _timing is not None and "timing" in results:
+        if args.verify:
+            _verify_ms = (time.perf_counter() - _t_verify0) * 1000.0
+            _merge_verify_timing(results["timing"], _verify_ms)
+        if args.numverify:
+            _numverify_ms = (time.perf_counter() - _t_numverify0) * 1000.0
+            _merge_verify_timing(results["timing"], _numverify_ms, stage="numverify")
+        if args.verify_with is not None:
+            _vw_ms = (time.perf_counter() - _t_verifywith0) * 1000.0
+            _merge_verify_timing(results["timing"], _vw_ms, stage="verify_with")
+
+    # 敏感信息自动脱敏拦截（防止真实 API Key / 通用敏感凭据在输出流泄露）
+    try:
+        from secret_guard import redact_data
+        results = redact_data(results)
+    except Exception:
+        pass
+
+    if args.json_output:
+        public = {k: v for k, v in results.items() if not k.startswith("_")}
+        # Agent 消费自动瘦身：stdout 非 tty（管道/Agent 调用）且未显式指定
+        # --fields 时，自动启用 agent 档。实测输出从 15.4KB → 4.3KB
+        # （-72%），token 消耗从 ~3863 → ~1086。显式 --fields full/agent 可覆盖。
+        from cli_io import stdout_is_tty
+        _auto_agent = (
+            not stdout_is_tty()
+            and args.fields is None
+            and not args.envelope
+        )
+        if args.fields == "agent" or _auto_agent:
+            if args.envelope:
+                print(
+                    "  [warning] --envelope 与 --fields agent 同时给时 envelope 会被"
+                    "剥光（实测增量 0 字节）：要 provenance 请去掉 --fields agent；"
+                    "只要瘦身就别加 --envelope。",
+                    file=sys.stderr,
+                )
+            public = _strip_for_agent(public)
+        print(dumps(public))
+    else:
+        print(format_text_output(results))
+        if results.get("timing"):
+            print(format_timing(results["timing"]))
+        if results.get("archive"):
+            ar = results["archive"]
+            print(f"  archived → {ar.get('run_dir')}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""mcp_transport.py — MCP JSON-RPC 分发 + stdio 帧协议（P2-4 拆分自 mcp_server.py）。
+
+handle_rpc 按方法分发（initialize / tools/list / tools/call / ping）；
+run_stdio 支持 Content-Length 帧与 NDJSON 两种输入格式。
+工具 schema 在 mcp_tools.py，执行逻辑在 mcp_handlers.py。
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from typing import Any
+
+from mcp_handlers import _warm_core_async, execute_tool
+from mcp_tools import listed_tools, sanitize_tool
+
+try:
+    from secret_guard import redact_data
+except ImportError:  # pragma: no cover - 脱敏模块不可用时不得静默放行
+    def redact_data(data):
+        raise RuntimeError("secret_guard 不可用：拒绝输出未经脱敏的工具结果")
+
+
+def _redact_response(response: dict[str, Any]) -> dict[str, Any]:
+    """tools/call 出口统一脱敏：覆盖所有分支，而不只是 _ok 成功路径。
+
+    _ok 内部已有一层（成功结果），但错误信息、surface 工具与兜底 except
+    都是裸 return，异常里常带回上游响应体——那里恰恰最容易带凭据。
+    放在 RPC 边界是唯一能一次覆盖全部出口的位置；两层叠加的代价是
+    对已脱敏文本再跑一次正则，实测 <0.5ms。
+    """
+    return redact_data(response)
+
+try:
+    import hot_state  # 代码/配置指纹自重启（失效则退化为旧行为：进程常驻）
+except Exception:  # pragma: no cover
+    hot_state = None  # type: ignore[assignment]
+
+# 版本来源：与 package.json / SKILL.md 保持一致（发布时统一升版；
+# tests/test_consistency_gates.py 会四端对账，漂移即红）
+ARGO_MCP_VERSION = "2.14.1"
+
+_response_format = "content-length"  # 根据客户端请求自动切换
+
+
+def handle_rpc(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    """处理 JSON-RPC 请求。"""
+    if method == "initialize":
+        _warm_core_async()
+        # 工具面真源在 mcp_tools.CORE_TOOL_NAMES：文案在这里只写「CORE 指哪
+        # 几个」的语义，不逐个列名——列名就有了第二份真源，改一处忘另一处时
+        # 模型会按旧名单调工具。机械对拍见 test_mcp_consolidated_tools.py::
+        # test_instructions_matches_core。
+        return {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {
+                "name": "argo",
+                "version": ARGO_MCP_VERSION
+            },
+            # 短指令：降 tools 上下文；细节在 tool schema。
+            # URL 在 results[].url（默认 envelope=False，不生成 sources）。
+            #
+            # 文案只写「CORE 指哪几个」的语义，不逐个列全名单——全名单在
+            # tools/list 里，抄一份到这里就有了第二真源。机械对拍见
+            # test_mcp_consolidated_tools.py::test_instructions_matches_core。
+            #
+            # 不点名 argo_local_search：它是真工具（domain=local 也能用），但
+            # 已不在默认注入面，写进「日常」文案会让模型去调一个没挂的工具。
+            "instructions": (
+                "Argo：日常四件套见 tools/list（argo_search 统一检索，URL 在 "
+                "results[].url；argo_fetch 抓取；argo_research 深度取证，"
+                "内建 academic/finance 等 topic profile、不调外部 skill；"
+                "argo_screenshot 截图）。argo_search 用 domain 切社交/招聘/本机。"
+                "其余工具默认不注入 schema，ARGO_MCP_TOOLS=all 打开："
+                "local_search/local_read/recompute/evidence/clarify/crawl/"
+                "extract/preflight/answer/watch/cite。"
+            ),
+        }
+
+    elif method == "tools/list":
+        _warm_core_async()
+        # 出口净化（issue #46）：严格网关（火山方舟/腾讯云 MaaS）会因 schema
+        # 里的 default/minimum/minItems 等非标注解直接 400。源头已写干净，
+        # 这里再兜一层——以后有人加回违规键时，拦住的是网关而不是用户。
+        return {"tools": [sanitize_tool(t) for t in listed_tools()]}
+
+    elif method == "tools/call":
+        tool_name = params.get("name", "")
+        arguments = params.get("arguments")
+        if not isinstance(arguments, dict):
+            # 宿主可能发 "arguments": null / 字符串（实测：AttributeError 逃到
+            # run_stdio 兜底 except，响应 -32000 且 id 打成 null，宿主无法
+            # 对账）。MCP 规范里 arguments 是 object，畸形一律按空对象走
+            # 正常缺参校验。
+            arguments = {}
+        return _redact_response(execute_tool(tool_name, arguments))
+
+    elif method == "ping":
+        return {}
+
+    elif method.startswith("notifications/"):
+        # 通知消息无需回复
+        return None
+
+    else:
+        return {"error": {"code": -32601, "message": f"Method not found: {method}"}}
+
+
+def run_stdio():
+    """运行 MCP stdio 服务。MCP 帧协议：Content-Length: N\\r\\n\\r\\n{json}"""
+    import sys, os, time as _time
+
+    global _response_format
+
+    sys.stderr.write("[argo-mcp] ready, waiting for stdin\n")
+    sys.stderr.flush()
+
+    while True:
+        # 每轮先归零：兜底 except 发错误响应时带本轮 id——若沿用上一轮残值，
+        # 会把错误对账到不相干的请求上（解析失败轮则保持 null）
+        request_id = None
+        try:
+            # 代码/配置热生效：循环顶部 = 上一个响应已 flush、无在途工作，
+            # 此刻 execv 最安全。stdio fd 跨 exec 继承，客户端连接不断；
+            # 磁盘状态（quota/熔断/缓存）天然存活。
+            if hot_state is not None and hot_state.should_reload():
+                sys.stderr.write("[argo-mcp] fingerprint changed → self-exec reload\n")
+                sys.stderr.flush()
+                if hot_state.self_exec():
+                    continue
+
+            # 读取 Content-Length 头
+            header = sys.stdin.buffer.readline()
+            if not header:
+                sys.stderr.write("[argo-mcp] EOF on stdin, exiting\n")
+                sys.stderr.flush()
+                break  # EOF
+            header_str = header.decode("utf-8", errors="replace").strip()
+            if not header_str:
+                continue
+            if not header_str.startswith("Content-Length:"):
+                # NDJSON 格式（Kimix 等）
+                _response_format = "ndjson"
+                try:
+                    request = json.loads(header_str)
+                except json.JSONDecodeError:
+                    _send_error(None, -32700, "Parse error")
+                    continue
+            else:
+                _response_format = "content-length"
+                length = int(header_str.split(":")[1].strip())
+                sys.stdin.buffer.readline()  # skip blank line
+                body = sys.stdin.buffer.read(length).decode("utf-8")
+                request = json.loads(body)
+
+            method = request.get("method", "")
+            params = request.get("params", {})
+            request_id = request.get("id")
+
+            response = handle_rpc(method, params)
+
+            # 通知消息无需回复
+            if response is None:
+                continue
+
+            # 协议级错误（handle_rpc 的裸 {"error": {code, message}} 形态）
+            # 必须走 JSON-RPC error 通道；包成成功 result 会让客户端把
+            # 「Method not found」这类错误当正常响应解析。
+            if isinstance(response, dict) and "error" in response and "content" not in response:
+                err = response["error"]
+                _send_error(request_id, int(err.get("code", -32000) or -32000),
+                            str(err.get("message", "internal error")))
+                continue
+
+            if request_id is not None:
+                _send_response({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": response
+                })
+
+        except json.JSONDecodeError:
+            _send_error(None, -32700, "Parse error")
+        except KeyboardInterrupt:
+            # Windows 控制台 Ctrl+C 会广播到同控制台 python 子进程，
+            # readline 被打断抛 KeyboardInterrupt（继承 BaseException，上面
+            # except Exception 接不住）。视同 EOF 干净退出，避免裸 traceback。
+            sys.stderr.write("[argo-mcp] interrupted, exiting\n")
+            sys.stderr.flush()
+            break
+        except Exception as e:
+            _send_error(request_id, -32000, f"Internal error: {e}")
+
+    # EOF/中断后硬退：在途引擎线程（社会搜并行池，非 daemon）会让解释器
+    # 退出时的 atexit join 拖到引擎内部超时（实测最长 ~15s）——宿主侧表现
+    # 为「会话已关、argo 进程残留」。此刻响应已全部 flush，盘上状态
+    # （quota/缓存/熔断）都是处理期间同步落盘的，直接硬退，不做任何 join。
+    sys.stdout.flush()
+    os._exit(0)
+
+
+def _send_response(response: dict):
+    """发送 MCP 响应，根据客户端请求格式自动选择。紧凑 separators 省传输体积。"""
+    data = json.dumps(response, ensure_ascii=False, separators=(",", ":"))
+    if _response_format == "ndjson":
+        sys.stdout.write(data + "\n")
+    else:
+        encoded = data.encode("utf-8")
+        sys.stdout.buffer.write(f"Content-Length: {len(encoded)}\r\n\r\n".encode() + encoded)
+    sys.stdout.flush()
+
+
+def _send_error(request_id, code: int, message: str):
+    """发送 JSON-RPC 错误响应。"""
+    resp = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {"code": code, "message": message}
+    }
+    _send_response(resp)
+

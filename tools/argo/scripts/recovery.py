@@ -1,0 +1,654 @@
+#!/usr/bin/env python3
+"""
+recovery.py — 空结果错误恢复决策树（P0-002）
+
+第一性原理：
+  「零结果」不是终态而是可恢复状态。用最小额外成本，按信息增益从高到低
+  逐级放宽约束，直到拿到可吸收事实或耗尽策略。
+
+MECE 五级决策树（L1→L5，成本递增）：
+  L1 放宽    : 去停用词 / 去引号 / 截断过长尾修饰
+  L2 同义    : 小同义表替换（财报↔earnings，股价↔行情，教程↔guide）
+  L3 换引擎  : 从 engines_fallback 或通用免费组合取未试引擎
+  L4 跨语言  : 非拉丁→通用英源；英文+偏好zh→中文源；中英互译启发式
+  L5 结构化  : 输出 recovery 字段告知 Agent 已降级及降级路径
+
+模式约束：
+  mode=fast : 最多 L1 + L3，禁止 L4（控制延迟/成本）
+
+设计为「计划生成器」：本模块只产出候选 (query, engines) 与理由，
+不直接执行网络请求，由 search.py 用回调执行，保持职责单一。
+
+纯本地，仅 stdlib + 一个 JSON 小表。
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+from cjk_tokens import signal_tokens
+import engine_states
+
+_BACKENDS_DIR = Path(__file__).parent.parent / "backends"
+_SYNONYMS_PATH = _BACKENDS_DIR / "query_synonyms_cn.json"
+
+
+# ── 停用词 / 尾修饰 ────────────────────────────────────────────────────────────
+
+_STOPWORDS_CN = {
+    "的", "了", "呢", "吧", "啊", "呀", "吗", "哦", "嘛", "些", "个",
+    "请问", "怎么", "如何", "一下", "帮我", "我想", "想要", "关于", "有关",
+    "求", "跪求", "谁知道", "有没有", "是不是",
+}
+_STOPWORDS_EN = {"the", "a", "an", "of", "for", "to", "please", "how", "what"}
+
+# 常见「过长尾修饰」：地点/时间/程度等，去掉后主体更聚焦
+# 年份只认「独立的四位数」：前后不能贴着数字、点、横线或斜杠。旧写法
+# `\b\d{4}` 只要求左边界，会把「GB/T 15834」的 1583 当年份切掉、剩下孤立
+# 的「4」（2026-11-07 实测 L1/L3 恢复都在用被改坏的查询）。
+_TAIL_MODIFIERS = re.compile(
+    r"(?:(?<![\w.\-/])\d{4}(?![\d.\-])年?(?:度)?|\b\d{1,2}月|"
+    r"最新|最全|详细|完整|全面|(?<!\d)(?:2020|2021|2022|2023|2024|2025|2026)(?!\d)|"
+    r"知乎|贴吧|论坛|大全|汇总|排行榜|一览|数据|报告|统计|分析|趋势)"
+)
+
+# 标识符原子：放宽与切词时整体保留，不拆、不删。切词正则只认字母数字，
+# 「GB/T 15834-2011」会变成「GB T 15834 2011」，DOI、版本号同理被拆碎，
+# 这类精确标识一旦拆开，引擎就按散词召回。顺序即优先级（DOI 先于版本号）。
+_ATOM_RE = re.compile(
+    r"\b10\.\d{4,9}/[^\s\"'“”「」]+"                  # DOI
+    r"|\bCVE-\d{4}-\d{4,}\b"                           # CVE 编号
+    # 标准号：带斜杠前缀（GB/T、ISO/IEC）或已知标准组织前缀。不放开成任意
+    # 大写词加数字，否则「AI 2026」会被当成标准号、年份删不掉。
+    r"|\b(?:[A-Z]{2,6}/[A-Z]{1,3}|RFC|ISO|IEC|IEEE|GB|GJB|JIS|DIN|ASTM|ANSI|PEP|ECMA)"
+    r"[ \t]?\d{2,6}(?:[.:\-]\d+)*"
+    r"|\bv?\d+(?:\.\d+){1,3}\b"                        # 版本号、章节号
+    r"|(?<!\d)\d{5,}(?!\d)"                             # 长数字代码（股票代码等）
+)
+
+_QUOTE_CHARS = re.compile(r'["\'“”‘’「」『』]')
+_TOKEN_RE = re.compile(r"[\u4e00-\u9fff]|[a-zA-Z0-9]+")
+_EN_WORD = re.compile(r"\b[a-zA-Z]{3,}\b")
+
+
+# ── 数据结构 ──────────────────────────────────────────────────────────────────
+
+@dataclass
+class RecoveryStep:
+    """单个恢复尝试。"""
+
+    level: str            # L1 / L2 / L3 / L4
+    strategy: str         # relax / synonym / switch_engine / translate
+    query: str
+    engines: list[str]
+    reason: str
+
+
+@dataclass
+class RecoveryResult:
+    """恢复执行的最终结构化结论（写入顶层 recovery 字段）。"""
+
+    triggered: bool = False
+    recovered: bool = False
+    level_used: str | None = None
+    strategy_used: str | None = None
+    steps_tried: list[dict[str, Any]] = field(default_factory=list)
+    final_query: str | None = None
+    note: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "triggered": self.triggered,
+            "recovered": self.recovered,
+            "level_used": self.level_used,
+            "strategy_used": self.strategy_used,
+            "steps_tried": self.steps_tried,
+            "final_query": self.final_query,
+            "note": self.note,
+        }
+
+
+# ── 同义表加载 ────────────────────────────────────────────────────────────────
+
+_synonyms_cache: dict[str, Any] | None = None
+
+
+def _load_synonyms() -> dict[str, Any]:
+    """加载同义表（缓存）。文件缺失/损坏时返回空表，不抛异常。"""
+    global _synonyms_cache
+    if _synonyms_cache is not None:
+        return _synonyms_cache
+    if not _SYNONYMS_PATH.exists():
+        _synonyms_cache = {"synonyms": {}, "en_to_cn": {}}
+        return _synonyms_cache
+    try:
+        data = json.loads(_SYNONYMS_PATH.read_text(encoding="utf-8"))
+        _synonyms_cache = {
+            "synonyms": data.get("synonyms", {}),
+            "en_to_cn": data.get("en_to_cn", {}),
+        }
+    except (json.JSONDecodeError, OSError):
+        _synonyms_cache = {"synonyms": {}, "en_to_cn": {}}
+    return _synonyms_cache
+
+
+# ── L1 放宽 ────────────────────────────────────────────────────────────────────
+
+def _relax_plain(segment: str) -> list[str]:
+    """对不含标识符原子的片段去尾修饰、孤立年月与停用词，返回保留词。"""
+    seg = _TAIL_MODIFIERS.sub(" ", segment)
+    seg = re.sub(r"(?<=\s)[年月](?=\s|$)|^([年月]\s+)", " ", seg)
+    return [t for t in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]+", seg)
+            if t.lower() not in _STOPWORDS_EN and t not in _STOPWORDS_CN]
+
+
+def relax_query(query: str) -> str:
+    """L1：去引号 / 去停用词 / 去过长尾修饰与孤立年份时间词。
+
+    标识符原子（标准号、DOI、CVE、版本号、长数字代码）原样保留，见 `_ATOM_RE`。
+    """
+    q = _QUOTE_CHARS.sub(" ", query)
+    kept: list[str] = []
+    pos = 0
+    for m in _ATOM_RE.finditer(q):
+        kept.extend(_relax_plain(q[pos:m.start()]))
+        kept.append(m.group(0))
+        pos = m.end()
+    kept.extend(_relax_plain(q[pos:]))
+    relaxed = " ".join(kept).strip()
+    # 保底：去停用词后不能为空
+    return relaxed or re.sub(r"\s+", " ", q).strip() or query
+
+
+# ── L1.5 结构化语法放宽（结果归零时逆序撤条件）─────────────────────────────────
+
+# 平台原生结构化语法：精准检索结果归零时，按「宽松代价从小到大」逐层剥离，
+# 每一步只撤一类、保留核心词。顺序＝帖子给的逆序（排除→热度→媒体→语言→日期→
+# 账号→短语）。跨平台通用：X from:/until:/min_faves:、GitHub repo:/is:、
+# Web site:、Reddit subreddit: 等。
+_STRUCTURED_RELAX_ORDER: list[tuple[str, re.Pattern]] = [
+    ("exclude", re.compile(r"(?<![A-Za-z0-9])\-\S+")),
+    ("heat",    re.compile(r"(?:min_faves|min_retweets|min_replies|min_rt|min_followers):\d+")),
+    ("media",   re.compile(r"filter:[A-Za-z]+")),
+    ("lang",    re.compile(r"lang:[A-Za-z\-]+")),
+    ("date",    re.compile(r"(?:since|until):\S+")),
+    ("account", re.compile(r"(?:from|to|via|list|repo|site|subreddit|user|org|is|label|author|assignee|milestone|comments|in|points|file|extension|path|filename):\S+")),
+    ("phrase",  re.compile(r'"[^"]+"')),
+]
+
+
+def structured_relax_steps(query: str, max_steps: int = 6) -> list[str]:
+    """按结构化语法逐层放宽，返回「从最保留到最宽」的候选查询序列。
+
+    只处理含平台语法的查询（高后果/精准检索）；无语法时返回 []。
+    每步剥掉一类条件，保留其余，符合「归零时一次撤一个、从去排除到去短语」。
+    """
+    if not query or not isinstance(query, str):
+        return []
+    steps: list[str] = []
+    cur = query
+    for _name, pat in _STRUCTURED_RELAX_ORDER:
+        if not pat.search(cur):
+            continue
+        if _name == "phrase":
+            relaxed = pat.sub(lambda m: m.group(0)[1:-1], cur)  # 去引号保留词
+        else:
+            relaxed = pat.sub(" ", cur)
+        relaxed = re.sub(r"\s+", " ", relaxed).strip()
+        if relaxed and relaxed != cur and relaxed != query:
+            steps.append(relaxed)
+            cur = relaxed
+        if len(steps) >= max_steps:
+            break
+    return steps
+
+
+def strip_structured(query: str) -> str:
+    """剥掉平台结构化字段，只保留核心关键词（供语义/通用引擎使用）。
+
+    语义型引擎（byted/bocha/anysearch 等）不理解 from:/repo:/site:/until: 这类
+    平台原生语法，把字段当普通词传进去反而污染相关性。此函数去掉「明确前缀字段」
+    与引号，保留核心词；无语法查询原样返回。`-排除` 不在此剥离（易误伤，交给 recovery）。
+    """
+    if not query or not isinstance(query, str):
+        return query
+    cur = query
+    for _name, pat in _STRUCTURED_RELAX_ORDER:
+        if _name in ("exclude", "phrase"):
+            continue
+        if pat.search(cur):
+            cur = pat.sub(" ", cur)
+    cur = _QUOTE_CHARS.sub(" ", cur)  # 去引号保留词
+    cur = re.sub(r"\s+", " ", cur).strip()
+    return cur or query
+
+
+# ── L2 同义 ────────────────────────────────────────────────────────────────────
+
+def synonym_expand(query: str) -> Optional[str]:
+    """L2：将查询中命中的词替换为首个同义词。无命中返回 None。"""
+    table = _load_synonyms()["synonyms"]
+    for term, syns in table.items():
+        if term in query and syns:
+            return query.replace(term, syns[0])
+    return None
+
+
+# ── L3 换引擎 ──────────────────────────────────────────────────────────────────
+
+# 通用免费源清单：唯一来源 engine_policy.GENERAL_FREE_FALLBACK（与 route 保底共用，
+# 避免两处清单漂移）。顺序 = 通用检索优先，百科殿后。
+try:
+    from engine_policy import GENERAL_FREE_FALLBACK as _GENERAL_FREE_COMBO  # noqa: E402
+except ImportError:
+    _GENERAL_FREE_COMBO = ["anysearch", "duckduckgo", "local_bing", "local_baidu", "wikipedia"]
+
+# 空结果恢复只允许「通用检索 + 百科」；垂直污染源（pypi/npm/jin10 等）一律禁入。
+# 例外：已尝试引擎同族可保留（如 tried 含 thesportsdb → 可补 sports 族）。
+_RECOVERY_SAFE_FAMILIES = frozenset({"web_general", "knowledge"})
+
+
+def _engine_family(name: str) -> str:
+    try:
+        from engine_families import family_of
+        try:
+            from config import get_engines
+            spec = (get_engines() or {}).get(name)
+        except Exception:
+            spec = None
+        # 必须把引擎声明传进去：config.yaml 的 family 字段才是来源。不传时
+        # family_of 会退回静态覆盖表、再退到默认值 web_general——而恢复链正好
+        # 把 web_general 列为「安全族」，于是那些只在 config 里声明了族的垂直源
+        # （如 doi=academic）会被误判成通用源放行进来，正是 _RECOVERY_SAFE_FAMILIES
+        # 想挡住的东西。
+        return family_of(name, spec)
+    except Exception:
+        return "web_general"
+
+
+def _recovery_engine_allowed(eng: str, tried_families: set[str]) -> bool:
+    """L3/L4 备选是否安全：通用/百科，或与已试引擎同族。"""
+    fam = _engine_family(eng)
+    return fam in _RECOVERY_SAFE_FAMILIES or fam in tried_families
+
+
+def pick_alternative_engines(tried: list[str], engines_fallback: list[str] | None,
+                             enabled: set[str] | None = None,
+                             max_n: int = 2, mode: str = "auto") -> list[str]:
+    """L3：挑选未尝试过的备选引擎。
+
+    优先通用免费组合（anysearch/ddg/bing/wiki），再同族垂直，再路由 fallback。
+    禁止 code/行情/快讯等与查询域无关的垂直源污染结果。
+    """
+    tried_set = set(tried)
+    tried_families = {_engine_family(e) for e in tried}
+    picks: list[str] = []
+
+    def _try_add(eng: str) -> bool:
+        if eng in tried_set or eng in picks:
+            return False
+        if enabled is not None and eng not in enabled:
+            return False
+        if not _recovery_engine_allowed(eng, tried_families):
+            return False
+        picks.append(eng)
+        return len(picks) >= max_n
+
+    # 1) 通用免费源优先（避免 fallback 全量 enabled 把 pypi/npm 排到前面）
+    for eng in _GENERAL_FREE_COMBO:
+        if _try_add(eng):
+            return picks
+
+    # 2) 同族垂直（如 knowledge 补 wikidata；sports 补其它体育源）。候选 = 域声明
+    #    engines_fallback + family_candidates 按已试族从全注册表激活的启用源（含
+    #    「单跑可用但域 combo 选不中」的孤儿源）——family_candidates 正是设计为此的
+    #    「能力族×语言×模式」单一取源口，此处首次接线。仍过 _engine_family 同族门 +
+    #    _try_add 安全门（_recovery_engine_allowed）。family_candidates 不可用时退回
+    #    engines_fallback（失败安全，不影响原有恢复链）。
+    _same_fam: list[str] = list(engines_fallback or [])
+    try:
+        from engine_families import family_candidates
+        for _fam in sorted(tried_families):  # set 迭代序不定，候选顺序必须确定
+            for _e in family_candidates(_fam, "*", enabled=enabled, mode=mode):
+                if _e not in _same_fam:
+                    _same_fam.append(_e)
+    except Exception:
+        pass
+    for eng in _same_fam:
+        if _engine_family(eng) in tried_families and _try_add(eng):
+            return picks
+
+    # 3) 其余安全 fallback（仍过 family 检查）
+    for eng in engines_fallback or []:
+        if _try_add(eng):
+            return picks
+    return picks
+
+
+# ── L4 跨语言回退（原中英互译启发式升级）───────────────────────────────────────
+
+# 非拉丁 / 中文主语言零结果时，用通用源补搜（原文即可，无需真翻译）
+_CROSS_LANG_ENGINES = ["anysearch", "local_bing", "wikipedia"]
+# 中英基线反向：英文主查询零结果且用户偏好含 zh 时，补中文源
+_CN_BASELINE_ENGINES = ["local_bing", "anysearch", "bocha"]
+
+_CROSS_LANG_SIGNAL = re.compile(
+    r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\u0400-\u04ff\u0e00-\u0e7f"
+    r"\u0600-\u06ff\u0590-\u05ff\u0370-\u03ff\u0900-\u097f]"
+)
+
+
+def _is_non_latin_script(query: str) -> bool:
+    """是否含非拉丁书写系统字符（日韩/西里尔/泰/阿/希伯来/希腊/天城体等）。"""
+    return bool(_CROSS_LANG_SIGNAL.search(query))
+
+
+def translate_heuristic(query: str) -> Optional[str]:
+    """L4：从中文/日韩查询抽英文 token 组新查询；或用同义表做中→英映射。
+
+    非真翻译：仅提取已有英文 token + 同义表英文对照，供英文源二次检索。
+    无可用英文信号时返回 None。
+    """
+    en_tokens = [w for w in _EN_WORD.findall(query)]
+    mapped: list[str] = []
+    table = _load_synonyms()["synonyms"]
+    for term, syns in table.items():
+        if term in query:
+            for s in syns:
+                if s.isascii():
+                    mapped.append(s)
+                    break
+    combined = []
+    for t in en_tokens + mapped:
+        if t not in combined:
+            combined.append(t)
+    if not combined:
+        return None
+    return " ".join(combined)
+
+
+def cross_lang_query(query: str, primary_lang: str = "") -> tuple[Optional[str], str]:
+    """跨语言回退：构造补搜查询与引擎组合。
+
+    规则：
+      - 主语言为英文/拉丁且无非拉丁字符 → 无需跨语言回退，返回 (None, "")。
+      - 含非拉丁书写系统（或主语言为非拉丁）→ 返回 (query, 通用源组合)，
+        用原文在 duckduckgo/anysearch/wikipedia 补搜（无需真翻译）。
+
+    返回 (补搜查询, 引擎列表逗号串)；无需回退时返回 (None, "")。
+    """
+    if not query:
+        return None, ""
+    non_latin = _is_non_latin_script(query)
+    if primary_lang:
+        # 显式主语言：拉丁系且无非拉丁字符才跳过
+        if primary_lang in ("en", "latin") and not non_latin:
+            return None, ""
+        # mixed 纯拉丁也跳过；mixed 含汉字/假名等仍回退
+        if primary_lang == "mixed" and not non_latin:
+            return None, ""
+    elif not non_latin:
+        return None, ""
+    return query, ",".join(_CROSS_LANG_ENGINES)
+
+
+def baseline_cross_query(
+    query: str,
+    primary_lang: str = "",
+    prefer: list[str] | None = None,
+) -> tuple[Optional[str], str]:
+    """中英基线补搜：英文主查询零结果时，若偏好含 zh，用中文源再试原文。
+
+    对称于 cross_lang_query（非拉丁→通用英源）。仅在 prefer 含 zh 时触发，
+    避免纯英文市场用户被强塞中文源。
+    """
+    if not query:
+        return None, ""
+    lang = primary_lang
+    if not lang:
+        try:
+            from lang_detect import detect_language
+            lang = detect_language(query)
+        except ImportError:
+            lang = "en"
+    if lang not in ("en", "latin"):
+        return None, ""
+    if _is_non_latin_script(query):
+        return None, ""
+    prefs = prefer
+    if prefs is None:
+        try:
+            from lang_pref import prefer_langs
+            prefs = prefer_langs(query_lang=lang)
+        except ImportError:
+            prefs = ["zh", "en"]
+    if "zh" not in (prefs or []):
+        return None, ""
+    return query, ",".join(_CN_BASELINE_ENGINES)
+
+
+# ── 计划生成 ──────────────────────────────────────────────────────────────────
+
+def build_recovery_plan(query: str, tried_engines: list[str],
+                        engines_fallback: list[str] | None = None,
+                        enabled: set[str] | None = None,
+                        mode: str = "auto",
+                        max_level: str | None = None) -> list[RecoveryStep]:
+    """构造有序恢复步骤（L1→L5）。
+
+    Args:
+        query: 已经失败（零结果）的查询。
+        tried_engines: 已尝试的引擎列表。
+        engines_fallback: 路由给出的未使用引擎候选。
+        enabled: 当前可用引擎集合（用于过滤 L3 候选）。
+        mode: 预算模式；fast 仅允许 L1 + L3，禁止 L4。
+
+    Returns:
+        RecoveryStep 列表（可能为空）。
+    """
+    steps: list[RecoveryStep] = []
+    base_engines = list(tried_engines) or ["anysearch"]
+
+    # 本轮主语言：供 L4 跨语 / 中英基线判断
+    primary_lang = ""
+    try:
+        from lang_detect import detect_language
+        primary_lang = detect_language(query)
+    except ImportError:
+        pass
+
+    prefer: list[str] = []
+    try:
+        from lang_pref import prefer_langs
+        prefer = prefer_langs(query_lang=primary_lang)
+    except ImportError:
+        prefer = ["zh", "en"]
+
+    # L1 放宽
+    # 止损：显式指定单一引擎且无备选时，L1 放宽仍在同一引擎上重试，白烧一轮 RTT。
+    # 只在有备选引擎（L3 可能换引擎）时才做 L1 同引擎重试。
+    _has_fallback = bool(engines_fallback) or len(tried_engines) > 1
+    relaxed = relax_query(query)
+    if relaxed and relaxed != query and _has_fallback:
+        steps.append(RecoveryStep(
+            level="L1", strategy="relax", query=relaxed, engines=base_engines,
+            reason="去停用词/引号/尾修饰后重试"))
+
+    # L1.5 结构化语法放宽（结果归零时逆序撤条件，每步只撤一类）
+    for _i, rq in enumerate(structured_relax_steps(query, max_steps=4)):
+        if rq == query:
+            continue
+        steps.append(RecoveryStep(
+            level="L1", strategy="drop_syntax", query=rq, engines=base_engines,
+            reason="结构化语法放宽（按「排除→热度→媒体→语言→日期→账号→短语」撤一类条件）"))
+
+    # L2 同义（fast 也允许，成本低）
+    syn = synonym_expand(query)
+    if syn and syn != query:
+        steps.append(RecoveryStep(
+            level="L2", strategy="synonym", query=syn, engines=base_engines,
+            reason="同义词替换重试"))
+
+    # L3 换引擎
+    alt = pick_alternative_engines(tried_engines, engines_fallback, enabled, mode=mode)
+    if alt:
+        steps.append(RecoveryStep(
+            level="L3", strategy="switch_engine", query=relaxed or query,
+            engines=alt, reason=f"切换未试引擎: {','.join(alt)}"))
+
+    # L4 跨语言回退（fast 禁止）
+    if mode != "fast":
+        # 非拉丁 / 中文 → 通用英源补搜
+        cross_q, cross_engines = cross_lang_query(query, primary_lang=primary_lang)
+        if cross_engines:
+            steps.append(RecoveryStep(
+                level="L4", strategy="cross_lang",
+                query=cross_q or query, engines=cross_engines.split(","),
+                reason="跨语言回退：非英文主语言用通用源补搜"))
+        # 中英基线反向：英文查询 + 偏好含 zh → 中文源补搜
+        base_q, base_engines_s = baseline_cross_query(
+            query, primary_lang=primary_lang, prefer=prefer)
+        if base_engines_s:
+            eng_list = [e for e in base_engines_s.split(",")
+                        if enabled is None or e in enabled]
+            if not eng_list:
+                eng_list = base_engines_s.split(",")
+            steps.append(RecoveryStep(
+                level="L4", strategy="baseline_zh",
+                query=base_q or query, engines=eng_list,
+                reason="中英基线：英文主查询零结果，偏好含 zh 时补中文源"))
+        # 中英互译启发式（有英文 token / 同义表映射时）
+        trans = translate_heuristic(query)
+        if trans and trans.lower() != query.lower():
+            trans_engines = pick_alternative_engines(
+                [], engines_fallback,
+                enabled, max_n=2, mode=mode) or ["duckduckgo", "wikipedia"]
+            steps.append(RecoveryStep(
+                level="L4", strategy="translate", query=trans,
+                engines=trans_engines, reason="中英互译启发式重试"))
+
+    # fast 模式：仅保留 L1 + L3
+    if mode == "fast":
+        steps = [s for s in steps if s.level in engine_states.RECOVERY_FAST_LEVELS]
+
+    # 复杂度门控：low 查询只保留低成本放宽（L1/L2），禁高价多源/跨语言（L3/L4）。
+    # 词表见 engine_states §23：L0 是恢复车道专用，成本序 -1；未登记的
+    # max_level 一律 fail-closed 返回空计划，绝不能回退到最高档 3（旧实现
+    # `.get(..., 3)` 让 max_level="L0" 放行全部高价策略，门控形同虚设）。
+    if max_level:
+        cut = engine_states.recovery_level_tier(max_level)
+        if cut is None:
+            return []
+        # 步骤等级同样 fail-closed：未登记等级一律剔除，不用 `or 0` 把
+        # None 当 L1 放行（那会重演本条注释要堵的静默回退）。
+        steps = [s for s in steps
+                 if (tier := engine_states.recovery_level_tier(s.level)) is not None
+                 and tier <= cut]
+
+    return steps
+
+
+# ── 执行调度（供 search.py 调用）───────────────────────────────────────────────
+
+# recovery 接受结果前的停用词（不含 WHO 等缩写；缩写靠 isupper 保留）
+_REC_SIGNAL_STOP = {
+    "the", "a", "an", "of", "for", "to", "in", "on", "at", "is", "are", "was", "were",
+    "how", "what", "which", "when", "where", "whom", "whose", "why", "who",
+    "and", "or", "with", "from", "that", "this", "year", "years", "founded", "founding",
+    "headquarters", "please", "latest", "about",
+    "请问", "怎么", "如何", "关于", "有关", "年份", "时间", "成立", "创办", "创立",
+    "总部", "职能", "简介", "最新", "详细",
+}
+
+
+def _result_has_query_signal(query: str, item: dict[str, Any]) -> bool:
+    """恢复结果须与查询有实质 token 重叠，避免 Chegg/无关广告被当成恢复成功。"""
+    if not query or not isinstance(item, dict):
+        return False
+    blob = f"{item.get('title', '')} {item.get('snippet', '')} {item.get('url', '')}".lower()
+    if not blob.strip():
+        return False
+    # 中文走 2-gram 展开（cjk_tokens）：旧写法 `[\u4e00-\u9fff]{2,}` 会把无空格
+    # 中文整句吃成一个 token，子串包含恒假 → 真实结果全被拒 → 中文查询的恢复
+    # 链路形同不存在（实测 6 个无空格中文查询：旧判据通过 0~2/5，展开后 5/5）。
+    keys = signal_tokens(query, stop=_REC_SIGNAL_STOP)
+    if not keys:
+        return True  # 无可用信号时不拦
+    return any(k in blob for k in keys)
+
+
+def run_recovery(query: str, tried_engines: list[str],
+                 executor: Callable[[str, list[str]], list[dict[str, Any]]],
+                 engines_fallback: list[str] | None = None,
+                 enabled: set[str] | None = None,
+                 mode: str = "auto",
+                 max_level: str | None = None) -> tuple[list[dict[str, Any]], RecoveryResult]:
+    """执行恢复决策树，返回 (结果列表, 结构化 RecoveryResult)。
+
+    executor(query, engines) 必须返回结果 list（可空），不得抛异常。
+
+    Returns:
+        (results, recovery_result)：results 为首个非空恢复结果（否则空列表）。
+    """
+    result = RecoveryResult(triggered=True, final_query=query)
+    plan = build_recovery_plan(
+        query, tried_engines, engines_fallback, enabled, mode, max_level=max_level)
+
+    if not plan:
+        result.note = "无可用恢复策略"
+        return [], result
+
+    for step in plan:
+        try:
+            hits = executor(step.query, step.engines)
+        except Exception as e:  # 显式记录执行异常，不静默
+            result.steps_tried.append({
+                "level": step.level, "strategy": step.strategy,
+                "query": step.query, "engines": step.engines,
+                "outcome": f"executor-error: {type(e).__name__}",
+            })
+            continue
+        goods = [r for r in (hits or [])
+                 if isinstance(r, dict) and "error" not in r
+                 and _result_has_query_signal(step.query, r)]
+        result.steps_tried.append({
+            "level": step.level, "strategy": step.strategy,
+            "query": step.query, "engines": step.engines,
+            "outcome": f"{len(goods)} results",
+        })
+        if goods:
+            result.recovered = True
+            result.level_used = step.level
+            result.strategy_used = step.strategy
+            result.final_query = step.query
+            result.note = f"经 {step.level}/{step.strategy} 恢复成功"
+            return goods, result
+
+    result.note = "所有恢复策略均无结果"
+    return [], result
+
+
+# ── CLI 测试 ──────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import sys
+
+    tests = sys.argv[1:] if len(sys.argv) > 1 else [
+        '"贵州茅台" 2025 最新财报 详细',
+        "英伟达 财报 请问怎么看",
+        "React 教程 入门",
+    ]
+    for q in tests:
+        print(f"原始: {q}")
+        print(f"  L1 放宽: {relax_query(q)}")
+        print(f"  L2 同义: {synonym_expand(q)}")
+        print(f"  L4 译词: {translate_heuristic(q)}")
+        plan = build_recovery_plan(q, ["anysearch"], ["duckduckgo", "wikipedia"],
+                                   mode="auto")
+        for s in plan:
+            print(f"  [{s.level}] {s.strategy}: q='{s.query}' engines={s.engines}")
+        print("-" * 60)

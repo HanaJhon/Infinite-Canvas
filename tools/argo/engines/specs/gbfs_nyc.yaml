@@ -1,0 +1,40 @@
+# GBFS — 通用共享单车/滑板车标准规范（免认证）
+# 补「共享单车实时站点」空白：GBFS 是标准规范，全球数百城市同构，
+# 换 base URL 即可复用（本 spec 以 NYC Citi Bike 为首发，其余城市按需追加）。
+# 榜单/快照型源：查询词不参与过滤，命中即给城市站点清单。
+# 验证:
+#   python3 scripts/engine_validate.py --engine gbfs_nyc --stage all --admit --write-doc
+
+engine_id: gbfs_nyc
+type: http
+enabled: true
+cost_tier: free
+method: GET
+url: https://gbfs.citibikenyc.com/gbfs/en/station_information.json
+timeout: 15
+query_param: ""
+canary_query: "bike"
+# 词面门豁免：站点列表是固定 GBFS 快照（url 无查询参数），item_title 是
+# 站名（「3 Ave & E 109 St」），对 bike share 类查询天然零词面交集
+relevance_check: false
+desc: "GBFS 共享单车站点（NYC Citi Bike，通用规范，免认证）"
+coverage: [transport, geo, realtime, open_data]
+recommended: false
+latency_ms: 1500
+
+headers:
+  User-Agent: argo-search/1.0 (+gbfs)
+
+output_map:
+  items: data.stations
+  item_title: name
+  item_summary: capacity
+  # 站点位置链走 OSM，**不要**改回 Google Maps：maps.google.com 的宿主后缀命中
+  # serp_guard 的 serp_host_markers（google.com），而 path="/" 又落在 SERP 路径
+  # 元组里，于是每一条结果都被当 SERP 壳丢弃——引擎实测恒 0 条输出，却在
+  # --list-engines 里报 ready、outcome 报 ok/10 条（失败伪装成功，2026-10-26 实测）。
+  # OSM 同为开放地图、链接稳定，且不被壳守卫误杀。
+  url_template: "https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=18/{lat}/{lon}"
+
+quality_queries:
+  - query: "bike share"

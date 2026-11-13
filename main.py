@@ -6844,7 +6844,7 @@ AGENT_WEB_TOOL_SPECS = [
         "desc": (
             "在互联网上搜索，返回标题 + 链接 + 摘要。用于查询实时信息、"
             "产品/模型的最新动态、行业资料、他人评价等你自己不知道或可能过时的内容。"
-            "默认走必应（Bing），结果不理想时可用 engine 参数换搜索引擎重搜。"
+            "默认走内置的 argo 多引擎搜索；结果不理想时可用 engine 参数换必应/搜狗/DuckDuckGo 重搜。"
         ),
         "parameters": {
             "type": "object",
@@ -6853,8 +6853,8 @@ AGENT_WEB_TOOL_SPECS = [
                 "limit": {"type": "integer", "description": f"返回条数，默认 6，最大 {AGENT_WEB_RESULT_LIMIT + 2}"},
                 "engine": {
                     "type": "string",
-                    "enum": ["", "bing", "ddg"],
-                    "description": "搜索引擎：留空=自动（Bing 优先、DuckDuckGo 兜底）；bing 强制必应；ddg 强制 DuckDuckGo",
+                    "enum": ["", "argo", "bing", "ddg"],
+                    "description": "搜索引擎：留空=自动（argo 优先，失败回落到必应/搜狗/DDG）；bing 强制必应；ddg 强制 DuckDuckGo",
                 },
             },
             "required": ["query"],
@@ -7213,6 +7213,83 @@ def _search_one_backend(kind, templates, query):
     raise RuntimeError(last or "无结果")
 
 
+# ---------- argo 搜索（随包内置，tools/argo）----------
+# 为什么换 argo：必应/DDG/百度对脚本请求限流（DDG 直接甩验证页、必应降级成泛结果），
+# 自研解析器只能靠一个搜狗硬撑。argo 自带几百个引擎和路由/恢复策略，无 key 也能跑。
+ARGO_DIR = os.path.join(BASE_DIR, "tools", "argo")
+ARGO_RUNNER = os.path.join(BASE_DIR, "tools", "argo_runner.py")
+AGENT_ARGO_TIMEOUT = 30          # argo 自己 --timeout 管单引擎，这里只兜住整个子进程
+
+
+def _argo_search(query, limit=6, timeout=AGENT_ARGO_TIMEOUT):
+    """跑一次 argo 搜索。返回 (results, error)；results 形如 [{title,url,snippet}]。"""
+    if not os.path.isfile(ARGO_RUNNER):
+        return [], "argo 未安装"
+    env = dict(os.environ)
+    # 🚨 本机注册表里有系统代理，requests 会读它：一次请求从 1s 变成 30s+，
+    #    上一次自研搜索也是栽在这（见 _WEB_DIRECT_OPENER 的注释）。
+    env["NO_PROXY"] = env["no_proxy"] = "*"
+    cmd = [sys.executable, ARGO_RUNNER, str(query), "--json",
+           "--max-results", str(max(1, int(limit or 6))), "--no-timing"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=timeout, env=env, cwd=ARGO_DIR,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except subprocess.TimeoutExpired:
+        return [], f"argo 超时（{timeout}s）"
+    except Exception as exc:
+        return [], f"argo 起不来：{str(exc)[:80]}"
+    out = (proc.stdout or b"").decode("utf-8", "replace").strip()
+    data = None
+    for line in reversed(out.splitlines()):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                data = json.loads(line)
+                break
+            except ValueError:
+                continue
+    if not isinstance(data, dict):
+        err = (proc.stderr or b"").decode("utf-8", "replace").strip()[-200:]
+        return [], f"argo 没输出 JSON：{err or '无输出'}"
+    items = []
+    for row in (data.get("results") or data.get("web_results") or []):
+        if not isinstance(row, dict):
+            continue
+        url = str(row.get("url") or "").strip()
+        if not url.startswith("http"):
+            continue
+        items.append({"title": str(row.get("title") or url)[:200],
+                      "url": url,
+                      "snippet": re.sub(r"\s+", " ", str(row.get("snippet") or ""))[:400]})
+    if not items:
+        errors = [str(e) for e in (data.get("errors") or []) if e]
+        return [], "argo 没搜到：" + ("；".join(errors)[:160] if errors else "引擎都没给结果")
+    return items, ""
+
+
+def _web_results_payload(results, used):
+    """把 [(title,url,snippet)] 变成一个给模型看的搜索结果包。"""
+    lines = []
+    for i, item in enumerate(results, 1):
+        lines.append(f"{i}. {item['title']}\n   {item['url']}"
+                     + (f"\n   {item['snippet']}" if item.get("snippet") else ""))
+    return {
+        "ok": True,
+        "summary": f"{len(results)} 条结果（{used}）",
+        "output": agent_truncate("\n".join(lines)),
+        "results": results,
+        "engine": used,
+    }
+
+
+def _cache_web_result(cache_key, data):
+    _AGENT_WEB_CACHE[cache_key] = {"ts": time.time(), "data": data}
+    if len(_AGENT_WEB_CACHE) > AGENT_WEB_CACHE_MAX:
+        for key in sorted(_AGENT_WEB_CACHE, key=lambda k: _AGENT_WEB_CACHE[k]["ts"])[:10]:
+            _AGENT_WEB_CACHE.pop(key, None)
+    return data
+
+
 def web_search_sync(query, limit=6, engine=""):
     """多引擎搜索：Bing + DuckDuckGo 并行跑，按 URL 去重后轮转合并。
 
@@ -7231,6 +7308,11 @@ def web_search_sync(query, limit=6, engine=""):
     cached = _AGENT_WEB_CACHE.get(cache_key)
     if cached and time.time() - cached["ts"] < AGENT_WEB_CACHE_TTL:
         return cached["data"]
+    argo_error = ""
+    if not want or want == "argo":
+        argo_items, argo_error = _argo_search(q, limit)
+        if argo_items:
+            return _cache_web_result(cache_key, _web_results_payload(argo_items[:limit], "argo"))
     backends = [item for item in AGENT_WEB_SEARCH_BACKENDS if not want or item[0] == want]
     if not backends:
         backends = list(AGENT_WEB_SEARCH_BACKENDS)
@@ -7284,6 +7366,8 @@ def web_search_sync(query, limit=6, engine=""):
         index += 1
     if not results:
         detail = "；".join(errors) if errors else "解析不到结果（可能被限流或改版）"
+        if argo_error:
+            detail = argo_error + "；" + detail
         if errors and all("解析不到结果" in e or "超时" in e for e in errors):
             detail += "（各引擎都返回了验证页/泛结果，通常是被限流，等几秒再搜）"
         # 失败时给模型一条明确的下一步：换引擎重搜一次就够，别再硬刚，也别编答案
@@ -7292,23 +7376,8 @@ def web_search_sync(query, limit=6, engine=""):
                       else "；可改用 engine:\"bing\" 再搜一次"))
         return {"ok": False, "summary": f"搜索失败：{detail}{hint}",
                 "output": "", "results": []}
-    lines = []
-    for i, item in enumerate(results, 1):
-        lines.append(f"{i}. {item['title']}\n   {item['url']}"
-                     + (f"\n   {item['snippet']}" if item["snippet"] else ""))
     used = "/".join(kind for kind in order if per_engine.get(kind))
-    data = {
-        "ok": True,
-        "summary": f"{len(results)} 条结果（{used}）",
-        "output": agent_truncate("\n".join(lines)),
-        "results": results,
-        "engine": used,
-    }
-    _AGENT_WEB_CACHE[cache_key] = {"ts": time.time(), "data": data}
-    if len(_AGENT_WEB_CACHE) > AGENT_WEB_CACHE_MAX:
-        for key in sorted(_AGENT_WEB_CACHE, key=lambda k: _AGENT_WEB_CACHE[k]["ts"])[:10]:
-            _AGENT_WEB_CACHE.pop(key, None)
-    return data
+    return _cache_web_result(cache_key, _web_results_payload(results, used))
 
 
 def web_read_sync(url, max_chars=AGENT_WEB_READ_CHARS):

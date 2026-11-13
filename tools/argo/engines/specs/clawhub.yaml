@@ -1,0 +1,50 @@
+# ClawHub — OpenClaw 技能生态聚合搜索（skill 域，GET JSON，keyless）
+# 聚合器：索引含 OpenClaw 原生技能 + skills.sh（Vercel 生态）条目，
+# 与 redskill（小红书生态）/ skillsmp（独立索引）/ explainx / skills.sh 互补。
+#
+# 为什么是 L3（2026-10-26 从 L1 声明式改过来）：
+#   上游有 `downloads`（生态下载量）与 `official`（官方标记），L1 的 output_map
+#   透不出。下载量是这一源独有的口径，值得进摘要；官方标记帮助用户识别可信源。
+#
+# 口径：downloads 是 ClawHub 生态下载量，与 skills.sh 的 Vercel 遥测、
+#   SkillsMP 的仓库星数、explainx 的平台统计互不可比，别混用。
+# install.reference 是 `owner/slug` 形式的安装引用（sourceUrl 多为 null）。
+#
+# 实现: scripts/engines_builders_skill.py::_build_clawhub_engine
+# 验证:
+#   python3 scripts/engine_validate.py --engine clawhub --stage all --admit --write-doc
+
+engine_id: clawhub
+type: clawhub
+enabled: true
+cost_tier: free
+label: ClawHub 技能目录
+family: misc_vertical
+priority: 50
+qps: 2
+period: second
+limit: null
+cost_per_call: 0.0
+cost_unit: free
+timeout: 15
+canary_query: "git commit"
+coverage:
+- skill
+- developer
+- tech
+desc: "ClawHub 技能生态聚合（OpenClaw + skills.sh 条目，免认证，带生态下载量与官方标记）"
+# 可验证出处声明（L3 builder 自行拼字段，不读本表；保留它是为了把「这个源
+# 必须给出安装引用」写成声明，由 tests/test_skill_registry_contract.py 把守）。
+# builder 侧对应实现：url 由 canonicalUrl 拼站内页，摘要前缀带下载量与官方标记。
+output_map:
+  items: results
+  item_title: displayName
+  item_url: canonicalUrl
+  item_summary: summary
+  item_upstream: install.reference
+  item_published_at: updatedAt
+  url_template: "https://clawhub.ai{canonicalUrl}"
+quality_queries:
+  - query: "git commit"
+  - query: "code review"
+  - query: "pdf"

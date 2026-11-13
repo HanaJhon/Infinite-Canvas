@@ -1,0 +1,379 @@
+#!/usr/bin/env python3
+"""net_proxy.py — 出口调度：代理解析与按域规则（issue #13，2026-09-14）。
+
+问题本质：进程默认直连。受限网络下部分域（github.com 等）直连不可达必须经
+代理，而另一些域（国内源）走代理反而更慢或触发风控。本模块是 argo 全部
+命令行网络层的唯一出口决策点，http_client / engines_base.http_open 共用。
+
+## 解析优先级（越具体越优先）
+
+  1. 调用方显式 override（proxy= 参数；"direct" 表示强制直连）
+  2. config.yaml `network.proxy.rules` 域名后缀命中（值=代理 URL 或 "direct"）
+  3. ARGO_PROXY 环境变量（argo 全局；"direct" 表示强制直连）
+  4. config.yaml `network.proxy.url`（argo 全局）
+  5. 标准环境变量（HTTPS_PROXY / HTTP_PROXY / ALL_PROXY + NO_PROXY，
+     urllib.request.getproxies 语义，与 curl/浏览器直觉一致）
+  6. 无 → 直连
+
+## 典型环境三档（本地化适配）
+
+  - TUN/全局代理（Clash TUN 等）：什么都不用配，直连即已可达。
+  - 本地混合端口：`ARGO_PROXY=http://127.0.0.1:7890` 或 config 里 url 填上。
+  - 按源分流：rules 里给需要代理的域配 URL、给直连更优的域配 "direct"。
+
+注意：https 目标经代理走 CONNECT 隧道（set_tunnel）；代理自身按 http://
+明文连接（https 代理极少见，暂不支持）。
+
+## urllib 类出口的两个原语
+
+  - `open_url(req, timeout)`：单次请求，代理感知的 urlopen 替身；
+  - `http_get(url, headers, timeout, max_retries)`：GET 字节 + 状态码，
+    带可选 429/网络重试。模块内所有「Request + open + read」都收敛到这两个。
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import re
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # 仅注解引用（ParseResult/HTTPConnection）；运行时按需惰性导入
+    from http.client import HTTPConnection
+    from urllib.parse import ParseResult
+
+# urllib 栈（http.client+urllib.request≈26ms）不进模块级导入链：本模块被
+# 13 处导入，其中 health_check.is_available（route 热路径）、job/fetch 等场景
+# 导入了却未必真发请求；urllib 推迟到各函数体内首次调用时加载（进程内仅一次）。
+
+logger = logging.getLogger("unified_search.net_proxy")
+
+_cfg_cache: dict[str, Any] | None = None
+_cfg_stamp: float | None = None
+
+
+def _argo_env(name: str) -> str:
+    """读 argo 级环境变量：**统一经 engine_env**（os.environ 优先，env 文件保底）。
+
+    为什么不能直读 `os.environ`：argo 的配置源是 env 文件（`ARGO_ENV_FILE` 或
+    平台配置根 `.../argo/env`，见 engine_env._envfile_paths），而
+    `sync_envfile_to_environ()` **只在 MCP server 启动时调用**，CLI 路径不同步。
+    直读 os.environ 的后果是「写在 env 文件里的代理开关在 CLI 下静默失效」——
+    实测：env 文件里写 ARGO_PROXY / ARGO_GDELT_PROXY，engine_env.get_env 读得到、
+    本模块读不到。同仓的 engines_base._resolve（引擎 spec 的 {VAR} 展开）早已走
+    engine_env，本模块此前是唯一的例外。
+
+    失败安全：engine_env 不可用时退回 os.environ，行为与改造前一致。
+    """
+    try:
+        from engine_env import get_env
+        return str(get_env(name, "") or "").strip()
+    except Exception:
+        return os.environ.get(name, "").strip()
+
+
+# 内嵌 env 引用（http://${HOST}:7890）；整值形式 "${VAR}" 不走它（单独分支）
+_ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _interp_env(value: str) -> str | None:
+    """配置里的代理值 → 实际代理 URL；None 表示直连。
+
+    三条语义（与 rules / 全局 url 共用，取值口径只有这一处）：
+      - `"direct"`            → None（强制直连）
+      - `"${VAR}"`            → env 值；**未设置或也写成 "direct"** → None
+      - 内嵌 `"http://${VAR}:7890"` → 逐个替换；任一变量未设置或为 direct → None
+      - 其它字面量             → 原样作为代理 URL
+
+    与 `{VAR}`（引擎 spec 占位符，缺失时替换为空串）刻意区分：这里的「未设置」
+    语义是「不设代理」而不是「空代理」——空串会让 urllib 把请求打到一个畸形代理上。
+    """
+    v = value.strip()
+    if v.startswith("${") and v.endswith("}"):
+        # env 值同样过一遍 direct 判定：否则 ARGO_X=direct 会被当成
+        # 代理字面量 "direct" 发给 urllib（畸形代理，请求必挂）
+        v = _argo_env(v[2:-1])
+    elif "${" in v:
+        missing = False
+
+        def _sub(m: "re.Match[str]") -> str:
+            nonlocal missing
+            val = _argo_env(m.group(1)).strip()
+            if not val or val.lower() == "direct":
+                missing = True
+            return val
+
+        v = _ENV_REF_RE.sub(_sub, v)
+        if missing:
+            return None
+    return None if v.lower() == "direct" else (v or None)
+
+
+def _network_cfg() -> dict[str, Any]:
+    """读 config.yaml 的 network.proxy 段；config 不可用时按空配置处理。"""
+    global _cfg_cache, _cfg_stamp
+    try:
+        from config import config_stamp, load_config
+        stamp = config_stamp()
+        if _cfg_cache is not None and _cfg_stamp == stamp:
+            return _cfg_cache
+        cfg = load_config() or {}
+        net = (cfg.get("network") or {}) if isinstance(cfg, dict) else {}
+        proxy = (net.get("proxy") or {}) if isinstance(net, dict) else {}
+        _cfg_cache = {
+            "url": str(proxy.get("url") or "").strip(),
+            "rules": proxy.get("rules") or {},
+        }
+        _cfg_stamp = stamp
+        return _cfg_cache
+    except Exception:
+        return {"url": "", "rules": {}}
+
+
+def resolve_proxy(url: str, override: str | None = None,
+                  include_standard_env: bool = True) -> str | None:
+    """返回该 URL 应使用的代理 URL；None=直连。优先级见模块 docstring。
+
+    include_standard_env=False 供 urllib 类传输层使用——urlopen 原生认标准
+    环境变量，调用方只需 argo 级增量配置；重复接管反而改变 mock 契约与
+    失败路径。http.client 类传输层（HttpClient）必须 True（它自己不认 env）。
+    """
+    import urllib.parse
+    import urllib.request
+
+    if override is not None:
+        return None if str(override).strip().lower() == "direct" else override
+
+    host = (urllib.parse.urlparse(url if "//" in url else "https://" + url)
+            .hostname or "").lower()
+
+    # 2) 按域规则（域名后缀匹配：github.com 命中 api.github.com / www.github.com）
+    cfg = _network_cfg()
+    for domain, val in (cfg.get("rules") or {}).items():
+        d = str(domain).lower().strip()
+        if d and (host == d or host.endswith("." + d)):
+            # ${VAR} 插值：把「本机代理端口」这类环境相关值交给 env 层，
+            # 未设置即直连（详见 _interp_env）
+            return _interp_env(str(val))
+
+    # 3) argo 全局 env（经 engine_env：env 文件里的开关同样生效）
+    argo = _argo_env("ARGO_PROXY")
+    if argo:
+        return None if argo.lower() == "direct" else argo
+
+    # 4) argo 全局 config（同样支持 ${VAR}，与 rules 同语义）
+    cu = str(cfg.get("url") or "").strip()
+    if cu:
+        return _interp_env(cu)
+
+    # 5) 标准环境变量（含 NO_PROXY 尊重；getproxies 已处理大小写变体）
+    if not include_standard_env:
+        return None
+    try:
+        scheme = urllib.parse.urlparse(
+            url if "//" in url else "https://" + url).scheme or "https"
+        proxies = urllib.request.getproxies()
+        # ALL_PROXY 在 getproxies() 里映射成 'all' 键，urllib 自身也不会按
+        # scheme 分发它——文档承诺支持 ALL_PROXY，这里必须显式回退，否则
+        # 只配 ALL_PROXY 的用户（Linux 惯例）全链路直连（2026-09-28 实锤）
+        px = proxies.get(scheme) or proxies.get("all")
+        if px and not urllib.request.proxy_bypass(host):
+            return px
+    except Exception:
+        pass
+    return None
+
+
+def _matched_rule_value(url: str) -> str | None:
+    """命中的域规则的**原始值**（未插值）；未命中返回 None。
+
+    与 resolve_proxy 的分工：那里把 `${VAR}` 未设置也压成 None（=不设代理），
+    无法区分「没配规则」与「规则要求直连」。open_url 需要这个区分——前者
+    维持 urlopen 的原生行为，后者要绕开标准环境变量代理。
+    """
+    try:
+        import urllib.parse
+        host = (urllib.parse.urlparse(url if "//" in url else "https://" + url)
+                .hostname or "").lower()
+        for domain, val in (_network_cfg().get("rules") or {}).items():
+            d = str(domain).lower().strip()
+            if d and (host == d or host.endswith("." + d)):
+                return str(val)
+    except Exception:
+        return None
+    return None
+
+
+def explicit_direct(url: str) -> bool:
+    """argo 级配置是否**显式**要求该 URL 直连（而不是「恰好没配代理」）。
+
+    为什么需要：urlopen 原生认标准 `HTTP(S)_PROXY`。rules 写 "direct"、或
+    `${VAR}` 的 VAR 未设置时，本意都是「真直连」，但 resolve_proxy 只回 None，
+    open_url 落回 urlopen 后又被环境变量代理兜走——「强制直连」在设了
+    HTTPS_PROXY 的机器上名不副实。例：animetrace.com 这类源按出口 IP 限频，
+    配置写明 direct 却仍走 Clash 出口时稳定 429——是否该直连取决于本机出口，
+    但 explicit_direct 至少要保证调用方真的拿到配置要求的出口。
+    """
+    val = _matched_rule_value(url)
+    if val is not None:
+        return _interp_env(val) is None
+    argo = _argo_env("ARGO_PROXY")
+    if argo:
+        return argo.lower() == "direct"
+    cu = str(_network_cfg().get("url") or "").strip()
+    if cu:
+        return _interp_env(cu) is None
+    return False
+
+
+def open_url(req: Any, timeout: float = 10.0):
+    """代理感知的 `urllib.request.urlopen` 替身——urllib 类出口的唯一入口。
+
+    为什么需要它：`urlopen` 原生只认标准 `HTTP(S)_PROXY` 环境变量，**不认**
+    argo 在 `config.yaml` 的 `network.proxy` 里配置的 url/rules。凡走 urllib
+    的抓取都应经本函数，否则在「必须经代理才能出网」的环境里会一直连不上、
+    把预算耗光后返回空（issue #13 的形态：抓 GitHub 挂到 deadline_exhausted）。
+
+    issue #13 修复时只覆盖了 `http_open`（引擎侧），其余脚本里的 urlopen
+    仍直接调用、不认这项配置；本函数把这条通道统一到一处，供所有 urllib
+    出口复用。
+
+    失败语义与 `urlopen` 完全一致：原样抛出，调用方既有的 `except` 分支
+    （含 `urllib.error.HTTPError` / `URLError`）不受影响。
+    """
+    import urllib.parse
+    import urllib.request
+
+    if isinstance(req, str):
+        req = urllib.request.Request(req)
+    url = getattr(req, "full_url", "") or ""
+    try:
+        # include_standard_env=False：urlopen 原生认标准环境变量，这里只补
+        # argo 级增量配置，避免重复接管改变既有 mock/失败语义。
+        px = resolve_proxy(url, include_standard_env=False)
+    except Exception as e:
+        # 静默直连是最坏的选择：本模块存在的理由就是「必须经代理才能出网」的
+        # 环境里直连会一直连不上，而解析失败后表现为完全一样的症状——用户看到
+        # 「一直连不上」，日志里什么都没有，只能猜。留一条 debug 给排查。
+        logger.debug("代理解析失败（%s），本次按直连处理：%r", url, e)
+        px = None
+    if not px:
+        # 显式直连要自己装空 ProxyHandler：urlopen 会把标准环境变量里的代理
+        # 再兜一层，那样 rules="direct" 等于没写。未配置时仍走 urlopen 原生。
+        if explicit_direct(url):
+            return urllib.request.build_opener(
+                urllib.request.ProxyHandler({})).open(req, timeout=timeout)
+        return urllib.request.urlopen(req, timeout=timeout)
+    scheme = urllib.parse.urlparse(url).scheme or "https"
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({scheme: px}))
+    return opener.open(req, timeout=timeout)
+
+
+def http_get(url: str, headers: dict[str, str] | None = None,
+             timeout: float = 10.0, max_retries: int = 0) -> tuple[bytes, int]:
+    """GET 原始字节 + 状态码；出口经 open_url（代理感知）。
+
+    这是 urllib 类出口上「Request + open + read」的唯一实现。此前每个模块
+    各写一份 `_http_get` / `_http_get_with_retry`：weibo 与 bilibili 的 23 行
+    实现逐字相同，reddit / hackernews / v2ex / redskill 各一份同构变体，
+    wx / video_fetch / job / tweet / wechat_article / zhihu 再各一份。它们只是
+    同一件事的复制粘贴，改重试策略要改五六处、漏一处就是行为分叉。
+
+    返回 (body_bytes, status_code)。max_retries>0 时对 429（尊重 Retry-After）
+    与网络层错误做指数退避重试；重试耗尽后原样抛出最后一次异常，调用方既有
+    的 except 分支语义不变。headers 为 None 时只发调用方给的头（不注入默认
+    UA），与改造前各 helper 的行为一致。
+    """
+    import time
+    import urllib.error
+    import urllib.request
+
+    for attempt in range(max_retries + 1):
+        try:
+            req = urllib.request.Request(url, headers=headers or {})
+            with open_url(req, timeout=timeout) as resp:
+                return resp.read(), int(getattr(resp, "status", 200) or 200)
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < max_retries:
+                try:
+                    wait = int(e.headers.get("Retry-After", "5"))
+                except (TypeError, ValueError):
+                    wait = 5
+                time.sleep(min(wait, 30))
+                continue
+            raise
+        except (urllib.error.URLError, OSError):
+            if attempt < max_retries:
+                time.sleep(2 ** attempt + 0.5)
+                continue
+            raise
+    return b"", 0
+
+
+def _verified_tls_context():
+    """显式构造「校验开启」的 TLS 上下文（check_hostname + CERT_REQUIRED）。
+
+    默认 http.client 已用校验上下文；这里显式化，让「TLS 校验不可被静默关掉」
+    成为可测试的不变式（而不是依赖库默认）。
+    """
+    import ssl
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = True
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    return ctx
+
+
+def open_connection(parsed: ParseResult, timeout: float,
+                    proxy_url: str | None) -> tuple[HTTPConnection, bool]:
+    """按是否走代理构造 http.client 连接。返回 (conn, via_proxy)。
+
+    https 目标 + 代理 → 到代理的 HTTPSConnection + set_tunnel（CONNECT 隧道）；
+    http 目标 + 代理 → 到代理的 HTTPConnection，request 须用绝对 URL
+    （见 request_selector）。
+
+    直连（无代理）：用「解析即锁定」的连接类（url_safety.Safe*Connection），
+    堵 check_url 与 connect 之间的 DNS 重绑定窗口；HTTPS 显式用校验上下文。
+    """
+    import http.client
+    import urllib.parse
+
+    target_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if not proxy_url:
+        # 直连：解析即锁定 + TLS 校验（详见 safe_conn 与 _verified_tls_context）
+        try:
+            from safe_conn import SafeHTTPConnection, SafeHTTPSConnection
+            if parsed.scheme == "https":
+                return SafeHTTPSConnection(
+                    parsed.hostname, target_port, timeout=timeout,
+                    context=_verified_tls_context()), False
+            return SafeHTTPConnection(parsed.hostname, target_port,
+                                      timeout=timeout), False
+        except ImportError:  # pragma: no cover
+            pass
+        cls = (http.client.HTTPSConnection if parsed.scheme == "https"
+               else http.client.HTTPConnection)
+        return cls(parsed.hostname, target_port, timeout=timeout), False
+    p = urllib.parse.urlparse(proxy_url)
+    if p.scheme.startswith("socks"):
+        # socks 代理需要 socks 客户端栈（http.client 没有 CONNECT 之外的
+        # 隧道语义）；此前表现为挂起/失败且无提示。curl 通道（-x）原生支持
+        # socks5，不受此限——本显式报错只挡 open_connection 这条 urllib 出口。
+        raise ValueError(
+            f"暂不支持 socks 代理（{proxy_url}）：open_connection 仅支持 "
+            "http/https 代理；请改用 http 代理或 ARGO_PROXY=direct")
+    proxy_port = p.port or (443 if p.scheme == "https" else 80)
+    if parsed.scheme == "https":
+        conn = http.client.HTTPSConnection(p.hostname, proxy_port, timeout=timeout)
+        conn.set_tunnel(parsed.hostname, target_port)
+        return conn, True
+    return http.client.HTTPConnection(p.hostname, proxy_port, timeout=timeout), True
+
+
+def request_selector(parsed: ParseResult, path: str,
+                     via_proxy: bool) -> str:
+    """http 经代理时请求行必须是绝对 URL（RFC 7230 5.3.2）；https 隧道用相对。"""
+    if via_proxy and parsed.scheme == "http":
+        port = "" if parsed.port in (None, 80) else f":{parsed.port}"
+        return f"http://{parsed.hostname}{port}{path}"
+    return path

@@ -1,0 +1,856 @@
+#!/usr/bin/env python3
+"""
+evidence.py — 来源可信度评估（v2.2 两阶段：Selection × Absorption）
+
+问题重定义（第一性）：
+  Agent 要的不是「搜到了什么」，而是「哪些材料可被吸收进可核验答案」。
+  被检索到（selection）≠ 被采用为证据（absorption）。
+
+MECE 分解：
+  A. Selection 门槛：URL 是否可引用页面 / 域名权威 / 是否 SERP·榜单污染
+  B. Absorption 深度：数字·定义·对比·披露 等证据块密度（snippet 或正文）
+  C. Freshness：发布年/URL 年；忽略「2015年以来」类历史对比年
+  D. Consensus：多域名佐证（交叉验证）
+
+综合：
+  final = 0.40 * selection + 0.35 * absorption + 0.15 * freshness + 0.10 * original
+  high-stakes 可再 × consensus 调节（见 compute_credibility）
+
+用法：
+  echo '{"results": [...]}' | python3 evidence.py "查询词" --stdin --json
+"""
+
+from __future__ import annotations
+
+import argparse
+import functools
+import json
+import os
+import re
+import sys
+import time
+from datetime import datetime
+from typing import Any
+from urllib.parse import urlparse
+from cli_io import dumps, ensure_utf8_stdio
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPT_DIR)
+
+try:
+    from content_signals import score_evidence_density
+except ImportError:  # pragma: no cover
+    def score_evidence_density(text: str, title: str = "") -> dict[str, Any]:
+        return {
+            "has_numbers": False,
+            "has_definition": False,
+            "has_comparison": False,
+            "has_howto": False,
+            "has_disclose": False,
+            "is_qa_format": False,
+            "absorption_score": 0.2,
+        }
+
+
+# ── 权威性评分 ────────────────────────────────────────────────────────────────
+
+AUTHORITY_TIERS = {
+    # Tier 1: 官方/权威
+    "gov.cn": 1.0, "gov": 0.95, "edu.cn": 0.95, "edu": 0.9,
+    "ac.cn": 0.95,
+    "nature.com": 0.95, "science.org": 0.95, "ieee.org": 0.9,
+    "acm.org": 0.9, "springer.com": 0.9, "elsevier.com": 0.9,
+    "arxiv.org": 0.9, "pubmed.ncbi.nlm.nih.gov": 0.95,
+    "scholar.google.com": 0.85, "ncbi.nlm.nih.gov": 0.95,
+    "nvd.nist.gov": 0.95, "cve.mitre.org": 0.95,
+    "xinhuanet.com": 0.95, "people.com.cn": 0.95,
+
+    # Tier 2: 专业媒体/平台
+    "zhihu.com": 0.85, "github.com": 0.85, "stackoverflow.com": 0.85,
+    "medium.com": 0.75, "dev.to": 0.75,
+    "reuters.com": 0.9, "bloomberg.com": 0.9, "wsj.com": 0.9,
+    "caixin.com": 0.9, "yicai.com": 0.86, "wallstreetcn.com": 0.86,
+    "cls.cn": 0.88, "api3.cls.cn": 0.85, "cs.com.cn": 0.92, "stcn.com": 0.88,
+    "cnr.cn": 0.9, "thepaper.cn": 0.82, "jiemian.com": 0.8,
+    "36kr.com": 0.8, "infoq.cn": 0.8, "juejin.cn": 0.75,
+    "eastmoney.com": 0.85, "xueqiu.com": 0.8, "10jqka.com.cn": 0.78,
+    "docs.python.org": 0.9, "react.dev": 0.9, "nextjs.org": 0.9,
+
+    # Tier 3: 通用可信
+    "wikipedia.org": 0.75, "baike.baidu.com": 0.7,
+    "linkedin.com": 0.65, "twitter.com": 0.45, "x.com": 0.45,
+    "reddit.com": 0.55,
+    # 主流门户：与 evidence_tier.py B 级「知名第三方」同口径（163/sohu/sina
+    # 都在 B 级名单里）。此前压在下方「内容农场」档 0.4-0.55，两份名单
+    # 自相矛盾，中文主流媒体被系统性降权（09-26 审查第 7 项，十项 P0 的
+    # 最后一项，2026-10-02 归位）。k.sina.com.cn 是聚合/博客通道，留 Tier 4。
+    "163.com": 0.65, "sohu.com": 0.65, "sina.com.cn": 0.65,
+
+    # Tier 4: 内容农场/低质
+    "k.sina.com.cn": 0.55, "baijiahao.baidu.com": 0.35,
+    "zhuanlan.zhihu.com": 0.7, "toutiao.com": 0.4, "weixin.qq.com": 0.5,
+    "guba.eastmoney.com": 0.35,
+
+    # 商业榜单（高引用≠高可信）
+    "maigoo.com": 0.28, "chinapp.com": 0.28, "cnpp.cn": 0.28,
+}
+
+SOURCE_TYPE_MAP = {
+    "eastmoney": ("金融数据", 0.9),
+    "zhihu": ("社区观点", 0.8),
+    "arxiv": ("学术预印本", 0.85),
+    "semantic_scholar": ("学术索引", 0.9),
+    "openalex": ("学术索引", 0.85),
+    "crossref": ("学术元数据", 0.9),
+    "europepmc": ("生物医学文献", 0.88),
+    "dblp": ("CS 文献索引", 0.85),
+    "github": ("代码仓库", 0.85),
+    "byted": ("中文搜索", 0.7),
+    "bocha": ("中文搜索", 0.7),
+    "tavily": ("AI搜索", 0.75),
+    "felo": ("AI搜索", 0.7),
+    "wikipedia": ("百科", 0.75),
+    "baidu_baike": ("中文百科", 0.72),
+    "mdn": ("官方文档", 0.9),
+    "pypi": ("包注册表", 0.88),
+    "npm": ("包注册表", 0.88),
+    "huggingface": ("模型仓库", 0.85),
+    "docker_hub": ("容器镜像", 0.8),
+    "juejin": ("中文技术社区", 0.65),
+    "devto": ("技术社区", 0.65),
+    "clinicaltrials": ("临床试验注册", 0.9),
+    "openfda": ("药品标签", 0.88),
+    "archive_org": ("数字档案馆", 0.75),
+    "steam": ("游戏商店", 0.7),
+    "polymarket": ("预测市场叙事", 0.35),
+    "anysearch": ("垂直搜索", 0.75),
+    "local_search": ("本地搜索", 0.7),
+    "metaso": ("AI搜索", 0.75),
+    "local_baidu": ("搜索结果页聚合", 0.35),
+    "local_sogou": ("搜索结果页聚合", 0.35),
+    "local_bing": ("搜索结果页聚合", 0.4),
+    "finviz": ("美股快照", 0.75),
+    "seeking_alpha": ("美股分析", 0.7),
+    "jin10": ("财经快讯", 0.65),
+    "models_dev": ("模型目录", 0.85),
+    "octen": ("AI搜索", 0.7),
+    "qweather": ("天气数据", 0.9),
+    "wenshu": ("裁判文书", 0.75),
+    "zhihu_global": ("社区观点", 0.8),
+    "zhihu_hot": ("社区热榜", 0.55),
+}
+
+# SERP/跳转 URL 判定已迁入 serp_guard（纯 URL 规则，轻依赖；热路径不再
+# 为一次判定付出本模块的证据质量栈导入）。此处转出仅为既有调用方兼容，
+# 新代码直接从 serp_guard import。判定的实现注释（为什么后缀匹配、为什么
+# 单一数据源）见 serp_guard.py。
+from serp_guard import (  # noqa: E402
+    _load_cn_source_types,
+    _normalize_domain,
+    is_serp_or_jump_url,
+)
+
+
+@functools.lru_cache(maxsize=512)
+def _score_authority_cached(url: str, source: str = "", query: str = "") -> tuple:
+    """score_authority 的缓存版本，返回 tuple（lru_cache 要求可哈希返回值）。"""
+    if not url:
+        return (0.3, "无 URL", "unknown", "", True)
+
+    domain = _normalize_domain(url)
+    is_serp = is_serp_or_jump_url(url)
+
+    if is_serp:
+        return (
+            0.12,
+            "搜索结果页/跳转链（不可作吸收源）",
+            "very_low",
+            domain,
+            True,
+        )
+
+    best_score = 0.5
+    best_reason = "通用域名"
+    best_len = -1
+    for pattern, score in AUTHORITY_TIERS.items():
+        if domain == pattern or domain.endswith("." + pattern):
+            if len(pattern) > best_len:
+                best_len = len(pattern)
+                best_score = score
+                best_reason = f"域名匹配：{pattern}"
+
+    # JSON 覆盖
+    for d, score in (_load_cn_source_types().get("authority_overrides") or {}).items():
+        if domain == d or domain.endswith("." + d):
+            if len(d) >= best_len:
+                best_len = len(d)
+                best_score = float(score)
+                best_reason = f"中文信源表：{d}"
+
+    demote = _load_cn_source_types().get("demote_domains") or {}
+    for d, meta in demote.items():
+        if domain == d or domain.endswith("." + d):
+            best_score = float(meta.get("score", 0.3))
+            best_reason = f"降权：{meta.get('reason', d)}"
+            break
+
+    social = _load_cn_source_types().get("social_narrative_only") or {}
+    for d, score in social.items():
+        if domain == d or domain.endswith("." + d):
+            best_score = min(best_score, float(score))
+            best_reason = f"社交/叙事源（非事实真值）：{d}"
+            break
+
+    # 路径特征
+    try:
+        path = urlparse(url).path.lower()
+    except Exception:
+        path = ""
+    if "/docs/" in path or "/documentation/" in path:
+        best_score = min(best_score + 0.05, 1.0)
+        best_reason += "（文档路径）"
+    if "/paper/" in path or "/arxiv/" in path or "/abs/" in path:
+        best_score = min(best_score + 0.05, 1.0)
+        best_reason += "（论文路径）"
+
+    # 来源类型：作为保底分（max），本地 SERP 聚合引擎不抬升
+    if source and source in SOURCE_TYPE_MAP:
+        type_name, type_score = SOURCE_TYPE_MAP[source]
+        if source.startswith("local_") and type_score < 0.5:
+            # 搜索结果页聚合：压低
+            best_score = min(best_score, type_score)
+            best_reason += f"（引擎={source}/{type_name}）"
+        else:
+            if type_score > best_score:
+                best_score = type_score
+                best_reason = f"来源类型：{type_name}" if best_reason == "通用域名" \
+                    else f"{best_reason}（引擎={source}↑）"
+            else:
+                best_reason += f"（引擎={source}）"
+
+    # 有条件降权（2026-10-29，issue #34）：同一域名在不同查询语境下可信度
+    # 不同——裁判文书站对「集采政策」是答非所问，对「判决书检索」是一手源。
+    # 放在引擎保底分之后做**最终裁决**：否则 anysearch 这类引擎的 0.75 保底
+    # 会把降权分拉回来（实测 0.15 → 0.75，降权形同虚设）。
+    # 只在调用方给了 query 时生效：无 query 的评分路径（状态展示、研究摘要）
+    # 保持原表行为，避免把「没传上下文」误判成「非法律查询」。
+    if query:
+        cond = _load_cn_source_types().get("demote_domains_unless") or {}
+        for d, meta in cond.items():
+            if d.startswith("_"):
+                continue
+            if domain == d or domain.endswith("." + d):
+                unless = meta.get("unless") or ""
+                if not (unless and re.search(unless, query, re.I)):
+                    best_score = float(meta.get("score", 0.3))
+                    best_reason = f"降权：{meta.get('reason', d)}"
+                break
+
+    tier = (
+        "high" if best_score >= 0.8
+        else "medium" if best_score >= 0.6
+        else "low" if best_score >= 0.35
+        else "very_low"
+    )
+
+    return (best_score, best_reason, tier, domain, bool(is_serp))
+
+
+def score_authority(url: str, source: str = "", query: str = "") -> dict[str, Any]:
+    """评估 URL 的权威性（Selection 门槛）。
+
+    结果按 (url, source, query) 做进程内 lru_cache：同一 URL + source 组合在多次
+    rerank/selection 中只算一次，避免 search.py 的 local_five_dim_rerank 与
+    _attach_selection_signals 对同一 URL 重复评分。
+
+    query 可选：只在有条件降权（demote_domains_unless，如裁判文书站）时需要，
+    无 query 的调用方保持原表行为，缓存也按空 query 各自命中。
+    """
+    score, reason, tier, domain, is_serp = _score_authority_cached(url, source, query)
+    return {
+        "score": round(score, 2),
+        "reason": reason,
+        "tier": tier,
+        "domain": domain,
+        "is_serp": is_serp,
+    }
+
+
+# ── 时效性评分 ────────────────────────────────────────────────────────────────
+
+# 「2015年以来」等历史对比年 — 不当作发布年
+_HIST_SINCE_RE = re.compile(
+    r"(?:自|从)?(19|20)\d{2}\s*年?\s*(?:以来|起|至今|至|到现在|之前|以前|以前水平)"
+)
+_FULL_DATE_RE = re.compile(
+    r"(20\d{2})[年/-](\d{1,2})[月/-](\d{1,2})"
+)
+_PUBLISH_HINT_RE = re.compile(
+    r"(?:发布|披露|刊登|更新|Published|发表)[^\n]{0,12}(20\d{2})"
+    r"|(20\d{2})\s*年\s*(?:[0-1]?\d\s*月)?\s*(?:[0-3]?\d\s*日)?\s*(?:电|讯|报道)"
+)
+
+
+def _years_from_text(text: str) -> list[int]:
+    """提取候选年份，排除历史对比语境中的旧年。"""
+    if not text:
+        return []
+    # 挖掉「2015年以来」整段，避免污染
+    cleaned = _HIST_SINCE_RE.sub(" ", text)
+    # 中文语境不用 \b（「2026年」左侧无词界）
+    years = [int(y) for y in re.findall(r"(?<![0-9])(20\d{2})(?![0-9])", cleaned)]
+    # 完整日期优先（用原文，保留结构）
+    for m in _FULL_DATE_RE.finditer(text):
+        years.append(int(m.group(1)))
+    for m in _PUBLISH_HINT_RE.finditer(text):
+        for g in m.groups():
+            if g and re.fullmatch(r"20\d{2}", g):
+                years.append(int(g))
+    # 合理范围
+    now_y = datetime.now().year
+    return [y for y in years if 1990 <= y <= now_y + 1]
+
+
+@functools.lru_cache(maxsize=512)
+def _score_freshness_cached(url: str, title: str, snippet: str) -> tuple[float, str]:
+    """score_freshness 的缓存版本：同一 (url, title, snippet) 组合在 rerank、
+    selection 及 evidence 打分间只算一次，避免重复的时效性评分
+    （实测热路径节省一次 full-text 年份提取）。返回 (score, reason)。
+
+    注：原 `query_time` 参数在 score_freshness 内从未参与计算，
+    此处不入缓存键以保持检索一致性。
+    """
+    combined = f"{title} {snippet}"
+    now_y = datetime.now().year
+
+    # 1) 完整日期
+    full = list(_FULL_DATE_RE.finditer(combined))
+    if full:
+        # 取最「新」的完整日期
+        best = max(full, key=lambda m: (int(m.group(1)), int(m.group(2)), int(m.group(3))))
+        year = int(best.group(1))
+        age_years = now_y - year
+        score, reason = _age_to_score(age_years, year, precise=True)
+    else:
+        years = _years_from_text(combined)
+        url_year = None
+        m = re.search(r"/(20\d{2})(?:/|-)", url)
+        if m:
+            url_year = int(m.group(1))
+            years.append(url_year)
+
+        if years:
+            # 优先靠近今年的年份（发布语境），而非文中最早的历史年
+            # 若存在今年或去年，取 max；否则取 max 全体
+            recent = [y for y in years if y >= now_y - 1]
+            year = max(recent) if recent else max(years)
+            age_years = now_y - year
+            score, reason = _age_to_score(age_years, year, precise=False)
+            if url_year and year == url_year:
+                reason += "（URL年）"
+        else:
+            score = 0.5
+            reason = "无明确时间标记"
+
+    if re.search(r"(最新|latest|recent|breaking|just|刚刚|今日|today|本周|本月)", combined, re.I):
+        score = min(score + 0.1, 1.0)
+        reason += "（含时效关键词）"
+
+    return score, reason
+
+
+def score_freshness(result: dict[str, Any], query_time: float = None) -> dict[str, Any]:
+    """评估结果的时效性（优先完整日期 / URL 年 / 最新合理年）。
+
+    结果按 (url, title, snippet) 做进程内 lru_cache：同一 URL 在 rerank、
+    selection 与 evidence 打分间只算一次，避免 search.py 的
+    local_five_dim_rerank 与 _attach_selection_signals 对同一结果重复评分。
+    `query_time` 保留以保持调用契约（当前评分逻辑不依赖它）。
+    """
+    score, reason = _score_freshness_cached(
+        result.get("url", "") or "",
+        result.get("title", "") or "",
+        result.get("snippet", "") or "",
+    )
+    return {"score": round(score, 2), "reason": reason}
+
+
+def _age_to_score(age_years: int, year: int, precise: bool) -> tuple[float, str]:
+    if age_years < 0:
+        return 0.4, f"{year}年（未来年份）"
+    if age_years == 0:
+        return (0.9 if precise else 0.85), f"{year}年（今年）"
+    if age_years == 1:
+        return 0.8, f"{year}年（去年）"
+    if age_years <= 2:
+        return 0.65, f"{year}年（{age_years}年前）"
+    if age_years <= 5:
+        return 0.45, f"{year}年（{age_years}年前）"
+    return 0.25, f"{year}年（{age_years}年前，较旧）"
+
+
+# ── 交叉验证 ──────────────────────────────────────────────────────────────────
+
+# 单条结果至少覆盖 20% 的 query 单元才算「与查询相关」。与 serp_guard 的
+# SERP 覆盖率门同量级，但两处判据独立：这里回答「这批结果里几条在答这题」，
+# serp_guard 回答「这一页 SERP 是不是整体答非所问」。
+_RELEVANCE_MIN_COVERAGE = 0.2
+
+
+def _relevance_units(text: str) -> set[str]:
+    """查询/结果 → 相关性比对单元（CJK 二元组 + 小写拉丁数字词）。
+
+    复用 rank_signals.relevance_units，避免再维护第三套分词口径。
+    import 放在函数内：evidence 不是搜索热路径，但 rank_signals 较重，
+    模块级导入会让所有 evidence 调用方一起付启动成本。
+    """
+    try:
+        from rank_signals import relevance_units
+        return set(relevance_units(text or ""))
+    except ImportError:
+        return {(text or "").lower()}
+
+
+def cross_validate(results: list[dict[str, Any]], query: str) -> dict[str, Any]:
+    """多来源交叉验证。"""
+    if len(results) < 2:
+        return {
+            "corroboration_level": "insufficient",
+            "score": 0.3,
+            "detail": f"仅 {len(results)} 个结果，无法交叉验证",
+            "agreement_count": 0,
+            "total_sources": len(results),
+            "unique_domains": 0,
+            "url_overlap": 0.0,
+            "content_domains": 0,
+        }
+
+    urls = [r.get("url", "") for r in results if r.get("url")]
+    unique_urls = set(urls)
+    url_overlap = 1 - (len(unique_urls) / max(len(urls), 1))
+
+    domains = set()
+    content_domains = set()
+    for r in results:
+        url = r.get("url", "")
+        if not url:
+            continue
+        domain = _normalize_domain(url)
+        domains.add(domain)
+        if not is_serp_or_jump_url(url):
+            content_domains.add(domain)
+
+    # 旧口径 `any(w in text for w in query.lower().split())` 在中文查询上
+    # 两个方向都错：无空格中文被当成一个整词，结果里永远不会出现整句，
+    # 真实相关也报 0/N；反过来，结果只要带「2026」这类年份就被算作相关，
+    # 年份表垃圾页也能过。改用 CJK 二元组覆盖率（issue #18 的「0/N」信号
+    # 只有在这个口径下才可信）。
+    q_units = _relevance_units(query)
+    content_matches = 0
+    for r in results:
+        text = f"{r.get('title', '')} {r.get('snippet', '')}"
+        if not q_units:
+            continue
+        hit = q_units & _relevance_units(text)
+        if len(hit) / len(q_units) >= _RELEVANCE_MIN_COVERAGE:
+            content_matches += 1
+
+    match_ratio = content_matches / max(len(results), 1)
+    n_content = len(content_domains)
+
+    if match_ratio >= 0.8 and n_content >= 3:
+        level, score = "strong", 0.9
+    elif match_ratio >= 0.6 and n_content >= 2:
+        level, score = "moderate", 0.7
+    elif match_ratio >= 0.4:
+        level, score = "weak", 0.5
+    else:
+        level, score = "minimal", 0.3
+
+    return {
+        "corroboration_level": level,
+        "score": round(score, 2),
+        "detail": (
+            f"{content_matches}/{len(results)} 与查询相关，"
+            f"{n_content} 个可吸收域名（总域名 {len(domains)}）"
+        ),
+        "agreement_count": content_matches,
+        "total_sources": len(results),
+        "unique_domains": len(domains),
+        "content_domains": n_content,
+        "url_overlap": round(url_overlap, 2),
+    }
+
+
+# ── 可溯源性评分 ──────────────────────────────────────────────────────────────
+
+# 一手信源平台特征（用户直接发布的原始内容）
+_PRIMARY_PLATFORM_PATTERNS = {
+    "weibo.com": 0.95,       # 微博原帖
+    "zhihu.com": 0.90,       # 知乎回答/文章
+    "github.com": 0.90,      # GitHub issue/PR/commit
+    "stackoverflow.com": 0.90,
+    "xiaohongshu.com": 0.85, # 小红书笔记
+    "bilibili.com": 0.85,    # B站视频/动态
+    "twitter.com": 0.85,     # X/Twitter 原帖
+    "x.com": 0.85,
+    "youtube.com": 0.85,    # YouTube 视频
+    "reddit.com": 0.80,      # Reddit 原帖
+    "medium.com": 0.80,      # Medium 原文
+    "dev.to": 0.80,
+    "juejin.cn": 0.75,       # 掘金原文
+    "cnblogs.com": 0.75,     # 博客园原文
+}
+
+# 原始媒体报道（新闻机构原创报道）
+_ORIGINAL_MEDIA_PATTERNS = {
+    "xinhuanet.com": 0.95,   # 新华社
+    "people.com.cn": 0.95,   # 人民网
+    "reuters.com": 0.95,     # 路透社
+    "bloomberg.com": 0.95,   # 彭博社
+    "wsj.com": 0.95,         # 华尔街日报
+    "caixin.com": 0.90,      # 财新
+    "yicai.com": 0.88,       # 第一财经
+    "wallstreetcn.com": 0.88,# 华尔街见闻
+    "cls.cn": 0.88,          # 财联社
+    "cs.com.cn": 0.90,       # 中证网
+    "stcn.com": 0.85,        # 证券时报
+    "cnr.cn": 0.88,          # 央广网
+    "thepaper.cn": 0.82,     # 澎湃新闻
+    "jiemian.com": 0.80,     # 界面新闻
+    "36kr.com": 0.75,        # 36氪
+    "eastmoney.com": 0.80,   # 东方财富
+    "163.com": 0.70,         # 网易新闻
+    "sohu.com": 0.70,        # 搜狐新闻
+    "sina.com.cn": 0.70,     # 新浪新闻
+}
+
+# 二手/聚合/洗稿平台特征
+_SECONDARY_PLATFORM_PATTERNS = {
+    "baijiahao.baidu.com": 0.35,  # 百家号（自媒体洗稿重灾区）
+    "toutiao.com": 0.35,          # 头条号（聚合+洗稿）
+    "weixin.qq.com": 0.40,        # 微信公众号（质量参差不齐）
+    "guba.eastmoney.com": 0.30,    # 股吧（UGC 讨论）
+    "zhuanlan.zhihu.com": 0.55,   # 知乎专栏（部分原创部分转载）
+    "k.sina.com.cn": 0.40,        # 新浪博客/聚合
+}
+
+# 转载/引用标记（出现在标题或 snippet 中）
+_REPOST_MARKERS = [
+    "转载", "转自", "摘自", "编译自", "译自", "综合自",
+    "来源：", "来源:", "原文：", "原文:", "援引", "据援引",
+    "reposted", "via@", "via @", "credit:", "courtesy",
+]
+
+
+def score_traceability(result: dict[str, Any]) -> dict[str, Any]:
+    """评估搜索结果的可溯源性（Traceability）。
+
+    借鉴 doubao-sentiment-tracker 的溯源四场景方法论，将「能否追溯到原始
+    来源」量化为 0-1 评分。与 Selection（域名权威）正交：一个结果可以
+    权威但不可溯源（如聚合媒体的转载稿），也可以不权威但可溯源（如个人
+    微博原帖）。
+
+    评分规则：
+    - 一手信源（用户直接发布的原始帖子）：0.80-0.95
+    - 原始媒体报道（新闻机构原创报道）：0.70-0.95
+    - 综合报道/评论（引用了原始来源）：0.50-0.65
+    - 二手转述/洗稿：0.30-0.45
+    - 无法判断：0.50（中性）
+
+    Returns:
+        {"score": float, "reason": str, "is_primary": bool, "platform_type": str}
+    """
+    url = result.get("url", "") or ""
+    title = result.get("title", "") or ""
+    snippet = result.get("snippet", "") or ""
+    source = result.get("source", "") or ""
+    content_type = result.get("content_type", "") or ""
+    social_meta = result.get("social_meta")
+    text = f"{title} {snippet}"
+
+    if not url:
+        return {
+            "score": 0.5,
+            "reason": "无 URL，无法判断可溯源性",
+            "is_primary": False,
+            "platform_type": "unknown",
+        }
+
+    domain = _normalize_domain(url)
+
+    # 1) 检查是否为 SERP/跳转 URL（不可溯源）
+    if is_serp_or_jump_url(url):
+        return {
+            "score": 0.10,
+            "reason": "搜索结果页/跳转链，非原始内容",
+            "is_primary": False,
+            "platform_type": "serp",
+        }
+
+    # 2) 检查是否为一手信源平台
+    best_primary_score = 0.0
+    best_primary_domain = ""
+    for pattern, score in _PRIMARY_PLATFORM_PATTERNS.items():
+        if domain == pattern or domain.endswith("." + pattern):
+            if score > best_primary_score:
+                best_primary_score = score
+                best_primary_domain = pattern
+
+    if best_primary_score > 0:
+        # 检查是否有转载标记（即使是原帖平台，也可能是转载）
+        has_repost = any(marker in text for marker in _REPOST_MARKERS)
+        if has_repost:
+            return {
+                "score": 0.45,
+                "reason": f"原帖平台（{best_primary_domain}）但含转载标记",
+                "is_primary": False,
+                "platform_type": "repost_on_primary",
+            }
+        return {
+            "score": best_primary_score,
+            "reason": f"一手信源（{best_primary_domain}）",
+            "is_primary": True,
+            "platform_type": "primary",
+        }
+
+    # 3) 检查是否为原始媒体报道
+    best_media_score = 0.0
+    best_media_domain = ""
+    for pattern, score in _ORIGINAL_MEDIA_PATTERNS.items():
+        if domain == pattern or domain.endswith("." + pattern):
+            if score > best_media_score:
+                best_media_score = score
+                best_media_domain = pattern
+
+    if best_media_score > 0:
+        has_repost = any(marker in text for marker in _REPOST_MARKERS)
+        if has_repost:
+            return {
+                "score": 0.55,
+                "reason": f"媒体平台（{best_media_domain}）但含转载标记",
+                "is_primary": False,
+                "platform_type": "media_repost",
+            }
+        return {
+            "score": best_media_score,
+            "reason": f"原始媒体报道（{best_media_domain}）",
+            "is_primary": True,
+            "platform_type": "official_media",
+        }
+
+    # 4) 检查是否为二手/聚合平台
+    for pattern, score in _SECONDARY_PLATFORM_PATTERNS.items():
+        if domain == pattern or domain.endswith("." + pattern):
+            return {
+                "score": score,
+                "reason": f"二手/聚合平台（{pattern}）",
+                "is_primary": False,
+                "platform_type": "aggregator",
+            }
+
+    # 5) 检查 content_type 和 social_meta
+    if content_type == "social_post" or social_meta:
+        return {
+            "score": 0.75,
+            "reason": "社交帖子（content_type=social_post）",
+            "is_primary": True,
+            "platform_type": "social_post",
+        }
+
+    # 6) 检查转载标记
+    has_repost = any(marker in text for marker in _REPOST_MARKERS)
+    if has_repost:
+        return {
+            "score": 0.40,
+            "reason": "含转载/引用标记",
+            "is_primary": False,
+            "platform_type": "repost",
+        }
+
+    # 7) 无法判断（中性）
+    return {
+        "score": 0.50,
+        "reason": "无法判断可溯源性（默认中性）",
+        "is_primary": False,
+        "platform_type": "unknown",
+    }
+
+
+# ── 综合可信度 ────────────────────────────────────────────────────────────────
+
+def compute_credibility(
+    results: list[dict[str, Any]],
+    query: str,
+    *,
+    high_stakes: bool = False,
+) -> dict[str, Any]:
+    """两阶段综合可信度：Selection × Absorption + Freshness。"""
+    query_time = time.time()
+    scored_results: list[dict[str, Any]] = []
+
+    for r in results:
+        url = r.get("url", "")
+        source = r.get("source", "")
+        title = r.get("title", "") or ""
+        snippet = r.get("snippet", "") or ""
+
+        auth = score_authority(url, source, query)
+        fresh = score_freshness(r, query_time)
+        density = score_evidence_density(snippet, title)
+
+        # Selection：权威为主；SERP 直接压到低分
+        selection = auth["score"]
+        if auth.get("is_serp"):
+            selection = min(selection, 0.15)
+
+        # Absorption：证据密度
+        absorption = density["absorption_score"]
+
+        original_score = r.get("score")
+        if original_score is None:
+            original_score = 0.5
+        else:
+            try:
+                original_score = float(original_score)
+            except (TypeError, ValueError):
+                original_score = 0.5
+        # Traceability：可溯源性
+        trace = score_traceability(r)
+
+        # MECE 加权（量化）— 五维度
+        credibility = (
+            selection * 0.35
+            + absorption * 0.30
+            + fresh["score"] * 0.15
+            + float(original_score) * 0.10
+            + trace["score"] * 0.10
+        )
+
+        scored_results.append({
+            "title": title,
+            "url": url,
+            "source": source,
+            "snippet": snippet[:180],
+            "credibility": {
+                "final": round(credibility, 3),
+                "selection": round(selection, 3),
+                "absorption": round(absorption, 3),
+                "authority": auth,
+                "freshness": fresh,
+                "evidence_density": density,
+                "original_score": original_score,
+                "traceability": trace,
+            },
+        })
+
+    cross = cross_validate(results, query)
+
+    if high_stakes and scored_results:
+        # 共识调节：强佐证略抬高 top 可吸收源；弱共识不抬
+        boost = 0.0
+        if cross["corroboration_level"] == "strong":
+            boost = 0.05
+        elif cross["corroboration_level"] == "moderate":
+            boost = 0.02
+        for item in scored_results:
+            if not item["credibility"]["authority"].get("is_serp"):
+                item["credibility"]["final"] = round(
+                    min(item["credibility"]["final"] + boost, 1.0), 3
+                )
+            item["credibility"]["consensus_boost"] = boost
+
+    scored_results.sort(key=lambda x: x["credibility"]["final"], reverse=True)
+
+    return {
+        "query": query,
+        "framework": "selection_x_absorption_v2.3_traceability",
+        "results": scored_results,
+        "cross_validation": cross,
+        "summary": {
+            "total": len(scored_results),
+            "high_credibility": sum(
+                1 for r in scored_results if r["credibility"]["final"] >= 0.7
+            ),
+            "medium_credibility": sum(
+                1 for r in scored_results if 0.5 <= r["credibility"]["final"] < 0.7
+            ),
+            "low_credibility": sum(
+                1 for r in scored_results if r["credibility"]["final"] < 0.5
+            ),
+            "serp_filtered": sum(
+                1 for r in scored_results
+                if r["credibility"]["authority"].get("is_serp")
+            ),
+            "best_source": scored_results[0] if scored_results else None,
+        },
+    }
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+def main():
+    ensure_utf8_stdio()  # 入口第一件事：钉住 stdout/stderr 编码（见 cli_io）
+    parser = argparse.ArgumentParser(description="来源可信度评估工具（Selection×Absorption）")
+    parser.add_argument("query", nargs="?", default="", help="搜索查询词")
+    parser.add_argument("--stdin", action="store_true", help="从 stdin 读取 JSON 搜索结果")
+    parser.add_argument("--json", action="store_true", help="JSON 输出")
+    parser.add_argument(
+        "--high-stakes",
+        action="store_true",
+        help="高后果模式：启用共识微调",
+    )
+    args = parser.parse_args()
+
+    if args.stdin:
+        data = json.load(sys.stdin)
+        results = data.get("results", [])
+    else:
+        results = []
+
+    if not results and args.query:
+        print("需要提供搜索结果进行评估。用法：")
+        print('  echo \'{"results": [...]}\' | python3 evidence.py --stdin --query "查询词"')
+        sys.exit(1)
+
+    report = compute_credibility(
+        results, args.query, high_stakes=args.high_stakes
+    )
+
+    if args.json:
+        print(dumps(report))
+    else:
+        print(f"\n来源可信度评估：{report['query']}  [{report['framework']}]")
+        print(f"{'='*50}")
+        for r in report["results"]:
+            c = r["credibility"]
+            level = "🟢" if c["final"] >= 0.7 else "🟡" if c["final"] >= 0.5 else "🔴"
+            ed = c.get("evidence_density") or {}
+            flags = []
+            if ed.get("has_numbers"):
+                flags.append("数")
+            if ed.get("has_comparison"):
+                flags.append("比")
+            if ed.get("has_definition"):
+                flags.append("义")
+            if c["authority"].get("is_serp"):
+                flags.append("SERP")
+            flag_s = ",".join(flags) if flags else "-"
+            print(f"{level} [{c['final']:.2f}] sel={c['selection']:.2f} abs={c['absorption']:.2f} [{flag_s}] {r['title'][:48]}")
+            print(f"   权威：{c['authority']['score']:.2f} ({c['authority']['reason']})")
+            print(f"   时效：{c['freshness']['score']:.2f} ({c['freshness']['reason']})")
+            print()
+
+        cv = report["cross_validation"]
+        print(f"交叉验证：{cv['corroboration_level']} (score={cv['score']:.2f})")
+        print(f"  {cv['detail']}")
+
+        s = report["summary"]
+        print(
+            f"\n总结：🟢高={s['high_credibility']} 🟡中={s['medium_credibility']} "
+            f"🔴低={s['low_credibility']} SERP={s.get('serp_filtered', 0)}"
+        )
+
+
+if __name__ == "__main__":
+    main()

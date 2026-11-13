@@ -1,0 +1,2820 @@
+{
+  "_description": "每个引擎的领域代表性文档。用于 TF-IDF 语义路由。",
+  "_update": "新增引擎时在此添加条目，不需要改代码。",
+  "eastmoney": {
+    "label": "东财金融",
+    "documents": [
+      "股票行情 股价涨跌 大盘走势 上证指数 深证成指",
+      "基金净值 基金筛选 基金经理 基金持仓 基金分红",
+      "财报分析 营收 净利润 PE PB ROE 市净率 市盈率",
+      "研报 评级 目标价 行业分析 公司研究",
+      "IPO 打新 中签 可转债 定增 配股",
+      "北向资金 主力资金 龙虎榜 融资融券",
+      "黄金 原油 期货 债券 利率 汇率",
+      "新能源 半导体 AI芯片 光伏 锂电 行业板块",
+      "英伟达 苹果 特斯拉 微软 谷歌 科技股",
+      "比特币 区块链 加密货币",
+      "宏观经济 CPI PPI GDP PMI 央行 货币政策",
+      "银行 券商 保险 信托 公募 私募 量化对冲",
+      "港股 美股 中概股 AH溢价 南下资金"
+    ],
+    "boost_keywords": {
+      "股票": 2.0,
+      "基金": 2.0,
+      "财报": 2.0,
+      "行情": 2.0,
+      "研报": 2.0,
+      "净值": 2.0,
+      "PE": 2.0,
+      "ROE": 2.0,
+      "IPO": 2.0,
+      "黄金": 1.5,
+      "期货": 1.5,
+      "利率": 1.5,
+      "英伟达": 1.1,
+      "特斯拉": 1.1,
+      "苹果": 1.1,
+      "比特币": 1.5,
+      "半导体": 1.5,
+      "新能源": 1.5
+    },
+    "boost_combos": {
+      "英伟达 财报": 0.5,
+      "英伟达 股票": 0.5,
+      "特斯拉 股价": 0.5,
+      "特斯拉 销量": 0.3,
+      "基金 净值": 0.5,
+      "基金 定投": 0.5,
+      "黄金 价格": 0.3,
+      "原油 价格": 0.3
+    }
+  },
+  "zhihu": {
+    "label": "知乎",
+    "documents": [
+      "技术方案 编程 算法 架构 系统设计 代码实现",
+      "职场 求职 面试 简历 职业发展 跳槽 薪资",
+      "生活经验 美食 旅行 健身 健康 育儿 教育",
+      "电影 书籍 音乐 艺术 文化 评论 推荐",
+      "社会热点 观点 讨论 分析 思考 价值观",
+      "创业 商业模式 运营 增长 营销 产品",
+      "学术 论文 研究 科学 物理 数学 哲学",
+      "数码 手机 电脑 硬件 软件 测评",
+      "情感 心理 人际关系 沟通 恋爱 婚姻",
+      "摄影 设计 绘画 创作 技巧 教程"
+    ],
+    "boost_keywords": {
+      "技术": 1.5,
+      "编程": 1.5,
+      "职场": 1.5,
+      "面试": 1.5,
+      "电影": 1.5,
+      "书籍": 1.5,
+      "推荐": 1.3,
+      "评价": 1.3,
+      "创业": 1.5,
+      "学术": 1.5,
+      "论文": 1.5,
+      "思考": 1.3,
+      "怎么": 1.2,
+      "如何": 1.2,
+      "为什么": 1.2,
+      "哪款": 1.3
+    }
+  },
+  "tavily": {
+    "label": "Tavily",
+    "documents": [
+      "latest news breaking developments international global",
+      "research paper study analysis academic science technology",
+      "market trends industry report forecast investment",
+      "company profile product launch funding acquisition",
+      "geopolitics policy regulation government international relations",
+      "AI artificial intelligence machine learning LLM model",
+      "cryptocurrency blockchain Web3 DeFi token",
+      "climate environment sustainability energy transition",
+      "health medicine biotech pharma clinical trial",
+      "startup innovation venture capital silicon valley"
+    ],
+    "boost_keywords": {
+      "latest": 1.5,
+      "news": 1.5,
+      "research": 2.0,
+      "analysis": 1.5,
+      "trend": 1.5,
+      "report": 1.5,
+      "international": 1.5,
+      "global": 1.5,
+      "AI": 1.5,
+      "artificial intelligence": 2.0,
+      "machine learning": 2.0,
+      "cryptocurrency": 1.5,
+      "blockchain": 1.5,
+      "startup": 1.5,
+      "paper": 1.5,
+      "study": 1.5,
+      "science": 1.5
+    }
+  },
+  "anysearch": {
+    "label": "AnySearch",
+    "documents": [
+      "通用搜索 网页搜索 信息查询 知识百科",
+      "技术文档 API 教程 开发指南 错误排查",
+      "产品评测 对比分析 使用体验 购买建议",
+      "新闻资讯 行业动态 事件报道",
+      "学术资源 论文检索 文献综述",
+      "开源项目 GitHub 代码仓库 技术栈"
+    ],
+    "boost_keywords": {
+      "搜索": 1.3,
+      "查询": 1.3,
+      "教程": 1.3,
+      "文档": 1.3,
+      "API": 1.5,
+      "GitHub": 1.5,
+      "开源": 1.5,
+      "评测": 1.3,
+      "对比": 1.3,
+      "推荐": 1.2
+    }
+  },
+  "byted": {
+    "label": "字节搜索",
+    "documents": [
+      "新闻 热点 时事 国内 社会 民生",
+      "科技 互联网 数码 手机 电脑 测评",
+      "娱乐 明星 综艺 影视 音乐 八卦",
+      "体育 足球 篮球 奥运 赛事 比分",
+      "教育 考试 学校 培训 课程 学习",
+      "旅游 景点 攻略 酒店 出行 签证",
+      "美食 餐厅 菜谱 烹饪 饮食 健康",
+      "房产 房价 买房 卖房 装修 物业",
+      "汽车 车型 评测 驾驶 保养 新能源车",
+      "游戏 手游 网游 攻略 评测 电竞"
+    ],
+    "boost_keywords": {
+      "新闻": 1.5,
+      "热点": 1.5,
+      "时事": 1.5,
+      "动态": 1.3,
+      "测评": 1.5,
+      "推荐": 1.3,
+      "最新": 1.3,
+      "攻略": 1.5,
+      "怎么": 1.2,
+      "排行": 1.3,
+      "价格": 1.3,
+      "多少钱": 1.3,
+      "好不好": 1.3
+    }
+  },
+  "arxiv": {
+    "label": "arXiv学术论文",
+    "documents": [
+      "academic paper research study experiment",
+      "machine learning deep learning neural network",
+      "natural language processing computer vision",
+      "reinforcement learning generative model diffusion",
+      "transformer attention mechanism self-attention",
+      "large language model foundation model pre-training",
+      "object detection semantic segmentation image recognition",
+      "optimization gradient descent loss function convergence",
+      "论文 学术 研究 实验 证明 定理",
+      "机器学习 深度学习 神经网络 模型 训练",
+      "自然语言处理 计算机视觉 图像识别 语义分割",
+      "强化学习 生成模型 扩散模型 注意力机制"
+    ],
+    "boost_keywords": {
+      "paper": 2.0,
+      "arXiv": 2.0,
+      "preprint": 2.0,
+      "DOI": 2.0,
+      "citation": 1.5,
+      "abstract": 1.5,
+      "论文": 2.0,
+      "学术": 1.5,
+      "arxiv": 2.0,
+      "transformer": 1.5,
+      "attention": 1.5,
+      "BERT": 1.5,
+      "GPT": 1.5
+    }
+  },
+  "uapi": {
+    "label": "UAPI中文搜索",
+    "documents": [
+      "中文搜索 网页搜索 信息查询 知识百科",
+      "新闻资讯 行业动态 事件报道",
+      "产品评测 使用体验 购买建议",
+      "技术文档 教程 指南 帮助",
+      "生活服务 旅游 美食 健康 教育",
+      "购物推荐 比价 优惠 折扣"
+    ],
+    "boost_keywords": {
+      "搜索": 1.5,
+      "查询": 1.5,
+      "新闻": 1.5,
+      "资讯": 1.5,
+      "评测": 1.5,
+      "推荐": 1.3,
+      "教程": 1.3,
+      "中文": 1.5,
+      "国内": 1.5
+    }
+  },
+  "semantic_scholar": {
+    "label": "Semantic Scholar学术",
+    "documents": [
+      "academic paper research citation impact factor",
+      "machine learning deep learning neural network",
+      "natural language processing computer vision",
+      "scientific study experiment methodology",
+      "journal conference proceedings peer review",
+      "author affiliation institution university",
+      "论文 引用 影响因子 学术 研究",
+      "机器学习 深度学习 神经网络 模型",
+      "期刊 会议 评审 作者 机构 大学"
+    ],
+    "boost_keywords": {
+      "paper": 2.0,
+      "research": 2.0,
+      "citation": 2.0,
+      "study": 1.5,
+      "experiment": 1.5,
+      "methodology": 1.5,
+      "论文": 2.0,
+      "引用": 2.0,
+      "学术": 1.5,
+      "研究": 1.5,
+      "survey": 1.5,
+      "review": 1.5
+    }
+  },
+  "felo": {
+    "label": "Felo AI搜索",
+    "documents": [
+      "AI answer synthesized search comprehensive overview",
+      "what is how does explain concept definition tutorial",
+      "technology framework library documentation deep dive",
+      "research synthesis multi source analysis summary",
+      "product comparison feature overview best practices",
+      "AI 综合回答 概念解释 技术原理 深度研究",
+      "是什么 怎么做 如何理解 教程 概述 综述",
+      "技术文档 框架 库 最佳实践 对比分析"
+    ],
+    "boost_keywords": {
+      "what is": 1.5,
+      "explain": 1.5,
+      "overview": 1.5,
+      "summary": 1.5,
+      "tutorial": 1.3,
+      "how does": 1.5,
+      "deep dive": 1.5,
+      "是什么": 1.5,
+      "怎么": 1.3,
+      "如何": 1.3,
+      "解释": 1.5,
+      "概述": 1.5,
+      "综述": 1.5,
+      "原理": 1.5,
+      "教程": 1.3
+    }
+  },
+  "bocha": {
+    "label": "博查搜索",
+    "documents": [
+      "中文搜索 网页搜索 AI友好 语义理解",
+      "新闻资讯 实时信息 热点事件",
+      "产品评测 使用体验 购买建议",
+      "技术文档 教程 开发指南",
+      "生活服务 旅游 美食 健康"
+    ],
+    "boost_keywords": {
+      "搜索": 1.3,
+      "中文": 1.3,
+      "资讯": 1.3,
+      "新闻": 1.3,
+      "热点": 1.3,
+      "推荐": 1.2,
+      "AI": 1.2,
+      "语义": 1.2
+    }
+  },
+  "github": {
+    "label": "GitHub代码",
+    "documents": [
+      "source code repository open source project",
+      "programming language framework library package",
+      "code search API implementation example",
+      "代码 开源 项目 仓库 函数 实现",
+      "编程 开发 库 框架 工具"
+    ],
+    "boost_keywords": {
+      "code": 2.0,
+      "github": 2.0,
+      "repository": 1.5,
+      "repo": 1.5,
+      "source": 1.5,
+      "open source": 2.0,
+      "library": 1.5,
+      "代码": 2.0,
+      "开源": 2.0,
+      "仓库": 1.5,
+      "函数": 1.5
+    }
+  },
+  "wikipedia": {
+    "label": "Wikipedia百科",
+    "documents": [
+      "encyclopedia knowledge fact definition history",
+      "science technology geography culture art",
+      "biography event country city",
+      "百科 知识 事实 定义 历史",
+      "科学 技术 地理 文化 艺术"
+    ],
+    "boost_keywords": {
+      "wiki": 2.0,
+      "wikipedia": 2.0,
+      "encyclopedia": 2.0,
+      "definition": 1.5,
+      "history": 1.5,
+      "百科": 2.0,
+      "定义": 1.5,
+      "历史": 1.5
+    }
+  },
+  "local_search": {
+    "label": "Local Search 聚合",
+    "documents": [
+      "local search zero cost fallback distributed engines",
+      "web general search html scraping public pages",
+      "chinese search baidu sogou bing",
+      "academic search arxiv crossref semantic scholar pubmed",
+      "code search github stackoverflow gitlab npm",
+      "news search rss bing news google news",
+      "reference wikipedia wiktionary wikiquote openstreetmap",
+      "vertical imdb goodreads",
+      "本地搜索 零成本 兜底 分布式 公开页面",
+      "中文搜索 学术搜索 代码搜索 新闻搜索 百科"
+    ],
+    "boost_keywords": {
+      "local": 2.0,
+      "fallback": 1.5,
+      "zero cost": 1.5,
+      "本地": 2.0,
+      "兜底": 1.5,
+      "零成本": 1.5,
+      "search": 1.2,
+      "搜索": 1.2
+    }
+  },
+  "local_baidu": {
+    "label": "百度搜索",
+    "documents": [
+      "中文网页搜索 百度 国内网站 信息查询",
+      "新闻 贴吧 知道 百科 图片 视频",
+      "生活服务 旅游 美食 健康 教育",
+      "产品评测 使用体验 购买建议",
+      "技术文档 教程 指南 帮助"
+    ],
+    "boost_keywords": {
+      "百度": 2.0,
+      "中文": 1.5,
+      "国内": 1.5,
+      "搜索": 1.3,
+      "资讯": 1.3,
+      "教程": 1.3
+    }
+  },
+  "local_sogou": {
+    "label": "搜狗搜索",
+    "documents": [
+      "搜狗搜索 中文网页 微信文章 知乎内容",
+      "新闻资讯 行业动态 事件报道",
+      "产品评测 使用体验 购买建议",
+      "生活服务 旅游 美食 健康 教育"
+    ],
+    "boost_keywords": {
+      "搜狗": 2.0,
+      "微信": 1.5,
+      "知乎": 1.5,
+      "中文": 1.3,
+      "搜索": 1.2,
+      "资讯": 1.2
+    }
+  },
+  "local_github": {
+    "label": "GitHub本地代码",
+    "documents": [
+      "source code repository open source project",
+      "programming language framework library package",
+      "code search API implementation example",
+      "代码 开源 项目 仓库 函数 实现",
+      "编程 开发 库 框架 工具"
+    ],
+    "boost_keywords": {
+      "github": 2.0,
+      "repository": 1.5,
+      "repo": 1.5,
+      "source code": 2.0,
+      "open source": 2.0,
+      "代码": 2.0,
+      "开源": 2.0,
+      "仓库": 1.5
+    }
+  },
+  "local_arxiv": {
+    "label": "arXiv本地学术",
+    "documents": [
+      "academic paper research study experiment",
+      "machine learning deep learning neural network",
+      "natural language processing computer vision",
+      "reinforcement learning generative model diffusion",
+      "transformer attention mechanism self-attention",
+      "large language model foundation model pre-training",
+      "论文 学术 研究 实验 证明 定理",
+      "机器学习 深度学习 神经网络 模型 训练"
+    ],
+    "boost_keywords": {
+      "arxiv": 2.0,
+      "paper": 2.0,
+      "preprint": 2.0,
+      "论文": 2.0,
+      "学术": 1.5,
+      "研究": 1.5
+    }
+  },
+  "local_stackoverflow": {
+    "label": "StackOverflow本地",
+    "documents": [
+      "programming question answer code error debug",
+      "python javascript java c# sql regex",
+      "error message exception stack trace solution",
+      "编程问题 代码报错 调试 解决方案",
+      "函数 类 库 框架 API 用法"
+    ],
+    "boost_keywords": {
+      "stackoverflow": 2.0,
+      "error": 1.5,
+      "debug": 1.5,
+      "question": 1.3,
+      "answer": 1.3,
+      "报错": 1.5,
+      "调试": 1.5,
+      "解决方案": 1.3
+    }
+  },
+  "twitter": {
+    "label": "Twitter/X",
+    "documents": [
+      "tweet post thread discussion",
+      "breaking news real-time updates trending",
+      "tech announcements product launches",
+      "viral content opinions commentary",
+      "推文 推特 话题 讨论",
+      "热点 实时 资讯 观点"
+    ],
+    "boost_keywords": {
+      "twitter": 2.0,
+      "tweet": 2.0,
+      "retweet": 1.5,
+      "thread": 1.5,
+      "trending": 1.5,
+      "viral": 1.3,
+      "推特": 2.0,
+      "推文": 2.0,
+      "转发": 1.3,
+      "热门": 1.3,
+      "话题": 1.3,
+      "讨论": 1.2
+    }
+  },
+  "reddit": {
+    "label": "Reddit",
+    "documents": [
+      "reddit post discussion AMA",
+      "subreddit community opinion",
+      "programming questions answers",
+      "product reviews recommendations",
+      "reddit 帖子 讨论 AMA",
+      "社区 观点 推荐 评测",
+      "upvote comment award"
+    ],
+    "boost_keywords": {
+      "reddit": 2.0,
+      "ama": 2.0,
+      "subreddit": 2.0,
+      "upvote": 1.5,
+      "downvote": 1.3,
+      "comment": 1.3,
+      "帖子": 1.5,
+      "讨论": 1.3,
+      "评论": 1.3,
+      "社区": 1.2,
+      "推荐": 1.3
+    }
+  },
+  "xiaohongshu": {
+    "label": "小红书",
+    "documents": [
+      "小红书 笔记 推荐 种草 拔草",
+      "美妆 护肤 穿搭 美食 旅行",
+      "评测 体验 心得 攻略",
+      "生活方式 家居 健身 摄影",
+      "博主 粉丝 点赞 收藏",
+      "口碑 真实体验 避坑"
+    ],
+    "boost_keywords": {
+      "小红书": 2.0,
+      "xhs": 2.0,
+      "种草": 2.0,
+      "拔草": 2.0,
+      "笔记": 1.5,
+      "推荐": 1.3,
+      "测评": 1.5,
+      "体验": 1.3,
+      "心得": 1.3,
+      "攻略": 1.5,
+      "避坑": 1.5,
+      "博主": 1.3,
+      "美妆": 1.5,
+      "穿搭": 1.5,
+      "护肤": 1.5,
+      "好用": 1.3,
+      "安利": 1.3,
+      "真实": 1.2
+    }
+  },
+  "bilibili": {
+    "label": "B站",
+    "documents": [
+      "bilibili video danmu comment",
+      "gaming tech review tutorial",
+      "anime manga entertainment",
+      "up主 视频 弹幕 评论",
+      "游戏 科技 教程 数码",
+      "番剧 动漫 音乐 舞蹈"
+    ],
+    "boost_keywords": {
+      "bilibili": 2.0,
+      "b站": 2.0,
+      "视频": 1.5,
+      "up主": 2.0,
+      "弹幕": 1.5,
+      "评论": 1.3,
+      "播放": 1.3,
+      "教程": 1.3,
+      "数码": 1.3,
+      "游戏": 1.3,
+      "科技": 1.3,
+      "番剧": 1.5,
+      "动漫": 1.5,
+      "鬼畜": 1.5
+    }
+  },
+  "weibo": {
+    "label": "微博",
+    "documents": [
+      "weibo post hot search trending",
+      "celebrity entertainment gossip",
+      "news breaking discussion",
+      "微博 热搜 话题 讨论",
+      "明星 娱乐 八卦 粉丝",
+      "社会 民生 热点 舆论"
+    ],
+    "boost_keywords": {
+      "微博": 2.0,
+      "weibo": 2.0,
+      "热搜": 2.0,
+      "话题": 1.5,
+      "超话": 1.5,
+      "粉丝": 1.3,
+      "八卦": 1.5,
+      "娱乐": 1.3,
+      "明星": 1.3,
+      "转发": 1.3,
+      "评论": 1.3,
+      "点赞": 1.2,
+      "社会": 1.2,
+      "民生": 1.2,
+      "舆论": 1.5
+    }
+  },
+  "itotii": {
+    "label": "itotii 梗百科",
+    "documents": [
+      "网络梗 流行语 热词 解释 是什么意思 出处 来源 为什么流行",
+      "抽象话 玩梗 出圈 破防 绷不住 蚌埠住了 栓Q 显眼包 电子榨菜",
+      "圈层黑话 饭圈用语 二次元 直播弹幕 游戏术语 方言梗",
+      "表情包 固定句式 谐音梗 缩写 数字谐音 网络用语 新梗",
+      "梗百科 梗词典 网络热词释义 流行语溯源"
+    ],
+    "boost_keywords": {
+      "梗": 2.5,
+      "流行语": 2.0,
+      "黑话": 2.0,
+      "网络用语": 2.0,
+      "热词": 1.8,
+      "抽象话": 1.8,
+      "玩梗": 1.8,
+      "出圈": 1.5,
+      "表情包": 1.5,
+      "谐音": 1.5,
+      "语录": 1.3,
+      "meme": 1.5
+    }
+  },
+  "urban_dictionary": {
+    "label": "Urban Dictionary",
+    "documents": [
+      "slang term meaning definition example usage",
+      "internet slang acronym abbreviation shorthand",
+      "british american informal colloquial expression",
+      "funny words meme phrase dictionary",
+      "俚语 俚语词典 英语口语 网络缩写 英文流行词"
+    ],
+    "boost_keywords": {
+      "slang": 2.5,
+      "俚语": 2.5,
+      "meaning": 1.5,
+      "definition": 1.5,
+      "acronym": 1.5,
+      "abbreviation": 1.5,
+      "colloquial": 1.8,
+      "urbandictionary": 2.0,
+      "口语": 1.5,
+      "英文俚语": 2.0
+    }
+  },
+  "know_your_meme": {
+    "label": "Know Your Meme",
+    "documents": [
+      "meme origin history explanation viral internet culture",
+      "know your meme entry author example usage",
+      "internet phenomenon viral video image macro reaction gif",
+      "meme 来源 起源 历史 病毒式传播 网络文化 表情包 起源"
+    ],
+    "boost_keywords": {
+      "meme": 2.5,
+      "know your meme": 2.5,
+      "kym": 2.0,
+      "origin": 1.5,
+      "history": 1.5,
+      "viral": 1.5,
+      "internet culture": 1.5,
+      "梗": 1.3,
+      "起源": 1.3
+    }
+  },
+  "itunes": {
+    "label": "iTunes 媒体库",
+    "documents": [
+      "音乐 歌曲 专辑 歌手 艺人 新歌 单曲 歌词 音乐人 演唱会 巡演",
+      "播客 podcast 有声书 电台 节目 音频 soundtrack",
+      "APP 应用 软件 iPhone iOS 应用商店"
+    ],
+    "boost_keywords": {
+      "音乐": 2.0,
+      "歌曲": 2.0,
+      "专辑": 2.0,
+      "歌手": 1.8,
+      "播客": 2.0,
+      "新歌": 2.0,
+      "歌词": 1.8,
+      "music": 1.5,
+      "song": 1.5,
+      "album": 1.5,
+      "podcast": 1.5
+    }
+  },
+  "openverse": {
+    "label": "Openverse 图库",
+    "documents": [
+      "图片 壁纸 照片 图库 素材 插画 头像 背景图",
+      "无版权 免费图片 CC0 开放版权 商用 素材下载",
+      "photo image wallpaper picture illustration"
+    ],
+    "boost_keywords": {
+      "图片": 2.2,
+      "壁纸": 2.2,
+      "照片": 2.0,
+      "图库": 2.2,
+      "素材": 2.0,
+      "插画": 2.0,
+      "无版权": 2.5,
+      "免费图片": 2.5,
+      "头像": 1.8,
+      "wallpaper": 2.0,
+      "image": 1.5,
+      "photo": 1.5
+    }
+  },
+  "coingecko": {
+    "label": "CoinGecko 币种",
+    "documents": [
+      "比特币 以太坊 莱特币 狗狗币 加密货币 虚拟货币",
+      "币价 币种 市值 代币 山寨币 空气币 稳定币 区块链",
+      "bitcoin ethereum crypto defi nft token"
+    ],
+    "boost_keywords": {
+      "比特币": 2.5,
+      "以太坊": 2.5,
+      "加密货币": 2.5,
+      "虚拟货币": 2.5,
+      "数字货币": 2.5,
+      "币价": 2.2,
+      "币种": 2.2,
+      "代币": 2.0,
+      "区块链": 1.8,
+      "bitcoin": 2.0,
+      "ethereum": 2.0,
+      "crypto": 1.8
+    }
+  },
+  "wikidata": {
+    "label": "维基数据实体",
+    "documents": [
+      "实体 知识图谱 结构化数据 词条 属性 关系",
+      "维基数据 wikidata QID 实体查询 SPARQL",
+      "entity knowledge graph structured data"
+    ],
+    "boost_keywords": {
+      "维基数据": 2.5,
+      "实体": 2.2,
+      "知识图谱": 2.2,
+      "实体查询": 2.5,
+      "wikidata": 2.5,
+      "QID": 2.5,
+      "词条": 1.5
+    }
+  },
+  "crates": {
+    "label": "crates.io 包",
+    "documents": [
+      "Rust 包 库 依赖 生态 crates.io cargo",
+      "crate 序列化 异步 框架 工具 命令行",
+      "serde tokio axum clap rust package"
+    ],
+    "boost_keywords": {
+      "crates": 2.5,
+      "cargo": 1.8,
+      "Rust": 2.2,
+      "rust": 2.2,
+      "依赖": 1.8,
+      "crate": 2.2,
+      "包管理": 1.5,
+      "库": 1.2
+    }
+  },
+  "musicbrainz": {
+    "label": "MusicBrainz 音乐人",
+    "documents": [
+      "歌手 乐队 音乐人 艺术家 乐手 主唱 创作人",
+      "专辑列表 discography 出道 国籍 流派 乐队成员",
+      "artist band singer musician discography"
+    ],
+    "boost_keywords": {
+      "歌手": 1.8,
+      "乐队": 2.0,
+      "音乐人": 2.0,
+      "艺术家": 1.8,
+      "乐手": 2.0,
+      "主唱": 2.0,
+      "discography": 2.2,
+      "artist": 1.5,
+      "band": 1.5
+    }
+  },
+  "open_library": {
+    "label": "Open Library 图书",
+    "documents": [
+      "小说 书籍 图书 名著 畅销书 电子书 书单",
+      "作者 出版社 ISBN 出版年份 科幻 推理 文学",
+      "book novel isbn ebook library reading"
+    ],
+    "boost_keywords": {
+      "小说": 2.2,
+      "书籍": 2.0,
+      "图书": 2.0,
+      "书单": 2.0,
+      "名著": 1.8,
+      "畅销书": 2.0,
+      "电子书": 1.8,
+      "ISBN": 2.2,
+      "book": 1.5,
+      "novel": 1.5
+    }
+  },
+  "free_dictionary": {
+    "label": "英英词典",
+    "documents": [
+      "单词 英文单词 释义 定义 音标 读音 词性",
+      "词典 字典 英英 查词 例句 用法 同义词",
+      "dictionary definition word meaning pronounce"
+    ],
+    "boost_keywords": {
+      "单词": 2.2,
+      "词典": 2.2,
+      "字典": 2.2,
+      "释义": 2.2,
+      "定义": 1.8,
+      "音标": 2.0,
+      "读音": 2.0,
+      "怎么读": 2.2,
+      "define": 2.0,
+      "definition": 2.0,
+      "dictionary": 2.2
+    }
+  },
+  "moegirl": {
+    "label": "萌娘百科",
+    "documents": [
+      "萌娘百科 二次元 ACG 动漫 番剧 新番 动画",
+      "声优 手办 同人 轻小说 漫画 游戏 galgame",
+      "vtuber 虚拟主播 东方project 型月 fate 角色 设定"
+    ],
+    "boost_keywords": {
+      "萌娘百科": 2.5,
+      "二次元": 2.2,
+      "ACG": 2.2,
+      "动漫": 2.0,
+      "番剧": 2.2,
+      "新番": 2.2,
+      "声优": 2.0,
+      "手办": 2.0,
+      "同人": 2.0,
+      "轻小说": 2.2,
+      "galgame": 2.0,
+      "vtuber": 2.0
+    }
+  },
+  "brave": {
+    "label": "Brave",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "crossref": {
+    "label": "Crossref",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "exa": {
+    "label": "Exa语义搜索",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "v2ex": {
+    "label": "V2EX",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "google_scholar": {
+    "label": "GoogleScholar",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "hackernews": {
+    "label": "HackerNews",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "stackoverflow": {
+    "label": "StackOverflow",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "ths_hot": {
+    "label": "同花顺热点",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "cls_telegraph": {
+    "label": "财联社电报",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "em_global_news": {
+    "label": "东财全球资讯",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "metaso": {
+    "label": "秘塔",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "openalex": {
+    "label": "OpenAlex",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "searxng": {
+    "label": "SearXNG",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "wolframalpha": {
+    "label": "WolframAlpha",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "wechat_sogou": {
+    "label": "搜狗微信搜索",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "local_bing": {
+    "label": "Bing本地",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "local_pubmed": {
+    "label": "PubMed本地",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "local_crossref": {
+    "label": "Crossref本地",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "local_semantic_scholar": {
+    "label": "Semantic Scholar本地",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "local_bing_news": {
+    "label": "Bing News本地",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "local_google_news": {
+    "label": "Google News本地",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "local_gitlab": {
+    "label": "GitLab本地",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "local_npm": {
+    "label": "NPM本地",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "local_wikipedia": {
+    "label": "Wikipedia本地",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "local_wiktionary": {
+    "label": "Wiktionary本地",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "local_wikiquote": {
+    "label": "Wikiquote本地",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "local_imdb": {
+    "label": "IMDb本地",
+    "documents": [
+      "电影 电视剧 影视 IMDb movie film director cast"
+    ],
+    "boost_keywords": {
+      "电影": 1.5,
+      "IMDb": 2.0,
+      "movie": 1.5
+    },
+    "boost_combos": {}
+  },
+  "local_goodreads": {
+    "label": "Goodreads本地",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "local_openstreetmap": {
+    "label": "OpenStreetMap本地",
+    "documents": [
+      "地理 地点 地标 坐标 经纬度 海拔 地图 位置 在哪里 位于",
+      "山脉 河流 湖泊 岛屿 沙漠 高原 峡谷 海峡 首都 省会 发源地",
+      "openstreetmap nominatim geocoding latitude longitude capital of where is",
+      "埃菲尔铁塔 长城 珠穆朗玛 长江 黄河 亚马逊 尼罗河 Eiffel Tower"
+    ],
+    "boost_keywords": {
+      "地理": 2.0,
+      "地标": 2.0,
+      "坐标": 2.0,
+      "海拔": 1.8,
+      "位于": 1.8,
+      "在哪": 2.0,
+      "首都": 1.8,
+      "发源地": 2.0,
+      "山脉": 1.8,
+      "河流": 1.8,
+      "where is": 2.0,
+      "latitude": 1.8,
+      "longitude": 1.8,
+      "capital": 1.5
+    },
+    "boost_combos": {
+      "在哪 位于": 0.4,
+      "where is capital": 0.4
+    }
+  },
+  "zh_wikipedia": {
+    "label": "中文维基百科",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "baidu_hot": {
+    "label": "百度热搜",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "toutiao_hot": {
+    "label": "今日头条热榜",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "bilibili_hot": {
+    "label": "B站热搜",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "baidu_baike": {
+    "label": "百度百科",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "pypi": {
+    "label": "PyPI",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "npm": {
+    "label": "npm",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "huggingface": {
+    "label": "Hugging Face",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "mdn": {
+    "label": "MDN Web Docs",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "juejin": {
+    "label": "掘金",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "europepmc": {
+    "label": "Europe PMC",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "dblp": {
+    "label": "DBLP",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "clinicaltrials": {
+    "label": "ClinicalTrials",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "openfda": {
+    "label": "openFDA",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "docker_hub": {
+    "label": "Docker Hub",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "devto": {
+    "label": "DEV Community 开发者社区",
+    "documents": [
+      "dev.to developer community blog article tutorial",
+      "web development frontend backend javascript typescript",
+      "react vue node css html open source project",
+      "career advice engineering culture code review"
+    ],
+    "boost_keywords": {
+      "dev.to": 1.5,
+      "developer": 1.3,
+      "community": 1.3,
+      "frontend": 1.3,
+      "前端": 1.2,
+      "开发者": 1.2
+    }
+  },
+  "archive_org": {
+    "label": "Internet Archive",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "steam": {
+    "label": "Steam",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "polymarket": {
+    "label": "Polymarket",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "finviz": {
+    "label": "Finviz",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "seeking_alpha": {
+    "label": "Seeking Alpha",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "jin10": {
+    "label": "金十数据",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "models_dev": {
+    "label": "models.dev",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "octen": {
+    "label": "Octen",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "qweather": {
+    "label": "和风天气",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "wenshu": {
+    "label": "裁判文书网",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "zhihu_global": {
+    "label": "知乎全局搜索",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "em_miaoxiang": {
+    "label": "东财妙想",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "cninfo": {
+    "label": "巨潮资讯",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "sina_quote": {
+    "label": "新浪行情",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "fx_rate": {
+    "label": "实时汇率",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "tencent_quote": {
+    "label": "腾讯行情",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "em_flow": {
+    "label": "东财资金流",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "worldbank": {
+    "label": "世界银行开放数据",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "nbs_stats": {
+    "label": "国家统计局",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "pubchem": {
+    "label": "PubChem/ChEMBL 化合物",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "eurostat": {
+    "label": "Eurostat 欧盟统计",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "gbif": {
+    "label": "GBIF 物种",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "rfc_editor": {
+    "label": "RFC/互联网标准",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "weread": {
+    "label": "微信读书",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "douban_book": {
+    "label": "豆瓣读书",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "fred": {
+    "label": "FRED 宏观数据",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "uniprot": {
+    "label": "UniProt 蛋白质",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "rcsb_pdb": {
+    "label": "RCSB PDB 结构",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "courtlistener": {
+    "label": "CourtListener 判例",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "gutenberg": {
+    "label": "Project Gutenberg",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "wayback_cdx": {
+    "label": "Wayback CDX 快照",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "usgs": {
+    "label": "USGS 地震",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "nasa_cmr": {
+    "label": "NASA CMR 地球数据",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "zhihu_hot": {
+    "label": "知乎热榜",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "imdb": {
+    "label": "IMDb 影视",
+    "documents": [
+      "电影 电视剧 纪录片 影视 影片 大片 影评 导演 主演 演员 编剧 上映 票房",
+      "奥斯卡 金像奖 金马奖 戛纳 美剧 韩剧 日剧 网剧 连续剧 IMDb",
+      "movie film cinema director cast starring oscar emmy box office netflix",
+      "Inception Interstellar Shawshank 肖申克的救赎 星际穿越 盗梦空间"
+    ],
+    "boost_keywords": {
+      "电影": 2.2,
+      "电视剧": 2.0,
+      "导演": 2.0,
+      "主演": 2.0,
+      "演员": 1.8,
+      "编剧": 1.8,
+      "IMDb": 2.5,
+      "imdb": 2.5,
+      "movie": 2.0,
+      "film": 2.0,
+      "director": 1.8,
+      "cast": 1.8,
+      "oscar": 1.8
+    },
+    "boost_combos": {
+      "电影 导演": 0.5,
+      "movie director": 0.5,
+      "主演 演员": 0.4
+    }
+  },
+  "thesportsdb": {
+    "label": "TheSportsDB 体育",
+    "documents": [
+      "NBA CBA NFL NHL MLB 英超 西甲 德甲 意甲 中超 欧冠 世界杯 奥运会 联赛 决赛 MVP",
+      "足球 篮球 网球 排球 球员 俱乐部 进球 助攻 转会 总冠军 季后赛 守门员 前锋",
+      "soccer football basketball tennis world cup olympics championship finals playoffs",
+      "Messi Ronaldo LeBron 梅西 皇马 湖人 勇士 Arsenal"
+    ],
+    "boost_keywords": {
+      "NBA": 2.5,
+      "世界杯": 2.2,
+      "奥运会": 2.0,
+      "足球": 2.0,
+      "篮球": 2.0,
+      "联赛": 1.8,
+      "MVP": 2.0,
+      "俱乐部": 1.8,
+      "球员": 1.8,
+      "决赛": 1.5,
+      "soccer": 1.8,
+      "basketball": 1.8,
+      "finals": 1.8
+    },
+    "boost_combos": {
+      "NBA finals": 0.5,
+      "世界杯 冠军": 0.4,
+      "球员 俱乐部": 0.4
+    }
+  },
+  "gdelt": {
+    "label": "GDELT 全球事件",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "opencorporates": {
+    "label": "OpenCorporates 公司注册",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "google_patents": {
+    "label": "Google Patents 专利",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "bocha_ai": {
+    "label": "博查AI搜索（模态卡）",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "marginalia": {
+    "label": "Marginalia 独立索引",
+    "documents": [
+      "独立博客 个人网站 长尾页面 非商业 复古网页 手工收录",
+      "老派网页 小众网站 独立开发者 技术博客 原创内容 非主流",
+      "indie web personal blog long tail non commercial old school",
+      "small web personal homepage hand curated independent site"
+    ],
+    "boost_keywords": {
+      "独立博客": 2.0,
+      "个人网站": 1.8,
+      "长尾": 1.8,
+      "独立开发": 1.5,
+      "indie": 1.6,
+      "personal blog": 1.6,
+      "long tail": 1.5
+    }
+  },
+  "wiby": {
+    "label": "Wiby 手工网页索引",
+    "documents": [
+      "经典网页 老式网站 个人主页 复古互联网 手工收录 非商业化",
+      "旧式网络 极简页面 个人收藏 独立站点 怀旧 小众内容",
+      "classic web old school personal homepage retro internet",
+      "hand curated vintage site simple html personal collection"
+    ],
+    "boost_keywords": {
+      "经典": 1.8,
+      "复古": 1.8,
+      "个人主页": 1.6,
+      "怀旧": 1.5,
+      "classic web": 1.5,
+      "retro": 1.6,
+      "personal homepage": 1.5
+    }
+  },
+  "gov_policy": {
+    "label": "中国政府网政策库",
+    "documents": [
+      "国务院 政策 文件 通知 规划 意见 办法 条例",
+      "政策解读 政府公报 部委 发文 法规 行政",
+      "国发 国办发 政策库 公报 政府工作报告",
+      "policy regulation state council gazette china"
+    ],
+    "boost_keywords": {
+      "政策": 2.2,
+      "国务院": 2.2,
+      "通知": 1.6,
+      "规划": 1.8,
+      "文件": 1.5,
+      "policy": 1.5
+    }
+  },
+  "qiita": {
+    "label": "Qiita 日本技术社区",
+    "documents": [
+      "Qiita 技術記事 プログラミング エンジニア 開発",
+      "Python JavaScript 入門 実装 チュートリアル 解説",
+      "qiita tech article japanese programming tutorial",
+      "zenn 技術ブログ 開発ノウハウ コード"
+    ],
+    "boost_keywords": {
+      "qiita": 2.2,
+      "技術": 1.8,
+      "プログラミング": 1.8,
+      "エンジニア": 1.6,
+      "tutorial": 1.4
+    }
+  },
+  "fr_opendata": {
+    "label": "法国政府开放数据",
+    "documents": [
+      "法国 开放数据 数据集 政府数据",
+      "data gouv fr dataset open data france",
+      "jeu de données ouvert gouvernement français",
+      "行政 公开 数据目录 下载"
+    ],
+    "boost_keywords": {
+      "法国": 2.0,
+      "开放数据": 2.0,
+      "数据集": 1.8,
+      "france": 1.6,
+      "opendata": 1.6
+    }
+  },
+  "cnii": {
+    "label": "CiNii Research 日文学术",
+    "documents": [
+      "日本 学术论文 博士论文 科研项目 研究数据",
+      "CiNii 国立情報学研究所 論文 研究 学術",
+      "japanese academic paper research nii cir",
+      "学術情報 検索 文献 図書 雑誌"
+    ],
+    "boost_keywords": {
+      "论文": 1.8,
+      "日本学术": 2.0,
+      "CiNii": 2.2,
+      "学術": 1.8,
+      "研究": 1.5,
+      "japanese paper": 1.6
+    }
+  },
+  "ndl": {
+    "label": "NDL 日本国立国会图书馆",
+    "documents": [
+      "日本 图书 书目 出版物 国会图书馆",
+      "NDL 国立国会図書館 書誌 図書 雑誌",
+      "japanese bibliography book catalog ndl",
+      "書籍 検索 出版 全出版物 資料"
+    ],
+    "boost_keywords": {
+      "日本书目": 2.0,
+      "国会图书馆": 2.2,
+      "図書": 1.8,
+      "書誌": 1.8,
+      "bibliography": 1.6
+    }
+  },
+  "kor_law": {
+    "label": "韩国判例库",
+    "documents": [
+      "韩国 判例 判决 法院 法令 法律 诉讼",
+      "대법원 판례 법원 판결 사건 判例",
+      "korean court case precedent law judgment",
+      "행정소송 민사 형사 헌법 재판"
+    ],
+    "boost_keywords": {
+      "韩国": 2.0,
+      "判例": 2.2,
+      "判决": 2.0,
+      "법원": 2.0,
+      "판례": 2.2,
+      "korean law": 2.0
+    }
+  },
+  "hatena_bookmark": {
+    "label": "Hatena Bookmark 日本书签",
+    "documents": [
+      "日本 书签 收藏 热门 技术圈 舆情",
+      "はてなブックマーク ブクマ 話題 注目",
+      "hatena bookmark japanese trending saved",
+      "ソーシャル ブックマーク 人気 エントリ"
+    ],
+    "boost_keywords": {
+      "日本书签": 2.0,
+      "はてな": 2.2,
+      "ブックマーク": 2.0,
+      "hatena": 2.2,
+      "bookmark": 1.6
+    }
+  },
+  "dnb": {
+    "label": "DNB 德国国家图书馆",
+    "documents": [
+      "德国 图书 书目 出版物 德语 国家图书馆",
+      "Deutsche Nationalbibliothek Buch Katalog",
+      "german book bibliography national library",
+      "文献 資料 検索 出版 ドイツ"
+    ],
+    "boost_keywords": {
+      "德国": 2.0,
+      "德语书目": 2.0,
+      "国家图书馆": 1.8,
+      "deutsche": 1.8,
+      "german book": 1.6
+    }
+  },
+  "doaj": {
+    "label": "DOAJ 开放获取期刊",
+    "documents": [
+      "开放获取 期刊 论文 学术 OA 全文",
+      "open access journal article full text",
+      "DOI 期刊论文 免费全文 学术期刊",
+      "openaccess paper scholarly journal"
+    ],
+    "boost_keywords": {
+      "开放获取": 2.2,
+      "OA": 2.0,
+      "期刊": 1.8,
+      "open access": 2.2,
+      "journal": 1.5,
+      "full text": 1.6
+    }
+  },
+  "europeana": {
+    "label": "Europeana 欧洲文化遗产",
+    "documents": [
+      "欧洲 文化遗产 博物馆 藏品 艺术 历史",
+      "europeana cultural heritage museum artifact",
+      "藏品 文物 美术馆 图书馆 档案 欧洲历史",
+      "culture heritage europe museum collection"
+    ],
+    "boost_keywords": {
+      "欧洲": 1.8,
+      "文化遗产": 2.2,
+      "博物馆": 1.8,
+      "藏品": 2.0,
+      "heritage": 2.0,
+      "museum": 1.6
+    }
+  },
+  "hal": {
+    "label": "HAL 法国学术仓储",
+    "documents": [
+      "法国 学术 论文 科研 开放仓储",
+      "HAL archives ouvertes recherche scientifique",
+      "french academic research repository paper",
+      "preprint 预印本 法语学术"
+    ],
+    "boost_keywords": {
+      "法国学术": 2.0,
+      "HAL": 2.2,
+      "recherche": 1.6,
+      "french paper": 1.6,
+      "预印本": 1.6
+    }
+  },
+  "eu_opendata": {
+    "label": "EU Open Data Portal",
+    "documents": [
+      "欧盟 开放数据 数据集 欧洲数据",
+      "EU open data european datasets portal",
+      "european union data catalogue open data",
+      "欧州 データ 公開 欧盟数据"
+    ],
+    "boost_keywords": {
+      "欧盟": 2.0,
+      "欧盟数据": 2.0,
+      "open data": 1.8,
+      "eu": 1.6,
+      "european data": 1.6
+    }
+  },
+  "open_meteo": {
+    "label": "Open-Meteo 全球天气",
+    "documents": [
+      "天气 气温 预报 降雨 风力 全球",
+      "weather forecast temperature global",
+      "天気 気温 予報 降水 風 天気予報",
+      "天气预报 当前温度 湿度 气象"
+    ],
+    "boost_keywords": {
+      "天气": 2.2,
+      "气温": 2.0,
+      "预报": 2.0,
+      "weather": 2.0,
+      "forecast": 1.8,
+      "天気": 2.0
+    }
+  },
+  "searchmysite": {
+    "label": "SearchMySite 个人站索引",
+    "documents": [
+      "how to self hosted 自己搭 手写 原理 教程 独立博客",
+      "email server home lab self hosted guide 自建",
+      "indie web personal website non commercial blog",
+      "自建服务 邮件服务器 独立部署 折腾 教程"
+    ],
+    "boost_keywords": {
+      "how to": 2.0,
+      "self hosted": 2.2,
+      "自建": 2.0,
+      "自己搭": 2.0,
+      "教程": 1.6,
+      "indie web": 2.0
+    }
+  },
+  "lieu": {
+    "label": "Lieu webring 搜索",
+    "documents": [
+      "webring small web 小众站点 个人主页 独立站",
+      "手工收录 webring 成员站 复古网页 极简",
+      "personal site webring member small web indie",
+      "怀旧 个人站 手工 非商业 独立网络"
+    ],
+    "boost_keywords": {
+      "webring": 2.2,
+      "small web": 2.0,
+      "小众": 1.8,
+      "个人主页": 1.8,
+      "独立站": 1.6
+    }
+  },
+  "opensky": {
+    "label": "OpenSky 实时航班",
+    "documents": [
+      "航班 飞机 实时 空中 航线 起飞 降落",
+      "flight realtime aircraft air traffic ads-b",
+      "東京上空 航班动态 机场 空中交通 雷达",
+      "东京 上海 北京 纽约 伦敦 航班 实时位置"
+    ],
+    "boost_keywords": {
+      "航班": 2.2,
+      "飞机": 2.0,
+      "实时": 1.8,
+      "flight": 2.0,
+      "aircraft": 1.8,
+      "空中": 1.6
+    }
+  },
+  "electricity_maps": {
+    "label": "Electricity Maps 电网碳强度",
+    "documents": [
+      "电网 碳强度 电力 碳排放 能源结构 分区",
+      "electricity carbon intensity grid zone",
+      "电网分区 清洁能源 火力 风电 光伏 碳",
+      "energy grid carbon emission zone power"
+    ],
+    "boost_keywords": {
+      "碳强度": 2.2,
+      "电网": 2.0,
+      "碳排放": 2.0,
+      "carbon": 2.0,
+      "electricity": 1.8,
+      "能源": 1.5
+    }
+  },
+  "usda": {
+    "label": "USDA 营养成分库",
+    "documents": [
+      "营养成分 热量 蛋白质 脂肪 维生素 食物",
+      "nutrition calories protein fat vitamin food",
+      "食品成分 卡路里 膳食 营养数据 健康饮食",
+      "usda food data nutrient composition"
+    ],
+    "boost_keywords": {
+      "营养": 2.2,
+      "热量": 2.0,
+      "卡路里": 2.0,
+      "成分": 1.8,
+      "nutrition": 2.0,
+      "calorie": 1.8
+    }
+  },
+  "tatoeba": {
+    "label": "Tatoeba 双语例句",
+    "documents": [
+      "例句 双语 翻译 语言学习 用法 句子",
+      "example sentence translation language pair",
+      "双语例句 地道表达 口语 搭配 語例",
+      "sentence pair parallel corpus language"
+    ],
+    "boost_keywords": {
+      "例句": 2.2,
+      "双语": 2.0,
+      "翻译": 1.8,
+      "句子": 1.8,
+      "example sentence": 2.0,
+      "translation": 1.5
+    }
+  },
+  "figshare": {
+    "label": "Figshare 科研数据集",
+    "documents": [
+      "科研数据集 数据 论文附件 实验数据 图表",
+      "research dataset data article supplementary",
+      "数据集 下载 科学数据 原始数据 开源数据",
+      "figshare dataset research data paper"
+    ],
+    "boost_keywords": {
+      "数据集": 2.2,
+      "科研数据": 2.0,
+      "实验数据": 2.0,
+      "dataset": 2.0,
+      "data": 1.5
+    }
+  },
+  "tencent_kline": {
+    "label": "腾讯 K 线",
+    "documents": [
+      "K线 k线 走势 日K 股票图表 前复权",
+      "股价走势 技术分析 均线 支撑 压力",
+      "stock kline chart trend technical",
+      "行情走势 历史价格 OHLCV 蜡烛图"
+    ],
+    "boost_keywords": {
+      "K线": 2.2,
+      "走势": 2.0,
+      "日K": 2.0,
+      "kline": 2.2,
+      "chart": 1.6,
+      "技术分析": 1.8
+    }
+  },
+  "qq_music": {
+    "label": "QQ 音乐搜索",
+    "documents": [
+      "音乐 歌曲 歌手 专辑 歌词 曲库",
+      "music song singer album lyrics",
+      "周杰伦 歌 听歌 播放 单曲 新歌",
+      "歌单 热门歌曲 华语 音乐平台"
+    ],
+    "boost_keywords": {
+      "歌曲": 2.2,
+      "歌手": 2.0,
+      "专辑": 2.0,
+      "音乐": 1.8,
+      "song": 2.0,
+      "music": 1.8
+    }
+  },
+  "parallel": {
+    "label": "Parallel搜索",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "you": {
+    "label": "You.com搜索",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "tinyfish": {
+    "label": "TinyFish 实时搜索",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "tinyfish_news": {
+    "label": "TinyFish 实时新闻",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "tinyfish_paper": {
+    "label": "TinyFish 论文搜索",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "redskill": {
+    "label": "小红书REDSkill",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "zhihu_user": {
+    "label": "知乎个人数据",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "aviation_weather": {
+    "label": "aviation_weather",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "biorxiv": {
+    "label": "biorxiv",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "cn_ai_news": {
+    "label": "cn_ai_news",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "datacite": {
+    "label": "datacite",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "deps_dev": {
+    "label": "deps_dev",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "endoflife": {
+    "label": "endoflife",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "firecrawl": {
+    "label": "Firecrawl",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "fxtwitter": {
+    "label": "fxtwitter",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "keenable": {
+    "label": "Keenable",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "nvd": {
+    "label": "nvd",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "openreview": {
+    "label": "openreview",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "realtime_index": {
+    "label": "实时索引搜索",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "sec_edgar": {
+    "label": "sec_edgar",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "train": {
+    "label": "火车余票",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "twitter_syndication": {
+    "label": "twitter_syndication",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "un_comtrade": {
+    "label": "un_comtrade",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "weather": {
+    "label": "weather",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "zenodo": {
+    "label": "zenodo",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "bangumi": {
+    "label": "bangumi",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "crt_sh": {
+    "label": "crt_sh",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "douban_movie": {
+    "label": "douban_movie",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "flk_law": {
+    "label": "flk_law",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "google_news": {
+    "label": "google_news",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "gov_regulations": {
+    "label": "gov_regulations",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "met_museum": {
+    "label": "met_museum",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "nasa_images": {
+    "label": "nasa_images",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "netease_music": {
+    "label": "netease_music",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "openstd": {
+    "label": "openstd",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "people_daily": {
+    "label": "people_daily",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "sspai": {
+    "label": "sspai",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "std_samr": {
+    "label": "std_samr",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "wikisource": {
+    "label": "wikisource",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "zdic": {
+    "label": "zdic",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "zhihu_hot_app": {
+    "label": "zhihu_hot_app",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "artic": {
+    "label": "artic",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "carbon_intensity": {
+    "label": "carbon_intensity",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "cleveland": {
+    "label": "cleveland",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "deezer": {
+    "label": "deezer",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "egov_law": {
+    "label": "egov_law",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "energy_charts": {
+    "label": "energy_charts",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "gbfs_nyc": {
+    "label": "gbfs_nyc",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "gdacs": {
+    "label": "gdacs",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "jikan": {
+    "label": "jikan",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "jolpica": {
+    "label": "jolpica",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "k10plus": {
+    "label": "k10plus",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "listenbrainz": {
+    "label": "listenbrainz",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "nhtsa_vpic": {
+    "label": "nhtsa_vpic",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "noaa_swpc": {
+    "label": "noaa_swpc",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "obis": {
+    "label": "obis",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "openf1": {
+    "label": "openf1",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "openligadb": {
+    "label": "openligadb",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "ror": {
+    "label": "ror",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "satnogs": {
+    "label": "satnogs",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "soilgrids": {
+    "label": "soilgrids",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "tle_mirror": {
+    "label": "tle_mirror",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "tvmaze": {
+    "label": "tvmaze",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "who_don": {
+    "label": "who_don",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "who_gho": {
+    "label": "who_gho",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "worms": {
+    "label": "worms",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "doi": {
+    "label": "DOI 元数据直出",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "stackexchange": {
+    "label": "StackExchange 问答族",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "parallel_free": {
+    "label": "Parallel免费搜索",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "seltz": {
+    "label": "Seltz搜索",
+    "documents": [
+      "general web search current information fresh results",
+      "AI agents startup funding product launch technology news",
+      "research comparison documentation troubleshooting how-to guide",
+      "company people news web signals low latency search API",
+      "科技 新闻 产品发布 融资 互联网 行业动态",
+      "教程 文档 对比 测评 指南 资料检索"
+    ],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "clawhub": {
+    "label": "ClawHub 技能目录",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "skillsmp": {
+    "label": "SkillsMP 技能目录",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "federal_register": {
+    "label": "Federal Register 联邦公报",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "opencitations": {
+    "label": "OpenCitations 引用图谱",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "unpaywall": {
+    "label": "Unpaywall 开放获取定位",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "weibo_hot": {
+    "label": "微博热搜",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "douyin_hot": {
+    "label": "抖音热榜",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "csdn": {
+    "label": "CSDN",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "wallstreetcn": {
+    "label": "华尔街见闻",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "weather_cn": {
+    "label": "中国天气网",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "dw_news": {
+    "label": "DW 德国之声 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "factcheck_org": {
+    "label": "FactCheck.org",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "france24": {
+    "label": "France 24 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "full_fact": {
+    "label": "Full Fact",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "guardian_rss": {
+    "label": "卫报 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "core": {
+    "label": "core",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "iplant": {
+    "label": "iplant",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "aljazeera": {
+    "label": "半岛电视台阿语 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "antara": {
+    "label": "安塔拉通讯社 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "ct24": {
+    "label": "捷克电视台24 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "elpais": {
+    "label": "西班牙国家报 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "faz": {
+    "label": "法兰克福汇报 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "folha": {
+    "label": "巴西页报 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "hurriyet": {
+    "label": "自由报 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "lefigaro": {
+    "label": "费加罗报 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "matichon": {
+    "label": "泰国民族报 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "nhk": {
+    "label": "NHK 新闻 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "tass": {
+    "label": "塔斯社 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "vnpress": {
+    "label": "VnExpress RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "yna": {
+    "label": "韩联社 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "ynet": {
+    "label": "Ynet 新闻 RSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "datagov_uk": {
+    "label": "datagov_uk",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "openfoodfacts": {
+    "label": "openfoodfacts",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "zbmath": {
+    "label": "zbmath",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "bing_rss": {
+    "label": "BingRSS",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "ddgs_images": {
+    "label": "通用图片",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "wikimedia_commons": {
+    "label": "Wikimedia图库",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "so": {
+    "label": "360搜索",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "shenma": {
+    "label": "神马搜索",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "qwant": {
+    "label": "Qwant",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "ecosia": {
+    "label": "Ecosia",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "sogou_weixin_browser": {
+    "label": "sogou_weixin_browser",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "x_trending": {
+    "label": "x_trending",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "yahoo_finance": {
+    "label": "Yahoo Finance",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "sec_companyfacts": {
+    "label": "SEC 结构化财务",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "frankfurter": {
+    "label": "Frankfurter(ECB)",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "digup": {
+    "label": "本地文件语义搜索",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "deepseek_search": {
+    "label": "DeepSeek Search",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "cfets": {
+    "label": "人民币中间价",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "defillama": {
+    "label": "DeFiLlama",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "gleif": {
+    "label": "GLEIF 法人标识",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "hkex": {
+    "label": "港交所披露易",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "shfe": {
+    "label": "上期所行情",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "keenable_free": {
+    "label": "Keenable (keyless)",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "tavily_free": {
+    "label": "Tavily (keyless)",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "yuanbao": {
+    "label": "腾讯元宝搜索",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "deepseek1024": {
+    "label": "DeepSeek1024 插件目录",
+    "documents": [
+      "DeepSeek1024 插件目录 DSH 插件目录（13855 条，免认证，带安装命令与安装量/星数/增长口径）"
+    ],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "dsh_hub": {
+    "label": "DSH Hub 插件市场",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "dshopen": {
+    "label": "dshopen 插件目录",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "explainx": {
+    "label": "explainx 技能目录",
+    "documents": [
+      "explainx 技能目录 explainx 技能目录（12075 条，免认证，带安装量/分类/官方标记）"
+    ],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "skills_sh": {
+    "label": "skills.sh 技能目录",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "sciverse": {
+    "label": "Sciverse（题录）",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "metaso_doc": {
+    "label": "秘塔文档（原文）",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "ncpssd": {
+    "label": "国家哲学社会科学文献中心（中文期刊题录+全文PDF）",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "metaso_image": {
+    "label": "秘塔搜索（图片）",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "metaso_podcast": {
+    "label": "秘塔搜索（播客）",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "metaso_scholar": {
+    "label": "秘塔学术（题录）",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "metaso_video": {
+    "label": "秘塔搜索（视频）",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "animetrace": {
+    "label": "AnimeTrace 角色识别",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "saucenao": {
+    "label": "SauceNAO 反搜图",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "google_lens": {
+    "label": "Google Lens 反搜图",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "pixiv": {
+    "label": "Pixiv 公开作品",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "tracemoe": {
+    "label": "trace.moe 场景识别",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "vam": {
+    "label": "V&A馆藏",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "wallhaven": {
+    "label": "Wallhaven壁纸",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "dbpedia": {
+    "label": "DBpedia 知识库",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "mojeek": {
+    "label": "Mojeek 独立索引",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "repology": {
+    "label": "Repology",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "openaire": {
+    "label": "openaire",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "grep_app": {
+    "label": "Grep.app",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "fourget": {
+    "label": "4get 极简元搜索",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "local_seek": {
+    "label": "本机技能与文件搜索",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "local_yandex": {
+    "label": "Yandex 本地（local-search 通道）",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "hf_papers": {
+    "label": "Hugging Face Papers",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "kaggle": {
+    "label": "Kaggle Datasets",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "mwmbl": {
+    "label": "Mwmbl 独立索引",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "feed": {
+    "label": "RSS 种子注册表",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "hf_datasets": {
+    "label": "Hugging Face Datasets",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "maven": {
+    "label": "Maven Central",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  },
+  "nuget": {
+    "label": "NuGet",
+    "documents": [],
+    "boost_keywords": {},
+    "boost_combos": {}
+  }
+}
