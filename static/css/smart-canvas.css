@@ -1427,17 +1427,19 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .theme-dark .prompt-output-pane { background:rgba(15,23,42,.42); }
 .theme-dark .prompt-output-pane.has-text { background:var(--card); }
 /* 复制提示词（老板 2026-11-13）：单栏时按钮在工具栏最左；LLM 双栏时改贴各栏右上角 */
-.composer-copy-btn { position:static; display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; padding:0; border:0; border-radius:7px; background:transparent; color:var(--faint); cursor:pointer; transition:background .14s ease, color .14s ease; }
+.composer-copy-btn { display:none; position:absolute; left:9px; bottom:8px; z-index:5; align-items:center; justify-content:center; width:20px; height:20px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--faint); cursor:pointer; transition:background .14s ease, color .14s ease; }
+
 .composer-copy-btn:hover { background:rgba(15,23,42,.06); color:var(--text); }
 .theme-dark .composer-copy-btn:hover { background:rgba(248,250,252,.1); }
-.composer-copy-btn i, .prompt-pane-copy i { width:13px; height:13px; }
+.composer-copy-btn i, .composer-copy-btn svg, .prompt-pane-copy i, .prompt-pane-copy svg { width:14px !important; height:14px !important; }
 .composer-copy-btn.copied, .prompt-pane-copy.copied { color:#12b76a; }
-.prompt-pane-copy { display:none; position:absolute; top:7px; z-index:5; width:22px; height:22px; padding:0; align-items:center; justify-content:center; border:1px solid var(--line); border-radius:7px; background:var(--card); color:var(--faint); cursor:pointer; opacity:.7; transition:opacity .14s ease, color .14s ease; }
+.prompt-pane-copy { display:none; position:absolute; top:7px; z-index:5; width:20px; height:20px; padding:0; align-items:center; justify-content:center; border:1px solid var(--line); border-radius:7px; background:var(--card); color:var(--faint); cursor:pointer; opacity:.7; transition:opacity .14s ease, color .14s ease; }
 .prompt-pane-copy:hover { opacity:1; color:var(--text); }
 .prompt-row.llm-split .prompt-pane-copy { display:inline-flex; }
 .prompt-row.llm-split .prompt-pane-copy.copy-user { right:calc(50% + 11px); }
 .prompt-row.llm-split .prompt-pane-copy.copy-final { right:11px; }
 .prompt-row.llm-split .composer-copy-btn { display:none; }
+.prompt-row:not(.llm-split) .composer-copy-btn { display:inline-flex; }
 .ref-line { display:none; }
 .ref-thumb { width:30px; height:30px; border-radius:8px; object-fit:cover; border:1px solid var(--line); background:var(--soft); flex:0 0 auto; }
 .ref-chip { height:20px; max-width:130px; padding:0 7px; border-radius:999px; display:inline-flex; align-items:center; background:var(--soft); border:1px solid var(--line); color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
