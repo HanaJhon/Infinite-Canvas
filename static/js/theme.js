@@ -277,9 +277,9 @@
             + '#xvai-entry span{white-space:nowrap}'
             + 'html.theme-dark #xvai-entry{border-color:#2a3446;background:#1b2130;color:#e8eefc}'
             // 2026-11-13 老板：画布右下角有个常驻「?」复习中心（canvas-tour.css 的 .ct-hub，
-            // right:22px;bottom:18px，32px 圆形），胶囊原来正好压在它上面。
-            // 有它时把胶囊让到左边，两个都不挡。
-            + 'html:has(.ct-hub) #xvai-entry{right:64px}'
+            // right:22px;bottom:18px，32px 圆形）。只往左让 42px 在别的缩放下还会蹭到，
+            // 干脆叠到它正上方（同样 22px 右边距，抬到 66px），垂直分开就不可能再挡。
+            + 'html:has(.ct-hub) #xvai-entry{right:22px;bottom:66px}'
             + 'html.theme-dark #xvai-entry:hover{border-color:#3b475c;background:#222a3a}';
         document.head.appendChild(style);
         const a = document.createElement('a');
