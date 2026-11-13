@@ -9583,6 +9583,24 @@ def builtin_skills_relevant(text):
     return bool(_OFFICE_SKILL_TRIGGER_RE.search(str(text or "")))
 
 
+# 内置 ego-browser（浏览器自动化）命中词。跟办公 Skill 分开判：
+# 「帮我把这个网页填了」不该顺带背上 9KB 办公流程，反之亦然。
+_EGO_BROWSER_TRIGGER_RE = re.compile(
+    r"(浏览器|网页|网站|网址|打开链接|登录|验证码|截图|抓取|爬取|"
+    r"browser|chrome|edge|playwright|http[s]?://|www\.)",
+    re.I,
+)
+
+
+def builtin_skill_relevant(name, query):
+    """这个内置 Skill 本次要不要注入。query 为 None = 不做相关性过滤（全给）。"""
+    if query is None:
+        return True
+    if name == "ego-browser":
+        return bool(_EGO_BROWSER_TRIGGER_RE.search(str(query or "")))
+    return builtin_skills_relevant(query)
+
+
 def canvas_llm_skill_query(payload):
     """拼出「本次请求 + 最近几条用户消息」用于判断是否注入内置办公 Skill。
 
@@ -9606,13 +9624,12 @@ def installed_skills_prompt_block(query=None):
     """
     entries = []
     tools_on = bool(load_agent_tools_settings().get("enabled"))
-    office_relevant = query is None or builtin_skills_relevant(query)
     for item in load_builtin_skills():
         name = str(item.get("name") or "")
         # 画布能力手册是 Agent 的地图，必须**始终**在场：
         #   ① 它不依赖本机工具（全是 canvas_ops，不是 run_shell）；
         #   ② 它跟「办公产物」无关，套 _OFFICE_SKILL_TRIGGER_RE 会把正常对话也过滤掉。
-        if name in ALWAYS_ON_BUILTIN_SKILLS or (tools_on and office_relevant):
+        if name in ALWAYS_ON_BUILTIN_SKILLS or (tools_on and builtin_skill_relevant(name, query)):
             entries.append((item.get("title") or item.get("id") or "Skill", item.get("content") or ""))
     for item in load_installed_skills().get("skills", []):
         skill_id = str(item.get("id") or "")
