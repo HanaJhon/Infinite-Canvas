@@ -74,6 +74,15 @@ def test_me_page():
     # 名字由接口填充：不能再挂 data-i18n（否则会被「未登录」盖回去）
     assert 'id="mhomeName" data-i18n' not in html
 
+    # 账号 / 积分走壳内 iframe：整页跳转会连底部标签栏一起丢掉
+    for page in ('accounts', 'credits'):
+        assert f'<iframe id="frame-{page}"' in html, page
+        assert f"'{page}'" in html.split('const PAGE_IDS =', 1)[1].split(';', 1)[0], page
+    assert 'function mobileOpenShellPage(id)' in html
+    assert 'function mobileOpenCredits() { mobileOpenShellPage(\'credits\'); }' in html
+    assert 'function mobileOpenAccounts() { mobileOpenShellPage(\'accounts\'); }' in html
+    assert "const MOBILE_SHELL_PAGES = [...MOBILE_TAB_PAGES, 'credits', 'accounts'];" in html
+
     # 底部第一个标签改成「我的」
     assert 'data-i18n="me.tab"' in html
     assert '"me.tab":' in read('static/js/i18n/common.js')

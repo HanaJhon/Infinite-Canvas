@@ -1895,6 +1895,8 @@
             <iframe id="frame-online" data-src="/static/online.html?v=1.3.7.1794557467" scrolling="yes"></iframe>
             <iframe id="frame-xvai" data-src="/static/xvai.html?v=1.3.7.1794557467" scrolling="yes"></iframe>
             <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=1.3.7.1794557467" scrolling="yes"></iframe>
+            <iframe id="frame-accounts" data-src="/accounts.html" scrolling="yes"></iframe>
+            <iframe id="frame-credits" data-src="/credits.html" scrolling="yes"></iframe>
             <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=1.3.7.1794575391" scrolling="yes"></iframe>
             <iframe id="frame-canvas" class="active" src="/static/canvas-list.html?v=1.3.7.1794575391" scrolling="yes"></iframe>
 
@@ -2012,7 +2014,7 @@
         const SIDEBAR_SETTINGS_COLLAPSED_KEY = 'studio_sidebar_settings_collapsed';
         const SIDEBAR_PINNED_KEY = 'studio_sidebar_pinned';
         const DEFAULT_PAGE_ID = 'canvas';
-        const PAGE_IDS = ['online','xvai','canvas','asset-manager','api-settings'];
+        const PAGE_IDS = ['online','xvai','canvas','asset-manager','api-settings','accounts','credits'];
         const LOCAL_PAGE_IDS = [];
         const PROJECT_URL = 'https://github.com/HanaJhon/Infinite-Canvas';
         let appInfo = { version:'', repo_url:PROJECT_URL, version_url:'' };
@@ -2191,10 +2193,13 @@
         // 竖屏（高 > 宽）= 手机形态：侧边栏整体换成一级页面 + 底部标签栏（老板 2026-11-13）
         // 一级页面里可进的三个功能页，和底部四个标签一一对应（画布竖屏放不下，不给入口）
         const MOBILE_TAB_PAGES = ['xvai', 'online', 'asset-manager'];
+        // 从「我的」里进的壳内页：没有自己的标签，但也不该被顶回一级页面
+        const MOBILE_SHELL_PAGES = [...MOBILE_TAB_PAGES, 'credits', 'accounts'];
 
         function mobileSetTabActive(id) {
+            const target = (id === 'credits' || id === 'accounts') ? 'home' : (id || 'home');
             document.querySelectorAll('#mobileTabs .mtab').forEach(tab => {
-                tab.classList.toggle('active', tab.dataset.tab === (id || 'home'));
+                tab.classList.toggle('active', tab.dataset.tab === target);
             });
         }
 
@@ -2258,8 +2263,14 @@
                 .catch(() => {});
         }
 
-        function mobileOpenCredits() { location.href = '/credits.html'; }
-        function mobileOpenAccounts() { location.href = '/accounts.html'; }
+        // 账号 / 积分是壳内页面：整页跳转会连底部标签栏一起丢掉（老板 2026-11-13）
+        function mobileOpenShellPage(id) {
+            const proxy = document.createElement('button');
+            proxy.dataset.page = id;
+            switchUI(proxy, id);
+        }
+        function mobileOpenCredits() { mobileOpenShellPage('credits'); }
+        function mobileOpenAccounts() { mobileOpenShellPage('accounts'); }
 
         function mobileOpenApi() {
             // 侧边栏没有 api-settings 的 nav-item，沿用账号弹层里的临时按钮做法
@@ -2306,7 +2317,7 @@
             const page = localStorage.getItem(ACTIVE_PAGE_KEY);
             if(portrait) {
                 // 竖屏首次进来（还停在画布等横屏页）→ 先给一级页面
-                if(!MOBILE_TAB_PAGES.includes(page)) showMobileHome();
+                if(!MOBILE_SHELL_PAGES.includes(page)) showMobileHome();
                 else mobileSetTabActive(page);
             } else {
                 hideMobileHome();
