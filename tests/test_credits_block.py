@@ -85,6 +85,12 @@ def main():
         assert 'if _charge.get("blocked"):' in main_py
         assert 'status_code=402' in main_py
         assert "if _image_estimate.get(\"configured\"):" in main_py
+        # 小抽AI 查余额/扣费必须用账号 id（session），不能用 IP 兜底的伪 id
+        # —— 否则余额永远读成 0，富余额用户被误拦（老板 2026-11-13 实测）。
+        assert "def credits_uid_for(request: Request" in main_py
+        assert "_pre_balance = _credits_store.balance(_credit_uid)" in main_py
+        assert "_credits_store.spend(_credit_uid, charge_payload)" in main_py
+        assert "_credits_store.balance(user_id)" not in main_py
 
         print("OK credits-block")
     finally:

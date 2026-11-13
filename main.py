@@ -25889,8 +25889,20 @@ async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(d
 
 # 小抽AI 的 agent 主流程拆成一个异步生成器：一路 yield 实时进度事件，最后 yield done。
 # /api/chat/agent 只取 done（老前端不用改），/api/chat/agent/stream 把它转成 SSE 推给页面。
+def credits_uid_for(request: Request, fallback: str = "") -> str:
+    """扣费/查余额必须用「账号 id」，不能用 safe_user_id 那套 IP 兜底的伪 id。
+    小抽AI 以前拿 {@code ip-127-0-0-1} 去查余额 ⇒ 永远读到 0，被误判成余额不足。"""
+    try:
+        user = _auth_store.session_user(_session_token(request))
+        if user and user.get("id"):
+            return str(user["id"])
+    except Exception:
+        pass
+    return fallback
+
 async def chat_agent_events(payload: ChatRequest, request: Request, user_id: str):
     # 老板 2026-11-13：「余额不足将拦截」；费用为 0 / 没配价的模型照常能用。
+    _credit_uid = credits_uid_for(request, user_id)
     try:
         _pre = _credits_store.estimate({
             "kind": "llm", "model": payload.model, "provider": payload.provider,
@@ -25900,7 +25912,7 @@ async def chat_agent_events(payload: ChatRequest, request: Request, user_id: str
     except Exception:
         _pre_cost = 0.0
     if _pre_cost > 0:
-        _pre_balance = _credits_store.balance(user_id)
+        _pre_balance = _credits_store.balance(_credit_uid)
         if _pre_balance < _pre_cost:
             raise HTTPException(
                 status_code=402,
@@ -25980,7 +25992,7 @@ async def chat_agent_events(payload: ChatRequest, request: Request, user_id: str
         # 老板 2026-11-13：余额不足不发起生图（费用为 0 / 没配价的不拦）
         if _image_estimate.get("configured"):
             _need = float(_image_estimate.get("credits") or 0)
-            _bal = _credits_store.balance(user_id)
+            _bal = _credits_store.balance(_credit_uid)
             if _need > 0 and _bal < _need:
                 raise HTTPException(
                     status_code=402,
@@ -26107,7 +26119,7 @@ async def chat_agent_events(payload: ChatRequest, request: Request, user_id: str
                 "estimated": not (usage.get("prompt_tokens") or usage.get("input_tokens")),
             }
         assistant_message["usage"] = usage_info
-        credits_info = _credits_store.spend(user_id, charge_payload)
+        credits_info = _credits_store.spend(_credit_uid, charge_payload)
         credits_info["usage"] = usage_info
         if credits_info.get("charged"):
             print(f"[credits] 小抽AI 扣 {credits_info.get('credits')} 积分"
