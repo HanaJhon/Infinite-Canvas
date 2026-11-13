@@ -148,7 +148,7 @@
       b.onclick = function () {
         selectedPreset = p.id;
         renderPresets();
-        renderPayments();
+        renderPayments(true);
         // 绑了链接的套餐：点一下直接跳去付款；绑了二维码的就在下面出码
         if (own && own.kind === 'link' && own.value) window.open(own.value, '_blank', 'noopener');
       };
@@ -163,17 +163,23 @@
     return (data.public.payments || []).filter(function (m) { return m.id === payId; })[0] || null;
   }
 
-  function renderPayments() {
+  var DEFAULT_TOPUP_HINT = '选择下面的额度，扫码或联系管理员付款后提交申请，管理员确认后积分到账。';
+  // 老板 2026-11-13：静态状态不要直接铺出收款码/链接，点了套餐才显示
+  var payVisible = false;
+
+  function renderPayments(show) {
+    if (show !== undefined) payVisible = !!show;
     var box = $('payments');
-    var own = boundPayment(selectedPreset);
-    var list = own ? [own] : (data.public.payments || []);
     var hint = $('topupHint');
+    var own = boundPayment(selectedPreset);
     if (hint) {
-      hint.textContent = own
-        ? '当前套餐已选定专属收款方式：' + (own.kind === 'qr' ? '扫码付款后提交申请。' : '点链接付款后提交申请。')
-        : '选择下面的额度，扫码或联系管理员付款后提交申请，管理员确认后积分到账。';
+      hint.textContent = payVisible && own
+        ? '当前套餐已选定专属收款方式：' + (own.kind === 'qr' ? '扫码付款后提交申请。' : '已在新标签页打开付款页面，付完回来提交申请。')
+        : DEFAULT_TOPUP_HINT;
     }
     box.innerHTML = '';
+    if (!payVisible) return;
+    var list = own ? [own] : (data.public.payments || []);
     if (!list.length) {
       box.innerHTML = '<div class="empty">管理员还没有上传收款二维码，请联系管理员付款。</div>';
       return;
@@ -264,7 +270,7 @@
       + '<br>' + (data.public.auto_deduct ? '运行模型时会自动扣积分' : '当前不自动扣积分')
       + (data.public.enforce_balance ? '（余额不足将拦截）' : '（余额不足不拦截）');
     renderPresets();
-    renderPayments();
+    renderPayments(false);
     renderTopups();
     renderLedger();
   }
