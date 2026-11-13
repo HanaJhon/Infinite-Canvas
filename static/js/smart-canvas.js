@@ -9940,6 +9940,8 @@ function promptNodeBodyHtml(node){
             <span class="prompt-processing-text">运行中</span>
         </div>
         <div class="prompt-node-tools">
+            <button class="prompt-node-pill prompt-node-control prompt-node-copy copy-user" type="button" title="复制提示词" aria-label="复制提示词"><i data-lucide="copy"></i></button>
+            ${llmEnabled ? `<button class="prompt-node-pill prompt-node-control prompt-node-copy copy-final" type="button" title="复制最终提示词" aria-label="复制最终提示词"><i data-lucide="copy"></i></button>` : ''}
             <button class="prompt-node-pill prompt-node-control prompt-preset-edit ${templateActive ? 'active' : ''}" type="button"><i data-lucide="library"></i><span>模板库</span></button>
             <button class="prompt-node-pill prompt-node-control prompt-split-toggle ${node.promptSplitEnabled ? 'active' : ''}" type="button"><i data-lucide="split"></i><span>分隔符</span></button>
             <button class="prompt-node-pill prompt-node-control prompt-desc-insert${llmEnabled ? '' : ' is-llm-off'}" type="button" title="${llmEnabled ? '填入「图片描述」预设提示词' : '填入「图片描述」预设提示词并启用 LLM'}"><i data-lucide="image"></i><span>图片描述</span></button>
@@ -15460,6 +15462,21 @@ function bindPromptNodeControls(el, node){
         e.stopPropagation();
         editPromptPresetForNode(node);
     };
+    // 提示词节点复制：用户提示词 / 最终提示词各一个（老板 2026-11-13：提示词节点也要有复制）
+    el.querySelectorAll('.prompt-node-copy').forEach(btn => {
+        btn.onclick = async e => {
+            e.preventDefault();
+            e.stopPropagation();
+            const isFinal = btn.classList.contains('copy-final');
+            const text = isFinal ? String(node.llmOutputText || '').trim() : String(node.text || '').trim();
+            if(!text){ toast('没有可复制的内容'); return; }
+            if(await copyTextToClipboard(text)){
+                toast(isFinal ? '已复制最终提示词' : '已复制提示词');
+            } else {
+                toast('复制失败，请手动选中复制');
+            }
+        };
+    });
     const toggle = el.querySelector('.prompt-llm-toggle');
     if(toggle) toggle.onclick = e => {
         e.preventDefault(); e.stopPropagation();

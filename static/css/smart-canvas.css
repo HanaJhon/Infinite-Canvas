@@ -187,6 +187,9 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity:0 !impo
 .prompt-node-pill { height:24px; padding:0 8px; border-radius:9px; border:1px solid rgba(148,163,184,.34); background:rgba(255,255,255,.62); color:var(--muted); display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:650; }
 .theme-dark .prompt-node-pill { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.26); }
 .prompt-node-pill i,.prompt-node-pill svg { width:12px; height:12px; }
+.prompt-node-copy { width:24px; padding:0; justify-content:center; cursor:pointer; }
+.prompt-node-copy:hover { color:var(--text); border-color:var(--text); }
+.prompt-node-copy.copied { color:#12b76a; }
 .prompt-node-pill.active { background:var(--strong); color:var(--strong-text); border-color:var(--strong); }
 /* LLM 关闭时「图片描述」仍可点（点它自动开 LLM），用虚线边提示会顺带打开 LLM */
 .prompt-node-pill.prompt-desc-insert.is-llm-off { border-style:dashed; color:var(--faint); }
