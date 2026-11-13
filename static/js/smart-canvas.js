@@ -33383,6 +33383,10 @@ async function sendAgentMessage(){
             await agentActivateStyleSkill(String(found.id), name);
             return;
         }
+        if(found && found.builtin){
+            toast(`内置 Skill [${name}] 随程序分发，相关时会自动生效，无需安装`);
+            return;
+        }
         toast(`Skill [${name}] 已激活（所有已安装 Skill 均由系统提示词自动注入）`);
         return;
     }
@@ -34714,14 +34718,32 @@ let agentSlashItems = [];
 let agentSlashIndex = 0;
 async function loadAgentSlashSkills(){
     if(agentSlashSkillsCache) return agentSlashSkillsCache;
+    const merged = [];
     try{
         const r = await fetch('/api/skills/installed');
         const d = await r.json();
-        agentSlashSkillsCache = Array.isArray(d?.skills) ? d.skills : [];
+        if(Array.isArray(d?.skills)) merged.push(...d.skills);
     }catch(err){
-        console.error('loadAgentSlashSkills failed', err);
-        agentSlashSkillsCache = [];
+        console.error('loadAgentSlashSkills installed failed', err);
     }
+    /* 随包内置的 Skill（ego-browser 等）后端会按相关性自动注入系统提示词，
+       但 `/` 面板以前只列「已安装」，用户根本不知道它们存在（2026-11-13 老板反馈
+       「skill 里缺少 ego-browser」）。这里一并列出来，标「内置」，点一下只做说明。 */
+    try{
+        const r = await fetch('/api/skills/builtin');
+        const d = await r.json();
+        if(Array.isArray(d?.skills)){
+            const seen = new Set(merged.map(s => String(s.id)));
+            d.skills.forEach(s => {
+                if(!s || !s.id || seen.has(String(s.id))) return;
+                merged.push({ id: s.id, name: s.name || '', title: s.title || s.name || s.id,
+                    summary: '', builtin: true });
+            });
+        }
+    }catch(err){
+        console.error('loadAgentSlashSkills builtin failed', err);
+    }
+    agentSlashSkillsCache = merged;
     return agentSlashSkillsCache;
 }
 /* 风格库的风格 Skill → 「风格」胶囊（2026-11-02 老板：/skill 只弹个提示，输入栏里没有胶囊、
@@ -34813,8 +34835,8 @@ async function renderAgentSlashPalette(queryRaw){
                 type: 'skill',
                 id: s.id,
                 title: s.title || s.name || s.id,
-                desc: s.summary || '',
-                chip: s.category || '',
+                desc: s.summary || (s.builtin ? '内置 Skill：相关时会自动生效' : ''),
+                chip: s.builtin ? '内置' : (s.category || ''),
                 icon: 'sparkles'
             });
         }
