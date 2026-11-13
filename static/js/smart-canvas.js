@@ -6678,11 +6678,8 @@ function creditsFormat(value){
     if(!n) return '';
     // 小额单价（生图 0.015、LLM 0.00008）两位/三位小数会把差别抹平，1 积分以下一律留 4 位有效小数（老板 m22860）
     if(n >= 1) return String(Math.round(n * 100) / 100);
-    // 1 积分以下按量级给有效位数：0.000006 和 0.000024 都得能看出差别，别一起抹成 <0.0001
-    // （提示词节点的 LLM 单价就是这么小，老板 2026-11-13 才以为「换模型积分没变」）
-    const digits = n >= 0.001 ? 4 : 6;
-    const fixed = n.toFixed(digits).replace(/0+$/, '').replace(/\.$/, '');
-    return (fixed && fixed !== '0') ? fixed : ('<' + (1 / Math.pow(10, digits)));
+    const fixed = n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+    return (fixed && fixed !== '0') ? fixed : '<0.0001';
 }
 function loadCreditsPublic(force=false){
     if(creditsPublicLoading) return;
@@ -6764,6 +6761,8 @@ function creditsVideoPerSecond(table, resolution){
     if(!per) per = creditsNumber(Object.values(table)[0]);
     return per;
 }
+/* 预估低于这个数就不显示（老板 2026-11-13：太低则不显示，费用照样扣除） */
+const CREDITS_MIN_SHOW = 0.001;
 function creditsNodeCost(node){
     if(!node) return null;
     /* 提示词节点的「运行」只跑一次理解模型生成文本，不出图。
@@ -6781,7 +6780,9 @@ function creditsNodeCost(node){
             contextText: ctxText,
         });
         const promptCredits = creditsNumber(promptLlm ? promptLlm.credits : 0);
-        if(!promptCredits) return null;
+        // 预估太小就不显示（老板 2026-11-13）：他的 LLM 单价极低，一次运行只值 0.00002 积分，
+        // 写出来对用户没意义。注意这里只控制「展不展示」，实际扣费仍由后端按用量结算。
+        if(promptCredits < CREDITS_MIN_SHOW) return null;
         return {credits: promptCredits, kind: 'llm', model: String(node.llmModel || ''), base: promptCredits, llmCredits: 0};
     }
     let settings = {};
