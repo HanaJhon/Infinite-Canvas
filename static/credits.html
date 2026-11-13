@@ -235,7 +235,7 @@
     $('rateHint').innerHTML = '当前汇率：1 积分 = ￥' + fmt(rate.credit_per_cny) + ' / $' + fmt(rate.credit_per_usd)
       + (rate.note ? '<br>' + rate.note : '')
       + '<br>' + (data.public.auto_deduct ? '运行模型时会自动扣积分' : '当前不自动扣积分')
-      + (data.public.enforce_balance ? '（余额不足会阻止运行）' : '（余额不足不拦截）');
+      + (data.public.enforce_balance ? '（余额不足将拦截）' : '（余额不足不拦截）');
     renderPresets();
     renderPayments();
     renderTopups();

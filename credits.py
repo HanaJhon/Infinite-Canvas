@@ -177,8 +177,8 @@ def default_settings() -> Dict[str, Any]:
         },
         # 模型计价：key = 模型名（或 "provider::model"），见 normalize_model_pricing()
         "models": {},
-        # 记账但不拦截（老板确认后再打开）
-        "enforce_balance": False,
+        # 余额不足拦截（老板 2026-11-13 要求：余额不足将拦截；费用为 0 的不拦）
+        "enforce_balance": True,
         "auto_deduct": True,
         "updated_at": 0,
     }
@@ -302,7 +302,7 @@ def normalize_settings(raw: Any) -> Dict[str, Any]:
     base["topup"]["allowed_methods"] = [m for m in methods if m in PAYMENT_METHODS][:8] or ["wechat", "alipay", "paypal"]
 
     base["models"] = normalize_model_pricing(raw.get("models"))
-    base["enforce_balance"] = bool(raw.get("enforce_balance"))
+    base["enforce_balance"] = bool(raw.get("enforce_balance", True))
     base["auto_deduct"] = bool(raw.get("auto_deduct", True))
     base["updated_at"] = int(_num(raw.get("updated_at"), 0))
     return base
@@ -506,7 +506,8 @@ class CreditsStore:
     def spend(self, uid: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """按用量扣费（只有估算命中且 auto_deduct 才扣）。
 
-        enforce_balance=False（默认）时：余额不够就不扣，返回 charged=False。
+        enforce_balance=True（默认）时：余额不够就拒绝，返回 blocked=True 且不扣款，
+        由调用方回 402；费用为 0 或没配价的一律放行（老板 2026-11-13）。
         """
         settings = self.settings()
         if not settings.get("auto_deduct", True):
@@ -518,7 +519,10 @@ class CreditsStore:
         if amount <= 0:
             return {"charged": False, "credits": 0, "reason": "zero"}
         balance = self.balance(uid)
-        if balance < amount and not settings.get("enforce_balance"):
+        if balance < amount:
+            if settings.get("enforce_balance", True):
+                return {"charged": False, "blocked": True, "credits": amount,
+                        "balance": balance, "reason": "insufficient"}
             return {"charged": False, "credits": amount, "balance": balance, "reason": "insufficient"}
         result = self.adjust(uid, -amount, reason=str(payload.get("reason") or "模型调用"),
                              actor=uid, kind="spend")

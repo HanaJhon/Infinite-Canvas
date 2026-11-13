@@ -377,6 +377,22 @@ async def no_cache_html_middleware(request: Request, call_next):
                 _charge = {}
             if _charge.get("charged"):
                 print(f"[credits] {_charge_uid} 预扣 {_charge.get('credits')} 积分（{path}）余额 {_charge.get('balance')}")
+            if _charge.get("blocked"):
+                # 老板 2026-11-13：「余额不足将拦截」—— 预扣阶段余额不够就直接回 402，不发起生成。
+                print(f"[credits] {_charge_uid} 余额不足，拦截 {path}"
+                      f"（需要 {_charge.get('credits')}，余额 {_charge.get('balance')}）")
+                if _token_set is not None:
+                    current_uid.reset(_token_set)
+                return JSONResponse(
+                    {
+                        "detail": f"积分不足：本次需要 {_charge.get('credits')} 积分，"
+                                  f"当前余额 {_charge.get('balance')}，请先充值",
+                        "need_credits": True,
+                        "credits": _charge.get("credits"),
+                        "balance": _charge.get("balance"),
+                    },
+                    status_code=402,
+                )
     try:
         response = await call_next(request)
     except Exception:
@@ -25874,6 +25890,22 @@ async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(d
 # 小抽AI 的 agent 主流程拆成一个异步生成器：一路 yield 实时进度事件，最后 yield done。
 # /api/chat/agent 只取 done（老前端不用改），/api/chat/agent/stream 把它转成 SSE 推给页面。
 async def chat_agent_events(payload: ChatRequest, request: Request, user_id: str):
+    # 老板 2026-11-13：「余额不足将拦截」；费用为 0 / 没配价的模型照常能用。
+    try:
+        _pre = _credits_store.estimate({
+            "kind": "llm", "model": payload.model, "provider": payload.provider,
+            "input_text": payload.message, "output_tokens": 1024,
+        })
+        _pre_cost = float(_pre.get("credits") or 0) if _pre.get("configured") else 0.0
+    except Exception:
+        _pre_cost = 0.0
+    if _pre_cost > 0:
+        _pre_balance = _credits_store.balance(user_id)
+        if _pre_balance < _pre_cost:
+            raise HTTPException(
+                status_code=402,
+                detail=f"积分不足：当前余额 {_pre_balance:.4f}，请先充值后再使用",
+            )
     conversation = (
         load_conversation(user_id, payload.conversation_id)
         if payload.conversation_id
@@ -25945,6 +25977,15 @@ async def chat_agent_events(payload: ChatRequest, request: Request, user_id: str
             })
         except Exception:
             _image_estimate = {}
+        # 老板 2026-11-13：余额不足不发起生图（费用为 0 / 没配价的不拦）
+        if _image_estimate.get("configured"):
+            _need = float(_image_estimate.get("credits") or 0)
+            _bal = _credits_store.balance(user_id)
+            if _need > 0 and _bal < _need:
+                raise HTTPException(
+                    status_code=402,
+                    detail=f"积分不足：本次生图需要 {_need:.4f} 积分，当前余额 {_bal:.4f}，请先充值",
+                )
         # 输出格式兜底（与画布同一套规则）：模型是 gpt-image-2.6 系列、提示词要动图时补 gif。
         # 不补这个参数上游只回 png（静图 + 宫格），老板会以为「输出被我转换过」。
         chat_output_format = str(payload.output_format or "").strip().lower()

@@ -852,6 +852,21 @@ const API_RATIO_VALUES = {
 };
 const RES_LONG_SIDE = { '1k':1536, '2k':2048, '4k':3840 };
 const RES_PIXEL_LIMIT = { '1k':1572864, '2k':4194304, '4k':8294400 };
+// 后端出错时回的是 {"detail": "…"}（积分不足 402 等），直接把整段 JSON 丢进 toast 很难看，
+// 能解析出 detail 就用 detail。
+async function apiErrorText(resp){
+    try{
+        const raw = await resp.text();
+        try{
+            const data = JSON.parse(raw);
+            if(data && typeof data.detail === 'string' && data.detail) return data.detail;
+        }catch(e){}
+        return raw;
+    }catch(e){
+        return '';
+    }
+}
+
 function tr(key){ return window.StudioI18n?.t ? window.StudioI18n.t(key) : key; }
 function trf(key, values={}){
     return Object.entries(values).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, String(value)), tr(key));
@@ -8507,7 +8522,7 @@ async function runSmartLlmNode(nodeId){
                 system_prompt: smartLlmSystemPrompt(node)
             })
         }).then(async r => {
-            if(!r.ok) throw new Error(await r.text());
+            if(!r.ok) throw new Error(await apiErrorText(r));
             return r.json();
         });
         node.outputText = String(result.text || '').trim();
@@ -11397,7 +11412,7 @@ async function upload3DSnapshot(nodeId, force=false){
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({data:dataUrl, name:`3d-preview-${String(nodeId).slice(-6)}.png`, content_type:'image/png'})
         }).then(async response => {
-            if(!response.ok) throw new Error(await response.text());
+            if(!response.ok) throw new Error(await apiErrorText(response));
             return response.json();
         });
         const url = result?.files?.[0]?.url || '';
@@ -12007,7 +12022,7 @@ async function uploadHy3dSnapshot(nodeId, force=false){
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({data:dataUrl, name:`hy3d-${String(nodeId).slice(-6)}.png`, content_type:'image/png'})
         }).then(async response => {
-            if(!response.ok) throw new Error(await response.text());
+            if(!response.ok) throw new Error(await apiErrorText(response));
             return response.json();
         });
         const url = result?.files?.[0]?.url || '';
@@ -14987,7 +15002,7 @@ async function runJimengUpscale(node, index){
             method:'POST', headers:{'Content-Type':'application/json'},
             body:JSON.stringify({prompt:`upscale ${resolution}`, provider_id:providerId, model:'', operation:'upscale', resolution_type:resolution, n:1, reference_images:[{url:item.url, name:item.name || 'upscale-input.png'}]})
         }).then(async response => {
-            if(!response.ok) throw new Error(await response.text());
+            if(!response.ok) throw new Error(await apiErrorText(response));
             return response.json();
         });
         if(!task.task_id) throw new Error(tr('smart.errRunFailed'));
@@ -23294,7 +23309,7 @@ async function generateComfyUrlsWithSettings(runSettings, prompt, refs){
     const workflowName = runSettings.comfyWorkflow || comfyWorkflows[0]?.name || '';
     if(!workflowName) throw new Error(tr('smart.errNeedWorkflow'));
     const wf = await fetch(`/api/workflows/${encodeURIComponent(workflowName)}`).then(async r => {
-        if(!r.ok) throw new Error(await r.text());
+        if(!r.ok) throw new Error(await apiErrorText(r));
         return r.json();
     });
     const fields = wf.config?.fields || [];
@@ -24100,7 +24115,7 @@ async function runPromptLLMNode(nodeId){
                 system_prompt: systemPrompt || LLM_SYSTEM_PRESETS[node.llmSystemMode || 'custom'] || LLM_SYSTEM_PRESETS.custom
             })
         }).then(async r => {
-            if(!r.ok) throw new Error(await r.text());
+            if(!r.ok) throw new Error(await apiErrorText(r));
             return r.json();
         });
         node.llmOutputText = (result.text || '').trim();
@@ -24166,7 +24181,7 @@ async function runApiGeneration(prompt, refs, runSettings=settings, options={}){
         };
     }
     const tasks = await Promise.all(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}).then(async r => {
-        if(!r.ok) throw new Error(await r.text());
+        if(!r.ok) throw new Error(await apiErrorText(r));
         return r.json();
     })));
     return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:payload.provider_id, model:payload.model};
@@ -24346,7 +24361,7 @@ async function resolvePromptWithLlmIfNeeded(prompt, refs, node, runSettings=sett
                 system_prompt: systemPrompt
             })
         }).then(async r => {
-            if(!r.ok) throw new Error(await r.text());
+            if(!r.ok) throw new Error(await apiErrorText(r));
             return r.json();
         });
         const expanded = (res.text || '').trim();
@@ -24558,7 +24573,7 @@ async function runModelscopeGeneration(prompt, refs, runSettings=settings){
         else if(modelKey === 'qwen_edit') body = {prompt, image_urls:imageUrls, resolution:`${width}x${height}`};
         else body = {prompt, model:modelKey === 'custom' ? (runSettings.msCustomModel || modelscopeImageModels()[0]) : msModel.modelId, image_urls:imageUrls, width, height, size:`${width}x${height}`};
         const data = await fetch(msModel.endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}).then(async r => {
-            if(!r.ok) throw new Error(await r.text());
+            if(!r.ok) throw new Error(await apiErrorText(r));
             return r.json();
         });
         return data.url || data.images?.[0] || '';
@@ -24588,7 +24603,7 @@ async function runComfyGeneration(node, prompt, refs, pendingNode, meta){
     const workflowName = settings.comfyWorkflow || comfyWorkflows[0]?.name || '';
     if(!workflowName) throw new Error(tr('smart.errNeedWorkflow'));
     const wf = await fetch(`/api/workflows/${encodeURIComponent(workflowName)}`).then(async r => {
-        if(!r.ok) throw new Error(await r.text());
+        if(!r.ok) throw new Error(await apiErrorText(r));
         return r.json();
     });
     const fields = wf.config?.fields || [];
@@ -24684,7 +24699,7 @@ async function comfyNameForRef(ref){
     const form = new FormData();
     form.append('files', blob, ref.name || 'smart-ref.png');
     const data = await fetch('/api/upload', {method:'POST', body:form}).then(async r => {
-        if(!r.ok) throw new Error(await r.text());
+        if(!r.ok) throw new Error(await apiErrorText(r));
         return r.json();
     });
     const name = String(data.files?.[0]?.comfy_name || '').trim();
@@ -25076,7 +25091,7 @@ async function fetchJimengQuery(submitId, kind){
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({submit_id:submitId, kind:kind || 'image'})
-    }).then(async r => { if(!r.ok) throw new Error(await r.text()); return r.json(); });
+    }).then(async r => { if(!r.ok) throw new Error(await apiErrorText(r)); return r.json(); });
 }
 async function queryJimengNow(nodeId){
     const node = nodes.find(n => n.id === nodeId);
@@ -25105,7 +25120,7 @@ async function fetchImageTaskQuery(providerId, taskId){
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({provider_id:providerId || 'comfly', task_id:taskId})
     }).then(async r => {
-        if(!r.ok) throw new Error(await r.text());
+        if(!r.ok) throw new Error(await apiErrorText(r));
         return r.json();
     });
 }
@@ -25271,7 +25286,7 @@ async function pollAgentLlmTask(taskId){
         await Promise.race([wsNotify, timeout]);
         _agentLlmWaiters.delete(taskId);
         const task = await fetch(`/api/agent-llm-task/${encodeURIComponent(taskId)}`).then(async r => {
-            if(!r.ok) throw new Error(await r.text());
+            if(!r.ok) throw new Error(await apiErrorText(r));
             return r.json();
         });
         if(task.status === 'succeeded') return task.result || {};
@@ -25296,7 +25311,7 @@ async function pollSmartCanvasTask(taskId){
             _canvasTaskWaiters.delete(taskId);
             // 如果是 WebSocket 通知触发，立即查询；如果是超时触发，也查询
             const task = await fetch(`/api/canvas-image-tasks/${encodeURIComponent(taskId)}`).then(async r => {
-                if(!r.ok) throw new Error(await r.text());
+                if(!r.ok) throw new Error(await apiErrorText(r));
                 return r.json();
             });
             if(task.status === 'succeeded'){
