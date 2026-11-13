@@ -32,7 +32,7 @@
         "nav.gpt": { zh: "GPT 对话", en: "GPT Chat" },
         "nav.canvas": { zh: "无限画布", en: "Infinite Canvas" },
         "nav.assetManager": { zh: "素材库", en: "Assets" },
-        "home.title": { zh: "老抽的无限画布", en: "LaoChou Canvas" },
+        "home.title": { zh: "老抽的AI创作平台", en: "LaoChou AI Studio" },
         "home.subtitle": { zh: "创作、对话、生图一站式工作台", en: "Chat, create and generate in one place" },
         "home.aiChat": { zh: "AI Chat", en: "AI Chat" },
         "me.tab": { zh: "我的", en: "Me" },
