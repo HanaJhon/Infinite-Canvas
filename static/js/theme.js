@@ -253,9 +253,33 @@
     applyTheme(currentTheme());
     applyScale(currentScaleMode());
 
+    // 每个功能页右下角的「小抽AI Chat」入口，跳到独立页 /ai
+    function mountXvaiEntry() {
+        if (document.getElementById('xvai-entry')) return;
+        const path = (location.pathname || '').replace(/\/+$/, '');
+        if (path === '/ai' || /\/xvai\.html$/.test(path)) return;
+        const style = document.createElement('style');
+        style.textContent = '#xvai-entry{position:fixed;right:20px;bottom:20px;z-index:9998;display:inline-flex;'
+            + 'align-items:center;gap:6px;height:36px;padding:0 15px;border-radius:999px;'
+            + 'background:linear-gradient(120deg,#06b6d4,#4f46e5);color:#fff;font:600 13px/1 '
+            + 'Inter,system-ui,"Microsoft YaHei",sans-serif;text-decoration:none;'
+            + 'box-shadow:0 6px 18px rgba(29,78,216,.28);transition:transform .16s ease,box-shadow .16s ease}'
+            + '#xvai-entry:hover{transform:translateY(-1px);box-shadow:0 10px 22px rgba(29,78,216,.34)}'
+            + '#xvai-entry i{font-style:normal;font-size:13px;line-height:1}';
+        document.head.appendChild(style);
+        const a = document.createElement('a');
+        a.id = 'xvai-entry';
+        a.href = '/ai';
+        a.title = '打开小抽AI Chat';
+        a.innerHTML = '<i>\u2728</i><span>\u5c0f\u62bdAI Chat</span>';
+        // 挂到 <html> 上：body 在 studio-ui-scaled 下有 transform，fixed 会跟着 body 缩放/偏移
+        document.documentElement.appendChild(a);
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         applyTheme(currentTheme());
         applyScale(currentScaleMode());
+        mountXvaiEntry();
     });
     window.addEventListener('message', event => {
         if(event.data?.type === 'studio-theme') applyTheme(event.data.theme);
