@@ -7104,6 +7104,7 @@ function connectAssetLibrarySyncSocket(){
                 if(data?.type === 'canvas_task_done') handleCanvasTaskDoneMessage(data);
                 if(data?.type === 'agent_llm_done') handleAgentLlmDoneMessage(data);
                 if(data?.type === 'agent_llm_token') handleAgentLlmTokenMessage(data);
+                if(data?.type === 'agent_llm_event') handleAgentLlmEventMessage(data);
             } catch(e) {}
         };
         socket.onclose = () => {
@@ -25254,6 +25255,10 @@ const _agentLlmWaiters = new Map();
 // 流式输出状态
 let _agentStreamTaskId = null;
 let _agentStreamText = '';
+// 执行过程（与小抽AI 的 trace 一致）：思考 / 开始调工具 / 工具返回
+let _agentStreamTrace = [];
+// 任务 id 还没接上前端时先缓存（POST 返回与后台任务启动有竞态，头一两条事件会先到）
+const _agentStreamPendingTrace = new Map();
 let _agentStreamCancelled = false;
 function handleAgentLlmDoneMessage(data){
     const taskId = data?.task_id;
@@ -25276,6 +25281,33 @@ function handleAgentLlmTokenMessage(data){
     // 更新流式气泡 UI
     renderAgentStreamBubble();
 }
+function handleAgentLlmEventMessage(data){
+    const taskId = data?.task_id;
+    if(!taskId || _agentStreamCancelled) return;
+    const ev = data?.event || {};
+    const name = ev.label || ev.name || '工具';
+    let line = '';
+    if(ev.phase === 'thinking'){
+        line = ev.text || '思考中…';
+    }else if(ev.phase === 'tool_start'){
+        line = `执行 ${name}…`;
+    }else if(ev.phase === 'tool_end'){
+        line = `${name}${ev.ok ? ' 完成' : ' 失败'}${ev.summary ? ' · ' + ev.summary : ''}`;
+    }
+    if(!line) return;
+    // 任务 id 还没接上前端时先攒着（POST 返回与后台任务启动有竞态，头几条事件会先到）
+    const target = taskId === _agentStreamTaskId
+        ? _agentStreamTrace
+        : (_agentStreamPendingTrace.get(taskId) || _agentStreamPendingTrace.set(taskId, []).get(taskId));
+    if(ev.phase === 'thinking'){
+        for(let i = target.length - 1; i >= 0; i--){
+            if(target[i].phase === 'thinking') target.splice(i, 1);
+        }
+    }
+    target.push({ phase: ev.phase || '', text: line });
+    if(target.length > 12) target.splice(0, target.length - 12);
+    if(taskId === _agentStreamTaskId) renderAgentStreamBubble();
+}
 function renderAgentStreamBubble(){
     if(!agentMessages) return;
     let bubble = agentMessages.querySelector('.agent-stream-bubble');
@@ -25283,13 +25315,19 @@ function renderAgentStreamBubble(){
         // 创建流式气泡
         const msgDiv = document.createElement('div');
         msgDiv.className = 'agent-msg assistant';
-        msgDiv.innerHTML = `<div class="agent-msg-bubble agent-stream-bubble"><div class="agent-stream-body"></div><button class="agent-stream-stop" type="button" title="停止">&#9632;</button></div>`;
+        msgDiv.innerHTML = `<div class="agent-msg-bubble agent-stream-bubble"><div class="agent-stream-trace"></div><div class="agent-stream-body"></div><button class="agent-stream-stop" type="button" title="停止">&#9632;</button></div>`;
         agentMessages.appendChild(msgDiv);
         bubble = msgDiv.querySelector('.agent-stream-bubble');
         // 停止按钮
         bubble.querySelector('.agent-stream-stop').onclick = () => {
             _agentStreamCancelled = true;
         };
+    }
+    const trace = bubble.querySelector('.agent-stream-trace');
+    if(trace){
+        trace.innerHTML = _agentStreamTrace.map(t =>
+            `<div class="agent-stream-trace-line${t.phase === 'tool_end' ? '' : ' is-running'}">${escapeHtml(t.text)}</div>`
+        ).join('');
     }
     const body = bubble.querySelector('.agent-stream-body');
     if(body){
@@ -25301,6 +25339,9 @@ function renderAgentStreamBubble(){
 function startAgentStream(taskId){
     _agentStreamTaskId = taskId;
     _agentStreamText = '';
+    _agentStreamTrace = _agentStreamPendingTrace.get(taskId) || [];
+    _agentStreamPendingTrace.delete(taskId);
+    if(_agentStreamTrace.length > 12) _agentStreamTrace = _agentStreamTrace.slice(-12);
     _agentStreamCancelled = false;
 }
 function endAgentStream(){
@@ -25311,12 +25352,13 @@ function endAgentStream(){
     }
     _agentStreamTaskId = null;
     _agentStreamText = '';
+    _agentStreamTrace = [];
     _agentStreamCancelled = false;
 }
 async function pollAgentLlmTask(taskId){
     if(!taskId) throw new Error('Invalid task ID');
     const startTime = Date.now();
-    const MAX_DURATION = 5 * 60 * 1000; // 5 分钟硬超时
+    const MAX_DURATION = 30 * 60 * 1000; // 30 分钟硬超时（本机工具可能跑很久）
     for(let i = 0; i < 120; i++){
         if(Date.now() - startTime > MAX_DURATION){
             throw new Error('LLM task timeout (5min)');

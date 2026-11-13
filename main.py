@@ -513,6 +513,16 @@ class ConnectionManager:
                 print(f"Broadcast agent llm done error: {e}")
                 self.active_connections.remove(connection)
 
+    async def broadcast_agent_llm_event(self, task_id: str, event: dict):
+        """画布 Agent 的执行过程（思考 / 开始调工具 / 工具返回），与小抽AI 的 SSE trace 对齐。"""
+        data = json.dumps({"type": "agent_llm_event", "task_id": task_id, "event": event})
+        for connection in self.active_connections[:]:
+            try:
+                await connection.send_text(data)
+            except Exception as e:
+                print(f"Broadcast agent event error: {e}")
+                self.active_connections.remove(connection)
+
     async def broadcast_agent_llm_token(self, task_id: str, token: str):
         data = json.dumps({"type": "agent_llm_token", "task_id": task_id, "token": token})
         for connection in self.active_connections[:]:
@@ -6643,7 +6653,7 @@ CODEX_PERMISSION_LEVELS = {
     },
     "workspace-write": {
         "label": "工作区可写",
-        "desc": "可修改项目内文件，禁止联网。这是默认级别。",
+        "desc": "可修改项目内文件，禁止联网。",
         "sandbox": "workspace-write",
         "network": False,
     },
@@ -6660,7 +6670,9 @@ CODEX_PERMISSION_LEVELS = {
         "network": True,
     },
 }
-CODEX_DEFAULT_PERMISSION = "workspace-write"
+# 老板 2026-11-13：「默认开启完全允许控制本机权限」。画布 Agent 与小抽AI 共用这一档。
+# 想收紧：data/codex_permissions.json 写 {"level": "workspace-write"}，或页面里改。
+CODEX_DEFAULT_PERMISSION = "danger-full-access"
 
 def codex_toml_string_array(values):
     """拼 TOML 字面量数组；Windows 路径含反斜杠，用单引号字面量避免转义问题。"""
@@ -21876,7 +21888,7 @@ async def run_agent_llm_task(task_id: str, payload: CanvasLLMRequest, stream: bo
         if stream:
             result = await canvas_llm_stream(task_id, payload)
         else:
-            result = await canvas_llm(payload)
+            result = await canvas_llm(payload, task_id=task_id)
         # 空回复 = 失败（2026-10-21）：以前这里把 "接口返回了空回复。" 当**正常回复**返回，
         # 前端于是继续走「模型没给结构化结果」的兜底 → 拿用户原话当提示词去生图（老板截图里那 5 张垃圾图）。
         # 宁可报一条能看懂的失败，也不能拿一句占位文案去触发真实生成（既浪费钱又污染画布）。
@@ -23543,7 +23555,7 @@ async def canvas_llm_stream(task_id: str, payload: CanvasLLMRequest):
     # 2026-11-13：光开本机工具才带工具是不对的 —— web_search / web_read 是按「常开」设计的，
     # 用户问「最新版本/价格/新闻」时模型必须能查，不能只凭训练记忆编。
     if load_agent_tools_settings().get("enabled") or agent_needs_web_lookup(payload.message):
-        result = await canvas_llm(payload)
+        result = await canvas_llm(payload, task_id=task_id)
         text = str(result.get("text") or "")
         if text:
             try:
@@ -23643,7 +23655,17 @@ async def canvas_llm_stream(task_id: str, payload: CanvasLLMRequest):
     }
 
 @app.post("/api/canvas-llm")
-async def canvas_llm(payload: CanvasLLMRequest):
+async def _agent_trace(task_id: str, event: dict):
+    """广播一条执行过程；没有 task_id（一次性调用）或发失败都静默 —— trace 不能影响主流程。"""
+    if not task_id:
+        return
+    try:
+        await manager.broadcast_agent_llm_event(task_id, event)
+    except Exception:
+        pass
+
+
+async def canvas_llm(payload: CanvasLLMRequest, task_id: str = ""):
     # 附件节点：把随消息发来的非图片附件（正文 / 本机路径）拼进用户消息，所有协议分支共用
     file_block = agent_files_context_block(payload.files)
     if file_block:
@@ -23734,6 +23756,8 @@ async def canvas_llm(payload: CanvasLLMRequest):
                     "content": "工具轮数已用完。请立刻基于上面已经拿到的结果给出最终结论："
                                "说清哪些有依据、哪些查不到，不要再要求调用工具。",
                 })
+            await _agent_trace(task_id, {"phase": "thinking", "round": round_index + 1,
+                                         "text": f"第 {round_index + 1} 轮推理中…"})
             req_body = apply_reasoning_effort(
                 {"model": model, "messages": upstream_messages},
                 getattr(payload, "reasoning_effort", ""),
@@ -23790,8 +23814,13 @@ async def canvas_llm(payload: CanvasLLMRequest):
                 fn = call.get("function") or {}
                 name = str(fn.get("name") or "").strip()
                 args = agent_parse_tool_args(fn.get("arguments"))
+                await _agent_trace(task_id, {"phase": "tool_start", "name": name,
+                                             "label": agent_tool_label(name), "args": args})
                 result = await run_agent_tool(name, args)
                 event = agent_tool_event_from_result(call.get("id"), name, args, result, round_index)
+                await _agent_trace(task_id, {"phase": "tool_end", "name": name,
+                                             "label": agent_tool_label(name),
+                                             "ok": event["ok"], "summary": event["summary"]})
                 tool_events.append(event)
                 upstream_messages.append({
                     "role": "tool",
