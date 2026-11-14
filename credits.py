@@ -11,8 +11,9 @@
 - 用户余额存在 `data/users.json` 的 `credits` 字段（和账号同一条记录，删号即清）；
   流水写到 `data/users/<uid>/credits_ledger.json`（最多保留 500 条）。
 - 充值申请走 `data/credits_topups.json`：成员提交 → 管理员批准或驳回。
-- **本版只记账、不拦截**：`enforce_balance` 默认 False，余额不够也允许生成，
-  只是不扣（`spend()` 返回 0）。等老板确认后再打开拦截。
+- **余额不足默认拦截**：`enforce_balance` 默认 True，余额不够直接拒绝（费用为 0 的照样放行）。
+  老配置文件里写死过 `false` 的，用一次性迁移（`enforce_balance_migrated` 标记）改成 True，
+  迁移之后管理员再手动关掉就按手动设置走。
 """
 from __future__ import annotations
 
@@ -305,6 +306,7 @@ def normalize_settings(raw: Any) -> Dict[str, Any]:
 
     base["models"] = normalize_model_pricing(raw.get("models"))
     base["enforce_balance"] = bool(raw.get("enforce_balance", True))
+    base["enforce_balance_migrated"] = bool(raw.get("enforce_balance_migrated"))
     base["auto_deduct"] = bool(raw.get("auto_deduct", True))
     base["updated_at"] = int(_num(raw.get("updated_at"), 0))
     return base
@@ -346,7 +348,24 @@ class CreditsStore:
     # ------------------------------------------------------------ 设置
     def settings(self) -> Dict[str, Any]:
         with self._lock:
-            return normalize_settings(self._read(self.settings_file, {}))
+            raw = self._read(self.settings_file, {})
+            # 2026-11-14：1.3.8 之前默认值是 False，且每次保存都会把 false 写进配置文件，
+            # 光改默认值救不了这些老文件（它们显式写着 false）→ 一次性迁移成 True。
+            # 迁移后打上 enforce_balance_migrated 标记，管理员再手动关掉就按手动值走。
+            if (
+                isinstance(raw, dict)
+                and "enforce_balance" in raw
+                and not raw.get("enforce_balance")
+                and not raw.get("enforce_balance_migrated")
+            ):
+                raw = dict(raw)
+                raw["enforce_balance"] = True
+                raw["enforce_balance_migrated"] = True
+                try:
+                    self._write(self.settings_file, normalize_settings(raw))
+                except OSError:
+                    pass
+            return normalize_settings(raw)
 
     def save_settings(self, patch: Any) -> Dict[str, Any]:
         """整份覆盖保存（前端每次都提交完整表单，避免局部合并歧义）。"""

@@ -72,10 +72,21 @@ def main():
         r = store.spend("u1", {"model": "nope", "provider": "p", "kind": "image", "count": 1})
         assert r["reason"] == "no_pricing" and not r.get("blocked"), r
 
-        # 5) 显式关掉拦截：记账不拦截（旧行为）
-        store, auth = make_store(os.path.join(tmp, "e"), 0.05, models, enforce=False)
+        # 5) 老配置文件里写死 enforce_balance=false（1.3.8 之前保存过设置的用户）：
+        #    一次性迁移成 True —— 否则「更新后还是余额不足不拦截」（老板 2026-11-14 实测）。
+        d5 = os.path.join(tmp, "e")
+        store, auth = make_store(d5, 0.05, models, enforce=False)
+        os.makedirs(os.path.join(d5, "users", "u1"), exist_ok=True)
+        r = store.spend("u1", {"model": "img", "provider": "p", "kind": "image", "count": 1})
+        assert r.get("blocked") and not r["charged"], r
+        saved = json.load(open(os.path.join(d5, "credits_settings.json"), encoding="utf-8"))
+        assert saved["enforce_balance"] is True and saved["enforce_balance_migrated"] is True, saved
+
+        # 5b) 迁移之后管理员再手动关掉：按手动值走（不再被迁移翻回来）
+        store.save_settings({"enforce_balance": False})
         r = store.spend("u1", {"model": "img", "provider": "p", "kind": "image", "count": 1})
         assert r["reason"] == "insufficient" and not r.get("blocked"), r
+        assert store.settings()["enforce_balance"] is False
 
         # 6) 默认值就是拦截（老配置文件没有这个键）
         assert C.default_settings()["enforce_balance"] is True
