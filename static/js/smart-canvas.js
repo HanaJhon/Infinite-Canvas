@@ -143,6 +143,70 @@ const agentInput = document.getElementById('agentInput');
         }
     });
 })();
+// 胶囊拖动换位置（2026-11-16 老板：附件位置要能调整）。
+// contenteditable 里 contenteditable=false 的胶囊没法用方向键搬，只能拖：
+// 拖到鼠标落点，用 caretRangeFromPoint 定位插入点。
+let agentDraggingChip = null;
+(function bindAgentChipDrag(){
+    if(!agentInput) return;
+    agentInput.addEventListener('dragstart', e => {
+        const chip = e.target.closest?.('.agent-inline-chip');
+        if(!chip || !agentInput.contains(chip)) return;
+        agentDraggingChip = chip;
+        chip.classList.add('is-dragging');
+        try {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', chip.dataset.chipKey || '');
+        } catch(_) {}
+    });
+    agentInput.addEventListener('dragend', () => {
+        agentDraggingChip?.classList.remove('is-dragging');
+        agentDraggingChip = null;
+    });
+    agentInput.addEventListener('dragover', e => {
+        if(!agentDraggingChip) return;   // 外面拖文件进来走原逻辑
+        e.preventDefault();
+        e.stopPropagation();
+        try { e.dataTransfer.dropEffect = 'move'; } catch(_) {}
+    });
+    agentInput.addEventListener('drop', e => {
+        if(!agentDraggingChip) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const chip = agentDraggingChip;
+        chip.classList.remove('is-dragging');
+        agentDraggingChip = null;
+        const range = document.caretRangeFromPoint?.(e.clientX, e.clientY);
+        if(range && agentInput.contains(range.startContainer)){
+            range.deleteContents();
+            range.insertNode(chip);
+            // 胶囊后面补一个空格，否则光标贴不上去、接着打字会粘在胶囊上
+            const space = document.createTextNode(' ');
+            chip.parentNode.insertBefore(space, chip.nextSibling);
+            agentPlaceCaretAfter(space);
+            agentSyncInputEmpty();
+            agentInput.dispatchEvent(new Event('input', {bubbles:true}));
+        }
+    });
+})();
+// 输入栏高度：拖右下角可调（原生 resize），并记住上一次的高度
+(function bindAgentInputHeight(){
+    if(!agentInput) return;
+    const KEY = 'infinite-canvas.agent-input-height';
+    try {
+        const saved = parseInt(localStorage.getItem(KEY) || '', 10);
+        if(saved > 0) agentInput.style.height = saved + 'px';
+    } catch(_) {}
+    let timer = 0;
+    const remember = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+            try { localStorage.setItem(KEY, String(Math.round(agentInput.getBoundingClientRect().height))); } catch(_) {}
+        }, 300);
+    };
+    agentInput.addEventListener('mouseup', remember);
+    window.addEventListener('resize', remember);
+})();
 const agentSendBtn = document.getElementById('agentSendBtn');
 const promptPresetPanel = document.getElementById('promptPresetPanel');
 const promptPresetClose = document.getElementById('promptPresetClose');
@@ -30265,6 +30329,35 @@ function agentInputSetText(v){
     });
     agentSyncInputEmpty();
 }
+/* 用「带 [图:名称] token 的原文」在**原位置**重建胶囊（编辑历史消息 / 回退重发用）。
+   🚨 别再走「先去 token 写纯文本，再让 syncAgentInlineChips 把胶囊补回来」那条路：
+      补回来只会 append 到句末，用户写在句子中间的附件编辑一次就全长到结尾了。 */
+function agentInputSetRich(raw){
+    if(!agentInput) return;
+    const s = String(raw == null ? '' : raw);
+    const byName = new Map();
+    [['att', '图'], ['doc', '文件'], ['ref', '节点']].forEach(([kind]) => {
+        const arr = kind === 'att' ? agentState?.attachments : kind === 'doc' ? agentState?.documents : agentState?.nodeRefs;
+        (arr || []).forEach(entry => byName.set(`${kind}:${agentChipNameOf(kind, entry)}`, {kind, entry}));
+    });
+    agentInput.textContent = '';
+    const re = new RegExp(AGENT_MSG_TOKEN_RE.source, 'g');
+    let last = 0, m;
+    while((m = re.exec(s))){
+        if(m.index > last) agentInput.appendChild(document.createTextNode(s.slice(last, m.index)));
+        const kind = m[1] === '图' ? 'att' : m[1] === '文件' ? 'doc' : 'ref';
+        const hit = byName.get(`${kind}:${m[2]}`);
+        if(hit){
+            agentInput.appendChild(agentMakeChipEl(hit.kind, hit.entry));
+            byName.delete(`${kind}:${m[2]}`);
+        } else {
+            agentInput.appendChild(document.createTextNode(m[0]));
+        }
+        last = re.lastIndex;
+    }
+    if(last < s.length) agentInput.appendChild(document.createTextNode(s.slice(last)));
+    agentSyncInputEmpty();
+}
 function agentSyncInputEmpty(){
     if(!agentInput) return;
     const hasChip = Boolean(agentInput.querySelector('.agent-inline-chip'));
@@ -30449,19 +30542,25 @@ function agentMsgTextHtml(msg){
 /* 在光标处插入一个胶囊。没有光标（输入框没聚焦）时追加到末尾。
    🚨 不要在这里无条件 focus：页面加载时 syncAgentInlineChips 会补胶囊，
       无条件 focus 会把焦点从画布抢到输入框。 */
+function agentMakeChipEl(kind, entry){
+    const key = agentChipKeyOf(kind, entry);
+    const chip = document.createElement('span');
+    chip.className = 'agent-inline-chip';
+    chip.contentEditable = 'false';
+    chip.draggable = true;   // 拖到句子任意位置（contenteditable 里没法用光标搬它）
+    chip.dataset.chipKind = kind;
+    chip.dataset.chipKey = key;
+    chip.dataset.chipToken = `[${AGENT_CHIP_TOKEN_PREFIX[kind] || '附件'}:${agentChipNameOf(kind, entry)}]`;
+    chip.innerHTML = agentChipInnerHtml(kind, entry);
+    return chip;
+}
 function agentInsertChipAtCaret(kind, entry){
     if(!agentInput || !entry) return null;
     const key = agentChipKeyOf(kind, entry);
     const exists = [...agentInput.querySelectorAll('.agent-inline-chip')].some(c => c.dataset.chipKey === key);
     if(exists) return null;
     const hadFocus = document.activeElement === agentInput;
-    const chip = document.createElement('span');
-    chip.className = 'agent-inline-chip';
-    chip.contentEditable = 'false';
-    chip.dataset.chipKind = kind;
-    chip.dataset.chipKey = key;
-    chip.dataset.chipToken = `[${AGENT_CHIP_TOKEN_PREFIX[kind] || '附件'}:${agentChipNameOf(kind, entry)}]`;
-    chip.innerHTML = agentChipInnerHtml(kind, entry);
+    const chip = agentMakeChipEl(kind, entry);
     const range = agentCaretRange();
     if(range){
         range.deleteContents();
@@ -31593,10 +31692,8 @@ function agentBeginEditMessage(id){
     agentState.documents = (Array.isArray(msg.documents) ? msg.documents : []).slice();
     agentState.nodeRefs = (Array.isArray(msg.nodeRefs) ? msg.nodeRefs : []).slice();
     agentEditingMsgId = '';
-    if(agentInput){
-        agentInput.value = String(msg.text || '').replace(new RegExp(AGENT_MSG_TOKEN_RE.source, 'g'), ' ')
-            .replace(/[ \t]{2,}/g, ' ').trim();
-    }
+    /* 带 token 重建，胶囊留在用户原来写的位置（不是全塞到句尾） */
+    if(agentInput) agentInputSetRich(String(msg.text || ''));
     renderAgentAttachments();
     renderAgentMessages();
     saveAgentState();
@@ -31643,11 +31740,8 @@ async function agentResendMessage(msg, newText){
        按 agentState 把附件胶囊**补回输入框**（还带一个尾随空格）。先写 input 再渲染，
        胶囊会把 [图:xxx] 又插回来 —— 看起来像 token 没被清掉（2026-10-20 实测）。
        所以先渲染、后覆盖输入框正文。 */
+    if(agentInput) agentInputSetRich(String(newText || ''));
     renderAgentAttachments();
-    if(agentInput){
-        agentInput.value = String(newText).replace(new RegExp(AGENT_MSG_TOKEN_RE.source, 'g'), ' ')
-            .replace(/[ \t]{2,}/g, ' ').trim();
-    }
     renderAgentMessages();
     saveAgentState();
     if(dropped > 1) toast(`已回退 ${dropped - 1} 条后续对话，正在按修改后的内容重新生成`);
