@@ -33,13 +33,30 @@ assert.ok(Math.abs(gray[0] - gray[1]) < 1 && Math.abs(gray[1] - gray[2]) < 1, 's
 const vivid = colorGradePixel(200, 60, 30, colorGradeConfig({saturation:100}));
 assert.ok(vivid[0] > 200 && vivid[2] < 30, 'sat +100 应更分离');
 
-// 4) 曲线：抬阴影只影响暗部，高光基本不动
+// 4) 曲线：抬低光控制点只影响暗部，高光基本不动
+const liftCurve = [[0.25, 0.5]];
 const darkBefore = colorGradePixel(20, 20, 20, colorGradeConfig({}))[0];
-const darkAfter = colorGradePixel(20, 20, 20, colorGradeConfig({shadow:0.25}))[0];
+const darkAfter = colorGradePixel(20, 20, 20, colorGradeConfig({curve: liftCurve}))[0];
 const lightBefore = colorGradePixel(250, 250, 250, colorGradeConfig({}))[0];
-const lightAfter = colorGradePixel(250, 250, 250, colorGradeConfig({shadow:0.25}))[0];
-assert.ok(darkAfter - darkBefore > 10, '抬阴影应提亮暗部');
-assert.ok(Math.abs(lightAfter - lightBefore) < 12, '抬阴影不该大幅改动高光');
+const lightAfter = colorGradePixel(250, 250, 250, colorGradeConfig({curve: liftCurve}))[0];
+assert.ok(darkAfter - darkBefore > 10, '抬低光应提亮暗部');
+assert.ok(Math.abs(lightAfter - lightBefore) < 12, '抬低光不该大幅改动高光');
+
+// 4a) 曲线端点固定、加点后经过该点
+assert.strictEqual(colorGradeCurve(0, []), 0);
+assert.strictEqual(colorGradeCurve(1, []), 1);
+assert.ok(Math.abs(colorGradeCurve(0.5, [[0.5, 0.8]]) - 0.8) < 0.01, '曲线应经过控制点');
+assert.ok(Math.abs(colorGradeCurve(0.5, []) - 0.5) < 0.001, '空曲线应为直线');
+
+// 4b) 色相：红转 120° 后绿色分量成为最大；灰色转色相仍为灰
+const hueOut = colorGradePixel(200, 40, 40, colorGradeConfig({hue:120}));
+assert.ok(hueOut[1] > hueOut[0] && hueOut[1] > hueOut[2], '红转 120° 应偏绿');
+const grayHue = colorGradePixel(128, 128, 128, colorGradeConfig({hue:150}));
+assert.ok(Math.max(...grayHue) - Math.min(...grayHue) < 2, '灰色不该被染色');
+
+// 4c) 明度：+100 变亮、-100 变暗
+assert.ok(colorGradePixel(...base, colorGradeConfig({light:100}))[0] > base[0]);
+assert.ok(colorGradePixel(...base, colorGradeConfig({light:-100}))[0] < base[0]);
 
 // 5) 滤镜预设各不相同，且 none 保持原样
 const px = [140, 110, 90];
@@ -103,6 +120,11 @@ def test_mode_wired():
     assert "'color'].includes(mode)" in js
     assert "classList.toggle('color-mode'" in js
     assert 'requestAnimationFrame(() => openColorGrade())' in js
+    # 色相/明度滑块 + 曲线还原 + 原图对比 + 双击还原
+    for cid in ['colorHue', 'colorLight', 'colorCurveReset', 'colorCompareBtn', 'colorResetBtn']:
+        assert 'id="%s"' % cid in html, cid
+    assert "classList.toggle('compare'" in js
+    assert "'dblclick'" in js and 'SLIDER_DEFAULTS' in js
     # 应用按钮走本地调色而不是裁剪
     assert "if(imageEditMode === 'color') return applyImageColor();" in js
     body = js[js.index('async function applyImageColor('):]

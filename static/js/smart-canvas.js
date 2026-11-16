@@ -19438,7 +19438,7 @@ function openImageEditor(nodeId, imageIndex=0){
     gridOperationMode = 'split'; gridJoinLayout = null; gridJoinDrag = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridJoinGroupId = '';
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
     imageAngleState = {deg:0, elev:0, shot:'mid'};
-    Object.assign(colorGradeState, {filter:'none', strength:100, exposure:0, saturation:0, shadow:0, high:0, picked:null, pickedOnly:false});
+    Object.assign(colorGradeState, {filter:'none', strength:100, exposure:0, saturation:0, hue:0, light:0, curve:[], picked:null, pickedOnly:false});
     colorBaseData = null; colorPicking = false;
     cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
     editTextItems = []; editTextSelectedId = ''; editTextDrag = null; editTextDirty = false;
@@ -19544,7 +19544,7 @@ function closeImageEditor(){
     previewNavState = {nodeId:'', index:0, count:0};
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
     imageAngleState = {deg:0, elev:0, shot:'mid'};
-    Object.assign(colorGradeState, {filter:'none', strength:100, exposure:0, saturation:0, shadow:0, high:0, picked:null, pickedOnly:false});
+    Object.assign(colorGradeState, {filter:'none', strength:100, exposure:0, saturation:0, hue:0, light:0, curve:[], picked:null, pickedOnly:false});
     colorBaseData = null; colorPicking = false;
     cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
     disposePanoramaPreview();
@@ -20415,10 +20415,22 @@ const COLOR_FILTER_PRESETS = {
     nh: {label:'NH胶片', gain:[1.05,1.0,1.02], offset:[0.004,0,0.008], sat:1.38, contrast:1.12}
 };
 function colorGradeClamp01(v){ return v < 0 ? 0 : (v > 1 ? 1 : v); }
-/* 曲线：低光/高光两个控制点，0 →(0.25,0.25+shadow)→(0.75,0.75+high)→ 1 分段线性 */
-function colorGradeCurve(v, shadow, high){
-    const s = Number(shadow) || 0, h = Number(high) || 0;
-    const pts = [[0,0],[0.25, colorGradeClamp01(0.25 + s)],[0.75, colorGradeClamp01(0.75 + h)],[1,1]];
+/* 曲线：任意多个控制点（PS 风格，可加/拖/删），两端固定 (0,0) 与 (1,1)，分段线性插值 */
+function colorGradeCurvePoints(list){
+    const pts = [[0, 0]];
+    (Array.isArray(list) ? list : []).forEach(pt => {
+        if(!Array.isArray(pt) || pt.length < 2) return;
+        const x = Number(pt[0]), y = Number(pt[1]);
+        if(!Number.isFinite(x) || !Number.isFinite(y)) return;
+        if(x <= 0.001 || x >= 0.999) return;
+        pts.push([colorGradeClamp01(x), colorGradeClamp01(y)]);
+    });
+    pts.push([1, 1]);
+    pts.sort((a, b) => a[0] - b[0]);
+    return pts;
+}
+function colorGradeCurve(v, list){
+    const pts = colorGradeCurvePoints(list);
     for(let i = 1; i < pts.length; i++){
         if(v <= pts[i][0]){
             const x0 = pts[i-1][0], y0 = pts[i-1][1], x1 = pts[i][0], y1 = pts[i][1];
@@ -20427,6 +20439,17 @@ function colorGradeCurve(v, shadow, high){
         }
     }
     return 1;
+}
+/* 色相旋转矩阵（SVG feColorMatrix hueRotate 同款），返回 3x3 */
+function colorGradeHueMatrix(deg){
+    const d = Number(deg) || 0;
+    if(!d) return null;
+    const a = d * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+    return [
+        [0.213 + c * 0.787 - s * 0.213, 0.715 - c * 0.715 - s * 0.715, 0.072 - c * 0.072 + s * 0.928],
+        [0.213 - c * 0.213 + s * 0.143, 0.715 + c * 0.285 + s * 0.140, 0.072 - c * 0.072 - s * 0.283],
+        [0.213 - c * 0.213 - s * 0.787, 0.715 - c * 0.715 + s * 0.715, 0.072 + c * 0.928 + s * 0.072]
+    ];
 }
 function colorGradeConfig(opts){
     const o = opts || {};
@@ -20437,16 +20460,19 @@ function colorGradeConfig(opts){
         strength: Math.max(0, Math.min(1, num(o.strength, 100) / 100)),
         exposure: Math.max(-2, Math.min(2, num(o.exposure, 0) / 100 * 2)),
         sat: Math.max(0, Math.min(2, 1 + num(o.saturation, 0) / 100)),
-        shadow: Math.max(-0.25, Math.min(0.25, num(o.shadow, 0))),
-        high: Math.max(-0.25, Math.min(0.25, num(o.high, 0))),
+        hue: Math.max(-180, Math.min(180, num(o.hue, 0))),
+        light: Math.max(-1, Math.min(1, num(o.light, 0) / 100)),
+        curve: colorGradeCurvePoints(o.curve),
         contrast: preset.contrast,
         gain: preset.gain,
         offset: preset.offset,
         picked: Array.isArray(o.picked) && o.picked.length === 3 ? o.picked.map(v => Math.max(0, Math.min(255, num(v, 0)))) : null,
         pickedOnly: !!o.pickedOnly,
         tolerance: 0.34,
-        lut: null
+        lut: null,
+        hueMatrix: colorGradeHueMatrix(0)
     };
+    cfg.hueMatrix = colorGradeHueMatrix(cfg.hue);
     cfg.lut = colorGradeBuildLut(cfg);
     return cfg;
 }
@@ -20455,7 +20481,7 @@ function colorGradeBuildLut(cfg){
     for(let i = 0; i < 256; i++){
         let v = i / 255;
         v = colorGradeClamp01(v * Math.pow(2, cfg.exposure));
-        v = colorGradeCurve(v, cfg.shadow, cfg.high);
+        v = colorGradeCurve(v, cfg.curve);
         v = colorGradeClamp01((v - 0.5) * cfg.contrast + 0.5);
         lut[i] = Math.round(colorGradeClamp01(v) * 255);
     }
@@ -20470,6 +20496,16 @@ function colorGradePixel(r, g, b, cfg){
     }
     const y = 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2];
     for(let i = 0; i < 3; i++) out[i] = y + (out[i] - y) * cfg.sat;
+    if(cfg.hueMatrix){
+        const r = out[0] / 255, g = out[1] / 255, b = out[2] / 255, m = cfg.hueMatrix;
+        out[0] = colorGradeClamp01(m[0][0] * r + m[0][1] * g + m[0][2] * b) * 255;
+        out[1] = colorGradeClamp01(m[1][0] * r + m[1][1] * g + m[1][2] * b) * 255;
+        out[2] = colorGradeClamp01(m[2][0] * r + m[2][1] * g + m[2][2] * b) * 255;
+    }
+    if(cfg.light !== 0){
+        const off = cfg.light * 255;
+        for(let i = 0; i < 3; i++) out[i] = colorGradeClamp01((out[i] + off) / 255) * 255;
+    }
     let t = cfg.strength;
     if(cfg.picked && cfg.pickedOnly){
         const dr = (src[0] - cfg.picked[0]) / 255;
@@ -20494,7 +20530,7 @@ function colorGradeImageData(data, cfg){
 }
 /* COLOR-GRADE:END */
 
-const colorGradeState = {filter:'none', strength:100, exposure:0, saturation:0, shadow:0, high:0, picked:null, pickedOnly:false};
+const colorGradeState = {filter:'none', strength:100, exposure:0, saturation:0, hue:0, light:0, curve:[], picked:null, pickedOnly:false};
 let colorBaseData = null;      // 预览用的原图缓冲（降采样），换图时清空
 let colorRenderQueued = false;
 let colorToolsBound = false;
@@ -20567,12 +20603,12 @@ function drawColorCurve(){
     ctx.lineWidth = 2;
     ctx.beginPath();
     for(let x = 0; x <= w; x++){
-        const v = colorGradeCurve(x / w, colorGradeState.shadow, colorGradeState.high);
+        const v = colorGradeCurve(x / w, colorGradeState.curve);
         const y = h - v * h;
         if(x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
-    [[0.25, 0.25 + colorGradeState.shadow], [0.75, 0.75 + colorGradeState.high]].forEach(([px, py]) => {
+    colorGradeState.curve.forEach(([px, py]) => {
         ctx.beginPath();
         ctx.arc(px * w, h - colorGradeClamp01(py) * h, 4, 0, Math.PI * 2);
         ctx.fillStyle = '#fff';
@@ -20588,10 +20624,14 @@ function syncColorControls(){
     set('colorStrength', colorGradeState.strength);
     set('colorExposure', colorGradeState.exposure);
     set('colorSaturation', colorGradeState.saturation);
+    set('colorHue', colorGradeState.hue);
+    set('colorLight', colorGradeState.light);
     const label = (id, val) => { const el = document.getElementById(id); if(el) el.textContent = String(val); };
     label('colorStrengthVal', colorGradeState.strength);
     label('colorExposureVal', colorGradeState.exposure);
     label('colorSaturationVal', colorGradeState.saturation);
+    label('colorHueVal', colorGradeState.hue);
+    label('colorLightVal', colorGradeState.light);
     document.querySelectorAll('[data-color-filter]').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.colorFilter === colorGradeState.filter);
     });
@@ -20619,6 +20659,8 @@ function bindColorTools(){
         if(t.id === 'colorStrength') colorGradeState.strength = Number(t.value) || 0;
         else if(t.id === 'colorExposure') colorGradeState.exposure = Number(t.value) || 0;
         else if(t.id === 'colorSaturation') colorGradeState.saturation = Number(t.value) || 0;
+        else if(t.id === 'colorHue') colorGradeState.hue = Number(t.value) || 0;
+        else if(t.id === 'colorLight') colorGradeState.light = Number(t.value) || 0;
         else return;
         syncColorControls();
         scheduleColorRender();
@@ -20638,8 +20680,14 @@ function bindColorTools(){
             syncColorControls();
             return;
         }
+        if(ev.target.closest?.('#colorCurveReset')){
+            colorGradeState.curve = [];
+            syncColorControls();
+            scheduleColorRender();
+            return;
+        }
         if(ev.target.closest?.('#colorResetBtn')){
-            Object.assign(colorGradeState, {filter:'none', strength:100, exposure:0, saturation:0, shadow:0, high:0, picked:null, pickedOnly:false});
+            Object.assign(colorGradeState, {filter:'none', strength:100, exposure:0, saturation:0, hue:0, light:0, curve:[], picked:null, pickedOnly:false});
             colorPicking = false;
             const canvas = document.getElementById('colorCanvas');
             if(canvas) canvas.style.cursor = 'default';
@@ -20648,6 +20696,15 @@ function bindColorTools(){
             syncColorControls();
             scheduleColorRender();
         }
+    });
+    const SLIDER_DEFAULTS = {colorStrength:100, colorExposure:0, colorSaturation:0, colorHue:0, colorLight:0};
+    tools.addEventListener('dblclick', ev => {
+        const t = ev.target;
+        if(!t || !(t.id in SLIDER_DEFAULTS)) return;
+        const key = t.id.replace('color', '');
+        colorGradeState[key.charAt(0).toLowerCase() + key.slice(1)] = SLIDER_DEFAULTS[t.id];
+        syncColorControls();
+        scheduleColorRender();
     });
     tools.addEventListener('change', ev => {
         if(ev.target?.id === 'colorPickOnly') colorGradeState.pickedOnly = !!ev.target.checked;
@@ -20670,26 +20727,71 @@ function bindColorTools(){
         scheduleColorRender();
     });
     const curve = document.getElementById('colorCurve');
-    let curveKey = '';
-    const applyCurvePointer = ev => {
-        if(!curveKey) return;
+    let curveIndex = -1;
+    const curvePos = ev => {
         const rect = curve.getBoundingClientRect();
-        if(!rect.width || !rect.height) return;
-        const v = colorGradeClamp01(1 - (ev.clientY - rect.top) / rect.height);
-        if(curveKey === 'shadow') colorGradeState.shadow = Math.max(-0.25, Math.min(0.25, v - 0.25));
-        else colorGradeState.high = Math.max(-0.25, Math.min(0.25, v - 0.75));
-        drawColorCurve();
-        scheduleColorRender();
+        if(!rect.width || !rect.height) return null;
+        return {x: colorGradeClamp01((ev.clientX - rect.left) / rect.width), y: colorGradeClamp01(1 - (ev.clientY - rect.top) / rect.height), rect};
+    };
+    const hitCurvePoint = pos => {
+        let best = -1, bestDist = 14 / Math.max(1, pos.rect.width);
+        colorGradeState.curve.forEach((pt, i) => {
+            const d = Math.hypot(pt[0] - pos.x, pt[1] - pos.y);
+            if(d <= bestDist){ best = i; bestDist = d; }
+        });
+        return best;
     };
     curve?.addEventListener('pointerdown', ev => {
-        const rect = curve.getBoundingClientRect();
-        curveKey = (ev.clientX - rect.left) / Math.max(1, rect.width) < 0.5 ? 'shadow' : 'high';
+        const pos = curvePos(ev);
+        if(!pos) return;
+        ev.preventDefault();
+        curveIndex = hitCurvePoint(pos);
+        if(curveIndex < 0){
+            if(colorGradeState.curve.length >= 8) return;   // 上限 8 个点，再多就是毛刺
+            colorGradeState.curve.push([pos.x, pos.y]);
+            colorGradeState.curve.sort((a, b) => a[0] - b[0]);
+            curveIndex = colorGradeState.curve.indexOf(colorGradeState.curve.find(pt => pt[0] === pos.x && pt[1] === pos.y));
+        }
         curve.setPointerCapture?.(ev.pointerId);
-        applyCurvePointer(ev);
+        drawColorCurve();
+        scheduleColorRender();
     });
-    curve?.addEventListener('pointermove', ev => { if(curveKey) applyCurvePointer(ev); });
-    curve?.addEventListener('pointerup', () => { curveKey = ''; });
-    curve?.addEventListener('pointercancel', () => { curveKey = ''; });
+    curve?.addEventListener('pointermove', ev => {
+        if(curveIndex < 0) return;
+        const pos = curvePos(ev);
+        if(!pos) return;
+        const pt = colorGradeState.curve[curveIndex];
+        if(!pt) return;
+        pt[0] = Math.max(0.02, Math.min(0.98, pos.x));
+        pt[1] = pos.y;
+        colorGradeState.curve.sort((a, b) => a[0] - b[0]);
+        curveIndex = colorGradeState.curve.indexOf(pt);
+        drawColorCurve();
+        scheduleColorRender();
+    });
+    const endCurveDrag = () => { curveIndex = -1; };
+    curve?.addEventListener('pointerup', endCurveDrag);
+    curve?.addEventListener('pointercancel', endCurveDrag);
+    curve?.addEventListener('dblclick', ev => {
+        const pos = curvePos(ev);
+        if(!pos) return;
+        const i = hitCurvePoint(pos);
+        if(i >= 0){
+            colorGradeState.curve.splice(i, 1);
+            drawColorCurve();
+            scheduleColorRender();
+        }
+    });
+    // 按住「对比原图」看未调色的原片
+    const compareBtn = document.getElementById('colorCompareBtn');
+    const cropCanvasEl2 = document.getElementById('cropCanvas');
+    const setCompare = on => {
+        cropCanvasEl2?.classList.toggle('compare', !!on);
+        compareBtn?.classList.toggle('active', !!on);
+    };
+    compareBtn?.addEventListener('pointerdown', ev => { ev.preventDefault(); setCompare(true); });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(name => compareBtn?.addEventListener(name, () => setCompare(false)));
+    setCompare(false);
 }
 
 async function applyImageColor(){

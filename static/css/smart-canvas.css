@@ -3142,6 +3142,11 @@ a.smart3d-run { text-decoration:none; cursor:pointer; }
 .crop-canvas.color-mode .grid-join-canvas { display:none; }
 .color-canvas { position:absolute; inset:0; width:100%; height:100%; display:none; border-radius:14px; }
 .crop-canvas.color-mode .color-canvas { display:block; }
+/* 按住对比原图：临时露出未调色的原片 */
+.crop-canvas.color-mode.compare #cropImage { visibility:visible; }
+.crop-canvas.color-mode.compare .color-canvas { visibility:hidden; }
+.color-compare-btn.active { background:var(--strong); border-color:var(--strong); color:#fff; }
+.color-hint { font-size:10.5px; opacity:.7; }
 .color-tools { flex-direction:column; align-items:flex-start; gap:7px; }
 .color-row { display:flex; align-items:center; gap:9px; flex-wrap:wrap; width:100%; }
 .color-chip { display:inline-flex; align-items:center; gap:6px; height:30px; padding:0 12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:12px; font-weight:800; cursor:pointer; }

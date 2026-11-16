@@ -748,14 +748,19 @@ try{var _g=new URLSearchParams(location.search).get('glass');if(_g){localStorage
                     <div class="color-row">
                         <label><span>曝光</span><input id="colorExposure" type="range" min="-100" max="100" step="1" value="0"><span id="colorExposureVal" class="color-num">0</span></label>
                         <label><span>饱和</span><input id="colorSaturation" type="range" min="-100" max="100" step="1" value="0"><span id="colorSaturationVal" class="color-num">0</span></label>
+                        <label><span>色相</span><input id="colorHue" type="range" min="-180" max="180" step="1" value="0"><span id="colorHueVal" class="color-num">0</span></label>
+                        <label><span>明度</span><input id="colorLight" type="range" min="-100" max="100" step="1" value="0"><span id="colorLightVal" class="color-num">0</span></label>
                         <button type="button" id="colorPickBtn" class="color-chip" title="吸取图片中的颜色，只调整相近的颜色"><i data-lucide="pipette" class="w-3.5 h-3.5"></i><span>吸管</span></button>
                         <span id="colorPickSwatch" class="color-swatch" title="已吸取的颜色"></span>
                         <label class="color-inline"><input id="colorPickOnly" type="checkbox" disabled><span>仅调该色</span></label>
+                        <button type="button" id="colorCompareBtn" class="color-chip color-compare-btn" title="按住查看原图"><i data-lucide="eye" class="w-3.5 h-3.5"></i><span>对比原图</span></button>
                     </div>
                     <div class="color-row">
                         <span class="image-edit-sub">曲线</span>
-                        <canvas id="colorCurve" class="color-curve" width="112" height="112"></canvas>
-                        <button type="button" id="colorResetBtn" class="color-chip"><i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i><span>重置</span></button>
+                        <canvas id="colorCurve" class="color-curve" width="112" height="112" title="拖动控制点调曲线；空白处点击加点，双击点删除"></canvas>
+                        <button type="button" id="colorCurveReset" class="color-chip" title="曲线还原成直线"><i data-lucide="activity" class="w-3.5 h-3.5"></i><span>还原曲线</span></button>
+                        <button type="button" id="colorResetBtn" class="color-chip" title="所有调色数值恢复默认（双击滑块可只还原这一项）"><i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i><span>还原全部</span></button>
+                        <span class="image-edit-sub color-hint">双击滑块可单独还原</span>
                     </div>
                 </div>
                 <div id="imageEditStage" class="image-edit-stage">
