@@ -153,7 +153,13 @@ html.studio-theme-dark .xv-agent {
     html .xv-empty { font-size:15.6px; }
     html .xv-composer { padding:6px 14px 16px; }
     html .xv-agent .agent-onebox { border-radius:22px; border-color:var(--line); box-shadow:0 6px 22px rgba(15,23,42,.06); }
-    html .xv-agent .agent-toolbar-btn { font-size:14.4px; height:30px; }
+    html .xv-agent .agent-toolbar-btn { font-size:17.3px; height:36px; padding:0 12px; gap:5px; }
+    html .xv-agent .agent-topbar .agent-toolbar-btn { font-size:17.3px; height:36px; padding:0 12px; }
+    html .xv-agent .agent-topbar .agent-toolbar-btn i,
+    html .xv-agent .agent-topbar .agent-toolbar-btn svg,
+    html .xv-agent .agent-toolbar-btn i,
+    html .xv-agent .agent-toolbar-btn svg { width:13.5px; height:13.5px; }
+    html .xv-agent .agent-topbar .agent-toolbar-btn span { max-width:115px; }
     html .xv-agent .agent-input-rich { font-size:16.8px; padding:8px 14px 10px; }
     html .xv-agent .agent-ratio-btn { height:56px; font-size:13.2px; }
     html .xv-agent .agent-res-btn,html .xv-agent .agent-quality-btn { height:34px; font-size:13.2px; }
@@ -164,7 +170,7 @@ html.studio-theme-dark .xv-agent {
 
     /* 大字号后页头挤爆：副标题让位、标题可截断、右侧按钮不参与压缩 */
     html .xv-head { gap:8px; padding:12px 12px 8px; }
-    html .xv-brand { min-width:0; flex:0 1 auto; gap:2px; }
+    html .xv-brand { display:none; }
     html .xv-title { flex:0 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     html .xv-sub { display:none; }
     html .xv-head-right { flex:0 0 auto; gap:6px; }
