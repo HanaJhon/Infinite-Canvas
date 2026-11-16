@@ -54,10 +54,6 @@ assert.ok(hueOut[1] > hueOut[0] && hueOut[1] > hueOut[2], '红转 120° 应偏�
 const grayHue = colorGradePixel(128, 128, 128, colorGradeConfig({hue:150}));
 assert.ok(Math.max(...grayHue) - Math.min(...grayHue) < 2, '灰色不该被染色');
 
-// 4c) 明度：+100 变亮、-100 变暗
-assert.ok(colorGradePixel(...base, colorGradeConfig({light:100}))[0] > base[0]);
-assert.ok(colorGradePixel(...base, colorGradeConfig({light:-100}))[0] < base[0]);
-
 // 5) 滤镜预设各不相同，且 none 保持原样
 const px = [140, 110, 90];
 const none = colorGradePixel(...px, colorGradeConfig({filter:'none'}));
@@ -120,8 +116,8 @@ def test_mode_wired():
     assert "'color'].includes(mode)" in js
     assert "classList.toggle('color-mode'" in js
     assert 'requestAnimationFrame(() => openColorGrade())' in js
-    # 色相/明度滑块 + 曲线还原 + 原图对比 + 双击还原
-    for cid in ['colorHue', 'colorLight', 'colorCurveReset', 'colorCompareBtn', 'colorResetBtn']:
+    # 色相滑块 + 曲线还原 + 原图对比 + 双击还原
+    for cid in ['colorHue', 'colorCurveReset', 'colorCompareBtn', 'colorResetBtn']:
         assert 'id="%s"' % cid in html, cid
     assert "classList.toggle('compare'" in js
     assert "'dblclick'" in js and 'SLIDER_DEFAULTS' in js
