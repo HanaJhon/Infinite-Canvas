@@ -350,6 +350,13 @@ let pendingUndoSnapshot = null;
 // 已删除节点 id（墓碑）。冲突合并按并集恢复会把这些节点复活，墓碑把它们挡在合并之外；
 // 撤销可能合法地把节点找回来，所以撤销后清空。
 const deletedNodeIds = new Set();
+// 墓碑要跟着画布落盘：只放内存的话，另一个标签页（本地还有这些节点）保存时会把它们
+// 当「仅本地存在」并回来，刷新后也会从服务器旧副本恢复。
+const TOMBSTONE_KEEP = 800;
+function rememberDeletedNodeIds(ids){
+    (ids || []).forEach(id => { if(id) deletedNodeIds.add(String(id)); });
+    while(deletedNodeIds.size > TOMBSTONE_KEEP) deletedNodeIds.delete(deletedNodeIds.values().next().value);
+}
 let runningHubWorkflowCache = {};
 function activeSmartCascadeCount(){ return smartCascadeRuns.size; }
 function smartCascadeRunForLoop(loopId){ return loopId ? smartCascadeRuns.get(loopId) || null : null; }
@@ -1307,6 +1314,7 @@ function mediaItemForStorage(item){
 function canvasForStorage(){
     const clean = JSON.parse(JSON.stringify(canvas || {}));
     clean.settings = settingsForStorage(canvasDefaultSmartSettings || initialSmartSettings);
+    clean.deleted_node_ids = [...deletedNodeIds];
     // 日志预览的临时节点（编辑器打开期间临时塞进 nodes）绝不能被持久化，否则刷新后会留下幽灵节点。
     if(Array.isArray(clean.nodes)) clean.nodes = clean.nodes.filter(node => node.id !== SMART_LOG_PREVIEW_NODE_ID);
     (clean.nodes || []).forEach(node => {
@@ -7088,6 +7096,8 @@ function mergeSmartConnections(localConns, remoteConns, nodeIds){
 }
 function applyMergedServerCanvas(serverCanvas){
     if(!serverCanvas || !canvas) return false;
+    // 服务器上落过盘的墓碑也要并进来：对方（另一个标签页）删过的节点不能再合并回来
+    rememberDeletedNodeIds(serverCanvas.deleted_node_ids);
     const remoteNodes = (Array.isArray(serverCanvas.nodes) ? serverCanvas.nodes : []).map(normalizeLegacySmartNode).filter(node => node && !deletedNodeIds.has(node.id));
     const mergedNodes = mergeSmartNodeLists(nodes, remoteNodes);
     const nodeIds = new Set(mergedNodes.map(n => n.id));
@@ -8195,7 +8205,8 @@ async function loadCanvas(){
         canvasUsesConnections = Object.prototype.hasOwnProperty.call(canvas || {}, 'connections');
         document.title = canvas.title || tr('canvas.smartCanvas');
         document.getElementById('smartTitle').textContent = canvas.title || tr('canvas.smartCanvas');
-        nodes = (Array.isArray(canvas.nodes) ? canvas.nodes : []).map(normalizeLegacySmartNode).filter(Boolean);
+        rememberDeletedNodeIds(canvas.deleted_node_ids);
+        nodes = (Array.isArray(canvas.nodes) ? canvas.nodes : []).map(normalizeLegacySmartNode).filter(node => node && !deletedNodeIds.has(node.id));
         migrateSmartGroupImageMembers();
         nodes.forEach(n => { if(isSmartGroupNode(n)) fitSmartGroupBoxToImage(n); });
         canvas.connections = Array.isArray(canvas.connections) ? canvas.connections : [];
@@ -8266,6 +8277,7 @@ async function saveCanvas(){
                 logs:storageCanvas.logs || [],
                 settings:storageCanvas.settings,
                 base_updated_at:storageCanvas.updated_at || canvas.updated_at || 0,
+                deleted_node_ids:[...deletedNodeIds],
                 client_id:smartClientId
             })
         });
@@ -16931,7 +16943,7 @@ function deleteNode(id){
     });
     const affectedGroups = new Set(nodes.filter(node => isSmartGroupNode(node) && (deleteIds.has(node.id) || (Array.isArray(node.items) && node.items.some(itemId => deleteIds.has(itemId))))).map(node => node.id));
     nodes = nodes.filter(node => !deleteIds.has(node.id));
-    deleteIds.forEach(delId => deletedNodeIds.add(delId));
+    rememberDeletedNodeIds(deleteIds);
     if(canvas) canvas.connections = (canvas.connections || []).filter(c => !deleteIds.has(c.from) && !deleteIds.has(c.to));
     nodes.forEach(node => {
         if(Array.isArray(node.inputNodeIds)) node.inputNodeIds = node.inputNodeIds.filter(inputId => !deleteIds.has(inputId));

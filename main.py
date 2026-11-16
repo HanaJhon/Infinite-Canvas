@@ -4674,6 +4674,8 @@ class CanvasSaveRequest(BaseModel):
     settings: Dict[str, Any] = {}
     client_id: str = ""
     base_updated_at: int = 0
+    # 前端墓碑：已经删掉的节点 id。跟着画布落盘，冲突合并（并集语义）时用它挡住复活。
+    deleted_node_ids: List[str] = []
 
 class CanvasAssetCheckRequest(BaseModel):
     urls: List[str] = []
@@ -25835,6 +25837,7 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
     canvas = load_canvas(canvas_id)
     current_updated_at = int(canvas.get("updated_at") or 0)
     base_updated_at = int(payload.base_updated_at or 0)
+    incoming_tombstones = {str(x) for x in (payload.deleted_node_ids or []) if x}
     if base_updated_at and current_updated_at and base_updated_at < current_updated_at:
         raise HTTPException(status_code=409, detail={
             "message": "画布已被其他页面更新，已拒绝旧版本覆盖。",
@@ -25857,7 +25860,7 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
             if isinstance(node, dict) and node.get("id")
         }
         dropped_ids = server_node_ids - incoming_node_ids
-        if dropped_ids:
+        if dropped_ids and not dropped_ids.issubset(incoming_tombstones):
             raise HTTPException(status_code=409, detail={
                 "message": f"本次保存会删除服务端已有的 {len(dropped_ids)} 个节点，已拒绝覆盖，请刷新后重试。",
                 "canvas": canvas,
@@ -25868,6 +25871,16 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
     canvas["icon"] = (payload.icon or canvas.get("icon") or "layers")[:32]
     canvas["kind"] = normalize_canvas_kind(canvas.get("kind"))
     canvas["nodes"] = payload.nodes
+    # 墓碑跟着画布落盘，并且「只增不减」：另一个标签页本地还有这些节点，没有墓碑就会在保存时
+    # 把它们当「仅本地存在」合并回来。唯一例外是节点又出现在本次 payload 里（撤销恢复），
+    # 那时把这个 id 从墓碑里放行。留最近 2000 条，避免无界增长。
+    incoming_node_ids = {str(node.get("id")) for node in (payload.nodes or []) if isinstance(node, dict) and node.get("id")}
+    kept_tombstones = [
+        str(x) for x in (canvas.get("deleted_node_ids") or [])
+        if x and str(x) not in incoming_node_ids
+    ]
+    merged_tombstones = list(dict.fromkeys(kept_tombstones + sorted(incoming_tombstones - incoming_node_ids)))
+    canvas["deleted_node_ids"] = merged_tombstones[-2000:]
     canvas["connections"] = payload.connections
     if canvas["kind"] == "smart":
         canvas["viewport"] = payload.viewport

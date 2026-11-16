@@ -39,7 +39,20 @@ def test_tombstone_declared():
 
 def test_delete_records_tombstone():
     body = _function_body(read('static/js/smart-canvas.js'), 'deleteNode')
-    assert 'deletedNodeIds.add(' in body, 'deleteNode 必须记墓碑，否则合并会把它复活'
+    assert 'rememberDeletedNodeIds(' in body, 'deleteNode 必须记墓碑，否则合并会把它复活'
+
+
+def test_tombstone_persisted_with_canvas():
+    js = read('static/js/smart-canvas.js')
+    # 墓碑必须落盘，否则另一个标签页/刷新后照样复活
+    assert 'clean.deleted_node_ids = [...deletedNodeIds];' in js
+    assert 'deleted_node_ids:[...deletedNodeIds],' in js
+    body = _function_body(js, 'loadCanvas')
+    assert 'rememberDeletedNodeIds(canvas.deleted_node_ids);' in body
+    main_src = read('main.py')
+    assert 'deleted_node_ids: List[str] = []' in main_src
+    assert 'canvas["deleted_node_ids"] = merged_tombstones[-2000:]' in main_src
+    assert 'not dropped_ids.issubset(incoming_tombstones)' in main_src
 
 
 def test_merge_filters_tombstone():
@@ -57,6 +70,7 @@ def test_undo_clears_tombstone():
 if __name__ == '__main__':
     test_tombstone_declared()
     test_delete_records_tombstone()
+    test_tombstone_persisted_with_canvas()
     test_merge_filters_tombstone()
     test_undo_clears_tombstone()
     print('OK canvas-delete-tombstone')
