@@ -17115,14 +17115,31 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 "images": [reference_to_data_url(ref, max_size=ref_image_max_size(len(_grsai_refs))) for ref in _grsai_refs],
                 "aspectRatio": grsai_aspect_ratio(aspect_ratio, size, model),
                 "imageSize": grsai_image_size(resolution, size),
-                "replyType": "json",
+                "replyType": "async",
             }
             grsai_url = provider_endpoint_url(provider, "image_generation_endpoint", "/v1/api/generate")
+            _grsai_t0 = time.monotonic()
             response = await client.post(
                 grsai_url,
                 headers=api_headers(provider=provider, model=model),
                 json=body,
             )
+            # 🚨 不能用 replyType:"json"（同步阻塞）：上游要等整张图出完才回包，
+            #    实测同参数比官方 web 的 async+轮询慢好几倍。改成 async 交任务自己高频轮询。
+            response.raise_for_status()
+            _grsai_submitted = response.json() or {}
+            _grsai_task_id = str(_grsai_submitted.get("id") or _grsai_submitted.get("task_id") or "").strip()
+            _grsai_has_image = False
+            try:
+                _grsai_has_image = bool(extract_images(_grsai_submitted))
+            except HTTPException:
+                _grsai_has_image = False
+            if _grsai_task_id and not _grsai_has_image:
+                _grsai_submit_s = time.monotonic() - _grsai_t0
+                _grsai_raw = await wait_for_grsai_image_task(client, provider, grsai_url, _grsai_task_id, model)
+                print("[grsai] 提交 %.1fs，等待出图 %.1fs（含轮询间隔）" % (
+                    _grsai_submit_s, time.monotonic() - _grsai_t0 - _grsai_submit_s))
+                return extract_image(_grsai_raw), _grsai_raw
         elif image_request_mode == "openai-video-proxy":
             body = {
                 "model": model,
@@ -22488,6 +22505,40 @@ async def generate_agnes_video(client, payload, provider, base_url, requested_mo
         raise HTTPException(status_code=502, detail=f"Agnes 视频生成成功但没有返回视频：{result}")
     local_urls = [await save_remote_video_to_output(url) for url in urls]
     return {"videos": local_urls, "task_id": task_id or video_id, "video_id": video_id or None, "raw": result}
+
+async def wait_for_grsai_image_task(client, provider, submit_url, task_id, model):
+    """轮询 Grsai 出图结果：`GET /v1/api/result?id=<task_id>`。
+
+    间隔从 0.8s 起、最稀 1.5s（官方 web 也是秒级查），不要用 5s 那一档——
+    出图本身 30~60s，粗粒度轮询会在「图已经好了」之后再多等好几秒。
+    """
+    base = str(submit_url).split("/v1/api/")[0]
+    query = f"{base}/v1/api/result"
+    deadline = time.monotonic() + 600.0
+    delay = 0.8
+    last = {}
+    status = ""
+    while time.monotonic() < deadline:
+        await asyncio.sleep(delay)
+        response = await client.get(
+            query,
+            params={"id": task_id},
+            headers=api_headers(provider=provider, model=model),
+        )
+        if response.status_code >= 400:
+            last = {"status": "failed", "error": (response.text or "")[:300]}
+            status = "failed"
+            break
+        last = response.json() or {}
+        status = str(last.get("status") or "").strip().lower()
+        if status in {"succeeded", "failed", "violation"}:
+            break
+        if delay < 1.5:
+            delay = 1.5
+    if status != "succeeded":
+        raise HTTPException(status_code=502, detail=f"Grsai 出图失败：{last.get('error') or last}")
+    return last
+
 
 async def wait_for_grsai_video_task(client, provider, base_url, task_id, model):
     """轮询 Grsai 异步结果：`GET /v1/api/result?id=<task_id>`。"""
