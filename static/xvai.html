@@ -389,6 +389,9 @@
         </div>
     </div>
     <aside class="xv-drawer" id="xvDrawer">
+        <div class="xv-drawer-head">
+            <button class="xv-btn" id="xvDrawerBack" type="button"><i data-lucide="chevron-left"></i><span>收起</span></button>
+        </div>
         <div class="xv-out-list" id="xvOutList">
             <div class="xv-out-empty" data-i18n="xvai.noOutputs">还没有产物。让 AI 出图或生成文件后会出现在这里。</div>
         </div>
@@ -1781,6 +1784,8 @@
     // ---------- 其他事件 ----------
     $('xvNew').addEventListener('click', resetChat);
     $('xvOutToggle').addEventListener('click', () => $('xvDrawer').classList.toggle('open'));
+    const drawerBack = $('xvDrawerBack');
+    if (drawerBack) drawerBack.addEventListener('click', () => $('xvDrawer').classList.remove('open'));
     // 抽屉标题栏已删，收起靠顶部「输出」按钮或 Esc
     document.addEventListener('keydown', ev => { if(ev.key === 'Escape') $('xvDrawer').classList.remove('open'); });
     $('xvModalClose').addEventListener('click', closePreview);

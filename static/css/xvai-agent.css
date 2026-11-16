@@ -202,3 +202,15 @@ html .xv-agent .agent-input-rich { max-height:55vh; }
   .xv-agent .agent-reasoning-item { flex:1 1 0; justify-content:center; padding:10px 4px; }
   .xv-agent .agent-reasoning-hint { display:none; }
 }
+
+/* 输出抽屉顶部收起按钮：桌面隐藏，手机端整屏二级页时显示 */
+.xv-drawer-head { display:none; }
+@media (max-width:640px) {
+  html .xv-shell { position:relative; }
+  html .xv-drawer { position:absolute; inset:0; width:100%; border-left:none; opacity:0; visibility:hidden; pointer-events:none;
+    transition:opacity .22s var(--easing); z-index:70; background:var(--bg); }
+  html .xv-drawer.open { width:100%; opacity:1; visibility:visible; pointer-events:auto; }
+  html .xv-drawer-head { display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--line); flex:0 0 auto; }
+  html .xv-drawer-head .xv-btn { height:36px; padding:0 12px; font-size:12.5px; }
+  html .xv-out-list { padding:12px 14px; gap:12px; }
+}
