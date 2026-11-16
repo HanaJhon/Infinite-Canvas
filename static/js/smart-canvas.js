@@ -19438,7 +19438,7 @@ function openImageEditor(nodeId, imageIndex=0){
     gridOperationMode = 'split'; gridJoinLayout = null; gridJoinDrag = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridJoinGroupId = '';
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
     imageAngleState = {deg:0, elev:0, shot:'mid'};
-    Object.assign(colorGradeState, {filter:'none', strength:100, exposure:0, saturation:0, hue:0, curve:[], picked:null, pickedOnly:false});
+    Object.assign(colorGradeState, {filter:'none', strength:100, exposure:0, saturation:0, hue:0, light:0, curve:[], picked:null, pickedOnly:false});
     colorBaseData = null; colorPicking = false;
     cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
     editTextItems = []; editTextSelectedId = ''; editTextDrag = null; editTextDirty = false;
@@ -19544,7 +19544,7 @@ function closeImageEditor(){
     previewNavState = {nodeId:'', index:0, count:0};
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
     imageAngleState = {deg:0, elev:0, shot:'mid'};
-    Object.assign(colorGradeState, {filter:'none', strength:100, exposure:0, saturation:0, hue:0, curve:[], picked:null, pickedOnly:false});
+    Object.assign(colorGradeState, {filter:'none', strength:100, exposure:0, saturation:0, hue:0, light:0, curve:[], picked:null, pickedOnly:false});
     colorBaseData = null; colorPicking = false;
     cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
     disposePanoramaPreview();
@@ -20461,6 +20461,7 @@ function colorGradeConfig(opts){
         exposure: Math.max(-2, Math.min(2, num(o.exposure, 0) / 100 * 2)),
         sat: Math.max(0, Math.min(2, 1 + num(o.saturation, 0) / 100)),
         hue: Math.max(-180, Math.min(180, num(o.hue, 0))),
+        light: Math.max(-1, Math.min(1, num(o.light, 0) / 100)),
         curve: colorGradeCurvePoints(o.curve),
         contrast: preset.contrast,
         gain: preset.gain,
@@ -20501,6 +20502,10 @@ function colorGradePixel(r, g, b, cfg){
         out[1] = colorGradeClamp01(m[1][0] * r + m[1][1] * g + m[1][2] * b) * 255;
         out[2] = colorGradeClamp01(m[2][0] * r + m[2][1] * g + m[2][2] * b) * 255;
     }
+    if(cfg.light !== 0){
+        const off = cfg.light * 255;
+        for(let i = 0; i < 3; i++) out[i] = colorGradeClamp01((out[i] + off) / 255) * 255;
+    }
     let t = cfg.strength;
     if(cfg.picked && cfg.pickedOnly){
         const dr = (src[0] - cfg.picked[0]) / 255;
@@ -20525,7 +20530,7 @@ function colorGradeImageData(data, cfg){
 }
 /* COLOR-GRADE:END */
 
-const colorGradeState = {filter:'none', strength:100, exposure:0, saturation:0, hue:0, curve:[], picked:null, pickedOnly:false};
+const colorGradeState = {filter:'none', strength:100, exposure:0, saturation:0, hue:0, light:0, curve:[], picked:null, pickedOnly:false};
 let colorBaseData = null;      // 预览用的原图缓冲（降采样），换图时清空
 let colorRenderQueued = false;
 let colorToolsBound = false;
@@ -20620,11 +20625,13 @@ function syncColorControls(){
     set('colorExposure', colorGradeState.exposure);
     set('colorSaturation', colorGradeState.saturation);
     set('colorHue', colorGradeState.hue);
+    set('colorLight', colorGradeState.light);
     const label = (id, val) => { const el = document.getElementById(id); if(el) el.textContent = String(val); };
     label('colorStrengthVal', colorGradeState.strength);
     label('colorExposureVal', colorGradeState.exposure);
     label('colorSaturationVal', colorGradeState.saturation);
     label('colorHueVal', colorGradeState.hue);
+    label('colorLightVal', colorGradeState.light);
     document.querySelectorAll('[data-color-filter]').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.colorFilter === colorGradeState.filter);
     });
@@ -20653,6 +20660,7 @@ function bindColorTools(){
         else if(t.id === 'colorExposure') colorGradeState.exposure = Number(t.value) || 0;
         else if(t.id === 'colorSaturation') colorGradeState.saturation = Number(t.value) || 0;
         else if(t.id === 'colorHue') colorGradeState.hue = Number(t.value) || 0;
+        else if(t.id === 'colorLight') colorGradeState.light = Number(t.value) || 0;
         else return;
         syncColorControls();
         scheduleColorRender();
@@ -20679,7 +20687,7 @@ function bindColorTools(){
             return;
         }
         if(ev.target.closest?.('#colorResetBtn')){
-            Object.assign(colorGradeState, {filter:'none', strength:100, exposure:0, saturation:0, hue:0, curve:[], picked:null, pickedOnly:false});
+            Object.assign(colorGradeState, {filter:'none', strength:100, exposure:0, saturation:0, hue:0, light:0, curve:[], picked:null, pickedOnly:false});
             colorPicking = false;
             const canvas = document.getElementById('colorCanvas');
             if(canvas) canvas.style.cursor = 'default';
@@ -20689,7 +20697,7 @@ function bindColorTools(){
             scheduleColorRender();
         }
     });
-    const SLIDER_DEFAULTS = {colorStrength:100, colorExposure:0, colorSaturation:0, colorHue:0};
+    const SLIDER_DEFAULTS = {colorStrength:100, colorExposure:0, colorSaturation:0, colorHue:0, colorLight:0};
     tools.addEventListener('dblclick', ev => {
         const t = ev.target;
         if(!t || !(t.id in SLIDER_DEFAULTS)) return;
