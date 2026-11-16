@@ -1626,6 +1626,10 @@
         }
         .mhome-profile-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
         .mhome-profile-name { font-size: 16px; font-weight: 650; color: var(--mhome-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mhome-profile-line { display:flex; align-items:center; gap:6px; min-width:0; }
+        .mhome-admin-badge { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:7px; background:rgba(99,102,241,.12); color:#6366f1; flex:0 0 auto; }
+        .mhome-admin-badge[hidden] { display:none; }
+        .mhome-admin-badge svg { width:13px; height:13px; }
         .mhome-profile-role { font-size: 12px; color: var(--mhome-muted); }
         .mhome-group {
             display: flex;
@@ -1844,7 +1848,7 @@
                 <section class="mhome-profile">
                     <div class="mhome-avatar" id="mhomeAvatar">·</div>
                     <div class="mhome-profile-info">
-                        <strong class="mhome-profile-name" id="mhomeName">未登录</strong>
+                        <span class="mhome-profile-line"><strong class="mhome-profile-name" id="mhomeName">未登录</strong><span class="mhome-admin-badge" id="mhomeAdminBadge" hidden title="管理员" aria-label="管理员"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-2.9 7.9-7 9-4.1-1.1-7-4.6-7-9V6z"></path><path d="M9 12l2 2 4-4"></path></svg></span></span>
                         <span class="mhome-profile-role" id="mhomeRole">—</span>
                     </div>
                 </section>
@@ -1892,8 +1896,8 @@
                     <span data-i18n="me.logout">退出登录</span>
                 </button>
             </section>
-            <iframe id="frame-online" data-src="/static/online.html?v=1.3.9.1794613844" scrolling="yes"></iframe>
-            <iframe id="frame-xvai" data-src="/static/xvai.html?v=1.3.9.1794613844" scrolling="yes"></iframe>
+            <iframe id="frame-online" data-src="/static/online.html?v=1.3.9.1794792708" scrolling="yes"></iframe>
+            <iframe id="frame-xvai" data-src="/static/xvai.html?v=1.3.9.1794794061" scrolling="yes"></iframe>
             <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=1.3.9.1794616397" scrolling="yes"></iframe>
             <iframe id="frame-accounts" data-src="/accounts.html" scrolling="yes"></iframe>
             <iframe id="frame-credits" data-src="/credits.html" scrolling="yes"></iframe>
@@ -2245,12 +2249,14 @@
                     if(nameEl) nameEl.textContent = name;
                     const avatar = document.getElementById('mhomeAvatar');
                     if(avatar) avatar.textContent = name.slice(0, 1).toUpperCase();
+                    const badge = document.getElementById('mhomeAdminBadge');
+                    if(badge) badge.hidden = u.role !== 'admin';
                     const role = document.getElementById('mhomeRole');
                     if(role) {
-                        const parts = [u.role === 'admin' ? '管理员' : '成员'];
-                        if(u.seq) parts.unshift('#' + u.seq);
+                        const parts = [];
+                        if(u.seq) parts.push('UID ' + u.seq);
                         if(typeof u.credits === 'number') parts.push(Math.round(u.credits * 100) / 100 + ' 积分');
-                        role.textContent = parts.join(' · ');
+                        role.textContent = parts.join(' · ') || '—';
                     }
                     const credits = document.getElementById('mhomeCredits');
                     if(credits && typeof u.credits === 'number') credits.textContent = Math.round(u.credits * 100) / 100;
