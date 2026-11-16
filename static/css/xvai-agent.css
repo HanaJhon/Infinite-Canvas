@@ -148,6 +148,8 @@ html.studio-theme-dark .xv-agent {
     html .xv-thread { padding:14px 16px 10px; gap:16px; }
     html .xv-avatar { width:30px; height:30px; font-size:14.4px; }
     html .xv-bubble { font-size:18px; line-height:1.65; }
+    html .xv-msg.assistant .xv-bubble { font-size:21.6px; }
+    html .xv-msg.user .xv-bubble { font-size:14.4px; }
     html .xv-msg.user .xv-bubble { padding:11px 15px; border-radius:18px; background:var(--card); box-shadow:0 6px 22px rgba(15,23,42,.06); }
     html .xv-img-card { border-radius:18px; box-shadow:0 6px 22px rgba(15,23,42,.06); }
     html .xv-empty { font-size:15.6px; }
@@ -170,3 +172,13 @@ html.studio-theme-dark .xv-agent {
     html .xv-head-right { flex:0 0 auto; gap:6px; }
     html .xv-head-right .xv-btn { padding:0 11px; }
 }
+
+/* 页头只留按钮（品牌名隐藏）；AI 正文放大 1/5、用户气泡缩小 1/5、输入栏顶栏放大 1/5、占位符半透明 */
+html .xv-brand { display:none; }
+html .xv-msg.assistant .xv-bubble { font-size:16.8px; }
+html .xv-msg.user .xv-bubble { font-size:11.2px; padding:8px 11px; }
+html .xv-agent .agent-topbar .agent-toolbar-btn { height:29px; padding:0 11px; font-size:12px; gap:5px; }
+html .xv-agent .agent-topbar .agent-toolbar-btn i,
+html .xv-agent .agent-topbar .agent-toolbar-btn svg { width:13px; height:13px; }
+html .xv-agent .agent-topbar .agent-toolbar-btn span { max-width:115px; }
+html .xv-agent .agent-input-rich[data-empty="1"]::before { opacity:.5; }
