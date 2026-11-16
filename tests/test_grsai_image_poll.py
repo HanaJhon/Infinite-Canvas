@@ -95,11 +95,20 @@ def test_failed_status_raises():
         run_poll(["running", "failed"])
     except main.HTTPException as exc:
         assert "Grsai 出图失败" in str(exc.detail)
+        # 失败/超时也要能「查询结果」把图捞回来
+        assert getattr(exc, "upstream_task_id", "") == "grsai_task_1", exc.__dict__
     else:
         raise AssertionError("失败状态必须抛 HTTPException")
+
+
+def test_query_url_for_grsai():
+    provider = {"id": "grsai", "name": "Grsai", "base_url": "https://grsai.example.com"}
+    url = main.image_task_url_for_provider(provider, "abc123")
+    assert url == "https://grsai.example.com/v1/api/result?id=abc123", url
 
 
 if __name__ == '__main__':
     test_polls_until_succeeded()
     test_failed_status_raises()
+    test_query_url_for_grsai()
     print('OK grsai-image-poll')

@@ -12035,6 +12035,9 @@ def image_task_url_for_provider(provider, task_id):
     # 提交走 /v1/videos，轮询必须走 /v1/videos/{id}；否则 protocol=apimart 的平台会错走 /v1/tasks/{id}
     if normalize_image_request_mode((provider or {}).get("image_request_mode")) == "openai-video-proxy":
         return f"{base_url}/videos/{task_id}" if base_url.endswith("/v1") else f"{base_url}/v1/videos/{task_id}"
+    if is_grsai_provider(provider):
+        # Grsai 只有 /v1/api/result?id=，没有 /images/tasks/。缺这条分支，「查询结果」必 404。
+        return f"{base_url}/v1/api/result?id={task_id}"
     if is_apimart_provider(provider):
         return f"{base_url}/tasks/{task_id}" if base_url.endswith("/v1") else f"{base_url}/v1/tasks/{task_id}"
     return f"{base_url}/images/tasks/{task_id}" if base_url.endswith("/v1") else f"{base_url}/v1/images/tasks/{task_id}"
@@ -22514,7 +22517,9 @@ async def wait_for_grsai_image_task(client, provider, submit_url, task_id, model
     """
     base = str(submit_url).split("/v1/api/")[0]
     query = f"{base}/v1/api/result"
-    deadline = time.monotonic() + 600.0
+    # 高峰期上游排队可能超过 10 分钟；前端轮询约 30 分钟，这里给到 20 分钟，
+    # 别让「图快好了」被 600s 硬截断。
+    deadline = time.monotonic() + 1200.0
     delay = 0.8
     last = {}
     status = ""
@@ -22536,7 +22541,14 @@ async def wait_for_grsai_image_task(client, provider, submit_url, task_id, model
         if delay < 1.5:
             delay = 1.5
     if status != "succeeded":
-        raise HTTPException(status_code=502, detail=f"Grsai 出图失败：{last.get('error') or last}")
+        # 挂 upstream_task_id：超时/失败后前端会出「查询结果」，让用户把已经出好的图捞回来，
+        # 而不是等满 600s 就直接判死、图白出。
+        exc = HTTPException(status_code=502, detail=f"Grsai 出图失败：{last.get('error') or last}")
+        try:
+            exc.upstream_task_id = task_id
+        except Exception:
+            pass
+        raise exc from None
     return last
 
 
