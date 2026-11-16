@@ -195,3 +195,10 @@ html .xv-agent .agent-input-rich { max-height:55vh; }
 .xv-agent .agent-reasoning-list { min-width:0; width:100%; gap:4px; }
 .xv-agent .agent-reasoning-item { padding:10px 12px; border-radius:10px; font-size:12.5px; }
 .xv-agent .agent-reasoning-hint { font-size:11px; }
+
+/* 手机端：思考强度改为横向一排 */
+@media (max-width:640px) {
+  .xv-agent .agent-reasoning-list { flex-direction:row; gap:6px; }
+  .xv-agent .agent-reasoning-item { flex:1 1 0; justify-content:center; padding:10px 4px; }
+  .xv-agent .agent-reasoning-hint { display:none; }
+}
