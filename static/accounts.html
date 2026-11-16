@@ -52,7 +52,7 @@
     <h1>账号与积分管理</h1>
     <div style="display:flex;gap:8px">
       <a class="back" href="/credits-admin.html">积分与计费</a>
-      <a class="back" href="/index.html">返回画布</a>
+      <a class="back" href="/index.html" onclick="return xvShellBack(event)">返回</a>
     </div>
   </div>
 
@@ -420,6 +420,22 @@
     load();
   }).catch(function () { location.replace('/login.html'); });
 })();
+</script>
+<script>
+    // 手机端：返回上一级（壳内页面通知宿主回一级页；独立打开则走浏览器历史）
+    function xvShellBack(ev){
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'mobile-shell-back' }, '*');
+            if (ev) ev.preventDefault();
+            return false;
+        }
+        if (history.length > 1) {
+            history.back();
+            if (ev) ev.preventDefault();
+            return false;
+        }
+        return true;
+    }
 </script>
 </body>
 </html>

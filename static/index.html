@@ -2155,6 +2155,7 @@
         window.addEventListener('message', event => {
             if (event.origin && event.origin !== location.origin) return;
             if(event.data && event.data.type === 'credits-changed') { refreshSideCredits(); return; }
+            if(event.data && event.data.type === 'mobile-shell-back') { mobileTabGo('home'); return; }
             forwardStudioApiChange(event.data);
         });
 

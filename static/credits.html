@@ -59,7 +59,7 @@
 <div class="wrap">
   <div class="top">
     <h1>我的积分</h1>
-    <a class="back" href="/index.html">返回画布</a>
+    <a class="back" href="/index.html" onclick="return xvShellBack(event)">返回</a>
   </div>
 
   <div class="balance">
@@ -325,6 +325,22 @@
 
   load();
 })();
+</script>
+<script>
+    // 手机端：返回上一级（壳内页面通知宿主回一级页；独立打开则走浏览器历史）
+    function xvShellBack(ev){
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'mobile-shell-back' }, '*');
+            if (ev) ev.preventDefault();
+            return false;
+        }
+        if (history.length > 1) {
+            history.back();
+            if (ev) ev.preventDefault();
+            return false;
+        }
+        return true;
+    }
 </script>
 </body>
 </html>
