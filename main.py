@@ -23654,7 +23654,6 @@ async def canvas_llm_stream(task_id: str, payload: CanvasLLMRequest):
         "empty_reason": describe_empty_llm_output(_finish_reason, _saw_reasoning),
     }
 
-@app.post("/api/canvas-llm")
 async def _agent_trace(task_id: str, event: dict):
     """广播一条执行过程；没有 task_id（一次性调用）或发失败都静默 —— trace 不能影响主流程。"""
     if not task_id:
@@ -23665,6 +23664,7 @@ async def _agent_trace(task_id: str, event: dict):
         pass
 
 
+@app.post("/api/canvas-llm")
 async def canvas_llm(payload: CanvasLLMRequest, task_id: str = ""):
     # 附件节点：把随消息发来的非图片附件（正文 / 本机路径）拼进用户消息，所有协议分支共用
     file_block = agent_files_context_block(payload.files)
