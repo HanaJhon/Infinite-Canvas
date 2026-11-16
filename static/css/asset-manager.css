@@ -532,3 +532,61 @@ body.theme-dark .asset-card.active { border-color:rgba(248,250,252,.86); box-sha
 .style-pick-name:focus { border-color:var(--strong); }
 .style-pick-name:disabled { opacity:.65; }
 .style-pick-bar .asset-btn { height:32px; }
+
+/* ---------------- 竖屏手机端：整体放大 + 卡片化（对照设计稿） ---------------- */
+@media (max-width:640px){
+    body { background:linear-gradient(180deg,#eef2fb 0%, var(--page) 34%); }
+    .asset-page { padding:14px 12px 24px; gap:12px; }
+    .asset-title { font-size:24px; }
+    .asset-sub { margin-top:6px; font-size:12.5px; line-height:1.4; }
+    .asset-head-actions { gap:8px; }
+    .asset-status { display:none; }
+    .asset-btn { height:38px; border-radius:12px; padding:0 14px; gap:7px; font-size:13px; }
+    .asset-btn svg,.asset-icon-btn svg { width:16px; height:16px; }
+    .asset-icon-btn { width:38px; height:38px; border-radius:12px; }
+
+    .asset-tabs { width:100%; flex-wrap:nowrap; gap:4px; padding:5px; border-radius:16px; overflow-x:auto; scrollbar-width:none; }
+    .asset-tabs::-webkit-scrollbar { display:none; }
+    .asset-tabs button { flex:0 0 auto; height:40px; padding:0 14px; border-radius:12px; gap:6px; font-size:13.5px; white-space:nowrap; }
+    .asset-tabs svg { width:16px; height:16px; }
+
+    .asset-manager-root { grid-template-columns:minmax(0,1fr); gap:12px; }
+    .asset-panel { border-radius:20px; border-color:rgba(148,163,184,.16); box-shadow:0 10px 26px rgba(15,23,42,.06); }
+    .asset-detail { grid-column:auto; min-height:0; }
+    .panel-head { min-height:0; padding:14px 14px 10px; gap:8px; }
+    .panel-title strong { font-size:15.5px; }
+    .panel-title span { margin-top:4px; font-size:11.5px; }
+
+    .nav-scroll { padding:8px 10px 12px; gap:12px; }
+    .nav-row { min-height:44px; border-radius:12px; padding:8px 10px; grid-template-columns:20px minmax(0,1fr) auto; gap:9px; }
+    .nav-row-name { font-size:13.5px; }
+    .nav-row-count { min-width:26px; height:24px; font-size:11.5px; }
+    .tree-parent { min-height:42px; padding:7px 10px; grid-template-columns:20px minmax(0,1fr) auto auto; }
+    .tree-child { min-height:36px; padding:6px 8px 6px 14px; }
+    .tree-children { margin-left:12px; padding-left:10px; }
+    .tree-row-name { font-size:13.5px; }
+    .tree-child .tree-row-name { font-size:12.5px; }
+    .tree-row-count { min-width:24px; height:22px; font-size:11px; }
+    .tree-row-icon svg { width:16px; height:16px; }
+    .tree-child .tree-row-icon svg { width:13px; height:13px; }
+    .nav-empty,.nav-hint,.tree-smart-title,.tree-empty,.nav-group-title,.nav-section-title { font-size:12px; }
+
+    .content-toolbar { padding:10px 14px 12px; gap:10px; }
+    .asset-scope-switch { width:100%; height:40px; padding:3px; gap:4px; border-radius:13px; }
+    .asset-scope-btn { flex:1; justify-content:center; height:34px; border-radius:10px; gap:6px; font-size:13.5px; }
+    .asset-scope-btn svg { width:15px; height:15px; }
+    .asset-search-wrap { width:100%; height:40px; border-radius:13px; }
+    .asset-search { font-size:13px; }
+    .content-scroll { padding:12px 14px 16px; }
+
+    .asset-grid { grid-template-columns:repeat(auto-fill, minmax(112px, 1fr)); gap:10px; }
+    .upload-grid-card { grid-column:1 / -1; min-height:118px; align-items:center; justify-content:center; gap:8px; padding:16px 12px; border-radius:18px; background:var(--soft); }
+    .upload-thumb { width:auto; aspect-ratio:auto; background:transparent; }
+    .upload-thumb svg { width:30px; height:30px; }
+    .upload-body { padding:0; align-items:center; gap:4px; }
+    .upload-body strong { font-size:14.5px; white-space:normal; }
+    .upload-body small { font-size:12px; }
+    .empty-state { min-height:150px; border-radius:16px; padding:18px; font-size:13px; line-height:1.5; }
+
+    .detail-scroll { padding:12px 14px 16px; }
+}
