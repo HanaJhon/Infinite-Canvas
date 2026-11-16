@@ -90,6 +90,13 @@
             .style-wrap .style-btn svg{ width:16px; height:16px; }
             #genBtn span{ font-size:15.6px !important; letter-spacing:.16em !important; }
             #genBtn svg{ width:20px; height:20px; }
+            /* 风格下拉：面板与行整体放大（base 规则在后面，用 #stylePanel 提权） */
+            #stylePanel.style-panel{ width:min(300px, 86vw); max-height:52vh; padding:8px; border-radius:18px; top:40px; }
+            #stylePanel .style-row{ padding:9px; gap:11px; border-radius:12px; }
+            #stylePanel .style-row img{ width:46px; height:46px; border-radius:10px; }
+            #stylePanel .style-row .n, #stylePanel .style-row.n{ font-size:13.8px; }
+            #stylePanel .style-row .m{ font-size:12px; }
+            #stylePanel .style-hint{ font-size:12.5px; padding:13px; }
             .result-frame{ border-radius:18px; box-shadow:0 6px 22px rgba(15,23,42,.06); }
         }
         .masonry-item { aspect-ratio:1/1; border-radius:24px; overflow:hidden; background:#fff; border:1px solid #f1f5f9; transition:all .5s var(--easing); }
