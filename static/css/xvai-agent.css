@@ -192,3 +192,6 @@ html .xv-agent .agent-input-rich { max-height:55vh; }
 .xv-agent .agent-dropdown-row label { flex:0 0 48px; font-size:12.5px; }
 .xv-agent .agent-dropdown-selects { gap:7px; }
 .xv-agent .agent-dropdown-selects select { height:40px; font-size:13px; padding:0 10px; border-radius:10px; }
+.xv-agent .agent-reasoning-list { min-width:0; width:100%; gap:4px; }
+.xv-agent .agent-reasoning-item { padding:10px 12px; border-radius:10px; font-size:12.5px; }
+.xv-agent .agent-reasoning-hint { font-size:11px; }
