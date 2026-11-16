@@ -183,3 +183,5 @@ html .xv-md h4, html .xv-md h5, html .xv-md h6 { font-size:16.8px; }
 html .xv-md h3 { font-size:18.6px; }
 html .xv-md code { font-size:15px; }
 html .xv-md-table table { font-size:15px; }
+/* 允许输入框被推到更高（默认 200px 会夹住拖拽结果） */
+html .xv-agent .agent-input-rich { max-height:55vh; }

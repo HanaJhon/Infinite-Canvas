@@ -54,6 +54,9 @@
         /* 左上角回无限画布（老板 2026-11-13）：这两个页面常来回切，别再让人翻地址栏 */
         .xv-home { text-decoration:none; flex:0 0 auto; }
         .xv-home svg { width:14px; height:14px; }
+        /* 手机端（壳内 body.mobile-portrait）：不给「无限画布」按钮（底部有 tab），整体放大 1/5
+           —— 放大靠 JS 把壳发来的 --studio-ui-scale 乘 1.2（复用 theme.js 的缩放补偿，别自己再套 zoom） */
+        html.xv-mobile .xv-home { display:none; }
         .xv-brand { display:flex; align-items:baseline; gap:8px; min-width:0; }
         .xv-title { font-size:14px; font-weight:600; letter-spacing:-.01em; flex:0 0 auto; }
         .xv-sub { font-size:12px; font-weight:400; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -141,6 +144,10 @@
         .xv-progress-step.active { background:var(--strong); color:var(--strong-text); }
         /* 执行过程：思考 / 搜索 / 浏览 / 浏览器动作逐条实时列出（对齐参考产品的 trace 列表） */
         /* 模型回复的 Markdown 排版（表格 / 代码块 / 标题 / 列表）——照参考产品那种可读性 */
+        /* 输入栏可调高度：顶部 12px 抓手，向上拖变高（手机/桌面都可用） */
+        .xv-resize-grip { height:12px; margin:2px 0 0; display:flex; align-items:center; justify-content:center; cursor:ns-resize; touch-action:none; }
+        .xv-resize-grip::before { content:''; width:38px; height:3px; border-radius:2px; background:var(--line); transition:background .15s ease; }
+        .xv-resize-grip:hover::before, .xv-resize-grip.is-dragging::before { background:var(--strong, var(--muted)); }
         .xv-md { font-size:13.5px; line-height:1.7; color:var(--text); }
         .xv-md p { margin:0 0 10px; }
         .xv-md p:last-child { margin-bottom:0; }
@@ -293,6 +300,7 @@
                 <div class="agent-input-area">
                     <div id="xvSlashPalette" class="xv-slash" hidden></div>
                     <div class="agent-onebox">
+                        <div class="xv-resize-grip" id="xvResizeGrip" title="拖动调整输入栏高度"></div>
                         <div class="agent-topbar">
                             <div class="agent-toolbar-dropdown-wrap">
                                 <button id="agentModelBtn" class="agent-toolbar-btn" type="button" title="理解模型 · 点击切换"><i data-lucide="cpu"></i><span id="agentModelLabel">理解</span><i data-lucide="chevron-down"></i></button>
@@ -2145,6 +2153,32 @@
     document.getElementById('xvHistory').addEventListener('click', openHistory);
     document.addEventListener('keydown', e => { if(e.key === 'Escape') closeHistory(); });
 
+    // 被手机壳 iframe 嵌入时（父页面 body.mobile-portrait）打标记，竖屏/横屏切换跟着走
+    // 手机端整体放大 1/5：壳会把宿主的 --studio-ui-scale 发进来，theme.js 先按原值写好，这里再乘 1.2
+    let xvBaseScale = null;
+    const bumpScale = () => {
+        const root = document.documentElement;
+        if (xvBaseScale == null || !root.classList.contains('xv-mobile')) return;
+        root.style.setProperty('--studio-ui-scale', (xvBaseScale * 1.2).toFixed(3));
+    };
+    const syncXvMobile = () => {
+        try {
+            const on = window.parent !== window && window.parent.document.body.classList.contains('mobile-portrait');
+            document.documentElement.classList.toggle('xv-mobile', on);
+        } catch (e) { /* 跨域/父页面未就绪，按桌面处理 */ }
+        bumpScale();
+    };
+    syncXvMobile();
+    try { window.parent.addEventListener('resize', syncXvMobile); } catch (e) {}
+    window.addEventListener('message', e => {
+        if (e.data?.type !== 'studio-ui-scale') return;
+        const v = Number(e.data.scale);
+        if (!Number.isFinite(v)) return;
+        xvBaseScale = v;
+        setTimeout(bumpScale, 0);   // 同一个事件里 theme.js 先跑，它写完原值我们再放大
+    });
+    window.addEventListener('studio-ui-scale-change', () => setTimeout(bumpScale, 0));
+
     // 历史抽屉在 <body> 末尾，主脚本先于它解析 ⇒ 必须等 DOM 建好再绑
     document.addEventListener('DOMContentLoaded', () => {
         $('xvHistMask').addEventListener('click', closeHistory);
@@ -2153,6 +2187,38 @@
 
     (async () => { await loadProviders(); await restoreConversation(); refreshBalance(); })();
 })();
+
+    /* 输入栏高度可拖（顶部抓手向上拖变高），高度记忆在 localStorage */
+    (function bindComposerResize(){
+        const grip = document.getElementById('xvResizeGrip');
+        const box = document.getElementById('agentInput');
+        if(!grip || !box) return;
+        const KEY = 'infinite-canvas.xvai-input-height';
+        const saved = Number(localStorage.getItem(KEY) || 0);
+        if(saved > 0) box.style.height = saved + 'px';
+        let startY = 0, startH = 0, dragging = false;
+        grip.addEventListener('pointerdown', (e) => {
+            dragging = true; startY = e.clientY;
+            startH = box.getBoundingClientRect().height;
+            grip.classList.add('is-dragging');
+            try { grip.setPointerCapture(e.pointerId); } catch(_) {}
+            e.preventDefault();
+        });
+        grip.addEventListener('pointermove', (e) => {
+            if(!dragging) return;
+            const max = Math.round(window.innerHeight * 0.55);
+            const h = Math.max(44, Math.min(max, startH - (e.clientY - startY)));
+            box.style.height = h + 'px';
+        });
+        const end = () => {
+            if(!dragging) return;
+            dragging = false;
+            grip.classList.remove('is-dragging');
+            try { localStorage.setItem(KEY, String(Math.round(box.getBoundingClientRect().height))); } catch(_) {}
+        };
+        grip.addEventListener('pointerup', end);
+        grip.addEventListener('pointercancel', end);
+    })();
 </script>
 
 
