@@ -176,3 +176,10 @@ html.studio-theme-dark .xv-agent {
     html .xv-head-right { flex:0 0 auto; gap:6px; }
     html .xv-head-right .xv-btn { padding:0 11px; }
 }
+
+/* AI 回复正文整体放大 1/5（含小标题、代码、表格；xvai.html 内联样式需要 html 前缀压过） */
+html .xv-md { font-size:16.2px; }
+html .xv-md h4, html .xv-md h5, html .xv-md h6 { font-size:16.8px; }
+html .xv-md h3 { font-size:18.6px; }
+html .xv-md code { font-size:15px; }
+html .xv-md-table table { font-size:15px; }
