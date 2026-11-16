@@ -107,8 +107,70 @@ def test_query_url_for_grsai():
     assert url == "https://grsai.example.com/v1/api/result?id=abc123", url
 
 
+def test_gpt_image_goes_to_generate_api():
+    """gpt-image 系（老板的 gpt-image-2.6-sunburst）必须走 /v1/api/generate 异步提交。
+
+    之前它落到 /v1/images/edits 同步 multipart：上游 164s 出图、中途网关掐连接
+    ⇒ 前端 RemoteProtocolError，扣了 2400 积分却拿不到图。
+    """
+    got = {}
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+        def do_POST(self):
+            n = int(self.headers.get('content-length') or 0)
+            got['path'] = self.path
+            got['body'] = json.loads(self.rfile.read(n) or b'{}')
+            payload = json.dumps({"id": "gpt_task_1"}).encode()
+            self.send_response(200)
+            self.send_header('content-type', 'application/json')
+            self.send_header('content-length', str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        def do_GET(self):
+            got.setdefault('gets', []).append(self.path)
+            payload = json.dumps({
+                "status": "succeeded",
+                "results": [{"url": "https://fake.example/gpt.png"}],
+            }).encode()
+            self.send_response(200)
+            self.send_header('content-type', 'application/json')
+            self.send_header('content-length', str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    server = HTTPServer(('127.0.0.1', 0), H)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    provider = {"id": "grsai", "name": "Grsai",
+                "base_url": "http://127.0.0.1:%d" % port,
+                "api_key": "k"}
+    saved_provider = main.get_api_provider
+    saved_headers = main.api_headers
+    main.get_api_provider = lambda pid: provider
+    main.api_headers = lambda *a, **kw: {"Authorization": "Bearer k"}
+    try:
+        url, _raw = asyncio.run(main.generate_ai_image(
+            "把地板换成木地板", "3504x2352", "high",
+            "gpt-image-2.6-sunburst", reference_images=None, provider_id="grsai"))
+    finally:
+        main.get_api_provider = saved_provider
+        main.api_headers = saved_headers
+        server.shutdown()
+
+    # extract_image 可能给 url 字符串，也可能给 {"type":"url","value":...}
+    got_url = url if isinstance(url, str) else (url.get('value') or url.get('url') or '')
+    assert got_url == "https://fake.example/gpt.png", url
+    assert got['path'].endswith('/v1/api/generate'), got['path']
+    assert got['body'].get('replyType') == 'async', got['body']
+    assert 'imageSize' not in got['body'], got['body']
+    assert '/' not in got['path'] or 'images/edits' not in got['path'], got['path']
+
+
 if __name__ == '__main__':
     test_polls_until_succeeded()
     test_failed_status_raises()
     test_query_url_for_grsai()
+    test_gpt_image_goes_to_generate_api()
     print('OK grsai-image-poll')

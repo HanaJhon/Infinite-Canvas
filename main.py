@@ -16300,14 +16300,26 @@ def is_grsai_nano_model_name(model):
     # 要求横线后至少还有一个字符（`nano-banana-` 这种空后缀不算）
     return name.startswith("nano-banana-") and len(name) > len("nano-banana-")
 
+def is_grsai_gpt_image_model_name(model):
+    """Grsai 上的 gpt-image 系模型（gpt-image-2 / gpt-image-2.6-sunburst …）。"""
+    name = str(model or "").strip().lower()
+    if not name or "/" in name:
+        return False
+    return name.startswith("gpt-image-")
+
+
 def is_grsai_nano_provider(provider, model):
     """是否走 Grsai 的 /v1/api/generate（该接口用 aspectRatio + imageSize + replyType）。
 
     🚨 原来这里硬判断 `model == "nano-banana-pro"`，导致 Grsai 新上的
     nano-banana-2.1 / -2 / -fast / -2-lite 等**全部走不进这个分支**，于是用了通用通道的
     `size` 参数，表现为「4K 分辨率选了没用」且 aspectRatio 拿不到 auto（老板 2026-10-19 反馈）。
+
+    🚨 2026-11-16：gpt-image 系同样必须走这里。之前它们落到 `/v1/images/edits`（同步阻塞
+    multipart），Grsai 出图要 2-3 分钟，网关先把连接掐了 ⇒ 前端 `RemoteProtocolError:
+    Server disconnected`，而上游其实已扣费并出图成功（老板截图：-2400 积分、成功、164s）。
     """
-    if not is_grsai_nano_model_name(model):
+    if not (is_grsai_nano_model_name(model) or is_grsai_gpt_image_model_name(model)):
         return False
     provider = provider or {}
     name = str(provider.get("name") or "").strip().lower()
@@ -17110,16 +17122,19 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 files=edit_files if edit_files is not None else {},
             )
 
-        if is_grsai_nano:
+        # gpt-image 系没有遮罩参数，带遮罩的局部重绘仍走 /images/edits（multipart 有 mask 字段）
+        if is_grsai_nano and (is_grsai_nano_model_name(model) or not mask_refs):
             _grsai_refs = image_refs[:ONLINE_IMAGE_REFERENCE_MAX]
             body = {
                 "model": model,
                 "prompt": prompt,
                 "images": [reference_to_data_url(ref, max_size=ref_image_max_size(len(_grsai_refs))) for ref in _grsai_refs],
                 "aspectRatio": grsai_aspect_ratio(aspect_ratio, size, model),
-                "imageSize": grsai_image_size(resolution, size),
                 "replyType": "async",
             }
+            # nano-banana 认 imageSize（1K/2K/4K）；gpt-image 系不吃这个字段，比例由 aspectRatio 决定
+            if not is_grsai_gpt_image_model_name(model):
+                body["imageSize"] = grsai_image_size(resolution, size)
             grsai_url = provider_endpoint_url(provider, "image_generation_endpoint", "/v1/api/generate")
             _grsai_t0 = time.monotonic()
             response = await client.post(
@@ -22520,7 +22535,8 @@ async def wait_for_grsai_image_task(client, provider, submit_url, task_id, model
     # 高峰期上游排队可能超过 10 分钟；前端轮询约 30 分钟，这里给到 20 分钟，
     # 别让「图快好了」被 600s 硬截断。
     deadline = time.monotonic() + 1200.0
-    delay = 0.8
+    # gpt-image 系在 Grsai 上稳定 2-3 分钟（老板实测 164s），秒级轮询纯属白发请求
+    delay = 3.0 if is_grsai_gpt_image_model_name(model) else 0.8
     last = {}
     status = ""
     while time.monotonic() < deadline:
@@ -22538,7 +22554,7 @@ async def wait_for_grsai_image_task(client, provider, submit_url, task_id, model
         status = str(last.get("status") or "").strip().lower()
         if status in {"succeeded", "failed", "violation"}:
             break
-        if delay < 1.5:
+        if delay < 1.5 and not is_grsai_gpt_image_model_name(model):
             delay = 1.5
     if status != "succeeded":
         # 挂 upstream_task_id：超时/失败后前端会出「查询结果」，让用户把已经出好的图捞回来，
