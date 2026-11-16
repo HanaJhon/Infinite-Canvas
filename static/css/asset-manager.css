@@ -600,4 +600,16 @@ body.theme-dark .asset-card.active { border-color:rgba(248,250,252,.86); box-sha
     .empty-state { min-height:150px; border-radius:16px; padding:18px; font-size:15.6px; line-height:1.5; }
 
     .detail-scroll { padding:12px 14px 16px; }
+
+    /* 资产层级：分组/重命名/删除 这类操作在手机上要按得准 */
+    .tree-action-bar { margin:6px 0 8px 20px; padding:6px; gap:6px; border-radius:14px; }
+    .tree-action-bar.child-actions { margin-left:29px; }
+    .tree-action-bar button { height:38px; border-radius:12px; padding:0 13px; gap:7px; font-size:14.4px; }
+    .tree-action-bar button svg { width:15px; height:15px; }
+    .tree-action-bar.muted-actions { font-size:14.4px; line-height:1.4; padding:8px 10px; }
+    .tree-row-actions { gap:6px; }
+    .tree-action { width:34px; height:34px; border-radius:11px; }
+    .tree-action svg { width:16px; height:16px; }
+    .tree-empty { margin-left:22px; min-height:36px; font-size:14.4px; }
+    .tree-smart-title svg { width:15px; height:15px; }
 }
