@@ -60,7 +60,32 @@
         .mode-badge { font-size:9px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color:#0f172a; background:#eef2ff; border:1px solid #e0e7ff; padding:2px 8px; border-radius:999px; }
         .masonry-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:20px; }
         @media (min-width:768px){ .masonry-grid{ grid-template-columns:repeat(4,1fr); } }
-        @media (max-width:640px){ .size-row{ grid-template-columns:1fr; } }
+        /* 手机端（竖屏）：模型/尺寸仍保持两列，整体放大 1/5 提可读性 */
+        /* 手机端配色/字号跟「我的」页对齐：浅灰底 + 白卡 + 靛蓝主按钮 */
+        @media (max-width:640px){
+            body{ zoom:1.2; background:#f2f3f5; }
+            html.theme-dark body{ background:#0e1014; }
+            .container-box{ padding:0 16px; margin-top:20px; }
+            body{ background-image:none !important; }
+            html.theme-dark body{ background-image:none !important; }
+            header{ margin-bottom:20px !important; align-items:flex-start !important; }
+            header h1{ font-size:25.2px !important; font-style:normal !important; font-weight:800 !important; letter-spacing:-.2px !important; }
+            header p{ font-size:13.2px !important; letter-spacing:.16em !important; color:#6b7280 !important; }
+            main{ gap:18px !important; }
+            .nano-input{ border-radius:18px; border-color:rgba(15,23,42,.07); box-shadow:0 6px 22px rgba(15,23,42,.06); }
+            .tool-panel,.control-panel{ border-radius:18px; border-color:rgba(15,23,42,.07); box-shadow:0 6px 22px rgba(15,23,42,.06); gap:12px; padding:14px; }
+            .control-label{ font-size:14.4px; color:#6b7280; letter-spacing:.02em; }
+            .model-pill{ background:#f2f3f5; border-color:rgba(15,23,42,.06); }
+            .model-option{ height:38px; font-size:15px; }
+            .model-option.active{ color:#5b5bd6; }
+            .size-select,.size-custom,.size-fit-btn{ height:40px; border-radius:12px; font-size:15.6px; background:#f6f7f9; border-color:rgba(15,23,42,.07); }
+            .upload-item{ border-radius:18px; }
+            .masonry-grid{ gap:12px; }
+            .masonry-item{ border-radius:18px; }
+            .glass-btn{ background:#6366f1; border-radius:18px !important; padding-top:16px !important; padding-bottom:16px !important; font-size:16.8px; }
+            .glass-btn:hover{ background:#5b5bd6; }
+            .result-frame{ border-radius:18px; box-shadow:0 6px 22px rgba(15,23,42,.06); }
+        }
         .masonry-item { aspect-ratio:1/1; border-radius:24px; overflow:hidden; background:#fff; border:1px solid #f1f5f9; transition:all .5s var(--easing); }
         .masonry-item:hover { transform:translateY(-6px); box-shadow:0 20px 40px rgba(0,0,0,.08); }
         .gallery-lightbox { background:rgba(255,255,255,.99); backdrop-filter:blur(22px) saturate(1.05); }

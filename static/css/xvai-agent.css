@@ -118,3 +118,55 @@ html.studio-theme-dark .xv-agent {
 .agent-reasoning-item { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:7px 10px; border-radius:8px; border:none; background:none; color:var(--text); font-size:10.5px; font-weight:650; cursor:pointer; text-align:left; }
 .agent-reasoning-item:hover { background:var(--soft); }
 .agent-reasoning-hint { font-size:9px; font-weight:500; color:var(--faint); }
+
+/* ---------------- 竖屏手机端：配色/圆角/字号跟「我的」页对齐 ---------------- */
+@media (max-width:640px){
+    /* html:root 是为了压过 xvai.html 里有同样 :root 声明、却排在后面的内联 <style> */
+    html:root { --bg:#f2f3f5; --card:#fff; --panel:#fff; --line:rgba(15,23,42,.07); --soft:#f6f7f9;
+        --text:#16181d; --accent:#16181d; --muted:#6b7280; --faint:#9aa1ad; --strong:#6366f1; --strong-text:#fff;
+        --shadow-card:0 6px 22px rgba(15,23,42,.06); --shadow-soft:0 2px 8px rgba(15,23,42,.05);
+        --shadow-composer:0 6px 22px rgba(15,23,42,.06); }
+    html:root.studio-theme-dark, html:root.theme-dark { --bg:#0e1014; --card:#171a20; --panel:#171a20; --line:rgba(255,255,255,.07);
+        --soft:#1d2027; --text:#e8ecf4; --accent:#e8ecf4; --muted:#97a0b0; --faint:#6b7280;
+        --strong:#818cf8; --strong-text:#0e1014; }
+    /* 输入区自带一套 .xv-agent 变量，这里同步一遍，否则发送键还是墨色 */
+    html .xv-agent { --line:rgba(15,23,42,.07); --card:#fff; --panel:#fff; --soft:#f6f7f9; --text:#16181d;
+        --muted:#6b7280; --faint:#9aa1ad; --strong:#6366f1; --strong-text:#fff; --shadow:rgba(15,23,42,.10); }
+    html.studio-theme-dark .xv-agent, html.theme-dark .xv-agent { --line:rgba(255,255,255,.07); --card:#171a20;
+        --panel:#171a20; --soft:#1d2027; --text:#e8ecf4; --muted:#97a0b0; --faint:#6b7280;
+        --strong:#818cf8; --strong-text:#0e1014; --shadow:rgba(0,0,0,.5); }
+
+    /* 跟「我的」页一致的纯色底：去掉 liquid-glass 那层彩色壁纸光 */
+    html body { background-image:none !important; }
+    html.studio-theme-dark body, html.theme-dark body { background-image:none !important; }
+
+    html .xv-head { padding:14px 16px 8px; border-bottom:0; background:transparent; gap:10px; }
+    html .xv-title { font-size:25.2px; font-weight:800; letter-spacing:-.2px; }
+    html .xv-sub { font-size:15px; color:var(--muted); }
+    html .xv-btn { height:38px; padding:0 14px; border-radius:12px; font-size:15.6px; background:var(--card); box-shadow:0 6px 22px rgba(15,23,42,.06); }
+    html .xv-balance { height:34px; padding:0 12px; font-size:15.6px; background:var(--card); box-shadow:0 6px 22px rgba(15,23,42,.06); }
+    html .xv-thread { padding:14px 16px 10px; gap:16px; }
+    html .xv-avatar { width:30px; height:30px; font-size:14.4px; }
+    html .xv-bubble { font-size:18px; line-height:1.65; }
+    html .xv-msg.user .xv-bubble { padding:11px 15px; border-radius:18px; background:var(--card); box-shadow:0 6px 22px rgba(15,23,42,.06); }
+    html .xv-img-card { border-radius:18px; box-shadow:0 6px 22px rgba(15,23,42,.06); }
+    html .xv-empty { font-size:15.6px; }
+    html .xv-composer { padding:6px 14px 16px; }
+    html .xv-agent .agent-onebox { border-radius:22px; border-color:var(--line); box-shadow:0 6px 22px rgba(15,23,42,.06); }
+    html .xv-agent .agent-toolbar-btn { font-size:14.4px; height:30px; }
+    html .xv-agent .agent-input-rich { font-size:16.8px; padding:8px 14px 10px; }
+    html .xv-agent .agent-ratio-btn { height:56px; font-size:13.2px; }
+    html .xv-agent .agent-res-btn,html .xv-agent .agent-quality-btn { height:34px; font-size:13.2px; }
+    html .xv-agent .agent-send-btn { width:34px; height:34px; border-radius:12px; }
+    html .xv-agent .agent-send-btn svg { width:15px; height:15px; }
+    html .xv-out { border-radius:18px; box-shadow:0 6px 22px rgba(15,23,42,.06); }
+    html .xv-hist-item { border-radius:14px; }
+
+    /* 大字号后页头挤爆：副标题让位、标题可截断、右侧按钮不参与压缩 */
+    html .xv-head { gap:8px; padding:12px 12px 8px; }
+    html .xv-brand { min-width:0; flex:0 1 auto; gap:2px; }
+    html .xv-title { flex:0 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    html .xv-sub { display:none; }
+    html .xv-head-right { flex:0 0 auto; gap:6px; }
+    html .xv-head-right .xv-btn { padding:0 11px; }
+}
