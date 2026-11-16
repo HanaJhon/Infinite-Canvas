@@ -86,6 +86,8 @@
             .glass-btn:hover{ background:#5b5bd6; }
             .sec-row svg{ width:17px; height:17px; }
             .sec-cap{ font-size:13.2px !important; letter-spacing:.12em !important; }
+            #refGrid .ref-count{font-size:10.8px;padding:3px 9px}
+            #refGrid #refUploader span.text-\[9px\]{font-size:10.8px !important}
             .style-wrap .style-btn{ height:34px; padding:0 14px; font-size:13.2px; gap:6px; max-width:200px; }
             .style-wrap .style-btn svg{ width:16px; height:16px; }
             #genBtn span{ font-size:15.6px !important; letter-spacing:.16em !important; }
@@ -108,6 +110,7 @@
     <link rel="stylesheet" href="/static/css/liquid-glass.css?v=1.3.9.1793776698">
     <style>
         /* ── 参考图工具（扩图 / 遮罩 / 视角 / 画笔）与风格选择 2026-11-09 ── */
+        .ref-count{position:absolute;right:6px;bottom:6px;z-index:12;background:#111827;color:#fff;font-size:9px;font-weight:800;letter-spacing:.04em;padding:2px 7px;border-radius:999px}
         .ref-tools{position:absolute;left:6px;right:6px;bottom:6px;display:flex;gap:4px;justify-content:center;z-index:12;opacity:1;transition:opacity .2s var(--easing)}
         .upload-item:hover .ref-tools,.upload-item:focus-within .ref-tools{opacity:1}
         .ref-tools button{width:26px;height:26px;border-radius:999px;background:rgba(17,24,39,.82);color:#fff;display:flex;align-items:center;justify-content:center;border:0;cursor:pointer}
@@ -295,47 +298,9 @@
                         <i data-lucide="images" class="w-3.5 h-3.5"></i>
                         <span class="sec-cap text-[10px] font-black uppercase tracking-widest" data-i18n="online.referenceImages">Reference Images</span>
                     </div>
-                    <div class="grid grid-cols-3 gap-4">
-                        <div id="drop-zone-1" onclick="document.getElementById('file1').click()" class="upload-item group aspect-square rounded-2xl flex flex-col items-center justify-center cursor-pointer">
-                            <input type="file" id="file1" accept="image/*" class="hidden" onchange="handleFile(this.files[0],1)">
-                            <i data-lucide="plus" class="w-5 h-5 text-gray-300 group-hover:text-black"></i><span class="text-[9px] mt-2 font-bold text-gray-400 uppercase">Main</span>
-                            <img id="prev1" class="preview-img hidden"><button id="del1" onclick="clearSlot(1,event)" class="hidden absolute top-2 right-2 w-6 h-6 bg-white/90 rounded-full shadow-sm z-10">×</button>
-                            <img id="maskprev1" class="preview-img ref-mask hidden" alt="">
-                            <span id="mbadge1" class="ref-badge hidden">已涂遮罩</span>
-                            <div id="tools1" class="ref-tools hidden" onclick="event.stopPropagation()">
-                                <button type="button" title="扩图" onclick="openRefEditor(1,'outpaint',event)"><i data-lucide="expand"></i></button>
-                                <button type="button" title="遮罩" onclick="openRefEditor(1,'mask',event)"><i data-lucide="brush"></i></button>
-                                <button type="button" title="视角" onclick="openRefEditor(1,'angle',event)"><i data-lucide="camera"></i></button>
-                                <button type="button" title="画笔" onclick="openRefEditor(1,'brush',event)"><i data-lucide="paintbrush"></i></button>
-                            </div>
-                        </div>
-                        <div id="drop-zone-2" onclick="document.getElementById('file2').click()" class="upload-item group aspect-square rounded-2xl flex flex-col items-center justify-center cursor-pointer">
-                            <input type="file" id="file2" accept="image/*" class="hidden" onchange="handleFile(this.files[0],2)">
-                            <i data-lucide="plus" class="w-5 h-5 text-gray-300 group-hover:text-black"></i><span class="text-[9px] mt-2 font-bold text-gray-400 uppercase">Aux A</span>
-                            <img id="prev2" class="preview-img hidden"><button id="del2" onclick="clearSlot(2,event)" class="hidden absolute top-2 right-2 w-6 h-6 bg-white/90 rounded-full shadow-sm z-10">×</button>
-                            <img id="maskprev2" class="preview-img ref-mask hidden" alt="">
-                            <span id="mbadge2" class="ref-badge hidden">已涂遮罩</span>
-                            <div id="tools2" class="ref-tools hidden" onclick="event.stopPropagation()">
-                                <button type="button" title="扩图" onclick="openRefEditor(2,'outpaint',event)"><i data-lucide="expand"></i></button>
-                                <button type="button" title="遮罩" onclick="openRefEditor(2,'mask',event)"><i data-lucide="brush"></i></button>
-                                <button type="button" title="视角" onclick="openRefEditor(2,'angle',event)"><i data-lucide="camera"></i></button>
-                                <button type="button" title="画笔" onclick="openRefEditor(2,'brush',event)"><i data-lucide="paintbrush"></i></button>
-                            </div>
-                        </div>
-                        <div id="drop-zone-3" onclick="document.getElementById('file3').click()" class="upload-item group aspect-square rounded-2xl flex flex-col items-center justify-center cursor-pointer">
-                            <input type="file" id="file3" accept="image/*" class="hidden" onchange="handleFile(this.files[0],3)">
-                            <i data-lucide="plus" class="w-5 h-5 text-gray-300 group-hover:text-black"></i><span class="text-[9px] mt-2 font-bold text-gray-400 uppercase">Aux B</span>
-                            <img id="prev3" class="preview-img hidden"><button id="del3" onclick="clearSlot(3,event)" class="hidden absolute top-2 right-2 w-6 h-6 bg-white/90 rounded-full shadow-sm z-10">×</button>
-                            <img id="maskprev3" class="preview-img ref-mask hidden" alt="">
-                            <span id="mbadge3" class="ref-badge hidden">已涂遮罩</span>
-                            <div id="tools3" class="ref-tools hidden" onclick="event.stopPropagation()">
-                                <button type="button" title="扩图" onclick="openRefEditor(3,'outpaint',event)"><i data-lucide="expand"></i></button>
-                                <button type="button" title="遮罩" onclick="openRefEditor(3,'mask',event)"><i data-lucide="brush"></i></button>
-                                <button type="button" title="视角" onclick="openRefEditor(3,'angle',event)"><i data-lucide="camera"></i></button>
-                                <button type="button" title="画笔" onclick="openRefEditor(3,'brush',event)"><i data-lucide="paintbrush"></i></button>
-                            </div>
-                        </div>
-                    </div>
+                    <div class="grid grid-cols-3 gap-4" id="refGrid"></div>
+                    <input type="file" id="fileAll" accept="image/*" multiple class="hidden"
+                           onchange="handleFilesToSlots(this.files, firstEmptySlot()); this.value='';">
                 </section>
 
                 <div class="tool-panel">
@@ -566,8 +531,8 @@
             document.title = tr('online.title');
             updateAdaptivePanel();
         });
-        let refs = {1:null,2:null,3:null};
-        let refDims = {1:null,2:null,3:null};
+        let refs = {};
+        let refDims = {};
         let provider = 'comfly';
         let selectedModel = 'gpt-image-2';
         let apiProviders = [];
@@ -954,7 +919,8 @@
             return match[0];
         }
 
-        const SLOTS = [1,2,3];
+        const SLOTS = [1,2,3,4,5,6,7,8,9];
+        const REF_MAX = SLOTS.length;
         // 外部页面（小抽AI）复用同一个编辑面板：?editor=1&src=<图片地址>&mode=outpaint|mask|angle|brush
         // ponytail: iframe + postMessage 复用这一套实现，不把 900 行编辑器复制到第二个页面
         const REF_EDITOR_BRIDGE = (() => {
@@ -969,7 +935,51 @@
         if(REF_EDITOR_BRIDGE){
             document.querySelectorAll('button[title="遮罩"], #refEditModal [data-re-mode="mask"]').forEach(el => { el.style.display = 'none'; });
         }
-        function firstEmptySlot(){ return SLOTS.find(id => !refs[id]) || 1; }
+        function firstEmptySlot(){ return SLOTS.find(id => !refs[id]) || 0; }
+        // 第一个格子只负责上传（可多选 / 拖入 / 粘贴），后面的格子逐个显示已上传的参考图与编辑项
+        function filledSlots(){ return SLOTS.filter(id => refs[id] && refs[id].url); }
+        const REF_TOOLS = [
+            ['outpaint', 'expand', '扩图'],
+            ['mask', 'brush', '遮罩'],
+            ['angle', 'camera', '视角'],
+            ['brush', 'paintbrush', '画笔']
+        ];
+        function renderRefGrid(){
+            const grid = document.getElementById('refGrid');
+            if(!grid) return;
+            const filled = filledSlots();
+            const tiles = filled.map(id => {
+                const tools = REF_TOOLS
+                    .filter(([mode]) => !(REF_EDITOR_BRIDGE && mode === 'mask'))
+                    .map(([mode, icon, title]) => `<button type="button" title="${title}" onclick="openRefEditor(${id},'${mode}',event)"><i data-lucide="${icon}"></i></button>`)
+                    .join('');
+                return `<div class="upload-item group aspect-square rounded-2xl flex flex-col items-center justify-center relative">
+                    <img id="prev${id}" class="preview-img" src="${escapeHtml(refs[id].url)}" alt="">
+                    <button id="del${id}" onclick="clearSlot(${id},event)" class="absolute top-2 right-2 w-6 h-6 bg-white/90 rounded-full shadow-sm z-10">×</button>
+                    <img id="maskprev${id}" class="preview-img ref-mask hidden" alt="">
+                    <span id="mbadge${id}" class="ref-badge hidden">已涂遮罩</span>
+                    <div id="tools${id}" class="ref-tools" onclick="event.stopPropagation()">${tools}</div>
+                </div>`;
+            }).join('');
+            const uploader = `<div id="refUploader" class="upload-item group aspect-square rounded-2xl flex flex-col items-center justify-center cursor-pointer"
+                    onclick="document.getElementById('fileAll').click()">
+                <i data-lucide="plus" class="w-5 h-5 text-gray-300 group-hover:text-black"></i>
+                <span class="text-[9px] mt-2 font-bold text-gray-400 uppercase">上传参考图</span>
+                <span class="ref-count">${filled.length}/${REF_MAX}</span>
+            </div>`;
+            grid.innerHTML = uploader + tiles;
+            grid.querySelectorAll('.upload-item').forEach(zone => {
+                zone.ondragover = e => { e.preventDefault(); zone.classList.add('drag-over'); };
+                zone.ondragleave = () => zone.classList.remove('drag-over');
+                zone.ondrop = e => {
+                    e.preventDefault();
+                    zone.classList.remove('drag-over');
+                    handleFilesToSlots(e.dataTransfer?.files, firstEmptySlot());
+                };
+            });
+            filled.forEach(id => { refMaskBadge(id); refToolBar(id, true); });
+            if(window.lucide?.createIcons) window.lucide.createIcons();
+        }
         // 从 start 开始按格子顺序排列（循环），让多张图依次落进 Main / Aux A / Aux B
         function slotOrder(start){
             const i = Math.max(0, SLOTS.indexOf(start));
@@ -980,20 +990,13 @@
         function handleFilesToSlots(files, start){
             const images = [...(files || [])].filter(f => f && String(f.type || '').startsWith('image/'));
             if(!images.length) return;
-            const order = slotOrder(start || firstEmptySlot());
-            images.slice(0, order.length).forEach((file, i) => handleFile(file, order[i]));
-            if(images.length > order.length) alert(tr('online.slotsFull'));
+            // 🚨 只在空档位里放：档位已满时 firstEmptySlot() 返回 0，不能退化成覆盖第一张
+            const free = slotOrder(start || 0).filter(id => !refs[id]);
+            if(!free.length){ alert(tr('online.slotsFull')); return; }
+            images.slice(0, free.length).forEach((file, i) => handleFile(file, free[i]));
+            if(images.length > free.length) alert(tr('online.slotsFull'));
         }
-        SLOTS.forEach(id => {
-            const zone = document.getElementById(`drop-zone-${id}`);
-            zone.ondragover = e => { e.preventDefault(); zone.classList.add('drag-over'); };
-            zone.ondragleave = () => zone.classList.remove('drag-over');
-            zone.ondrop = e => {
-                e.preventDefault();
-                zone.classList.remove('drag-over');
-                handleFilesToSlots(e.dataTransfer?.files, id);
-            };
-        });
+        renderRefGrid();
         window.addEventListener('paste', e => {
             const files = [...(e.clipboardData?.items || [])]
                 .filter(x => x.kind === 'file' && String(x.type || '').startsWith('image/'))
@@ -1003,26 +1006,22 @@
         });
 
         async function handleFile(file, index){
-            if(!file) return;
-            const reader = new FileReader();
-            reader.onload = e => {
-                const prev = document.getElementById(`prev${index}`);
-                prev.src = e.target.result; prev.classList.remove('hidden');
-                document.getElementById(`del${index}`).classList.remove('hidden');
-                getImageDimensions(e.target.result).then(dim => {
-                    refDims[index] = dim;
-                    updateSizeUI();
-                }).catch(() => {});
-            };
-            reader.readAsDataURL(file);
+            if(!file || !String(file.type || '').startsWith('image/')) return;
             const form = new FormData();
             form.append('files', file);
-            const data = await fetch('/api/ai/upload', {method:'POST', body:form}).then(r=>r.json());
-            refs[index] = data.files[0];
+            let data = null;
+            try { data = await fetch('/api/ai/upload', {method:'POST', body:form}).then(r => r.json()); } catch(e) { return; }
+            const ref = data?.files?.[0];
+            if(!ref?.url) return;
+            refs[index] = ref;
+            refDims[index] = null;
             slotMask[index] = null;
             rePendingMask = null; rePendingMaskUrl = ''; rePendingPreview = '';   // 换了图，未应用的遮罩作废
-            refMaskBadge(index);
-            refToolBar(index, true);
+            renderRefGrid();
+            getImageDimensions(ref.url).then(dim => {
+                refDims[index] = dim;
+                updateSizeUI();
+            }).catch(() => {});
         }
         function clearSlot(index, ev){
             if(ev) ev.stopPropagation();
@@ -1030,11 +1029,8 @@
             refDims[index] = null;
             slotMask[index] = null;
             rePendingMask = null; rePendingMaskUrl = ''; rePendingPreview = '';
-            document.getElementById(`tools${index}`).classList.add('hidden');
-            refMaskBadge(index);
-            document.getElementById(`prev${index}`).src = '';
-            document.getElementById(`prev${index}`).classList.add('hidden');
-            document.getElementById(`del${index}`).classList.add('hidden');
+            renderRefGrid();
+            updateSizeUI();
         }
 
         /* ── 参考图编辑：扩图 / 遮罩 / 视角 / 画笔（语义对齐 smart-canvas.js）─────
@@ -1057,7 +1053,7 @@
             brush:{title:'画笔', sub:'直接在参考图上涂画，应用后替换这张参考图'}
         };
         // 遮罩元数据（含 base_url）；参考图被换掉/清掉时必须一起失效，否则会贴歪
-        let slotMask = {1:null,2:null,3:null};
+        let slotMask = {};
         // 还没点「应用」的遮罩涂抹（编辑器里的黑底白掩膜 + 它的半透明红预览），只用于缩略图提示
         let rePendingMask = null, rePendingMaskUrl = '', rePendingPreview = '', refEditSrc = '';
         let refEdit = null;
@@ -2038,15 +2034,11 @@
         async function replaceRefImage(slot, file, dim, extra){
             if(!file?.url) return false;
             refs[slot] = {...(refs[slot] || {}), ...file};
-            const prev = document.getElementById(`prev${slot}`);
-            if(prev){ prev.src = file.url; prev.classList.remove('hidden'); }
-            const del = document.getElementById(`del${slot}`);
-            if(del) del.classList.remove('hidden');
             if(dim?.width && dim?.height) refDims[slot] = {width:dim.width, height:dim.height};
             // 🚨 参考图变了，之前的遮罩坐标全部失效
             slotMask[slot] = null;
             rePendingMask = null; rePendingMaskUrl = ''; rePendingPreview = '';
-            refMaskBadge(slot);
+            renderRefGrid();
             updateSizeUI();
             if(REF_EDITOR_BRIDGE && window.parent !== window){
                 // 外部页面要靠这条消息把「图 + 该配的提示词」一起填进输入栏，只给图等于让用户自己猜要说什么
@@ -2059,6 +2051,7 @@
             document.body.classList.add('re-solo');
             // 不挂在 window load 上：页面里有需要鉴权的图片会 401，load 可能永远不触发
             refs[1] = { url:REF_EDITOR_BRIDGE.src, name:'edit.png' };
+            renderRefGrid();
             // 弹窗原本嵌在 .page-wrap 里，fixed 定位会相对那个容器算，顶部留一条黑边；
             // 桥接模式把它挪到 body 下，inset:0 才是真的整窗
             const bridgeOverlay = document.getElementById('refEditModal');
@@ -2083,7 +2076,7 @@
 
         // 有效遮罩：参考图没被换过 / 清过才算，否则坐标对不上
         function activeInpaintMeta(){
-            for(const slot of [1,2,3]){
+            for(const slot of SLOTS){
                 const meta = slotMask[slot];
                 if(!meta) continue;
                 // 🚨 比的是「应用遮罩时那张参考图的地址」：base_url 是后端规范化后的地址，未必和 refs[slot].url 一模一样
@@ -2184,12 +2177,12 @@
                     const skip = new Set([inpaintMeta.crop_url, inpaintMeta.crop_mask_url, inpaintMeta.mask_url, inpaintMeta.base_url]);
                     refList.push({url:inpaintMeta.crop_url, name:'inpaint_crop.png', kind:'image'});
                     refList.push({url:inpaintMeta.crop_mask_url, name:'inpaint_mask.png', kind:'image', role:'mask'});
-                    [1,2,3].map(id => refs[id]).filter(Boolean).forEach(ref => {
+                    SLOTS.map(id => refs[id]).filter(Boolean).forEach(ref => {
                         if(!ref.url || skip.has(ref.url)) return;
                         refList.push({url:ref.url, name:ref.name || 'ref.png', kind:ref.kind || 'image'});
                     });
                 } else {
-                    [1,2,3].map(id => refs[id]).filter(Boolean).forEach(ref => refList.push({url:ref.url, name:ref.name || 'ref.png', kind:ref.kind || 'image'}));
+                    SLOTS.map(id => refs[id]).filter(Boolean).forEach(ref => refList.push({url:ref.url, name:ref.name || 'ref.png', kind:ref.kind || 'image'}));
                     // 风格：把风格库的参考图强行并进本次生图 + 提示词前缀，不靠模型自觉
                     if(selectedStyle){
                         const seen = new Set(refList.map(ref => ref.url));
@@ -2311,16 +2304,15 @@
         function applySameStyle(){
             if(!currentLightboxData) return;
             document.getElementById('promptInput').value = currentLightboxData.prompt || '';
-            [1,2,3].forEach(id => clearSlot(id));
-            (currentLightboxData.params?.reference_images || []).slice(0,3).forEach((ref,i) => {
-                refs[i+1] = ref; const prev = document.getElementById(`prev${i+1}`);
-                prev.src = ref.url; prev.classList.remove('hidden'); document.getElementById(`del${i+1}`).classList.remove('hidden');
-                refToolBar(i+1, true);
+            SLOTS.forEach(id => { refs[id] = null; refDims[id] = null; slotMask[id] = null; });
+            (currentLightboxData.params?.reference_images || []).slice(0, REF_MAX).forEach((ref, i) => {
+                refs[i+1] = ref;
                 getImageDimensions(ref.url).then(dim => {
                     refDims[i+1] = dim;
                     updateSizeUI();
                 }).catch(() => {});
             });
+            renderRefGrid();
             const savedResolution = String(currentLightboxData.params?.resolution || '').toLowerCase();
             const savedAspectRatio = String(currentLightboxData.params?.aspect_ratio || '').toLowerCase();
             const size = currentLightboxData.params?.size || '1024x1024';
