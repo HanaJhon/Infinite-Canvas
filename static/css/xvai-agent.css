@@ -149,6 +149,7 @@ html.studio-theme-dark .xv-agent {
     html .xv-avatar { width:30px; height:30px; font-size:14.4px; }
     html .xv-bubble { font-size:18px; line-height:1.65; }
     html .xv-msg .xv-bubble { font-size:21.6px; }
+    html .xv-msg.assistant .xv-bubble { font-size:23.8px; }
     html .xv-msg.user .xv-bubble { padding:11px 15px; border-radius:18px; background:var(--card); box-shadow:0 6px 22px rgba(15,23,42,.06); }
     html .xv-img-card { border-radius:18px; box-shadow:0 6px 22px rgba(15,23,42,.06); }
     html .xv-empty { font-size:15.6px; }
@@ -175,6 +176,7 @@ html.studio-theme-dark .xv-agent {
 /* 页头只留按钮（品牌名隐藏）；AI 正文放大 1/5、用户气泡缩小 1/5、输入栏顶栏放大 1/5、占位符半透明 */
 html .xv-brand { display:none; }
 html .xv-msg .xv-bubble { font-size:16.8px; }
+html .xv-msg.assistant .xv-bubble { font-size:18.5px; }
 html .xv-msg.user .xv-bubble { padding:10px 14px; }
 html .xv-agent .agent-topbar .agent-toolbar-btn { height:29px; padding:0 11px; font-size:12px; gap:5px; }
 html .xv-agent .agent-topbar .agent-toolbar-btn i,
