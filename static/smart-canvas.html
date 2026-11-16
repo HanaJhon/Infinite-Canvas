@@ -24,8 +24,8 @@ try{var _g=new URLSearchParams(location.search).get('glass');if(_g){localStorage
     <script src="/static/vendor/js/photopea.min.js?v=1.3.9.1767196800"></script>
     <script src="/static/js/theme.js?v=1.3.9.1794556649"></script>
     <script src="/static/js/touch-mouse.js?v=1.3.9.1767196800"></script>
-    <script src="/static/js/i18n.js?v=1.3.9.1794585976"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=1.3.9.1794570046">
+    <script src="/static/js/i18n.js?v=1.3.9.1794816330"></script>
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=1.3.9.1794798496">
     <!-- Skill 市场：浮层样式与逻辑都在共享模块里（gpt-chat 页用同一份），见 static/js/skill-market.js -->
     <link rel="stylesheet" href="/static/css/skill-market.css?v=1.3.9.1767196800">
     <link rel="stylesheet" href="/static/css/split-layers.css?v=1.3.9.1792329089">
@@ -592,6 +592,7 @@ try{var _g=new URLSearchParams(location.search).get('glass');if(_g){localStorage
                         <button type="button" data-image-edit-mode="brush"><i data-lucide="paintbrush" class="w-3.5 h-3.5"></i><span data-i18n="canvas.modeBrush">画笔</span></button>
                         <button type="button" data-image-edit-mode="resize"><i data-lucide="minimize-2" class="w-3.5 h-3.5"></i><span>缩放</span></button>
                         <button type="button" data-image-edit-mode="grid"><i data-lucide="grid-3x3" class="w-3.5 h-3.5"></i><span data-i18n="canvas.modeGrid">宫格切分</span></button>
+                        <button type="button" data-image-edit-mode="color"><i data-lucide="palette" class="w-3.5 h-3.5"></i><span>调色</span></button>
                         <!-- 拆分图层：不是「编辑模式」，而是从预览直接进拆分流程的入口（等价于上传节点菜单里的同名动作）。
                              显隐由 setImageEditMode 按 GPT 门禁控制，初始隐藏避免闪一下。 -->
                         <button type="button" id="imageSplitLayersBtn" style="display:none" data-i18n-title="smart.splitLayersTitle" title="拆分图层"><i data-lucide="layers" class="w-3.5 h-3.5"></i><span data-i18n="smart.splitLayersAction">拆分图层</span></button>
@@ -734,6 +735,29 @@ try{var _g=new URLSearchParams(location.search).get('glass');if(_g){localStorage
                     <label class="grid-gap-control"><span data-i18n="canvas.gridGap">间隔(px)</span> <input id="gridGapSize" type="range" min="0" max="240" step="1" value="0"><span id="gridGapValue" class="grid-gap-value">0</span></label>
                     <span id="gridSplitCount" class="image-edit-sub"></span>
                 </div>
+                <div id="imageColorTools" class="image-edit-tools color-tools">
+                    <div class="color-row">
+                        <span class="image-edit-sub">滤镜</span>
+                        <button type="button" class="color-chip active" data-color-filter="none">原片</button>
+                        <button type="button" class="color-chip" data-color-filter="800t">800T胶片</button>
+                        <button type="button" class="color-chip" data-color-filter="cc">CC胶片</button>
+                        <button type="button" class="color-chip" data-color-filter="nc">NC胶片</button>
+                        <button type="button" class="color-chip" data-color-filter="nh">NH胶片</button>
+                        <label><span>程度</span><input id="colorStrength" type="range" min="0" max="100" step="1" value="100"><span id="colorStrengthVal" class="color-num">100</span></label>
+                    </div>
+                    <div class="color-row">
+                        <label><span>曝光</span><input id="colorExposure" type="range" min="-100" max="100" step="1" value="0"><span id="colorExposureVal" class="color-num">0</span></label>
+                        <label><span>饱和</span><input id="colorSaturation" type="range" min="-100" max="100" step="1" value="0"><span id="colorSaturationVal" class="color-num">0</span></label>
+                        <button type="button" id="colorPickBtn" class="color-chip" title="吸取图片中的颜色，只调整相近的颜色"><i data-lucide="pipette" class="w-3.5 h-3.5"></i><span>吸管</span></button>
+                        <span id="colorPickSwatch" class="color-swatch" title="已吸取的颜色"></span>
+                        <label class="color-inline"><input id="colorPickOnly" type="checkbox" disabled><span>仅调该色</span></label>
+                    </div>
+                    <div class="color-row">
+                        <span class="image-edit-sub">曲线</span>
+                        <canvas id="colorCurve" class="color-curve" width="112" height="112"></canvas>
+                        <button type="button" id="colorResetBtn" class="color-chip"><i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i><span>重置</span></button>
+                    </div>
+                </div>
                 <div id="imageEditStage" class="image-edit-stage">
                     <button id="previewPrevBtn" class="preview-nav-btn prev" type="button" onclick="navigatePreviewImage(-1)" title="上一张"><i data-lucide="chevron-left"></i></button>
                     <button id="previewNextBtn" class="preview-nav-btn next" type="button" onclick="navigatePreviewImage(1)" title="下一张"><i data-lucide="chevron-right"></i></button>
@@ -774,6 +798,7 @@ try{var _g=new URLSearchParams(location.search).get('glass');if(_g){localStorage
                         </div>
                         <div id="cropCanvas" class="crop-canvas">
                             <img id="cropImage" alt="crop source">
+                            <canvas id="colorCanvas" class="color-canvas"></canvas>
                             <div id="gridJoinCanvas" class="grid-join-canvas"></div>
                             <canvas id="editDrawCanvas" class="edit-draw-canvas"></canvas>
                             <canvas id="editTextCanvas" class="edit-text-canvas"></canvas>
@@ -1013,7 +1038,7 @@ try{var _g=new URLSearchParams(location.search).get('glass');if(_g){localStorage
 
     <script src="/static/js/skill-market.js?v=1.3.9.1767196800"></script>
     <script src="/static/js/credits-badge.js?v=1.3.9.1794031306"></script>
-    <script src="/static/js/smart-canvas.js?v=1.3.9.1794570371"></script>
+    <script src="/static/js/smart-canvas.js?v=1.3.9.1794820166"></script>
     <!-- 新人引导：必须在 smart-canvas.js 之后加载（要读画布页已有 DOM 与状态） -->
     <script src="/static/js/canvas-tour.js?v=1.3.9.1794031306"></script>
 </body>

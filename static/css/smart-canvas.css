@@ -3131,3 +3131,27 @@ a.smart3d-run { text-decoration:none; cursor:pointer; }
 }
 .ext-install-ghost:hover { color:var(--text); border-color:var(--strong); }
 .ext-install-note { margin:0; font-size:10.5px; line-height:1.5; color:var(--muted); }
+
+/* ── 调色（滤镜预设 / 曝光 / 饱和 / 曲线）──────────────────────────────── */
+.crop-canvas.color-mode { cursor:default; }
+.crop-canvas.color-mode #cropImage { visibility:hidden; }
+.crop-canvas.color-mode .crop-box,
+.crop-canvas.color-mode .outpaint-frame,
+.crop-canvas.color-mode .edit-draw-canvas,
+.crop-canvas.color-mode .edit-text-canvas,
+.crop-canvas.color-mode .grid-join-canvas { display:none; }
+.color-canvas { position:absolute; inset:0; width:100%; height:100%; display:none; border-radius:14px; }
+.crop-canvas.color-mode .color-canvas { display:block; }
+.color-tools { flex-direction:column; align-items:flex-start; gap:7px; }
+.color-row { display:flex; align-items:center; gap:9px; flex-wrap:wrap; width:100%; }
+.color-chip { display:inline-flex; align-items:center; gap:6px; height:30px; padding:0 12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:12px; font-weight:800; cursor:pointer; }
+.color-chip.active { background:var(--strong); border-color:var(--strong); color:#fff; }
+.color-chip i, .color-chip svg { width:14px; height:14px; }
+.color-num { min-width:26px; font-size:11px; font-weight:900; color:var(--muted); font-variant-numeric:tabular-nums; }
+.color-swatch { width:26px; height:26px; border-radius:9px; border:1px solid var(--line); background:#eef2f7; box-shadow:inset 0 0 0 1px rgba(255,255,255,.6); }
+.color-inline { font-weight:800; }
+.color-inline input { accent-color:var(--strong); }
+.color-curve { width:70px; height:70px; border-radius:10px; border:1px solid var(--line); background:var(--card); cursor:crosshair; touch-action:none; }
+.theme-dark .color-chip { background:#1f2430; border-color:rgba(148,163,184,.24); color:#e2e8f0; }
+.theme-dark .color-chip.active { background:var(--strong); border-color:var(--strong); color:#fff; }
+.theme-dark .color-swatch { background:#334155; }

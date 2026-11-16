@@ -17541,7 +17541,7 @@ function setImageEditMode(mode, userTouched=false){
     if(userTouched) imageEditModeTouched = true;
     const prev = imageEditMode;
     if(mode !== 'brush') removeEditTextInlineEditor(true);
-    imageEditMode = ['preview','angle','crop','outpaint','mask','brush','resize','grid'].includes(mode) ? mode : 'preview';
+    imageEditMode = ['preview','angle','crop','outpaint','mask','brush','resize','grid','color'].includes(mode) ? mode : 'preview';
     hideBrushCursor();   // 切模式可能就不该有圆环了，先收掉，下次 pointermove 自会按新模式决定
     const cropCanvasEl = document.getElementById('cropCanvas');
     const previewStageEl = document.getElementById('previewStage');
@@ -17577,6 +17577,7 @@ function setImageEditMode(mode, userTouched=false){
     cropCanvasEl.classList.toggle('resize-mode', imageEditMode === 'resize');
     cropCanvasEl.classList.toggle('grid-mode', imageEditMode === 'grid');
     cropCanvasEl.classList.toggle('outpaint-mode', imageEditMode === 'outpaint');
+    cropCanvasEl.classList.toggle('color-mode', imageEditMode === 'color');
     syncGridCustomCursor();
     document.querySelectorAll('[data-image-edit-mode]').forEach(btn => btn.classList.toggle('active', btn.dataset.imageEditMode === imageEditMode));
     // 「拆分图层」入口：与上传节点菜单同一个门禁 —— 只在**当前对话模型是 GPT 系**时才露出
@@ -17599,6 +17600,7 @@ function setImageEditMode(mode, userTouched=false){
     document.getElementById('imageBrushTools').classList.toggle('active', imageEditMode === 'brush');
     document.getElementById('imageResizeTools')?.classList.toggle('active', imageEditMode === 'resize');
     document.getElementById('imageGridTools').classList.toggle('active', imageEditMode === 'grid');
+    document.getElementById('imageColorTools')?.classList.toggle('active', imageEditMode === 'color');
     if(imageEditMode === 'grid' && gridOperationMode === 'join' && !canGridJoinCurrentNode()) gridOperationMode = 'split';
     syncGridOperationControls();
     syncGridGapValue();
@@ -17625,6 +17627,10 @@ function setImageEditMode(mode, userTouched=false){
             document.getElementById('imageEditTitle').textContent = '缩放图片';
             document.getElementById('imageEditSub').textContent = '选择缩小倍数，应用会替换当前原图';
             applyBtn.innerHTML = `<i data-lucide="minimize-2" class="w-4 h-4"></i><span>应用缩放</span>`;
+        } else if(imageEditMode === 'color'){
+            document.getElementById('imageEditTitle').textContent = '调色';
+            document.getElementById('imageEditSub').textContent = '滤镜预设、曝光、饱和度与曲线，应用后生成新图并替换当前原图';
+            applyBtn.innerHTML = `<i data-lucide="palette" class="w-4 h-4"></i><span>应用调色</span>`;
         } else {
             const icon = imageEditMode === 'crop' ? 'crop' : imageEditMode === 'outpaint' ? 'expand' : imageEditMode === 'mask' ? 'brush' : imageEditMode === 'brush' ? 'paintbrush' : 'grid-3x3';
             const labelKey = imageEditMode === 'crop' ? 'canvas.applyCrop' : imageEditMode === 'outpaint' ? 'canvas.applyOutpaint' : imageEditMode === 'mask' ? 'canvas.applyMask' : imageEditMode === 'brush' ? 'canvas.applyBrush' : 'canvas.applyGrid';
@@ -17634,6 +17640,9 @@ function setImageEditMode(mode, userTouched=false){
             document.getElementById('imageEditSub').textContent = tr(subKey);
             const applyLabel = imageEditMode === 'grid' && gridOperationMode === 'join' ? '输出拼接' : tr(labelKey);
             applyBtn.innerHTML = `<i data-lucide="${icon}" class="w-4 h-4"></i><span>${applyLabel}</span>`;
+        }
+        if(imageEditMode === 'color'){
+            requestAnimationFrame(() => openColorGrade());
         }
         if(imageEditMode === 'crop'){
             requestAnimationFrame(() => {
@@ -19429,6 +19438,8 @@ function openImageEditor(nodeId, imageIndex=0){
     gridOperationMode = 'split'; gridJoinLayout = null; gridJoinDrag = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridJoinGroupId = '';
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
     imageAngleState = {deg:0, elev:0, shot:'mid'};
+    Object.assign(colorGradeState, {filter:'none', strength:100, exposure:0, saturation:0, shadow:0, high:0, picked:null, pickedOnly:false});
+    colorBaseData = null; colorPicking = false;
     cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
     editTextItems = []; editTextSelectedId = ''; editTextDrag = null; editTextDirty = false;
     const toggle = document.getElementById('gridCustomToggle');
@@ -19533,6 +19544,8 @@ function closeImageEditor(){
     previewNavState = {nodeId:'', index:0, count:0};
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
     imageAngleState = {deg:0, elev:0, shot:'mid'};
+    Object.assign(colorGradeState, {filter:'none', strength:100, exposure:0, saturation:0, shadow:0, high:0, picked:null, pickedOnly:false});
+    colorBaseData = null; colorPicking = false;
     cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
     disposePanoramaPreview();
     previewPanDrag = null; previewCompareDrag = false; imageEditPanDrag = null; resetPreviewTransform();
@@ -20389,6 +20402,319 @@ async function applyImageGridJoin(){
         toast('已输出拼接图片');
     }
 }
+/* ── 调色 ───────────────────────────────────────────────────────────────────
+   纯本地像素处理，不走上游：滤镜预设 + 曝光 + 饱和度 + 曲线，应用后生成一张新图
+   替换当前原图（与缩放/裁剪同一条落盘路径）。
+   带参考图/遮罩那套不在这里，调色只改像素。 */
+/* COLOR-GRADE:START —— 以下纯数学，无 DOM，tests 里用 node 直接 eval 这一段 */
+const COLOR_FILTER_PRESETS = {
+    none: {label:'原片', gain:[1,1,1], offset:[0,0,0], sat:1, contrast:1},
+    '800t': {label:'800T胶片', gain:[1.07,1.0,0.93], offset:[0,0.008,0.031], sat:0.94, contrast:1.06},
+    cc: {label:'CC胶片', gain:[0.93,1.01,1.09], offset:[0,0.012,0.027], sat:1.04, contrast:1.10},
+    nc: {label:'NC胶片', gain:[1.02,1.0,0.98], offset:[0.008,0.008,0.012], sat:1.0, contrast:1.14},
+    nh: {label:'NH胶片', gain:[1.05,1.0,1.02], offset:[0.004,0,0.008], sat:1.38, contrast:1.12}
+};
+function colorGradeClamp01(v){ return v < 0 ? 0 : (v > 1 ? 1 : v); }
+/* 曲线：低光/高光两个控制点，0 →(0.25,0.25+shadow)→(0.75,0.75+high)→ 1 分段线性 */
+function colorGradeCurve(v, shadow, high){
+    const s = Number(shadow) || 0, h = Number(high) || 0;
+    const pts = [[0,0],[0.25, colorGradeClamp01(0.25 + s)],[0.75, colorGradeClamp01(0.75 + h)],[1,1]];
+    for(let i = 1; i < pts.length; i++){
+        if(v <= pts[i][0]){
+            const x0 = pts[i-1][0], y0 = pts[i-1][1], x1 = pts[i][0], y1 = pts[i][1];
+            const t = x1 === x0 ? 0 : (v - x0) / (x1 - x0);
+            return y0 + (y1 - y0) * t;
+        }
+    }
+    return 1;
+}
+function colorGradeConfig(opts){
+    const o = opts || {};
+    const key = COLOR_FILTER_PRESETS[o.filter] ? o.filter : 'none';
+    const preset = COLOR_FILTER_PRESETS[key];
+    const num = (v, fallback) => { const n = Number(v); return Number.isFinite(n) ? n : fallback; };
+    const cfg = {
+        strength: Math.max(0, Math.min(1, num(o.strength, 100) / 100)),
+        exposure: Math.max(-2, Math.min(2, num(o.exposure, 0) / 100 * 2)),
+        sat: Math.max(0, Math.min(2, 1 + num(o.saturation, 0) / 100)),
+        shadow: Math.max(-0.25, Math.min(0.25, num(o.shadow, 0))),
+        high: Math.max(-0.25, Math.min(0.25, num(o.high, 0))),
+        contrast: preset.contrast,
+        gain: preset.gain,
+        offset: preset.offset,
+        picked: Array.isArray(o.picked) && o.picked.length === 3 ? o.picked.map(v => Math.max(0, Math.min(255, num(v, 0)))) : null,
+        pickedOnly: !!o.pickedOnly,
+        tolerance: 0.34,
+        lut: null
+    };
+    cfg.lut = colorGradeBuildLut(cfg);
+    return cfg;
+}
+function colorGradeBuildLut(cfg){
+    const lut = new Uint8ClampedArray(256);
+    for(let i = 0; i < 256; i++){
+        let v = i / 255;
+        v = colorGradeClamp01(v * Math.pow(2, cfg.exposure));
+        v = colorGradeCurve(v, cfg.shadow, cfg.high);
+        v = colorGradeClamp01((v - 0.5) * cfg.contrast + 0.5);
+        lut[i] = Math.round(colorGradeClamp01(v) * 255);
+    }
+    return lut;
+}
+function colorGradePixel(r, g, b, cfg){
+    const src = [r, g, b];
+    const out = [0, 0, 0];
+    for(let i = 0; i < 3; i++){
+        const base = cfg.lut[src[i]] / 255;
+        out[i] = colorGradeClamp01(base * cfg.gain[i] + cfg.offset[i]) * 255;
+    }
+    const y = 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2];
+    for(let i = 0; i < 3; i++) out[i] = y + (out[i] - y) * cfg.sat;
+    let t = cfg.strength;
+    if(cfg.picked && cfg.pickedOnly){
+        const dr = (src[0] - cfg.picked[0]) / 255;
+        const dg = (src[1] - cfg.picked[1]) / 255;
+        const db = (src[2] - cfg.picked[2]) / 255;
+        const d = Math.sqrt(dr * dr + dg * dg + db * db) / Math.sqrt(3);
+        const w = Math.max(0, 1 - d / cfg.tolerance);
+        t = t * w * w;   // 平方让边缘过渡更柔和
+    }
+    return [
+        src[0] + (out[0] - src[0]) * t,
+        src[1] + (out[1] - src[1]) * t,
+        src[2] + (out[2] - src[2]) * t
+    ];
+}
+function colorGradeImageData(data, cfg){
+    for(let i = 0; i < data.length; i += 4){
+        const out = colorGradePixel(data[i], data[i+1], data[i+2], cfg);
+        data[i] = out[0]; data[i+1] = out[1]; data[i+2] = out[2];
+    }
+    return data;
+}
+/* COLOR-GRADE:END */
+
+const colorGradeState = {filter:'none', strength:100, exposure:0, saturation:0, shadow:0, high:0, picked:null, pickedOnly:false};
+let colorBaseData = null;      // 预览用的原图缓冲（降采样），换图时清空
+let colorRenderQueued = false;
+let colorToolsBound = false;
+let colorPicking = false;
+
+function colorGradeActiveCfg(){
+    return colorGradeConfig(colorGradeState);
+}
+
+function openColorGrade(){
+    const img = document.getElementById('cropImage');
+    const canvas = document.getElementById('colorCanvas');
+    if(!img || !canvas) return;
+    if(!img.naturalWidth){
+        setTimeout(() => { if(imageEditMode === 'color') openColorGrade(); }, 120);
+        return;
+    }
+    const maxSide = 1200;   // 预览降采样：拖滑块要跟手，最终输出另按原图分辨率算
+    const fit = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * fit));
+    const h = Math.max(1, Math.round(img.naturalHeight * fit));
+    if(canvas.width !== w || canvas.height !== h){
+        canvas.width = w; canvas.height = h;
+        colorBaseData = null;
+    }
+    bindColorTools();
+    syncColorControls();
+    scheduleColorRender();
+}
+
+function scheduleColorRender(){
+    if(colorRenderQueued) return;
+    colorRenderQueued = true;
+    requestAnimationFrame(() => {
+        colorRenderQueued = false;
+        renderColorPreview();
+    });
+}
+
+function renderColorPreview(){
+    const img = document.getElementById('cropImage');
+    const canvas = document.getElementById('colorCanvas');
+    if(!img || !canvas || !canvas.width || !img.naturalWidth) return;
+    const ctx = canvas.getContext('2d');
+    if(!colorBaseData){
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        colorBaseData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    }
+    const graded = new ImageData(new Uint8ClampedArray(colorBaseData.data), canvas.width, canvas.height);
+    colorGradeImageData(graded.data, colorGradeActiveCfg());
+    ctx.putImageData(graded, 0, 0);
+    drawColorCurve();
+}
+
+function drawColorCurve(){
+    const el = document.getElementById('colorCurve');
+    if(!el) return;
+    const ctx = el.getContext('2d');
+    const w = el.width, h = el.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.strokeStyle = 'rgba(148,163,184,.34)';
+    ctx.lineWidth = 1;
+    for(let i = 1; i < 4; i++){
+        const p = Math.round(i * w / 4) + 0.5;
+        ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, h); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(w, p); ctx.stroke();
+    }
+    ctx.strokeStyle = '#6366f1';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for(let x = 0; x <= w; x++){
+        const v = colorGradeCurve(x / w, colorGradeState.shadow, colorGradeState.high);
+        const y = h - v * h;
+        if(x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    [[0.25, 0.25 + colorGradeState.shadow], [0.75, 0.75 + colorGradeState.high]].forEach(([px, py]) => {
+        ctx.beginPath();
+        ctx.arc(px * w, h - colorGradeClamp01(py) * h, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+        ctx.strokeStyle = '#6366f1';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    });
+}
+
+function syncColorControls(){
+    const set = (id, val) => { const el = document.getElementById(id); if(el) el.value = String(val); };
+    set('colorStrength', colorGradeState.strength);
+    set('colorExposure', colorGradeState.exposure);
+    set('colorSaturation', colorGradeState.saturation);
+    const label = (id, val) => { const el = document.getElementById(id); if(el) el.textContent = String(val); };
+    label('colorStrengthVal', colorGradeState.strength);
+    label('colorExposureVal', colorGradeState.exposure);
+    label('colorSaturationVal', colorGradeState.saturation);
+    document.querySelectorAll('[data-color-filter]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.colorFilter === colorGradeState.filter);
+    });
+    const swatch = document.getElementById('colorPickSwatch');
+    if(swatch && colorGradeState.picked){
+        swatch.style.background = `rgb(${colorGradeState.picked.map(v => Math.round(v)).join(',')})`;
+    }
+    const only = document.getElementById('colorPickOnly');
+    if(only){
+        only.checked = !!colorGradeState.pickedOnly;
+        only.disabled = !colorGradeState.picked;
+    }
+    document.getElementById('colorPickBtn')?.classList.toggle('active', colorPicking);
+    drawColorCurve();
+}
+
+function bindColorTools(){
+    if(colorToolsBound) return;
+    colorToolsBound = true;
+    const tools = document.getElementById('imageColorTools');
+    if(!tools) return;
+    tools.addEventListener('input', ev => {
+        const t = ev.target;
+        if(!t || !t.id) return;
+        if(t.id === 'colorStrength') colorGradeState.strength = Number(t.value) || 0;
+        else if(t.id === 'colorExposure') colorGradeState.exposure = Number(t.value) || 0;
+        else if(t.id === 'colorSaturation') colorGradeState.saturation = Number(t.value) || 0;
+        else return;
+        syncColorControls();
+        scheduleColorRender();
+    });
+    tools.addEventListener('click', ev => {
+        const chip = ev.target.closest?.('[data-color-filter]');
+        if(chip){
+            colorGradeState.filter = chip.dataset.colorFilter || 'none';
+            syncColorControls();
+            scheduleColorRender();
+            return;
+        }
+        if(ev.target.closest?.('#colorPickBtn')){
+            colorPicking = !colorPicking;
+            const canvas = document.getElementById('colorCanvas');
+            if(canvas) canvas.style.cursor = colorPicking ? 'crosshair' : 'default';
+            syncColorControls();
+            return;
+        }
+        if(ev.target.closest?.('#colorResetBtn')){
+            Object.assign(colorGradeState, {filter:'none', strength:100, exposure:0, saturation:0, shadow:0, high:0, picked:null, pickedOnly:false});
+            colorPicking = false;
+            const canvas = document.getElementById('colorCanvas');
+            if(canvas) canvas.style.cursor = 'default';
+            const swatch = document.getElementById('colorPickSwatch');
+            if(swatch) swatch.style.background = '';
+            syncColorControls();
+            scheduleColorRender();
+        }
+    });
+    tools.addEventListener('change', ev => {
+        if(ev.target?.id === 'colorPickOnly') colorGradeState.pickedOnly = !!ev.target.checked;
+        if(ev.target?.id === 'colorPickOnly'){ syncColorControls(); scheduleColorRender(); }
+    });
+    const canvas = document.getElementById('colorCanvas');
+    canvas?.addEventListener('click', ev => {
+        if(!colorPicking || !colorBaseData) return;
+        const rect = canvas.getBoundingClientRect();
+        if(!rect.width || !rect.height) return;
+        const x = Math.floor((ev.clientX - rect.left) / rect.width * canvas.width);
+        const y = Math.floor((ev.clientY - rect.top) / rect.height * canvas.height);
+        if(x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return;
+        const i = (y * canvas.width + x) * 4;
+        colorGradeState.picked = [colorBaseData.data[i], colorBaseData.data[i+1], colorBaseData.data[i+2]];
+        colorGradeState.pickedOnly = true;
+        colorPicking = false;
+        canvas.style.cursor = 'default';
+        syncColorControls();
+        scheduleColorRender();
+    });
+    const curve = document.getElementById('colorCurve');
+    let curveKey = '';
+    const applyCurvePointer = ev => {
+        if(!curveKey) return;
+        const rect = curve.getBoundingClientRect();
+        if(!rect.width || !rect.height) return;
+        const v = colorGradeClamp01(1 - (ev.clientY - rect.top) / rect.height);
+        if(curveKey === 'shadow') colorGradeState.shadow = Math.max(-0.25, Math.min(0.25, v - 0.25));
+        else colorGradeState.high = Math.max(-0.25, Math.min(0.25, v - 0.75));
+        drawColorCurve();
+        scheduleColorRender();
+    };
+    curve?.addEventListener('pointerdown', ev => {
+        const rect = curve.getBoundingClientRect();
+        curveKey = (ev.clientX - rect.left) / Math.max(1, rect.width) < 0.5 ? 'shadow' : 'high';
+        curve.setPointerCapture?.(ev.pointerId);
+        applyCurvePointer(ev);
+    });
+    curve?.addEventListener('pointermove', ev => { if(curveKey) applyCurvePointer(ev); });
+    curve?.addEventListener('pointerup', () => { curveKey = ''; });
+    curve?.addEventListener('pointercancel', () => { curveKey = ''; });
+}
+
+async function applyImageColor(){
+    const {node, image} = currentEditImage();
+    const img = document.getElementById('cropImage');
+    if(!node || !image || !img.naturalWidth) return;
+    const w = img.naturalWidth, h = img.naturalHeight;
+    const canvasEl = document.createElement('canvas');
+    canvasEl.width = w; canvasEl.height = h;
+    const ctx = canvasEl.getContext('2d');
+    ctx.drawImage(img, 0, 0, w, h);
+    const data = ctx.getImageData(0, 0, w, h);
+    colorGradeImageData(data.data, colorGradeActiveCfg());
+    ctx.putImageData(data, 0, 0);
+    const blob = await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
+    if(!blob) return;
+    const base = safeExportFileName((downloadNameForMediaItem(image, 'image') || image.name || 'image').replace(/\.[^.]+$/, ''), 'image');
+    const file = await uploadCroppedBlob(blob, `${base}_color.png`);
+    if(!file) return;
+    if(!replaceEditedImage(file, {kind:'image', role:image.role || '', natural_w:w, natural_h:h})) return;
+    closeImageEditor();
+    render();
+    scheduleSave();
+}
+
 async function applyImageResize(){
     if(!cropState) return;
     const {node, image} = currentEditImage();
@@ -20420,6 +20746,7 @@ function applyImageEdit(){
     if(imageEditMode === 'brush') return applyImageBrush();
     if(imageEditMode === 'resize') return applyImageResize();
     if(imageEditMode === 'grid') return applyImageGridSplit();
+    if(imageEditMode === 'color') return applyImageColor();
     return applyImageCrop();
 }
 let lastComposerNodeId = '';
