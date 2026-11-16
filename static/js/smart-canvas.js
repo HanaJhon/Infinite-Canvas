@@ -283,6 +283,9 @@ const UNDO_LIMIT = 40;
 const undoStack = [];
 let undoSuppressed = false;
 let pendingUndoSnapshot = null;
+// 已删除节点 id（墓碑）。冲突合并按并集恢复会把这些节点复活，墓碑把它们挡在合并之外；
+// 撤销可能合法地把节点找回来，所以撤销后清空。
+const deletedNodeIds = new Set();
 let runningHubWorkflowCache = {};
 function activeSmartCascadeCount(){ return smartCascadeRuns.size; }
 function smartCascadeRunForLoop(loopId){ return loopId ? smartCascadeRuns.get(loopId) || null : null; }
@@ -336,6 +339,7 @@ function performUndo(){
     if(!undoStack.length){ toast(tr('smart.toastNoUndo')); return; }
     const snap = undoStack.pop();
     undoSuppressed = true;
+    deletedNodeIds.clear();
     nodes = snap.nodes;
     if(canvas) canvas.connections = snap.connections;
     selectedId = snap.selectedId;
@@ -7020,7 +7024,7 @@ function mergeSmartConnections(localConns, remoteConns, nodeIds){
 }
 function applyMergedServerCanvas(serverCanvas){
     if(!serverCanvas || !canvas) return false;
-    const remoteNodes = (Array.isArray(serverCanvas.nodes) ? serverCanvas.nodes : []).map(normalizeLegacySmartNode).filter(Boolean);
+    const remoteNodes = (Array.isArray(serverCanvas.nodes) ? serverCanvas.nodes : []).map(normalizeLegacySmartNode).filter(node => node && !deletedNodeIds.has(node.id));
     const mergedNodes = mergeSmartNodeLists(nodes, remoteNodes);
     const nodeIds = new Set(mergedNodes.map(n => n.id));
     nodes = mergedNodes;
@@ -16863,6 +16867,7 @@ function deleteNode(id){
     });
     const affectedGroups = new Set(nodes.filter(node => isSmartGroupNode(node) && (deleteIds.has(node.id) || (Array.isArray(node.items) && node.items.some(itemId => deleteIds.has(itemId))))).map(node => node.id));
     nodes = nodes.filter(node => !deleteIds.has(node.id));
+    deleteIds.forEach(delId => deletedNodeIds.add(delId));
     if(canvas) canvas.connections = (canvas.connections || []).filter(c => !deleteIds.has(c.from) && !deleteIds.has(c.to));
     nodes.forEach(node => {
         if(Array.isArray(node.inputNodeIds)) node.inputNodeIds = node.inputNodeIds.filter(inputId => !deleteIds.has(inputId));
