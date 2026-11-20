@@ -16310,6 +16310,64 @@ def is_grsai_gpt_image_model_name(model):
     return name.startswith("gpt-image-")
 
 
+# GPT Image 系列分档（Grsai 文档 2026-11-20 核对）：
+#  - 比例：gpt-image-2 / 2.5 / 2.6 支持 "16:9" 这类比例字符串；-vip / -flare / -sunburst
+#    只吃 1-4K 像素值（传比例上游会忽略或报错）。
+#  - quality 按模型分档；outputFormat 默认 png，gif 仅 2.6 系、svg 仅 gpt-image-2.6。
+GRSAI_GPT_PIXEL_ONLY_SUFFIXES = ("-vip", "-flare", "-sunburst")
+GRSAI_GPT_QUALITY_OPTIONS = {
+    "gpt-image-2": {"auto"},
+    "gpt-image-2.5": {"auto"},
+    "gpt-image-2.6": {"auto"},
+    "gpt-image-2-vip": {"auto", "low", "medium", "high"},
+    "gpt-image-2.5-flare": {"auto", "low", "medium", "high"},
+    "gpt-image-2.5-sunburst": {"auto", "low", "medium", "high", "xhigh", "max"},
+    "gpt-image-2.6-flare": {"auto", "low", "medium", "high"},
+    "gpt-image-2.6-sunburst": {"auto", "low", "medium", "high"},
+}
+GRSAI_GPT_GIF_MODELS = {"gpt-image-2.6", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst"}
+GRSAI_GPT_SVG_MODELS = {"gpt-image-2.6"}
+
+def grsai_gpt_pixel_only_model(model):
+    name = str(model or "").strip().lower()
+    return is_grsai_gpt_image_model_name(name) and name.endswith(GRSAI_GPT_PIXEL_ONLY_SUFFIXES)
+
+def grsai_gpt_quality(model, quality):
+    """不认识的质量值一律不传，别把非法值甩给上游。"""
+    option = str(quality or "").strip().lower()
+    allowed = GRSAI_GPT_QUALITY_OPTIONS.get(str(model or "").strip().lower())
+    if not option or not allowed or option not in allowed:
+        return ""
+    return option
+
+def grsai_gpt_output_format(model, output_format):
+    name = str(model or "").strip().lower()
+    value = str(output_format or "").strip().lower()
+    if value == "jpg":
+        value = "jpeg"
+    if value == "png":
+        return "png"
+    if value == "gif" and name in GRSAI_GPT_GIF_MODELS:
+        return "gif"
+    if value == "svg" and name in GRSAI_GPT_SVG_MODELS:
+        return "svg"
+    return ""
+
+def grsai_gpt_aspect_ratio(aspect_ratio, size, model):
+    """像素档模型（vip/flare/sunburst）必须发像素值；其余保持比例白名单那套。"""
+    if not grsai_gpt_pixel_only_model(model):
+        return grsai_aspect_ratio(aspect_ratio, size, model)
+    fixed = normalize_gpt_image_2_size(size)
+    width, height = parse_size_pair(fixed)
+    if not width or not height:
+        return grsai_aspect_ratio(aspect_ratio, size, model)
+    # 文档下限 655,360 像素：太小会被上游拒，等比放大到合规。
+    if width * height < GPT_IMAGE2_MIN_PIXELS:
+        grow = (GPT_IMAGE2_MIN_PIXELS / max(1, width * height)) ** 0.5
+        width = int((width * grow + 15) // 16) * 16
+        height = int((height * grow + 15) // 16) * 16
+    return f"{width}x{height}"
+
 def is_grsai_nano_provider(provider, model):
     """是否走 Grsai 的 /v1/api/generate（该接口用 aspectRatio + imageSize + replyType）。
 
@@ -17069,7 +17127,7 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
     output_format = str(output_format or "").strip().lower().lstrip(".")
     if output_format == "jpg":
         output_format = "jpeg"
-    if output_format not in {"png", "jpeg", "webp", "gif"}:
+    if output_format not in {"png", "jpeg", "webp", "gif", "svg"}:
         output_format = ""
     if is_tudou_provider(provider):
         model = tudou_image_model_for_request(model)
@@ -17131,12 +17189,22 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 "model": model,
                 "prompt": prompt,
                 "images": [reference_to_data_url(ref, max_size=ref_image_max_size(len(_grsai_refs))) for ref in _grsai_refs],
-                "aspectRatio": grsai_aspect_ratio(aspect_ratio, size, model),
+                "aspectRatio": (grsai_gpt_aspect_ratio(aspect_ratio, size, model)
+                                if is_grsai_gpt_image_model_name(model)
+                                else grsai_aspect_ratio(aspect_ratio, size, model)),
                 "replyType": "async",
             }
             # nano-banana 认 imageSize（1K/2K/4K）；gpt-image 系不吃这个字段，比例由 aspectRatio 决定
             if not is_grsai_gpt_image_model_name(model):
                 body["imageSize"] = grsai_image_size(resolution, size)
+            else:
+                # 文档 2026-11-20：quality 与 outputFormat 都是 gpt-image 专用字段，按模型分档校验后再传
+                _grsai_quality = grsai_gpt_quality(model, quality)
+                if _grsai_quality:
+                    body["quality"] = _grsai_quality
+                _grsai_format = grsai_gpt_output_format(model, output_format)
+                if _grsai_format:
+                    body["outputFormat"] = _grsai_format
             grsai_url = provider_endpoint_url(provider, "image_generation_endpoint", "/v1/api/generate")
             _grsai_t0 = time.monotonic()
             response = await client.post(

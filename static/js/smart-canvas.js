@@ -1299,6 +1299,8 @@ function isGptImageAutoSizeModel(model){
         || compact.endsWith('gptimage2');
 }
 function defaultSmartApiResolution(model){
+    /* 基础款 gpt-image-2 / 2.5 / 2.6 只有一档尺寸，默认给 1K；像素档默认 4K。 */
+    if(isGptImageBaseModel(model)) return '1k';
     return isGptImageAutoSizeModel(model) ? '4k' : '1k';
 }
 function mediaItemForStorage(item){
@@ -3849,13 +3851,38 @@ const GPT_IMAGE_FAMILY_SIZES = {
     '2:1' : ['1536x768',  '3072x1536', '3840x1920'],
     '1:2' : ['768x1536',  '1536x3072', '1920x3840']
 };
-/* 按「比例 key（SIZE_MAP 那套）+ 分辨率档」查官方尺寸；查不到返回空串，交回通用逻辑。 */
-function gptImageFamilySize(ratioKey, resolutionValue){
+/* gpt-image-2 / 2.5 / 2.6（**不带 -vip/-flare/-sunburst**）官方只给一档尺寸：
+   传比例字符串或 1K 像素值，根本没有 2K/4K 档。表来自 Grsai GPT Image 文档（2026-11-20）。 */
+const GPT_IMAGE_BASE_SIZES = {
+    '1:1' :'1024x1024',
+    '16:9':'1672x941',
+    '9:16':'941x1672',
+    '4:3' :'1443x1090',
+    '3:4' :'1090x1443',
+    '3:2' :'1536x1024',
+    '2:3' :'1024x1536',
+    '5:4' :'1408x1120',
+    '4:5' :'1120x1408',
+    '21:9':'1920x832',
+    '9:21':'832x1920',
+    '1:2' :'896x1792',
+    '2:1' :'1792x896'
+};
+/* 只认「基础款」：gpt-image-2 / gpt-image-2.5 / gpt-image-2.6。
+   -vip / -flare / -sunburst 是像素档，走 GPT_IMAGE_FAMILY_SIZES 那套 1K/2K/4K。 */
+function isGptImageBaseModel(model){
+    return /^gpt-image-2(\.\d+)?$/i.test(String(model || '').trim());
+}
+/* 按「比例 key（SIZE_MAP 那套）+ 分辨率档 + 模型」查官方尺寸；查不到返回空串，交回通用逻辑。 */
+function gptImageFamilySize(ratioKey, resolutionValue, model=''){
+    if(!isGptImageAutoSizeModel(model)) return '';
     const res = String(resolutionValue || '1k').toLowerCase();
     if(res === 'auto') return 'auto';
     const ratio = API_RATIO_VALUES[ratioKey]
         || (String(ratioKey || '').includes(':') ? String(ratioKey) : '');
-    const arr = ratio ? GPT_IMAGE_FAMILY_SIZES[ratio] : null;
+    if(!ratio) return '';
+    if(isGptImageBaseModel(model)) return GPT_IMAGE_BASE_SIZES[ratio] || '';
+    const arr = GPT_IMAGE_FAMILY_SIZES[ratio];
     if(!arr || !arr.length) return '';
     const idx = {'1k':0, '2k':1, '4k':2}[res];
     if(idx === undefined) return '';
@@ -4434,7 +4461,9 @@ function renderRatioControl(prefix='', includeSource=false){
 }
 function renderResolutionControl(prefix=''){
     const resKey = prefix ? `${prefix}Resolution` : 'resolution';
-    const options = (!prefix && settings.engine === 'api') ? ['auto','1k','2k','4k','custom'] : ['1k','2k','4k','custom'];
+    const baseModelOnly = !prefix && settings.engine === 'api' && isGptImageBaseModel(settings.model);
+    const options = ((!prefix && settings.engine === 'api') ? ['auto','1k','2k','4k','custom'] : ['1k','2k','4k','custom'])
+        .filter(v => !baseModelOnly || v === 'auto' || v === '1k' || v === 'custom');
     const current = settings[resKey] || ((!prefix && settings.engine === 'api') ? defaultSmartApiResolution(settings.model) : '1k');
     const allowAuto = !prefix && settings.engine === 'api' && settings.apiKind !== 'video' && isGptImageAutoSizeModel(settings.model);
     return `<div class="smart-control resolution-control">
@@ -4480,7 +4509,10 @@ function renderSizePickerControl(prefix='', includeSource=false){
     const customRatioKey = prefix ? `${prefix}CustomRatio` : 'customRatio';
     if(settings[ratioKey] === 'source') applySourceRatioToSettings(prefix);
     const scope = sizePickerScope(prefix);
-    const options = (!prefix && settings.engine === 'api') ? ['auto','1k','2k','4k'] : ['1k','2k','4k'];
+    /* gpt-image-2 / 2.5 / 2.6 官方只有一档尺寸（无 2K/4K）⇒ 别把它们列出来让老板选了没用。 */
+    const baseModelOnly = !prefix && settings.engine === 'api' && isGptImageBaseModel(settings.model);
+    const options = ((!prefix && settings.engine === 'api') ? ['auto','1k','2k','4k'] : ['1k','2k','4k'])
+        .filter(v => !baseModelOnly || v === 'auto' || v === '1k');
     const currentRes = settings[resKey] || ((!prefix && settings.engine === 'api') ? defaultSmartApiResolution(settings.model) : '1k');
     const currentRatio = settings[ratioKey] || 'square';
     const currentCustomRatio = settings[customRatioKey] || (currentRatio === 'source' ? sourceImageRatioLabel(prefix) : '');
@@ -4526,7 +4558,7 @@ function renderSizePickerControl(prefix='', includeSource=false){
                     }).join('')}
                 </div>
                 <div class="size-picker-list">
-                    ${options.filter(v => v !== 'auto').map(value => `<button type="button" class="size-picker-option ${value === currentRes ? 'active' : ''}" data-smart-param="${resKey}" data-smart-value="${value}"><span>${value.toUpperCase()}</span><small>${currentRatio === 'auto' ? '' : escapeHtml(apiImageSize(currentRatio, value, currentCustomRatio, '') || '')}</small></button>`).join('')}
+                    ${options.filter(v => v !== 'auto').map(value => `<button type="button" class="size-picker-option ${value === currentRes ? 'active' : ''}" data-smart-param="${resKey}" data-smart-value="${value}"><span>${value.toUpperCase()}</span><small>${currentRatio === 'auto' ? '' : escapeHtml((isGptImageAutoSizeModel(settings.model) ? gptImageFamilySize(currentRatio, value, settings.model) : '') || apiImageSize(currentRatio, value, currentCustomRatio, '') || '')}</small></button>`).join('')}
                 </div>
             </div>` : ''}
             ${scope === 'custom' ? `<div class="size-picker-pane size-picker-custom">
@@ -4563,24 +4595,51 @@ function renderInlineCustomSizeFields(prefix=''){
         <input type="number" data-param="${hKey}" value="${escapeHtml(settings[hKey] || '')}" placeholder="${escapeHtml(tr('smart.height'))}">
     </div>`;
 }
+/* GPT Image 系的 quality 分档（Grsai 文档 2026-11-20）：基础款只有 auto，-sunburst 才吃 xhigh/max。
+   其它通道/模型不在表里，保持原来的四档。 */
+const GPT_IMAGE_QUALITY_OPTIONS = {
+    'gpt-image-2': ['auto'],
+    'gpt-image-2.5': ['auto'],
+    'gpt-image-2.6': ['auto'],
+    'gpt-image-2-vip': ['auto','low','medium','high'],
+    'gpt-image-2.5-flare': ['auto','low','medium','high'],
+    'gpt-image-2.5-sunburst': ['auto','low','medium','high','xhigh','max'],
+    'gpt-image-2.6-flare': ['auto','low','medium','high'],
+    'gpt-image-2.6-sunburst': ['auto','low','medium','high']
+};
+function qualityOptionsForModel(model){
+    return GPT_IMAGE_QUALITY_OPTIONS[String(model || '').trim().toLowerCase()] || ['auto','low','medium','high'];
+}
 function renderQualityControl(){
-    const value = settings.quality || 'auto';
-    const labels = {auto:tr('smart.qualityAuto'), low:tr('smart.qualityLow'), medium:tr('smart.qualityMid'), high:tr('smart.qualityHigh')};
+    const options = qualityOptionsForModel(settings.model);
+    const value = options.includes(settings.quality || '') ? settings.quality : 'auto';
+    const labels = {auto:tr('smart.qualityAuto'), low:tr('smart.qualityLow'), medium:tr('smart.qualityMid'), high:tr('smart.qualityHigh'), xhigh:'XHIGH', max:'MAX'};
     return `<div class="smart-control quality-control">
         <button class="smart-pill" type="button"><i data-lucide="sliders-horizontal"></i><span>${escapeHtml(labels[value] || value)}</span></button>
         <div class="smart-popover compact-popover">
             <div class="smart-popover-title">${escapeHtml(tr('smart.quality'))}</div>
             <div class="seg-row">
-                ${Object.entries(labels).map(([k, l]) => `<button type="button" class="${k === value ? 'active' : ''}" data-smart-param="quality" data-smart-value="${escapeHtml(k)}">${escapeHtml(l)}</button>`).join('')}
+                ${options.map(k => `<button type="button" class="${k === value ? 'active' : ''}" data-smart-param="quality" data-smart-value="${escapeHtml(k)}">${escapeHtml(labels[k] || k)}</button>`).join('')}
             </div>
         </div>
     </div>`;
 }
-// 输出格式：auto=不传（跟随上游默认）；png/jpeg/webp/gif 透传给支持的上游
+// 输出格式：auto=不传（跟随上游默认）；png/jpeg/webp/gif/svg 透传给支持的上游
 const OUTPUT_FORMAT_VALUES = ['auto', 'png', 'jpeg', 'webp', 'gif'];
+/* GPT Image 系（Grsai 文档 2026-11-20）只认 png/gif/svg：gif 仅 2.6 系、svg 仅 gpt-image-2.6。
+   jpeg/webp 传过去会被忽略，索性不给选。 */
+function outputFormatOptionsForModel(model){
+    const name = String(model || '').trim().toLowerCase();
+    if(!/^gpt-image-/.test(name)) return OUTPUT_FORMAT_VALUES;
+    const list = ['auto', 'png'];
+    if(/^gpt-image-2\.6/.test(name)) list.push('gif');
+    if(name === 'gpt-image-2.6') list.push('svg');
+    return list;
+}
 function normalizeOutputFormat(value){
     const clean = String(value || '').toLowerCase();
     if(clean === 'jpg') return 'jpeg';
+    if(clean === 'svg') return 'svg';
     return OUTPUT_FORMAT_VALUES.includes(clean) ? clean : 'auto';
 }
 // 只写「生成gif」在提示词里，上游会回两张 png（静图 + 分镜格），必须真的带 output_format=gif。
@@ -4594,20 +4653,23 @@ function outputFormatPayload(runSettings=settings, promptText=''){
     return value === 'auto' ? '' : value;
 }
 function renderOutputFormatControl(){
-    const value = normalizeOutputFormat(settings.outputFormat);
+    const options = outputFormatOptionsForModel(settings.model);
+    const normalized = normalizeOutputFormat(settings.outputFormat);
+    const value = options.includes(normalized) ? normalized : 'auto';
     const labels = {
         auto:tr('smart.formatAuto') || '自动',
         png:'PNG',
         jpeg:'JPG',
         webp:'WEBP',
         gif:'GIF',
+        svg:'SVG',
     };
     return `<div class="smart-control format-control">
         <button class="smart-pill" type="button" title="${escapeAttr(tr('smart.outputFormat') || '输出格式')}"><i data-lucide="file-image"></i><span>${escapeHtml(labels[value] || value)}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
         <div class="smart-popover compact-popover">
             <div class="smart-popover-title">${escapeHtml(tr('smart.outputFormat') || '输出格式')}</div>
             <div class="seg-row">
-                ${OUTPUT_FORMAT_VALUES.map(k => `<button type="button" class="${k === value ? 'active' : ''}" data-smart-param="outputFormat" data-smart-value="${escapeHtml(k)}">${escapeHtml(labels[k] || k)}</button>`).join('')}
+                ${options.map(k => `<button type="button" class="${k === value ? 'active' : ''}" data-smart-param="outputFormat" data-smart-value="${escapeHtml(k)}">${escapeHtml(labels[k] || k)}</button>`).join('')}
             </div>
         </div>
     </div>`;
@@ -21809,7 +21871,14 @@ function sizeForRun(sourceSettings=settings){
     const fallbackResolution = sourceSettings.engine === 'api' && isGptImageAutoSizeModel(sourceSettings.model)
         ? defaultSmartApiResolution(sourceSettings.model)
         : '1k';
-    return apiImageSize(sourceSettings.ratio || 'square', sourceSettings.resolution || fallbackResolution, sourceSettings.customRatio || '', sourceSettings.customSize || '') || '1024x1024';
+    const res = sourceSettings.resolution || fallbackResolution;
+    /* GPT Image 系先查官方尺寸表：像素档走 1K/2K/4K，基础款只有 1K 一档；
+       不查表会用通用 SIZE_MAP（1:1 4K = 4096×4096、21:9 1K = 1280×544）→ 上游按规则外的东西猜。 */
+    const famSize = isGptImageAutoSizeModel(sourceSettings.model)
+        ? gptImageFamilySize(sourceSettings.ratio || 'square', res, sourceSettings.model)
+        : '';
+    if(famSize) return famSize;
+    return apiImageSize(sourceSettings.ratio || 'square', res, sourceSettings.customRatio || '', sourceSettings.customSize || '') || '1024x1024';
 }
 function expectedOutputSize(){
     if(settings.engine === 'comfy'){
@@ -35037,7 +35106,7 @@ async function runAgentGenerations(assistantMsg, userMsg){
             /* 🚨 gpt-image-2 家族**先查官方尺寸表**（2026-10-21）：
                它们的 4K 规格是 2880×2880 而不是通用的 4096×4096，3:2/4:3 的 2K、4K 取值也和通用表不同。
                查得到就用官方值；查不到（普通模型）再走通用表 + 护栏。 */
-            const _famSize = isGptImageAutoSizeModel(genModel) ? gptImageFamilySize(_genRatio, _genRes) : '';
+            const _famSize = isGptImageAutoSizeModel(genModel) ? gptImageFamilySize(_genRatio, _genRes, genModel) : '';
             let genSize = _famSize || apiImageSize(_genRatio, _genRes) || size;
             /* 出图前先过尺寸护栏：模型吃不下这个尺寸就直接压到合规，别等上游 400。
                压过就记 gen.sizeNote，卡片上会写清楚「已自动改成多少」——
