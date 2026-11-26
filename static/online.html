@@ -51,7 +51,7 @@
         .size-select:disabled { opacity:.55; cursor:not-allowed; }
         /* 比例：图形缩略图直接点选（替代原生下拉，和画布尺寸面板一致） */
         .ratio-chips { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:6px; }
-        .ratio-chip { height:46px; min-width:0; padding:0 2px; border:1px solid #edf2f7; border-radius:12px; background:#f8fafc; color:#64748b; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; font-size:9.5px; font-weight:700; line-height:1; cursor:pointer; transition:border-color .15s ease, background .15s ease, color .15s ease; }
+        .ratio-chip { height:61px; min-width:0; padding:0 2px; border:1px solid #edf2f7; border-radius:13px; background:#f8fafc; color:#64748b; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; font-size:11px; font-weight:700; line-height:1; cursor:pointer; transition:border-color .15s ease, background .15s ease, color .15s ease; }
         .ratio-chip:hover { border-color:#cbd5e1; color:#111827; }
         .ratio-chip.active { background:#111827; border-color:#111827; color:#fff; }
         .ratio-chip:disabled { opacity:.45; cursor:not-allowed; }
@@ -67,6 +67,7 @@
         .size-row > .model-field, .size-row > .provider-field { grid-column:1/-1; }
         .size-row > #qualityField, .size-row > #countField { grid-column:1/-1; }
         #qualitySelectChips, #countSelectChips { grid-template-columns:repeat(4,minmax(0,1fr)); }
+        #providerSelectChips .ratio-chip { height:37px; font-size:12px; }
         #modelSelectChips { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); max-height:196px; overflow-y:auto; scrollbar-width:thin; }
         #modelSelectChips .ratio-chip { font-size:11.5px; padding:0 8px; }
         #modelSelectChips::-webkit-scrollbar { width:6px; }
@@ -74,15 +75,15 @@
         #ratioField { grid-column:1/-1; }
         #resolutionField { grid-column:1/-1; }
         #ratioSelect { display:none; }
-        .ratio-icon { width:13px; height:13px; border:1.3px solid currentColor; border-radius:2px; opacity:.92; box-sizing:border-box; position:relative; flex:0 0 auto; }
-        .ratio-icon.r-portrait { width:10px; height:15px; }
-        .ratio-icon.r-portrait43 { width:12px; height:16px; }
-        .ratio-icon.r-landscape { width:18px; height:12px; }
-        .ratio-icon.r-landscape43 { width:16px; height:12px; }
-        .ratio-icon.r-wide { width:20px; height:11px; }
-        .ratio-icon.r-story { width:11px; height:20px; }
-        .ratio-icon.r-auto { width:16px; height:16px; border-radius:50%; border-style:dashed; }
-        .ratio-icon.r-custom { width:14px; height:14px; border-radius:3px; border-style:dashed; }
+        .ratio-icon { width:17px; height:17px; border:1.3px solid currentColor; border-radius:2px; opacity:.92; box-sizing:border-box; position:relative; flex:0 0 auto; }
+        .ratio-icon.r-portrait { width:13px; height:20px; }
+        .ratio-icon.r-portrait43 { width:16px; height:21px; }
+        .ratio-icon.r-landscape { width:24px; height:16px; }
+        .ratio-icon.r-landscape43 { width:21px; height:16px; }
+        .ratio-icon.r-wide { width:27px; height:15px; }
+        .ratio-icon.r-story { width:15px; height:27px; }
+        .ratio-icon.r-auto { width:21px; height:21px; border-radius:50%; border-style:dashed; }
+        .ratio-icon.r-custom { width:19px; height:19px; border-radius:3px; border-style:dashed; }
         .ratio-icon.r-custom::after { content:"+"; position:absolute; left:50%; top:50%; transform:translate(-50%, -52%); font-size:10px; line-height:1; font-weight:700; }
         .size-custom { display:none; background:#fff; }
         .size-field.custom .size-custom { display:block; }
@@ -119,19 +120,20 @@
             .choice-chips .ratio-chip.active{ background:#6366f1; color:#fff; border-color:transparent; }
             #modelSelectChips{ grid-template-columns:minmax(0,1fr); max-height:300px; }
             #providerSelectChips{ grid-template-columns:repeat(2,minmax(0,1fr)); }
+            #providerSelectChips .ratio-chip{ height:45px; font-size:14.4px; }
 
             #modelSelectChips .ratio-chip{ font-size:14.4px; height:60px; }
             #modelSelectChips .ratio-chip > span{ white-space:nowrap; overflow:visible; text-overflow:clip; }
             .ratio-chips{ gap:7px; }
-            .ratio-chip{ height:77px; border-radius:16px; font-size:13.5px; gap:7px; background:#f6f7f9; border-color:rgba(15,23,42,.07); }
+            .ratio-chip{ height:103px; border-radius:18px; font-size:14.4px; gap:7px; background:#f6f7f9; border-color:rgba(15,23,42,.07); }
             .ratio-chip.active{ background:#6366f1; border-color:#6366f1; }
-            .ratio-icon{ width:21px; height:21px; }
-            .ratio-icon.r-portrait{ width:16px; height:24px; }
-            .ratio-icon.r-portrait43{ width:19px; height:25px; }
-            .ratio-icon.r-landscape{ width:29px; height:19px; }
-            .ratio-icon.r-landscape43{ width:25px; height:19px; }
-            .ratio-icon.r-wide{ width:32px; height:17px; }
-            .ratio-icon.r-story{ width:17px; height:32px; }
+            .ratio-icon{ width:28px; height:28px; }
+            .ratio-icon.r-portrait{ width:21px; height:32px; }
+            .ratio-icon.r-portrait43{ width:25px; height:33px; }
+            .ratio-icon.r-landscape{ width:39px; height:25px; }
+            .ratio-icon.r-landscape43{ width:33px; height:25px; }
+            .ratio-icon.r-wide{ width:43px; height:23px; }
+            .ratio-icon.r-story{ width:23px; height:43px; }
             .upload-item{ border-radius:18px; }
             .masonry-grid{ gap:12px; }
             .masonry-item{ border-radius:18px; }
