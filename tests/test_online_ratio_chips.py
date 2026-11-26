@@ -64,6 +64,8 @@ def test_generic_choice_wiring():
     assert "#modelSelectChips { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); max-height:196px; overflow-y:auto;" in s
     # 质量/张数固定 4 项，恒为一行 4 列
     assert "#qualitySelectChips, #countSelectChips { grid-template-columns:repeat(2,minmax(0,1fr)); }" in s
+    # 画布上 gemini 图像模型也有质量，这里别把它藏了
+    assert "new Set(['api','apimart','gemini'])" in s
 
 
 def test_shape_mapping_runtime():

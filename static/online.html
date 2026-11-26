@@ -930,8 +930,9 @@
             runninghub:'online.modeRunningHub', jimeng:'online.modeJimeng',
             volcengine:'online.modeVolcengine', gemini:'online.modeGemini'
         };
-        // 仅 OpenAI / APIMart（gpt-image 系）后端会消费 quality；其它协议忽略，隐藏以免误导。
-        const QUALITY_PROTOCOLS = new Set(['api','apimart']);
+        // 与画布参数面板一致：gemini 图像模型也显示 quality（后端透传，上游不认识就忽略）；
+        // ComfyUI / RunningHub / 即梦这些本地工作流没有这个参数，仍然隐藏。
+        const QUALITY_PROTOCOLS = new Set(['api','apimart','gemini']);
         function updateAdaptivePanel(){
             const proto = providerProtocol(provider);
             const badge = document.getElementById('providerModeBadge');
