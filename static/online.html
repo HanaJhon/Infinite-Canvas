@@ -117,18 +117,21 @@
             .choice-chips{ gap:3px; padding:3px; border-radius:14px; background:#f2f3f5; border-color:rgba(15,23,42,.06); }
             .choice-chips .ratio-chip{ height:68px; border-radius:14px; font-size:15.6px; border-color:transparent; background:transparent; }
             .choice-chips .ratio-chip.active{ background:#6366f1; color:#fff; border-color:transparent; }
-            #modelSelectChips{ max-height:300px; }
-            #modelSelectChips .ratio-chip{ font-size:14.4px; }
+            #modelSelectChips{ grid-template-columns:minmax(0,1fr); max-height:300px; }
+            #providerSelectChips{ grid-template-columns:repeat(2,minmax(0,1fr)); }
+
+            #modelSelectChips .ratio-chip{ font-size:14.4px; height:60px; }
+            #modelSelectChips .ratio-chip > span{ white-space:nowrap; overflow:visible; text-overflow:clip; }
             .ratio-chips{ gap:7px; }
-            .ratio-chip{ height:58px; border-radius:14px; font-size:12px; gap:6px; background:#f6f7f9; border-color:rgba(15,23,42,.07); }
+            .ratio-chip{ height:77px; border-radius:16px; font-size:13.5px; gap:7px; background:#f6f7f9; border-color:rgba(15,23,42,.07); }
             .ratio-chip.active{ background:#6366f1; border-color:#6366f1; }
-            .ratio-icon{ width:16px; height:16px; }
-            .ratio-icon.r-portrait{ width:12px; height:18px; }
-            .ratio-icon.r-portrait43{ width:14px; height:19px; }
-            .ratio-icon.r-landscape{ width:22px; height:14px; }
-            .ratio-icon.r-landscape43{ width:19px; height:14px; }
-            .ratio-icon.r-wide{ width:24px; height:13px; }
-            .ratio-icon.r-story{ width:13px; height:24px; }
+            .ratio-icon{ width:21px; height:21px; }
+            .ratio-icon.r-portrait{ width:16px; height:24px; }
+            .ratio-icon.r-portrait43{ width:19px; height:25px; }
+            .ratio-icon.r-landscape{ width:29px; height:19px; }
+            .ratio-icon.r-landscape43{ width:25px; height:19px; }
+            .ratio-icon.r-wide{ width:32px; height:17px; }
+            .ratio-icon.r-story{ width:17px; height:32px; }
             .upload-item{ border-radius:18px; }
             .masonry-grid{ gap:12px; }
             .masonry-item{ border-radius:18px; }
