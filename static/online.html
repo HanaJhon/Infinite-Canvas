@@ -49,6 +49,26 @@
         .size-select,.size-custom { width:100%; min-width:0; max-width:100%; height:34px; border:1px solid #edf2f7; border-radius:14px; background:#f8fafc; color:#111827; outline:none; padding:0 10px; font-size:11px; font-weight:700; }
         .size-select { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .size-select:disabled { opacity:.55; cursor:not-allowed; }
+        /* 比例：图形缩略图直接点选（替代原生下拉，和画布尺寸面板一致） */
+        .ratio-chips { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:6px; }
+        .ratio-chip { height:46px; min-width:0; padding:0 2px; border:1px solid #edf2f7; border-radius:12px; background:#f8fafc; color:#64748b; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; font-size:9.5px; font-weight:700; line-height:1; cursor:pointer; transition:border-color .15s ease, background .15s ease, color .15s ease; }
+        .ratio-chip:hover { border-color:#cbd5e1; color:#111827; }
+        .ratio-chip.active { background:#111827; border-color:#111827; color:#fff; }
+        .ratio-chip:disabled { opacity:.45; cursor:not-allowed; }
+        .ratio-chip > span:last-child { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        #ratioField { grid-column:1/-1; }
+        #resolutionField { grid-column:1/-1; }
+        #ratioSelect { display:none; }
+        .ratio-icon { width:13px; height:13px; border:1.3px solid currentColor; border-radius:2px; opacity:.92; box-sizing:border-box; position:relative; flex:0 0 auto; }
+        .ratio-icon.r-portrait { width:10px; height:15px; }
+        .ratio-icon.r-portrait43 { width:12px; height:16px; }
+        .ratio-icon.r-landscape { width:18px; height:12px; }
+        .ratio-icon.r-landscape43 { width:16px; height:12px; }
+        .ratio-icon.r-wide { width:20px; height:11px; }
+        .ratio-icon.r-story { width:11px; height:20px; }
+        .ratio-icon.r-auto { width:16px; height:16px; border-radius:50%; border-style:dashed; }
+        .ratio-icon.r-custom { width:14px; height:14px; border-radius:3px; border-style:dashed; }
+        .ratio-icon.r-custom::after { content:"+"; position:absolute; left:50%; top:50%; transform:translate(-50%, -52%); font-size:10px; line-height:1; font-weight:700; }
         .size-custom { display:none; background:#fff; }
         .size-field.custom .size-custom { display:block; }
         .size-pair { display:none; grid-template-columns:1fr 1fr; gap:6px; }
@@ -79,6 +99,16 @@
             .model-option{ height:38px; font-size:15px; }
             .model-option.active{ color:#5b5bd6; }
             .size-select,.size-custom,.size-fit-btn{ height:40px; border-radius:12px; font-size:15.6px; background:#f6f7f9; border-color:rgba(15,23,42,.07); }
+            .ratio-chips{ gap:7px; }
+            .ratio-chip{ height:58px; border-radius:14px; font-size:12px; gap:6px; background:#f6f7f9; border-color:rgba(15,23,42,.07); }
+            .ratio-chip.active{ background:#6366f1; border-color:#6366f1; }
+            .ratio-icon{ width:16px; height:16px; }
+            .ratio-icon.r-portrait{ width:12px; height:18px; }
+            .ratio-icon.r-portrait43{ width:14px; height:19px; }
+            .ratio-icon.r-landscape{ width:22px; height:14px; }
+            .ratio-icon.r-landscape43{ width:19px; height:14px; }
+            .ratio-icon.r-wide{ width:24px; height:13px; }
+            .ratio-icon.r-story{ width:13px; height:24px; }
             .upload-item{ border-radius:18px; }
             .masonry-grid{ gap:12px; }
             .masonry-item{ border-radius:18px; }
@@ -353,8 +383,9 @@
                                 <button id="fitImageSizeBtn" class="size-fit-btn" type="button" onclick="fitCustomSizeToImage(event)">适配图片</button>
                             </span>
                         </label>
-                        <label id="ratioField" class="size-field">
-                            <select id="ratioSelect" class="size-select" onchange="setRatio(this.value)">
+                        <div id="ratioField" class="size-field">
+                            <div id="ratioChips" class="ratio-chips" onclick="handleRatioChipClick(event)"></div>
+                            <select id="ratioSelect" class="size-select" onchange="setRatio(this.value)" tabindex="-1" aria-hidden="true">
                                 <option value="" data-i18n="online.emptyRatio">比例为空</option>
                                 <option id="grsaiAutoRatioOption" value="auto" hidden>Auto</option>
                                 <option value="square" selected data-i18n="online.square">1:1 方图</option>
@@ -370,7 +401,7 @@
                                 <input id="ratioCustomWidth" class="size-custom" type="number" min="1" step="1" placeholder="宽" data-i18n-placeholder="online.ratioWidth" oninput="setCustomRatio()">
                                 <input id="ratioCustomHeight" class="size-custom" type="number" min="1" step="1" placeholder="高" data-i18n-placeholder="online.ratioHeight" oninput="setCustomRatio()">
                             </span>
-                        </label>
+                        </div>
                     </div>
                 </div>
 
@@ -819,6 +850,42 @@
             updateSizeUI();
         }
 
+        /* 比例图形选择：从隐藏的 <select> 生成图形按钮（文案/国际化沿用 option，不加新 key） */
+        const RATIO_ICON_CLASS = {
+            '': 'r-auto', auto: 'r-auto', square: 'r-square', portrait: 'r-portrait', landscape: 'r-landscape',
+            portrait43: 'r-portrait43', landscape43: 'r-landscape43', story: 'r-story', wide: 'r-wide', custom: 'r-custom'
+        };
+        let ratioChipSignature = '';
+        function renderRatioChips(force){
+            const box = document.getElementById('ratioChips');
+            const select = document.getElementById('ratioSelect');
+            if(!box || !select) return;
+            const options = [...select.options].filter(o => !o.hidden);
+            const signature = options.map(o => `${o.value}|${o.textContent}`).join(',');
+            if(force || signature !== ratioChipSignature){
+                ratioChipSignature = signature;
+                box.innerHTML = options.map(o => {
+                    const icon = o.value === '' ? '' : `<span class="ratio-icon ${RATIO_ICON_CLASS[o.value] || 'r-square'}"></span>`;
+                    return `<button type="button" class="ratio-chip" data-ratio="${escapeHtml(o.value)}">${icon}<span>${escapeHtml(o.textContent)}</span></button>`;
+                }).join('');
+            }
+            syncRatioChips();
+        }
+        function syncRatioChips(){
+            const select = document.getElementById('ratioSelect');
+            const box = document.getElementById('ratioChips');
+            if(!box || !select) return;
+            box.querySelectorAll('.ratio-chip').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.ratio === ratio);
+                btn.disabled = select.disabled;
+            });
+        }
+        function handleRatioChipClick(event){
+            const btn = event.target.closest('.ratio-chip');
+            if(!btn || btn.disabled) return;
+            setRatio(btn.dataset.ratio);
+        }
+
         function setCustomRatio(){
             customRatioWidth = document.getElementById('ratioCustomWidth').value;
             customRatioHeight = document.getElementById('ratioCustomHeight').value;
@@ -860,6 +927,7 @@
             ratioSelect.value = ratio;
             ratioSelect.disabled = resolution === 'custom';
             ratioField.classList.toggle('custom', ratio === 'custom');
+            renderRatioChips();
             ratioCustomWidthInput.value = customRatioWidth;
             ratioCustomHeightInput.value = customRatioHeight;
             resolutionSelect.value = resolution;
