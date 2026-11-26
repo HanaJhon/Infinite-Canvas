@@ -58,13 +58,15 @@
         .ratio-chip > span:last-child { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         /* 通用：原生下拉 → 模块化按钮（select 保留为状态源，只是隐藏） */
         .choice-native { display:none !important; }
-        .choice-chips { display:grid; grid-template-columns:repeat(auto-fit,minmax(76px,1fr)); gap:3px; padding:3px; border-radius:14px; background:#f8fafc; border:1px solid #edf2f7; }
+        .choice-chips { display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:3px; padding:3px; border-radius:14px; background:#f8fafc; border:1px solid #edf2f7; }
         .choice-chips .ratio-chip { height:28px; flex-direction:row; padding:0 8px; border-color:transparent; background:transparent; font-size:11px; font-weight:700; white-space:nowrap; }
         .choice-chips .ratio-chip:hover { border-color:transparent; background:#fff; }
         .choice-chips .ratio-chip.active { background:#fff; border-color:transparent; color:#111827; box-shadow:0 1px 3px rgba(15,23,42,.1); }
         .choice-chips .ratio-chip > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         /* 模型数量多（10+）时：两列网格 + 限高滚动，避免把面板拉成一长条 */
         .size-row > .model-field, .size-row > .provider-field { grid-column:1/-1; }
+        .size-row > #qualityField, .size-row > #countField { grid-column:1/-1; }
+        #qualitySelectChips, #countSelectChips { grid-template-columns:repeat(4,minmax(0,1fr)); }
         #modelSelectChips { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); max-height:124px; overflow-y:auto; scrollbar-width:thin; }
         #modelSelectChips .ratio-chip { font-size:10.5px; padding:0 8px; }
         #modelSelectChips::-webkit-scrollbar { width:6px; }
