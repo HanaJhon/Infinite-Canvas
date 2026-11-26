@@ -786,7 +786,8 @@
             return onlineIsGptBaseModel(model) ? ['1k'] : ['1k', '2k', '4k'];
         }
         function onlineOfficialSize(ratioKey, res, model){
-            const ratioValue = ONLINE_RATIO_VALUES[ratioKey] || '';
+            const ratioValue = ONLINE_RATIO_VALUES[ratioKey]
+                || (/^\d+:\d+$/.test(String(ratioKey)) ? String(ratioKey) : '');
             const idx = ONLINE_RES_INDEX[res];
             if(!ratioValue || idx === undefined) return '';
             if(onlineIsGptBaseModel(model)) return ONLINE_GPT_BASE_SIZES[ratioValue] || '';
@@ -1167,16 +1168,18 @@
         /* 原图：把尺寸锁成参考图的实际像素（16 对齐、4K 像素封顶），交给「自定义」页签显形 */
         function applySourceSize(){
             const dim = firstReferenceDimension();
-            if(!dim){ toastSafe('先加一张参考图，才能按原图尺寸输出'); return; }
+            if(!dim){ toastSafe('先加一张参考图，才能按原图比例输出'); return; }
             const ref = onlineReferenceSize();
             if(!ref) return;
+            // 跟画布一致：原图 = 把比例换成参考图的比例，1K/2K/4K 照旧可选
             sourceRatioActive = true;
             ratio = 'custom';
-            customRatioWidth = Number(ref.aspect.split(':')[0]) || '';
-            customRatioHeight = Number(ref.aspect.split(':')[1]) || '';
-            resolution = 'custom';
-            customWidth = ref.width;
-            customHeight = ref.height;
+            const parts = String(ref.aspect).split(':');
+            customRatioWidth = Number(parts[0]) || '';
+            customRatioHeight = Number(parts[1]) || '';
+            if(resolution === 'custom') resolution = '1k';
+            customWidth = '';
+            customHeight = '';
             updateSizeUI();
         }
 
@@ -1209,8 +1212,8 @@
         }
 
         function currentSizeMode(){
-            if(sourceRatioActive) return 'preset';
             if(resolution === 'custom') return 'custom';
+            if(sourceRatioActive || ratio === 'custom') return 'preset';
             if(ratio === '' || ratio === 'auto') return 'auto';
             return 'preset';
         }
@@ -1233,7 +1236,7 @@
         }
 
         function sizeCaptionForRes(res){
-            const key = (ratio && ratio !== 'auto' && ratio !== 'custom') ? ratio : 'square';
+            const key = (ratio && ratio !== 'auto') ? (ratio === 'custom' ? (currentAspectRatio() || 'square') : ratio) : 'square';
             const official = onlineOfficialSize(key, res, selectedModel);
             if(official) return official;
             const rows = SIZE_OPTIONS[key] || SIZE_OPTIONS.square || [];
@@ -1245,11 +1248,6 @@
             const box = document.getElementById('resRows');
             if(!box) return;
             const mode = currentSizeMode();
-            if(sourceRatioActive){
-                // 原图模式按参考图实际像素出图，1K/2K/4K 三档没有意义
-                box.innerHTML = `<button type="button" class="sp-res-row active" data-res="custom" disabled><span>原图</span><em>${currentSize() || '—'}</em></button>`;
-                return;
-            }
             box.innerHTML = onlineResKeys(selectedModel).map(res => {
                 const cls = mode === 'preset' && resolution === res ? ' active' : '';
                 return `<button type="button" class="sp-res-row${cls}" data-res="${res}"><span>${res.toUpperCase()}</span><em>${sizeCaptionForRes(res) || '—'}</em></button>`;
@@ -1369,7 +1367,7 @@
                 const ref = onlineReferenceSize();
                 if(ref) return `${ref.width}x${ref.height}`;
             }
-            const official = onlineOfficialSize(ratio, resolution, selectedModel);
+            const official = onlineOfficialSize(ratio === 'custom' ? (currentAspectRatio() || 'square') : ratio, resolution, selectedModel);
             if(official) return official;
             const options = SIZE_OPTIONS[ratio] || SIZE_OPTIONS.square;
             if(ratio === 'custom'){

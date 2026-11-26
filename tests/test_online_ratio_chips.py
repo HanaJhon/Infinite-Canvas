@@ -296,8 +296,14 @@ def test_extreme_ratios_and_source_mode():
     assert "/^gemini-nano-banana/i.test(tail)" in s          # gemini-nano-banana-2.1 算 nano 系
     assert "/nano-banana-2/.test(tail)" in s                 # 2 系按尾段判定，不看前缀
     assert "let sourceRatioActive = false;" in s
-    assert "if(sourceRatioActive) return 'preset';" in s      # 原图停在「系统参数」页签
-    assert 'data-res="custom" disabled><span>原图</span>' in s
+    # 原图 = 只换比例（跟画布的 ratio='source' 一样），不锁死像素、不跳自定义页签
+    assert "if(sourceRatioActive || ratio === 'custom') return 'preset';" in s
+    src_body = s.split("function applySourceSize(){", 1)[1].split("\n        }", 1)[0]
+    assert "resolution = 'custom';" not in src_body, src_body
+    assert "if(resolution === 'custom') resolution = '1k';" in src_body, src_body
+    assert "customWidth = ref.width;" not in src_body, src_body
+    # 官方表要能吃裸比例串（原图比例不一定是预设键）
+    assert "? String(ratioKey) : ''" in s
     for fn in ("setRatio(next, preferredSize = ''){",
                "setResolution(next){",
                "setSizeMode(mode){",
@@ -327,6 +333,8 @@ def test_extreme_ratios_and_source_mode():
     assert data["supp_tall4_nano2"] is True, data
     assert data["supp_tall4_gpt"] is False and data["supp_tall4_nano_pro"] is False, data
     assert data["supp_wide16_nano_pro"] is True, data
+    assert data["bare_ratio_16_9_1k"] == "1376x768", data
+    assert data["bare_ratio_169_4k"] == "4800x3584", data
     assert data["supp_generic_wide"] is True and data["supp_generic_tall4"] is False, data
 
 
@@ -357,6 +365,8 @@ out.supp_tall4_gpt = ctx.onlineRatioSupported('tall4');
 ctx.selectedModel = 'nano-banana-pro';
 out.supp_tall4_nano_pro = ctx.onlineRatioSupported('tall4');
 out.supp_wide16_nano_pro = ctx.onlineRatioSupported('wide');
+out.bare_ratio_16_9_1k = ctx.onlineOfficialSize('16:9', '1k', 'nano-banana-pro');
+out.bare_ratio_169_4k = ctx.onlineOfficialSize('4:3', '4k', 'gemini-nano-banana-2.1');
 ctx.selectedModel = 'comfly/some-model';
 out.supp_generic_wide = ctx.onlineRatioSupported('wide');
 out.supp_generic_tall4 = ctx.onlineRatioSupported('tall4');
