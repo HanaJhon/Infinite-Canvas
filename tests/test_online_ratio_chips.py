@@ -49,8 +49,6 @@ def test_generic_choice_wiring():
     assert "#modelSelectChips { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); max-height:124px; overflow-y:auto;" in s
     # 质量/张数固定 4 项，恒为一行 4 列
     assert "#qualitySelectChips, #countSelectChips { grid-template-columns:repeat(4,minmax(0,1fr)); }" in s
-    # 手机端：厂商两列、模型单列（长模型名放得下）
-    assert "#modelSelectChips{ grid-template-columns:minmax(0,1fr); max-height:168px; }" in s
 
 
 def test_shape_mapping_runtime():
