@@ -458,7 +458,9 @@
                                     <option value="landscape43">4:3 横图</option>
                                     <option value="story" data-i18n="online.story">9:16 竖屏</option>
                                     <option value="wide" data-i18n="online.wide">16:9 宽屏</option>
-                                    <option value="custom" data-i18n="online.customRatio">自定义比例</option>
+                                    <option value="ultrawide" data-i18n="online.ultrawide">21:9 宽幅</option>
+                                    <option value="ultratall" data-i18n="online.ultratall">9:21 竖幅</option>
+                                    <option value="custom" data-i18n="online.customRatio">原图</option>
                                 </select>
                                 <span class="size-pair">
                                     <input id="ratioCustomWidth" class="size-custom" type="number" min="1" step="1" placeholder="宽" data-i18n-placeholder="online.ratioWidth" oninput="setCustomRatio()">
@@ -690,6 +692,16 @@
                 ['1280x720', '1k'],
                 ['2048x1152', '2k'],
                 ['3840x2160', '4k']
+            ],
+            ultrawide: [
+                ['1280x544', '1k'],
+                ['2048x880', '2k'],
+                ['3840x1648', '4k']
+            ],
+            ultratall: [
+                ['544x1280', '1k'],
+                ['880x2048', '2k'],
+                ['1648x3840', '4k']
             ]
         };
         const RES_LONG_SIDE = { '1k': 1536, '2k': 2048, '4k': 3840 };
@@ -738,7 +750,8 @@
         };
         const ONLINE_RATIO_VALUES = {
             square:'1:1', portrait:'2:3', landscape:'3:2', portrait43:'3:4',
-            landscape43:'4:3', story:'9:16', wide:'16:9'
+            landscape43:'4:3', story:'9:16', wide:'16:9',
+            ultrawide:'21:9', ultratall:'9:21'
         };
         const ONLINE_RES_INDEX = { '1k': 0, '2k': 1, '4k': 2 };
 
@@ -1089,15 +1102,27 @@
         /* 比例图形选择：从隐藏的 <select> 生成图形按钮（文案/国际化沿用 option，不加新 key） */
         const RATIO_ICON_CLASS = {
             '': 'r-auto', auto: 'r-auto', square: 'r-square', portrait: 'r-portrait', landscape: 'r-landscape',
-            portrait43: 'r-portrait43', landscape43: 'r-landscape43', story: 'r-story', wide: 'r-wide', custom: 'r-custom'
+            portrait43: 'r-portrait43', landscape43: 'r-landscape43', story: 'r-story', wide: 'r-wide',
+            ultrawide: 'r-wide', ultratall: 'r-story', custom: 'r-source'
         };
+        /* 模型支持哪些比例：官方表里有这个比例才给；表外模型（中转 / ComfyUI）只留通用 7 个 */
+        const ONLINE_GENERIC_RATIO_KEYS = ['square', 'portrait', 'landscape', 'portrait43', 'landscape43', 'story', 'wide'];
+        function onlineRatioSupported(ratioKey){
+            if(ratioKey === 'custom') return true;   // 「原图」一直在，没有参考图时置灰
+            if(!ONLINE_RATIO_VALUES[ratioKey]) return false;
+            if(onlineIsGptImageModel(selectedModel) || onlineIsNanoModel(selectedModel)){
+                return !!onlineOfficialSize(ratioKey, '1k', selectedModel);
+            }
+            return ONLINE_GENERIC_RATIO_KEYS.includes(ratioKey);
+        }
+
         let ratioChipSignature = '';
         function renderRatioChips(force){
             const box = document.getElementById('ratioChips');
             const select = document.getElementById('ratioSelect');
             if(!box || !select) return;
             // 「比例为空」「auto」由上面的「自动」页签承担，网格里不再重复
-            const options = [...select.options].filter(o => !o.hidden && o.value !== '' && o.value !== 'auto');
+            const options = [...select.options].filter(o => !o.hidden && o.value !== '' && o.value !== 'auto' && onlineRatioSupported(o.value));
             const signature = options.map(o => `${o.value}|${o.textContent}`).join(',');
             if(force || signature !== ratioChipSignature){
                 ratioChipSignature = signature;
@@ -1112,15 +1137,34 @@
             const select = document.getElementById('ratioSelect');
             const box = document.getElementById('ratioChips');
             if(!box || !select) return;
+            const hasSource = !!firstReferenceDimension();
             box.querySelectorAll('.ratio-chip').forEach(btn => {
-                btn.classList.toggle('active', btn.dataset.ratio === ratio);
-                btn.disabled = select.disabled;
+                const isSource = btn.dataset.ratio === 'custom';
+                btn.classList.toggle('active', isSource ? ratio === 'custom' : btn.dataset.ratio === ratio);
+                btn.disabled = select.disabled || (isSource && !hasSource);
+                if(isSource) btn.title = hasSource ? '按参考图尺寸输出' : '先加一张参考图';
             });
         }
         function handleRatioChipClick(event){
             const btn = event.target.closest('.ratio-chip');
             if(!btn || btn.disabled) return;
+            // 「原图」= 按参考图尺寸输出，和画布同一个语义
+            if(btn.dataset.ratio === 'custom'){ applySourceSize(); return; }
             setRatio(btn.dataset.ratio);
+        }
+        /* 原图：把尺寸锁成参考图的实际像素（16 对齐、4K 像素封顶），交给「自定义」页签显形 */
+        function applySourceSize(){
+            const dim = firstReferenceDimension();
+            if(!dim){ toastSafe('先加一张参考图，才能按原图尺寸输出'); return; }
+            const ref = onlineReferenceSize();
+            if(!ref) return;
+            ratio = 'custom';
+            customRatioWidth = Number(ref.aspect.split(':')[0]) || '';
+            customRatioHeight = Number(ref.aspect.split(':')[1]) || '';
+            resolution = 'custom';
+            customWidth = ref.width;
+            customHeight = ref.height;
+            updateSizeUI();
         }
 
         function setCustomRatio(){
@@ -1288,7 +1332,9 @@
                 portrait43:'3:4',
                 landscape43:'4:3',
                 story:'9:16',
-                wide:'16:9'
+                wide:'16:9',
+                ultrawide:'21:9',
+                ultratall:'9:21'
             }[ratio] || '';
         }
 

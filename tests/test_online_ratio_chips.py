@@ -84,7 +84,12 @@ global.document = {
   getElementById: (id) => id === 'ratioChips' ? box : id === 'ratioSelect' ? select : null,
 };
 global.escapeHtml = (v) => String(v).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// 真实现按模型官方表过滤，这里只关心形状映射，全部放行
+global.onlineRatioSupported = () => true;
+global.firstReferenceDimension = () => null;
 eval(block);
+// 真实现要在官方表里查比例，这个用例只验形状：直接放行
+onlineRatioSupported = () => true;
 box.querySelectorAll = () => btns;
 renderRatioChips(true);
 // 从生成的 HTML 里抠出 data-ratio + 图标类名
@@ -108,7 +113,7 @@ console.log(JSON.stringify({ ratios: m, icons, expect }));
         assert data["ratios"] == ["square", "portrait", "landscape", "portrait43",
                                   "landscape43", "story", "wide", "custom"], data
         assert data["icons"] == ["r-square", "r-portrait", "r-landscape", "r-portrait43",
-                                 "r-landscape43", "r-story", "r-wide", "r-custom"], data
+                                 "r-landscape43", "r-story", "r-wide", "r-source"], data
 
 
 def test_generic_chips_runtime():
@@ -262,6 +267,22 @@ def test_reference_follow_wiring():
     # 换模型要把不支持的档位收回到 1K
     assert "if(!onlineResKeys(selectedModel).includes(resolution) && resolution !== 'custom') resolution = '1k';" in s
 
+
+def test_ratio_filter_and_source():
+    """比例列表按模型官方表过滤；「原图」按参考图尺寸输出。"""
+    s = source()
+    for fn in ("function onlineRatioSupported(", "function applySourceSize("):
+        assert fn in s, fn
+    assert 'value="ultrawide"' in s and 'value="ultratall"' in s
+    assert "ultrawide:'21:9'" in s and "ultratall:'9:21'" in s
+    assert "ultrawide: 'r-wide'" in s and "custom: 'r-source'" in s
+    assert "onlineRatioSupported(o.value)" in s
+    # 原图按钮一直在，没有参考图时置灰；点它走自适应而不是切到自定义比例输入
+    assert "if(ratioKey === 'custom') return true;" in s
+    assert "btn.disabled = select.disabled || (isSource && !hasSource);" in s
+    assert "if(btn.dataset.ratio === 'custom'){ applySourceSize(); return; }" in s
+    assert "resolution = 'custom';" in s.split("function applySourceSize(")[1][:600]
+    assert "16:" in s  # 比例吸附
 
 if __name__ == "__main__":
     test_source_contract()
