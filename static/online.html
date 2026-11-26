@@ -65,9 +65,8 @@
         .choice-chips .ratio-chip > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         /* 模型数量多（10+）时：两列网格 + 限高滚动，避免把面板拉成一长条 */
         .size-row > .model-field, .size-row > .provider-field { grid-column:1/-1; }
-        .size-row > #qualityField, .size-row > #countField { grid-column:1/-1; }
-        #qualitySelectChips, #countSelectChips { grid-template-columns:repeat(4,minmax(0,1fr)); }
-        #providerSelectChips .ratio-chip, #countSelectChips .ratio-chip { height:37px; font-size:12px; }
+        #qualitySelectChips, #countSelectChips { grid-template-columns:repeat(2,minmax(0,1fr)); }
+        #providerSelectChips .ratio-chip, #qualitySelectChips .ratio-chip, #countSelectChips .ratio-chip { height:37px; font-size:12px; }
         #modelSelectChips { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); max-height:196px; overflow-y:auto; scrollbar-width:thin; }
         #modelSelectChips .ratio-chip { font-size:11.5px; padding:0 8px; }
         #modelSelectChips::-webkit-scrollbar { width:6px; }
@@ -94,9 +93,9 @@
         .sp-ratios .ratio-icon.r-wide { width:24px; height:13px; }
         .sp-ratios .ratio-icon.r-story { width:13px; height:21px; }
         .sp-res { display:flex; flex-direction:column; gap:6px; }
-        .sp-res-row { display:flex; align-items:center; justify-content:space-between; gap:8px; height:48px; padding:0 12px; border-radius:12px; border:1px solid #edf2f7; background:#f8fafc; color:#64748b; font-size:12px; font-weight:700; cursor:pointer; transition:border-color .15s ease, background .15s ease, color .15s ease; }
+        .sp-res-row { display:flex; align-items:center; justify-content:space-between; gap:8px; height:48px; padding:0 12px; border-radius:13px; border:1px solid #edf2f7; background:#f8fafc; color:#64748b; font-size:12.5px; font-weight:700; cursor:pointer; transition:border-color .15s ease, background .15s ease, color .15s ease; }
         .sp-res-row em { font-style:normal; font-size:11px; font-weight:600; letter-spacing:.02em; opacity:.8; }
-        .sp-res-row.active { border-color:#111827; color:#111827; }
+        .sp-res-row.active { background:#111827; border-color:#111827; color:#fff; }
         .sp-res-row:disabled { opacity:.45; cursor:not-allowed; }
         .sp-custom-body .size-pair { display:grid; }
         #ratioField { grid-column:1/-1; }
@@ -147,7 +146,7 @@
             .choice-chips .ratio-chip.active{ background:#6366f1; color:#fff; border-color:transparent; }
             #modelSelectChips{ grid-template-columns:minmax(0,1fr); max-height:300px; }
             #providerSelectChips{ grid-template-columns:repeat(2,minmax(0,1fr)); }
-            #providerSelectChips .ratio-chip, #countSelectChips .ratio-chip{ height:45px; font-size:14.4px; }
+            #providerSelectChips .ratio-chip, #qualitySelectChips .ratio-chip, #countSelectChips .ratio-chip{ height:45px; font-size:14.4px; }
             .sp-tab{ height:44px; font-size:14.4px; border-radius:13px; }
             .sp-hint{ font-size:12.5px; padding:12px 14px; }
             .sp-body{ grid-template-columns:minmax(0,1fr); }
@@ -160,8 +159,11 @@
             .sp-ratios .ratio-icon.r-landscape43{ width:23px; height:18px; }
             .sp-ratios .ratio-icon.r-wide{ width:31px; height:17px; }
             .sp-ratios .ratio-icon.r-story{ width:17px; height:27px; }
-            .sp-res-row{ height:56px; font-size:13px; }
-            .sp-res-row em{ font-size:12px; }
+            /* 竖屏：1K/2K/4K 横向三列，和上面的比例卡同风格 */
+            .sp-res{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; }
+            .sp-res-row{ flex-direction:column; justify-content:center; gap:3px; height:76px; padding:0 4px; font-size:14px; border-radius:14px; }
+            .sp-res-row em{ font-size:11.5px; opacity:.75; }
+            .sp-res-row.active{ background:#6366f1; border-color:transparent; color:#fff; }
 
             #modelSelectChips .ratio-chip{ font-size:14.4px; height:60px; }
             #modelSelectChips .ratio-chip > span{ white-space:nowrap; overflow:visible; text-overflow:clip; }
