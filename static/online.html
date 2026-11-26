@@ -63,7 +63,12 @@
         .choice-chips .ratio-chip:hover { border-color:transparent; background:#fff; }
         .choice-chips .ratio-chip.active { background:#fff; border-color:transparent; color:#111827; box-shadow:0 1px 3px rgba(15,23,42,.1); }
         .choice-chips .ratio-chip > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        #modelSelectChips { grid-template-columns:minmax(0,1fr); }
+        /* 模型数量多（10+）时：两列网格 + 限高滚动，避免把面板拉成一长条 */
+        .size-row > .model-field, .size-row > .provider-field { grid-column:1/-1; }
+        #modelSelectChips { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); max-height:124px; overflow-y:auto; scrollbar-width:thin; }
+        #modelSelectChips .ratio-chip { font-size:10.5px; padding:0 8px; }
+        #modelSelectChips::-webkit-scrollbar { width:6px; }
+        #modelSelectChips::-webkit-scrollbar-thumb { background:rgba(148,163,184,.4); border-radius:999px; }
         #ratioField { grid-column:1/-1; }
         #resolutionField { grid-column:1/-1; }
         #ratioSelect { display:none; }
@@ -110,6 +115,8 @@
             .choice-chips{ gap:3px; padding:3px; border-radius:14px; background:#f2f3f5; border-color:rgba(15,23,42,.06); }
             .choice-chips .ratio-chip{ height:34px; border-radius:11px; font-size:14.4px; border-color:transparent; background:transparent; }
             .choice-chips .ratio-chip.active{ background:#6366f1; color:#fff; border-color:transparent; }
+            #modelSelectChips{ max-height:168px; }
+            #modelSelectChips .ratio-chip{ font-size:13.2px; }
             .ratio-chips{ gap:7px; }
             .ratio-chip{ height:58px; border-radius:14px; font-size:12px; gap:6px; background:#f6f7f9; border-color:rgba(15,23,42,.07); }
             .ratio-chip.active{ background:#6366f1; border-color:#6366f1; }
@@ -351,10 +358,10 @@
                         <span id="providerModeBadge" class="mode-badge" style="margin-left:auto;display:none;"></span>
                     </div>
                     <div class="size-row">
-                        <label class="size-field">
+                        <label class="size-field provider-field">
                             <select id="providerSelect" class="size-select" onchange="setProvider(this.value)"></select>
                         </label>
-                        <label class="size-field">
+                        <label class="size-field model-field">
                             <select id="modelSelect" class="size-select" onchange="setModel(this.value)"></select>
                         </label>
                     </div>

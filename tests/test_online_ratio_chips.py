@@ -44,6 +44,9 @@ def test_generic_choice_wiring():
     assert ".choice-native { display:none !important; }" in s
     # 三个入口都会刷新按钮，避免代码里改了 select.value 而按钮不跟
     assert s.count("syncAllSelectChips();") >= 3
+    # 厂商/模型名最长，占满整行；模型多时限高滚动而不是把面板拉长
+    assert ".size-row > .model-field, .size-row > .provider-field { grid-column:1/-1; }" in s
+    assert "#modelSelectChips { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); max-height:124px; overflow-y:auto;" in s
 
 
 def test_shape_mapping_runtime():
