@@ -3,6 +3,7 @@
 跑法：./python/python.exe tests/test_online_ratio_chips.py
 """
 import io
+import json
 import os
 import re
 import subprocess
@@ -283,6 +284,91 @@ def test_ratio_filter_and_source():
     assert "if(btn.dataset.ratio === 'custom'){ applySourceSize(); return; }" in s
     assert "resolution = 'custom';" in s.split("function applySourceSize(")[1][:600]
     assert "16:" in s  # 比例吸附
+
+def test_extreme_ratios_and_source_mode():
+    """nano-banana-2 系（含 gemini- 前缀）才有 1:4/4:1/1:8/8:1；「原图」不跳自定义页签。"""
+    s = source()
+
+    # —— 源码约定 ——
+    assert 'value="tall4"' in s and 'value="wide8"' in s
+    assert "tall4:'1:4', wide4:'4:1', tall8:'1:8', wide8:'8:1'" in s
+    assert "tall4: 'r-story', wide4: 'r-wide'" in s
+    assert "/^gemini-nano-banana/i.test(tail)" in s          # gemini-nano-banana-2.1 算 nano 系
+    assert "/nano-banana-2/.test(tail)" in s                 # 2 系按尾段判定，不看前缀
+    assert "let sourceRatioActive = false;" in s
+    assert "if(sourceRatioActive) return 'preset';" in s      # 原图停在「系统参数」页签
+    assert 'data-res="custom" disabled><span>原图</span>' in s
+    for fn in ("setRatio(next, preferredSize = ''){",
+               "setResolution(next){",
+               "setSizeMode(mode){",
+               "setModel(next){"):
+        body = s.split(fn, 1)[1][:240]
+        assert "sourceRatioActive = false;" in body, fn
+
+    # —— 运行时：官方表 + 比例过滤 ——
+    block = s[s.index("const ONLINE_GPT_FAMILY_SIZES"):s.index("const SLOTS = [")]
+    gen = s[s.index("const ONLINE_GENERIC_RATIO_KEYS"):]
+    gen = gen[:gen.index("\n        }", gen.index("function onlineRatioSupported")) + len("\n        }")]
+    js = JS_TEMPLATE.replace("__BLOCK__", json.dumps(block)).replace("__GENERIC__", json.dumps(gen))
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(js)
+        path = f.name
+    try:
+        out = subprocess.run(["node", path], capture_output=True, text=True, timeout=60)
+    finally:
+        os.unlink(path)
+    assert out.returncode == 0, out.stderr[-2000:]
+    data = json.loads(out.stdout.strip().splitlines()[-1])
+    assert data["nano2_211"] is True and data["nano2_plain"] is True and data["nano2_pro"] is False, data
+    assert data["geminiNano"] is True, data
+    assert data["size_tall4_2k"] == "1024x4096", data
+    assert data["size_wide8_1k"] == "3072x384", data
+    assert data["size_1to4_4k"] == "2048x8192", data
+    assert data["supp_tall4_nano2"] is True, data
+    assert data["supp_tall4_gpt"] is False and data["supp_tall4_nano_pro"] is False, data
+    assert data["supp_wide16_nano_pro"] is True, data
+    assert data["supp_generic_wide"] is True and data["supp_generic_tall4"] is False, data
+
+
+JS_TEMPLATE = r"""
+const vm = require('vm');
+const ctx = {
+  selectedModel: '',
+  RES_PIXEL_LIMIT: {'1k': 1e6, '2k': 4e6, '4k': 8294400},
+  firstReferenceDimension: () => null,
+  console,
+};
+vm.createContext(ctx);
+vm.runInContext(__BLOCK__, ctx);
+vm.runInContext(__GENERIC__, ctx);
+const out = {
+  nano2_211: ctx.onlineIsNano2Series('gemini-nano-banana-2.1'),
+  nano2_plain: ctx.onlineIsNano2Series('nano-banana-2.1'),
+  nano2_pro: ctx.onlineIsNano2Series('nano-banana-pro'),
+  geminiNano: ctx.onlineIsNanoModel('gemini-nano-banana-2.1'),
+  size_tall4_2k: ctx.onlineOfficialSize('tall4', '2k', 'gemini-nano-banana-2.1'),
+  size_wide8_1k: ctx.onlineOfficialSize('wide8', '1k', 'nano-banana-2.1'),
+  size_1to4_4k: ctx.onlineOfficialSize('tall4', '4k', 'nano-banana-2.1'),
+};
+ctx.selectedModel = 'gemini-nano-banana-2.1';
+out.supp_tall4_nano2 = ctx.onlineRatioSupported('tall4');
+ctx.selectedModel = 'gpt-image-2';
+out.supp_tall4_gpt = ctx.onlineRatioSupported('tall4');
+ctx.selectedModel = 'nano-banana-pro';
+out.supp_tall4_nano_pro = ctx.onlineRatioSupported('tall4');
+out.supp_wide16_nano_pro = ctx.onlineRatioSupported('wide');
+ctx.selectedModel = 'comfly/some-model';
+out.supp_generic_wide = ctx.onlineRatioSupported('wide');
+out.supp_generic_tall4 = ctx.onlineRatioSupported('tall4');
+console.log(JSON.stringify(out));
+"""
+
+
+def test_extreme_i18n():
+    js = io.open(os.path.join("static", "js", "i18n", "studio.js"), encoding="utf-8").read()
+    for key in ("online.tall4", "online.wide4", "online.tall8", "online.wide8"):
+        assert '"%s": { zh:' % key in js, key
+
 
 if __name__ == "__main__":
     test_source_contract()

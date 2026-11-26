@@ -460,6 +460,10 @@
                                     <option value="wide" data-i18n="online.wide">16:9 宽屏</option>
                                     <option value="ultrawide" data-i18n="online.ultrawide">21:9 宽幅</option>
                                     <option value="ultratall" data-i18n="online.ultratall">9:21 竖幅</option>
+                                    <option value="tall4" data-i18n="online.tall4">1:4 极竖</option>
+                                    <option value="wide4" data-i18n="online.wide4">4:1 极宽</option>
+                                    <option value="tall8" data-i18n="online.tall8">1:8 超竖</option>
+                                    <option value="wide8" data-i18n="online.wide8">8:1 超宽</option>
                                     <option value="custom" data-i18n="online.customRatio">原图</option>
                                 </select>
                                 <span class="size-pair">
@@ -648,6 +652,7 @@
         let apiProviders = [];
         let ratio = 'square';
         let resolution = '1k';
+        let sourceRatioActive = false;   // 选中「原图」时按参考图实际像素出图
         let customRatioWidth = '';
         let customRatioHeight = '';
         let customWidth = '';
@@ -751,7 +756,8 @@
         const ONLINE_RATIO_VALUES = {
             square:'1:1', portrait:'2:3', landscape:'3:2', portrait43:'3:4',
             landscape43:'4:3', story:'9:16', wide:'16:9',
-            ultrawide:'21:9', ultratall:'9:21'
+            ultrawide:'21:9', ultratall:'9:21',
+            tall4:'1:4', wide4:'4:1', tall8:'1:8', wide8:'8:1'
         };
         const ONLINE_RES_INDEX = { '1k': 0, '2k': 1, '4k': 2 };
 
@@ -768,10 +774,13 @@
         function onlineIsNanoModel(model){
             const raw = onlineModelName(model);
             const tail = raw.includes('/') ? raw.split('/').pop() : raw;
-            return /^nano-banana/i.test(tail) || /^gemini[-a-z0-9.]*image/i.test(tail);
+            return /^nano-banana/i.test(tail) || /^gemini[-a-z0-9.]*image/i.test(tail) || /^gemini-nano-banana/i.test(tail);
         }
         function onlineIsNano2Series(model){
-            return /^nano-banana-2/i.test(onlineModelName(model));
+            const raw = onlineModelName(model);
+            const tail = raw.includes('/') ? raw.split('/').pop() : raw;
+            // 2 系 = nano-banana-2 / 2.1 / 3.1 Flash；gemini-nano-banana-2.1 这类带前缀的也算
+            return /nano-banana-2/.test(tail) || /nano-banana-3\.1/.test(tail);
         }
         function onlineResKeys(model){
             return onlineIsGptBaseModel(model) ? ['1k'] : ['1k', '2k', '4k'];
@@ -1007,6 +1016,7 @@
             refreshCreditBadge();
         }
         function setModel(next){
+            sourceRatioActive = false;
             selectedModel = next;
             if(!onlineResKeys(selectedModel).includes(resolution) && resolution !== 'custom') resolution = '1k';
             updateModelSpecificControls();
@@ -1043,6 +1053,7 @@
 
         function setRatio(next, preferredSize = ''){
             if(next === 'auto' && !isGrsaiNanoModel()) next = 'square';
+            sourceRatioActive = false;
             ratio = next;
             if (preferredSize) {
                 const match = SIZE_OPTIONS[next]?.find(([value]) => value === preferredSize);
@@ -1103,7 +1114,8 @@
         const RATIO_ICON_CLASS = {
             '': 'r-auto', auto: 'r-auto', square: 'r-square', portrait: 'r-portrait', landscape: 'r-landscape',
             portrait43: 'r-portrait43', landscape43: 'r-landscape43', story: 'r-story', wide: 'r-wide',
-            ultrawide: 'r-wide', ultratall: 'r-story', custom: 'r-source'
+            ultrawide: 'r-wide', ultratall: 'r-story',
+            tall4: 'r-story', wide4: 'r-wide', tall8: 'r-story', wide8: 'r-wide', custom: 'r-source'
         };
         /* 模型支持哪些比例：官方表里有这个比例才给；表外模型（中转 / ComfyUI）只留通用 7 个 */
         const ONLINE_GENERIC_RATIO_KEYS = ['square', 'portrait', 'landscape', 'portrait43', 'landscape43', 'story', 'wide'];
@@ -1158,6 +1170,7 @@
             if(!dim){ toastSafe('先加一张参考图，才能按原图尺寸输出'); return; }
             const ref = onlineReferenceSize();
             if(!ref) return;
+            sourceRatioActive = true;
             ratio = 'custom';
             customRatioWidth = Number(ref.aspect.split(':')[0]) || '';
             customRatioHeight = Number(ref.aspect.split(':')[1]) || '';
@@ -1183,6 +1196,7 @@
         }
 
         function setResolution(next){
+            sourceRatioActive = false;
             resolution = next;
             if(next === 'custom'){
                 ratio = '';
@@ -1195,12 +1209,14 @@
         }
 
         function currentSizeMode(){
+            if(sourceRatioActive) return 'preset';
             if(resolution === 'custom') return 'custom';
             if(ratio === '' || ratio === 'auto') return 'auto';
             return 'preset';
         }
 
         function setSizeMode(mode){
+            sourceRatioActive = false;
             if(mode === 'auto'){
                 customWidth = '';
                 customHeight = '';
@@ -1229,6 +1245,11 @@
             const box = document.getElementById('resRows');
             if(!box) return;
             const mode = currentSizeMode();
+            if(sourceRatioActive){
+                // 原图模式按参考图实际像素出图，1K/2K/4K 三档没有意义
+                box.innerHTML = `<button type="button" class="sp-res-row active" data-res="custom" disabled><span>原图</span><em>${currentSize() || '—'}</em></button>`;
+                return;
+            }
             box.innerHTML = onlineResKeys(selectedModel).map(res => {
                 const cls = mode === 'preset' && resolution === res ? ' active' : '';
                 return `<button type="button" class="sp-res-row${cls}" data-res="${res}"><span>${res.toUpperCase()}</span><em>${sizeCaptionForRes(res) || '—'}</em></button>`;
@@ -1334,7 +1355,11 @@
                 story:'9:16',
                 wide:'16:9',
                 ultrawide:'21:9',
-                ultratall:'9:21'
+                ultratall:'9:21',
+                tall4:'1:4',
+                wide4:'4:1',
+                tall8:'1:8',
+                wide8:'8:1'
             }[ratio] || '';
         }
 
