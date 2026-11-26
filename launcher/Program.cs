@@ -1309,6 +1309,7 @@ sealed class LauncherHost : IDisposable
         public string Url = "";
         public string ApiKey = "";
         public string Model = "";
+        public bool Gemini = false;   // true = 走 Gemini 原生 generateContent（x-goog-api-key + contents/parts）
     }
 
     private ChatTestEndpoint? ResolveChatTestEndpoint(string model, string channel)
@@ -1359,6 +1360,17 @@ sealed class LauncherHost : IDisposable
 
                 var pIdForKey = p["id"]?.GetValue<string>() ?? "";
                 var apiKey = ReadEnvValue(GetEnvKeyForProvider(pIdForKey));
+                if (protocol == "gemini")
+                {
+                    // Gemini 原生协议没有 /chat/completions：测速打 generateContent（正文只要一个 part）
+                    return new ChatTestEndpoint
+                    {
+                        Url = chatBase + "/models/" + Uri.EscapeDataString(model) + ":generateContent",
+                        ApiKey = apiKey,
+                        Model = model,
+                        Gemini = true
+                    };
+                }
                 return new ChatTestEndpoint
                 {
                     Url = chatBase + "/chat/completions",
@@ -1389,18 +1401,27 @@ sealed class LauncherHost : IDisposable
             return new { latency = 0, ok = false, error = "该通道未配置 API Key，请先在 API 管理中填写" };
 
         // 与启动器前端约定的参考请求一致：model / stream:false / 单条 user 消息
-        var body = new
-        {
-            model = endpoint.Model,
-            stream = false,
-            messages = new[] { new { role = "user", content = "你好" } }
-        };
+        // Gemini 原生协议用的是 contents/parts，鉴权走 x-goog-api-key
+        object body = endpoint.Gemini
+            ? new
+            {
+                contents = new[] { new { role = "user", parts = new[] { new { text = "你好" } } } }
+            }
+            : new
+            {
+                model = endpoint.Model,
+                stream = false,
+                messages = new[] { new { role = "user", content = "你好" } }
+            };
         var json = JsonSerializer.Serialize(body);
         using var req = new HttpRequestMessage(HttpMethod.Post, endpoint.Url)
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
-        req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + endpoint.ApiKey);
+        if (endpoint.Gemini)
+            req.Headers.TryAddWithoutValidation("x-goog-api-key", endpoint.ApiKey);
+        else
+            req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + endpoint.ApiKey);
         req.Headers.TryAddWithoutValidation("Accept", "application/json");
         // 显式 UA：避免部分网关（如 Cloudflare 前置）对无 UA / Python-urllib 类客户端返回 1010 拦截
         req.Headers.TryAddWithoutValidation("User-Agent", "InfiniteCanvasLauncher/1.0");
@@ -2169,6 +2190,9 @@ sealed class LauncherHost : IDisposable
 
         using var req = new HttpRequestMessage(HttpMethod.Get, endpoint.Url);
         req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + endpoint.ApiKey);
+        // Gemini 原生协议认 x-goog-api-key，不认 Bearer
+        if (endpoint.Url.Contains("/v1beta/", StringComparison.OrdinalIgnoreCase) || endpoint.Url.EndsWith("/v1beta", StringComparison.OrdinalIgnoreCase))
+            req.Headers.TryAddWithoutValidation("x-goog-api-key", endpoint.ApiKey);
         req.Headers.TryAddWithoutValidation("Accept", "application/json");
         // 显式 UA：避免部分网关（如 Cloudflare 前置）对无 UA / Python-urllib 类客户端返回 1010 拦截
         req.Headers.TryAddWithoutValidation("User-Agent", "InfiniteCanvasLauncher/1.0");
