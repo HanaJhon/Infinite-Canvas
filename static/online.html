@@ -96,6 +96,8 @@
         .sp-res-row { display:flex; align-items:center; justify-content:space-between; gap:8px; height:48px; padding:0 12px; border-radius:13px; border:1px solid #edf2f7; background:#f8fafc; color:#64748b; font-size:12.5px; font-weight:700; cursor:pointer; transition:border-color .15s ease, background .15s ease, color .15s ease; }
         .sp-res-row em { font-style:normal; font-size:11px; font-weight:600; letter-spacing:.02em; opacity:.8; }
         .sp-res-row.active { background:#111827; border-color:#111827; color:#fff; }
+        .sp-res-row.is-off { opacity:.45; cursor:not-allowed; background:transparent; border-style:dashed; }
+        .sp-res-tip { margin:6px 2px 0; font-size:11px; line-height:1.5; color:#94a3b8; }
         .sp-res-row:disabled { opacity:.45; cursor:not-allowed; }
         .sp-custom-body .size-pair { display:grid; }
         #ratioField { grid-column:1/-1; }
@@ -1247,14 +1249,21 @@
             return hit ? hit[0] : '';
         }
 
+        // 该模型不支持的档位也列出来（置灰），否则列表突然只剩一行，看着像功能坏了。
+        const ONLINE_RES_ALL = ['1k','2k','4k'];
         function renderResRows(){
             const box = document.getElementById('resRows');
             if(!box) return;
             const mode = currentSizeMode();
-            box.innerHTML = onlineResKeys(selectedModel).map(res => {
-                const cls = mode === 'preset' && resolution === res ? ' active' : '';
-                return `<button type="button" class="sp-res-row${cls}" data-res="${res}"><span>${res.toUpperCase()}</span><em>${sizeCaptionForRes(res) || '—'}</em></button>`;
-            }).join('');
+            const keys = onlineResKeys(selectedModel);
+            const onlyOne = keys.length === 1;
+            const tip = onlyOne ? `${onlineModelName(selectedModel)} 官方只有 ${keys[0].toUpperCase()} 一档；要 2K/4K 请选 -vip / -flare / -sunburst 系列` : '';
+            box.innerHTML = ONLINE_RES_ALL.map(res => {
+                const ok = keys.includes(res);
+                const cls = (mode === 'preset' && resolution === res && ok ? ' active' : '') + (ok ? '' : ' is-off');
+                const tipAttr = ok ? '' : ` title="${escapeHtml(tip)}" aria-disabled="true"`;
+                return `<button type="button" class="sp-res-row${cls}" data-res="${res}"${ok ? '' : ' disabled'}${tipAttr}><span>${res.toUpperCase()}</span><em>${ok ? (sizeCaptionForRes(res) || '—') : '—'}</em></button>`;
+            }).join('') + (onlyOne ? `<p class="sp-res-tip">${escapeHtml(tip)}</p>` : '');
         }
 
         function handleResRowClick(event){

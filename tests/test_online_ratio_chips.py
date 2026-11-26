@@ -66,6 +66,10 @@ def test_generic_choice_wiring():
     assert "#qualitySelectChips, #countSelectChips { grid-template-columns:repeat(2,minmax(0,1fr)); }" in s
     # 画布上 gemini 图像模型也有质量，这里别把它藏了
     assert "new Set(['api','apimart','gemini'])" in s
+    # 单一档位模型（gpt-image-2/2.5/2.6）也要把 2K/4K 列出来并置灰，否则像功能坏了
+    assert "ONLINE_RES_ALL = ['1k','2k','4k']" in s
+    assert "sp-res-row.is-off" in s
+    assert "sp-res-tip" in s
 
 
 def test_shape_mapping_runtime():
