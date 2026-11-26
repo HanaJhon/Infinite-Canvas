@@ -6,6 +6,7 @@
 3. outputFormat 只认 png/gif/svg，gif 仅 2.6 系、svg 仅 gpt-image-2.6；
 4. 前端尺寸表：基础款一档、像素档 1K/2K/4K，且 4K 是官方值（1:1 = 2880²，21:9 = 3840x1648）。
 """
+import io
 import os
 import subprocess
 import sys
@@ -68,8 +69,16 @@ const stub = 'const API_RATIO_VALUES = {square:"1:1",portrait:"2:3",landscape:"3
     + 'function isGptImageAutoSizeModel(model){'
     + 'const n = String(model||"").trim().toLowerCase();'
     + 'return n === "gpt-image-2" || n.startsWith("gpt-image-2-") || n.startsWith("gpt-image-2.");'
+    + '}'
+    + 'function isNanoBananaAutoRatioModel(model){'
+    + 'const n = String(model||"").trim().toLowerCase();'
+    + 'if(!n || n.includes("/")) return false;'
+    + 'return n === "nano-banana" || (n.startsWith("nano-banana-") && n.length > "nano-banana-".length);'
+    + '}'
+    + 'function isNanoBanana2SeriesModel(model){'
+    + 'return String(model||"").trim().toLowerCase().startsWith("nano-banana-2");'
     + '}';
-const api = new Function(stub + block + ';return {gptImageFamilySize, isGptImageBaseModel};')();
+const api = new Function(stub + block + ';return {gptImageFamilySize, isGptImageBaseModel, nanoBananaFamilySize, isGeminiImageModel, officialImageSize};')();
 const out = {
     base_1k: api.gptImageFamilySize('square', '1k', 'gpt-image-2'),
     base_4k: api.gptImageFamilySize('square', '4k', 'gpt-image-2.6'),
@@ -80,7 +89,22 @@ const out = {
     auto: api.gptImageFamilySize('square', 'auto', 'gpt-image-2'),
     unknown: api.gptImageFamilySize('square', '1k', 'nano-banana-pro'),
     base_flag: api.isGptImageBaseModel('gpt-image-2.5'),
-    vip_flag: api.isGptImageBaseModel('gpt-image-2-vip')
+    vip_flag: api.isGptImageBaseModel('gpt-image-2-vip'),
+    nano_sq_1k: api.nanoBananaFamilySize('square', '1k', 'nano-banana-pro'),
+    nano_sq_4k: api.nanoBananaFamilySize('square', '4k', 'nano-banana-pro'),
+    nano_43_1k: api.nanoBananaFamilySize('landscape43', '1k', 'nano-banana-2.1'),
+    nano_43_4k: api.nanoBananaFamilySize('landscape43', '4k', 'nano-banana-2.1'),
+    nano_169_2k: api.nanoBananaFamilySize('wide', '2k', 'nano-banana'),
+    nano_219_4k: api.nanoBananaFamilySize('ultrawide', '4k', 'nano-banana-pro'),
+    nano_14_2k: api.nanoBananaFamilySize('1:4', '2k', 'nano-banana-2.1'),
+    nano_14_pro: api.nanoBananaFamilySize('1:4', '2k', 'nano-banana-pro'),
+    nano_auto: api.nanoBananaFamilySize('square', 'auto', 'nano-banana-pro'),
+    gemini_43_2k: api.nanoBananaFamilySize('4:3', '2k', 'gemini-3-pro-image-preview'),
+    gemini_text: api.nanoBananaFamilySize('square', '1k', 'gemini-2.5-flash'),
+    gemini_flag_text: api.isGeminiImageModel('gemini-2.5-flash'),
+    dispatch_custom: api.officialImageSize('custom', '1k', 'nano-banana-pro', '4:3'),
+    dispatch_gpt: api.officialImageSize('square', '4k', 'gpt-image-2-vip'),
+    dispatch_plain: api.officialImageSize('square', '1k', 'nano-banana/text-to-image-official-stable')
 };
 console.log(JSON.stringify(out));
 """
@@ -105,6 +129,29 @@ def test_frontend_size_tables(tmpdir=None):
     check("非 gpt 模型查不到", got["unknown"], "")
     check("基础款识别", got["base_flag"], True)
     check("像素档不是基础款", got["vip_flag"], False)
+    # nano-banana / gemini：官方固定像素表（2026-11-26 文档截图）
+    check("nano 1:1 1K", got["nano_sq_1k"], "1024x1024")
+    check("nano 1:1 4K=4096", got["nano_sq_4k"], "4096x4096")
+    check("nano 4:3 1K", got["nano_43_1k"], "1200x896")
+    check("nano 4:3 4K", got["nano_43_4k"], "4800x3584")
+    check("nano 16:9 2K", got["nano_169_2k"], "2752x1536")
+    check("nano 21:9 4K", got["nano_219_4k"], "6336x2688")
+    check("nano-2 1:4 2K", got["nano_14_2k"], "1024x4096")
+    check("非 2 系没有 1:4", got["nano_14_pro"], "")
+    check("nano auto 透传", got["nano_auto"], "auto")
+    check("gemini 图像 4:3 2K", got["gemini_43_2k"], "2400x1792")
+    check("gemini 纯文本不查表", got["gemini_text"], "")
+    check("gemini 文本不算图像模型", got["gemini_flag_text"], False)
+    check("自定义比例识别到 4:3", got["dispatch_custom"], "1200x896")
+    check("gpt 走官方表", got["dispatch_gpt"], "2880x2880")
+    check("带斜杠的 RunningHub 不查表", got["dispatch_plain"], "")
+    js_src = io.open(os.path.join(ROOT, "static", "js", "smart-canvas.js"), encoding="utf-8").read()
+    for needle in (
+        "officialImageSize(currentRatio, value, settings.model, currentCustomRatio)",
+        "officialImageSize(sourceSettings.ratio || 'square', res, sourceSettings.model, sourceSettings.customRatio || '')",
+        "officialImageSize(_genRatio, _genRes, genModel)",
+    ):
+        check("源码调用 " + needle[:32], needle in js_src, True)
 
 
 def main_run():

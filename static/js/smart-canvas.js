@@ -3888,6 +3888,63 @@ function gptImageFamilySize(ratioKey, resolutionValue, model=''){
     if(idx === undefined) return '';
     return arr[Math.min(idx, arr.length - 1)];
 }
+/* Nano Banana / Gemini 图像模型的**官方固定尺寸表**（2026-11-26 老板提供官方文档截图）。
+   适用：nano-banana / nano-banana-2 / 2.1 / pro / 3.1 Flash，以及 gemini-*-image 这些同源模型
+   （nano-banana-pro 就是 Gemini 3 Pro Image，表是同一张）。
+   🚨 这家族的像素是**写死的值**，不是按「长边 + 像素预算」算出来的：
+      4:3 的 1K 是 1200×896（通用表算成 1344×1008）、4K 是 4800×3584（通用表 3264×2448）——
+      尺寸不是官方值，等于让上游按规则外的东西去猜。 */
+const NANO_BANANA_SIZES = {
+    '1:1' : ['1024x1024', '2048x2048', '4096x4096'],
+    '16:9': ['1376x768',  '2752x1536', '5504x3072'],
+    '9:16': ['768x1376',  '1536x2752', '3072x5504'],
+    '4:3' : ['1200x896',  '2400x1792', '4800x3584'],
+    '3:4' : ['896x1200',  '1792x2400', '3584x4800'],
+    '3:2' : ['1264x848',  '2528x1696', '5056x3392'],
+    '2:3' : ['848x1264',  '1696x2528', '3392x5056'],
+    '5:4' : ['1152x928',  '2304x1856', '4608x3712'],
+    '4:5' : ['928x1152',  '1856x2304', '3712x4608'],
+    '21:9': ['1584x672',  '3168x1344', '6336x2688']
+};
+/* 1:4 / 4:1 / 1:8 / 8:1 只有 nano-banana-2 系列（2.1 / 3.1 Flash）支持，别的 nano 系没有。 */
+const NANO_BANANA_EXTREME_SIZES = {
+    '1:4' : ['512x2048',  '1024x4096', '2048x8192'],
+    '4:1' : ['2048x512',  '4096x1024', '8192x2048'],
+    '1:8' : ['384x3072',  '768x6144',  '1536x12288'],
+    '8:1' : ['3072x384',  '6144x768',  '12288x1536']
+};
+/* gemini-3-pro-image-preview / gemini-2.5-flash-image 这类。别把 gemini-*-flash 纯文本模型算进来。 */
+function isGeminiImageModel(model){
+    const name = String(model || '').trim().toLowerCase();
+    if(!name) return false;
+    const tail = name.includes('/') ? name.split('/').pop() : name;
+    return /^gemini[-a-z0-9.]*image/.test(tail);
+}
+/* 按「比例 key（SIZE_MAP 那套）/ 比例字符串 + 分辨率档 + 模型」查官方尺寸；查不到返回空串。 */
+function nanoBananaFamilySize(ratioKey, resolutionValue, model=''){
+    const name = String(model || '').trim().toLowerCase();
+    if(!isNanoBananaAutoRatioModel(name) && !isGeminiImageModel(name)) return '';
+    const res = String(resolutionValue || '1k').toLowerCase();
+    if(res === 'auto') return 'auto';
+    const idx = {'1k':0, '2k':1, '4k':2}[res];
+    if(idx === undefined) return '';
+    const ratio = API_RATIO_VALUES[ratioKey]
+        || (String(ratioKey || '').includes(':') ? String(ratioKey).trim() : '');
+    if(!ratio) return '';
+    const arr = (isNanoBanana2SeriesModel(name) && NANO_BANANA_EXTREME_SIZES[ratio]) || NANO_BANANA_SIZES[ratio];
+    if(!arr || !arr.length) return '';
+    return arr[Math.min(idx, arr.length - 1)];
+}
+/* 有官方固定尺寸表的模型统一入口（gpt-image 系 + nano-banana 系 + gemini 图像模型）。
+   查不到返回空串，调用方回落通用 apiImageSize。
+   customRatioValue 用于 ratio='source'/'custom'：那种情况 ratioKey 不是 SIZE_MAP 的 key，
+   真正的比例（可能正是识别出来的标准比例，如 "4:3"）在 customRatio 里。 */
+function officialImageSize(ratioValue, resolutionValue, model, customRatioValue=''){
+    const key = (ratioValue === 'custom' || ratioValue === 'source') ? (customRatioValue || '') : ratioValue;
+    if(!key) return '';
+    return gptImageFamilySize(key, resolutionValue, model)
+        || nanoBananaFamilySize(key, resolutionValue, model);
+}
 /* 尺寸护栏（2026-10-21）：模型有硬性尺寸上限时，**在出图前就压到合规范围**，
    别等上游报错再把红字甩给老板。
    🚨 为什么必须前置：agent 默认 resolution='4k'，方图 1:1 + 4K = 4096×4096 = 1677 万像素，
@@ -4540,7 +4597,14 @@ function renderSizePickerControl(prefix='', includeSource=false){
                     <button type="button" class="${scope === 'custom' ? 'active' : ''}" data-size-scope="custom" data-size-prefix="${escapeHtml(prefix)}">自定义</button>
                 </div>
             </div>
-            ${scope === 'auto' ? `<div class="size-picker-pane size-picker-auto"><div class="size-picker-note"><strong>自动尺寸</strong><span>使用模型默认尺寸，或由支持自动尺寸的模型自行决定。</span></div></div>` : ''}
+            ${scope === 'auto' ? `<div class="size-picker-pane size-picker-auto"><div class="size-picker-note"><strong>自动尺寸</strong><span>使用模型默认尺寸，或由支持自动尺寸的模型自行决定。</span></div>${(() => {
+                /* 自动档也给个参照值：模型有官方尺寸表时，按当前分辨率档（没有就按 1K）把像素写出来，
+                   老板才知道「自动」大约出多大。 */
+                const refRes = currentRes === 'auto' ? '1k' : currentRes;
+                const refSize = officialImageSize(currentRatio === 'auto' ? 'square' : currentRatio, refRes, settings.model, currentCustomRatio);
+                if(!refSize || refSize === 'auto' || refSize === 'custom') return '';
+                return `<div class="size-picker-note"><span>${escapeHtml(refRes.toUpperCase())} 档参考：${escapeHtml(refSize)}（实际由模型决定）</span></div>`;
+            })()}</div>` : ''}
             ${scope === 'preset' ? `<div class="size-picker-pane size-picker-preset">
                 <div class="size-picker-list size-picker-ratios">
                     ${ratios.map(([value, label, sub]) => {
@@ -4558,7 +4622,7 @@ function renderSizePickerControl(prefix='', includeSource=false){
                     }).join('')}
                 </div>
                 <div class="size-picker-list">
-                    ${options.filter(v => v !== 'auto').map(value => `<button type="button" class="size-picker-option ${value === currentRes ? 'active' : ''}" data-smart-param="${resKey}" data-smart-value="${value}"><span>${value.toUpperCase()}</span><small>${currentRatio === 'auto' ? '' : escapeHtml((isGptImageAutoSizeModel(settings.model) ? gptImageFamilySize(currentRatio, value, settings.model) : '') || apiImageSize(currentRatio, value, currentCustomRatio, '') || '')}</small></button>`).join('')}
+                    ${options.filter(v => v !== 'auto').map(value => `<button type="button" class="size-picker-option ${value === currentRes ? 'active' : ''}" data-smart-param="${resKey}" data-smart-value="${value}"><span>${value.toUpperCase()}</span><small>${currentRatio === 'auto' ? '' : escapeHtml(officialImageSize(currentRatio, value, settings.model, currentCustomRatio) || apiImageSize(currentRatio, value, currentCustomRatio, '') || '')}</small></button>`).join('')}
                 </div>
             </div>` : ''}
             ${scope === 'custom' ? `<div class="size-picker-pane size-picker-custom">
@@ -21872,12 +21936,11 @@ function sizeForRun(sourceSettings=settings){
         ? defaultSmartApiResolution(sourceSettings.model)
         : '1k';
     const res = sourceSettings.resolution || fallbackResolution;
-    /* GPT Image 系先查官方尺寸表：像素档走 1K/2K/4K，基础款只有 1K 一档；
-       不查表会用通用 SIZE_MAP（1:1 4K = 4096×4096、21:9 1K = 1280×544）→ 上游按规则外的东西猜。 */
-    const famSize = isGptImageAutoSizeModel(sourceSettings.model)
-        ? gptImageFamilySize(sourceSettings.ratio || 'square', res, sourceSettings.model)
-        : '';
-    if(famSize) return famSize;
+    /* 有官方尺寸表的模型先查表：gpt-image 系（像素档 1K/2K/4K、基础款只有一档）、
+       nano-banana / gemini 图像模型（写死的 1K/2K/4K）。
+       不查表会用通用 SIZE_MAP（1:1 4K = 4096×4096、21:9 1K = 1280×544、4:3 1K = 1344×1008）→ 全不是官方值。 */
+    const famSize = officialImageSize(sourceSettings.ratio || 'square', res, sourceSettings.model, sourceSettings.customRatio || '');
+    if(famSize && famSize !== 'custom') return famSize;
     return apiImageSize(sourceSettings.ratio || 'square', res, sourceSettings.customRatio || '', sourceSettings.customSize || '') || '1024x1024';
 }
 function expectedOutputSize(){
@@ -34536,7 +34599,8 @@ function agentFindEmptyPosition(count=1){
 // Agent 占位节点尺寸：复用主画布的 pendingBoxSize 逻辑，但使用 Agent 自己的比例设置
 function agentPendingBoxSize(count, options={}){
     // 用 Agent 的比例设置算出请求尺寸
-    const ratioSize = apiImageSize(agentState.genRatio || 'square', agentState.genResolution || '1k') || '1024x1024';
+    /* 与出图 payload 同源：有官方尺寸表的模型（gpt-image / nano-banana / gemini）按官方表算占位比例。 */
+    const ratioSize = officialImageSize(agentState.genRatio || 'square', agentState.genResolution || '1k', agentState.genModel) || apiImageSize(agentState.genRatio || 'square', agentState.genResolution || '1k') || '1024x1024';
     const parsed = parseSizeValue(ratioSize);
     const requestSize = parsed ? {w:Number(parsed.width) || 1024, h:Number(parsed.height) || 1024} : {w:1024, h:1024};
     // Agent 始终用选中比例计算占位尺寸，不使用参考图尺寸。
@@ -34941,7 +35005,7 @@ async function runAgentGenerations(assistantMsg, userMsg){
     const genModel = models.includes(agentState.genModel) ? agentState.genModel : (models[0] || '');
     agentState.genProvider = providerId;
     agentState.genModel = genModel;
-    const size = apiImageSize(agentState.genRatio || 'square', agentState.genResolution || '1k') || '1024x1024';
+    const size = officialImageSize(agentState.genRatio || 'square', agentState.genResolution || '1k', agentState.genModel) || apiImageSize(agentState.genRatio || 'square', agentState.genResolution || '1k') || '1024x1024';
     const lastResults = agentLastResults();
     const currentAttach = (userMsg?.images || []).filter(i => i?.url);
     const attachRefs = currentAttach.length ? currentAttach : agentLastUserAttachments();
@@ -35106,7 +35170,7 @@ async function runAgentGenerations(assistantMsg, userMsg){
             /* 🚨 gpt-image-2 家族**先查官方尺寸表**（2026-10-21）：
                它们的 4K 规格是 2880×2880 而不是通用的 4096×4096，3:2/4:3 的 2K、4K 取值也和通用表不同。
                查得到就用官方值；查不到（普通模型）再走通用表 + 护栏。 */
-            const _famSize = isGptImageAutoSizeModel(genModel) ? gptImageFamilySize(_genRatio, _genRes, genModel) : '';
+            const _famSize = officialImageSize(_genRatio, _genRes, genModel);
             let genSize = _famSize || apiImageSize(_genRatio, _genRes) || size;
             /* 出图前先过尺寸护栏：模型吃不下这个尺寸就直接压到合规，别等上游 400。
                压过就记 gen.sizeNote，卡片上会写清楚「已自动改成多少」——
@@ -35121,7 +35185,7 @@ async function runAgentGenerations(assistantMsg, userMsg){
             /* 「我选了 4K，为什么出 2880？」—— 这家族的 4K 按**总像素约 829 万**封顶，
                1:1 / 4:3 / 3:2 的 4K 长边都到不了 3840。这种反直觉的情况必须解释一次，
                否则老板会以为是系统偷偷降了画质（2026-10-21 老板就是为这个来问的）。 */
-            if(!gen.sizeNote && _famSize && _famSize !== 'auto' && String(_genRes).toLowerCase() === '4k'){
+            if(!gen.sizeNote && _famSize && _famSize !== 'auto' && isGptImageAutoSizeModel(genModel) && String(_genRes).toLowerCase() === '4k'){
                 const _fp = _famSize.split('x').map(Number);
                 if(_fp[0] && _fp[1] && Math.max(_fp[0], _fp[1]) < GPT_IMAGE2_MAX_EDGE){
                     gen.sizeNote = `${genModel} 的 4K 规格就是 ${_fp[0]}×${_fp[1]}（该系列按总像素约 ${Math.round(GPT_IMAGE2_MAX_PIXELS / 10000)} 万封顶），已经是它能给的最大档`;
