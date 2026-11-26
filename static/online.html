@@ -117,7 +117,10 @@
             .choice-chips{ gap:3px; padding:3px; border-radius:14px; background:#f2f3f5; border-color:rgba(15,23,42,.06); }
             .choice-chips .ratio-chip{ height:34px; border-radius:11px; font-size:14.4px; border-color:transparent; background:transparent; }
             .choice-chips .ratio-chip.active{ background:#6366f1; color:#fff; border-color:transparent; }
-            #modelSelectChips{ max-height:168px; }
+            /* 手机屏窄：厂商/模型不再挤三列，模型独占一行才放得下全名 */
+            .choice-chips{ grid-template-columns:repeat(2,minmax(0,1fr)); }
+            #qualitySelectChips, #countSelectChips, #resolutionSelectChips{ grid-template-columns:repeat(4,minmax(0,1fr)); }
+            #modelSelectChips{ grid-template-columns:minmax(0,1fr); max-height:168px; }
             #modelSelectChips .ratio-chip{ font-size:13.2px; }
             .ratio-chips{ gap:7px; }
             .ratio-chip{ height:58px; border-radius:14px; font-size:12px; gap:6px; background:#f6f7f9; border-color:rgba(15,23,42,.07); }
