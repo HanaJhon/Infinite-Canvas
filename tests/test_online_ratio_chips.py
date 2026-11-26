@@ -186,6 +186,83 @@ console.log(JSON.stringify(data));
         assert data["disabledAll"] is True, data  # select 禁用时按钮同步禁用
 
 
+
+def test_model_sizes_runtime():
+    """官方尺寸表按模型生效：基础款只有 1K，像素档三档，nano 用自家表；自动档跟随参考图。"""
+    s = source()
+    start = s.index("        /* 官方尺寸表：与 static/js/smart-canvas.js:3837-3947 同一份数据")
+    end = s.index("        const SLOTS = [1,2,3,4,5,6,7,8,9];")
+    block = s[start:end]
+    js = r"""
+const fs = require('fs');
+const block = fs.readFileSync(process.argv[2], 'utf8');
+let selectedModel = 'gpt-image-2';
+const RES_PIXEL_LIMIT = { '1k': 1572864, '2k': 4194304, '4k': 8294400 };
+let refDim = null;
+global.selectedModel = undefined;
+global.firstReferenceDimension = () => refDim;
+eval(block);
+// block 里的函数读的是闭包变量 selectedModel，这里用 globalThis 赋值无效，改走函数参数
+const pick = (model, ratioKey, res) => onlineOfficialSize(ratioKey, res, model);
+const out = {
+  baseRows: onlineResKeys('gpt-image-2'),
+  pixelRows: onlineResKeys('gpt-image-2.5-flare'),
+  base11: pick('gpt-image-2.6', 'square', '4k'),
+  base169: pick('gpt-image-2', 'wide', '1k'),
+  flare169_2k: pick('gpt-image-2.5-flare', 'wide', '2k'),
+  flare11_4k: pick('gpt-image-2-flare', 'square', '4k'),
+  nano169_4k: pick('nano-banana-pro', 'wide', '4k'),
+  nano43_1k: pick('nano-banana-pro', 'landscape43', '1k'),
+  gemini43_2k: pick('gemini-3-pro-image-preview', 'landscape43', '2k'),
+  unknown: pick('some-relay/model', 'wide', '2k'),
+  snapLandscape: onlineSnapAspect(1600, 900, 'nano-banana-pro'),
+  snapSquare: onlineSnapAspect(1024, 1024, 'nano-banana-pro'),
+  snapCustom: onlineSnapAspect(1000, 333, 'nano-banana-pro'),
+};
+console.log(JSON.stringify(out));
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        frag = os.path.join(tmp, "block.js")
+        io.open(frag, "w", encoding="utf-8", newline="\n").write(block)
+        script = os.path.join(tmp, "run.js")
+        io.open(script, "w", encoding="utf-8", newline="\n").write(js)
+        out = subprocess.run(["node", script, frag], capture_output=True, text=True, encoding="utf-8")
+        assert out.returncode == 0, out.stderr
+        import json
+        data = json.loads(out.stdout.strip().splitlines()[-1])
+    assert data["baseRows"] == ["1k"], data
+    assert data["pixelRows"] == ["1k", "2k", "4k"], data
+    # 基础款只有一档，4K 也回官方 1:1 尺寸
+    assert data["base11"] == "1024x1024", data
+    assert data["base169"] == "1672x941", data
+    # 像素档走家族三档表
+    assert data["flare169_2k"] == "2048x1152", data
+    assert data["flare11_4k"] == "2880x2880", data
+    # nano / gemini 走自家表（4K 是 5504x3072，不是 gpt 的 3840x2160）
+    assert data["nano169_4k"] == "5504x3072", data
+    assert data["nano43_1k"] == "1200x896", data
+    assert data["gemini43_2k"] == "2400x1792", data
+    # 带斜杠的中转模型不查表
+    assert data["unknown"] == "", data
+    assert data["snapLandscape"] == "16:9", data
+    assert data["snapSquare"] == "1:1", data
+    assert data["snapCustom"] == "1000:333", data
+
+
+def test_reference_follow_wiring():
+    """自动档「跟随参考图」：像素按参考图 16 对齐，比例吸附官方白名单。"""
+    s = source()
+    for fn in ("function onlineReferenceSize(", "function onlineSnapAspect(",
+               "function onlineOfficialSize(", "function onlineResKeys(", "function renderAutoHint("):
+        assert fn in s, fn
+    assert "if(currentSizeMode() === 'auto'){" in s and "if(ref) return `${ref.width}x${ref.height}`;" in s
+    assert "if(ref) return ref.aspect;" in s
+    assert "renderAutoHint();" in s
+    assert "ONLINE_NANO_EXTREME_SIZES" in s
+    # 换模型要把不支持的档位收回到 1K
+    assert "if(!onlineResKeys(selectedModel).includes(resolution) && resolution !== 'custom') resolution = '1k';" in s
+
+
 if __name__ == "__main__":
     test_source_contract()
     test_generic_choice_wiring()

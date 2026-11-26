@@ -695,6 +695,118 @@
         const RES_LONG_SIDE = { '1k': 1536, '2k': 2048, '4k': 3840 };
         const RES_PIXEL_LIMIT = { '1k': 1572864, '2k': 4194304, '4k': 8294400 };
 
+        /* 官方尺寸表：与 static/js/smart-canvas.js:3837-3947 同一份数据，改表请两边一起改 */
+        const ONLINE_GPT_FAMILY_SIZES = {
+            '1:1': ['1024x1024', '2048x2048', '2880x2880'],
+            '16:9': ['1280x720', '2048x1152', '3840x2160'],
+            '9:16': ['720x1280', '1152x2048', '2160x3840'],
+            '4:3': ['1152x864', '2304x1728', '3264x2448'],
+            '3:4': ['864x1152', '1728x2304', '2448x3264'],
+            '3:2': ['1536x1024', '2048x1360', '3504x2336'],
+            '2:3': ['1024x1536', '1360x2048', '2336x3504'],
+            '5:4': ['1120x896', '2240x1792', '3200x2560'],
+            '4:5': ['896x1120', '1792x2240', '2560x3200'],
+            '21:9': ['1456x624', '2912x1248', '3840x1648'],
+            '9:21': ['624x1456', '1248x2912', '1648x3840'],
+            '2:1': ['1536x768', '3072x1536', '3840x1920'],
+            '1:2': ['768x1536', '1536x3072', '1920x3840']
+        };
+        const ONLINE_GPT_BASE_SIZES = {
+            '1:1': '1024x1024', '16:9': '1672x941', '9:16': '941x1672',
+            '4:3': '1443x1090', '3:4': '1090x1443', '3:2': '1536x1024', '2:3': '1024x1536',
+            '5:4': '1408x1120', '4:5': '1120x1408', '21:9': '1920x832', '9:21': '832x1920',
+            '1:2': '896x1792', '2:1': '1792x896'
+        };
+        const ONLINE_NANO_SIZES = {
+            '1:1': ['1024x1024', '2048x2048', '4096x4096'],
+            '16:9': ['1376x768', '2752x1536', '5504x3072'],
+            '9:16': ['768x1376', '1536x2752', '3072x5504'],
+            '4:3': ['1200x896', '2400x1792', '4800x3584'],
+            '3:4': ['896x1200', '1792x2400', '3584x4800'],
+            '3:2': ['1264x848', '2528x1696', '5056x3392'],
+            '2:3': ['848x1264', '1696x2528', '3392x5056'],
+            '5:4': ['1152x928', '2304x1856', '4608x3712'],
+            '4:5': ['928x1152', '1856x2304', '3712x4608'],
+            '21:9': ['1584x672', '3168x1344', '6336x2688']
+        };
+        /* 极端比例只有 nano-banana-2 系列（2.1 / 3.1 Flash）支持 */
+        const ONLINE_NANO_EXTREME_SIZES = {
+            '1:4': ['512x2048', '1024x4096', '2048x8192'],
+            '4:1': ['2048x512', '4096x1024', '8192x2048'],
+            '1:8': ['384x3072', '768x6144', '1536x12288'],
+            '8:1': ['3072x384', '6144x768', '12288x1536']
+        };
+        const ONLINE_RATIO_VALUES = {
+            square:'1:1', portrait:'2:3', landscape:'3:2', portrait43:'3:4',
+            landscape43:'4:3', story:'9:16', wide:'16:9'
+        };
+        const ONLINE_RES_INDEX = { '1k': 0, '2k': 1, '4k': 2 };
+
+        function onlineModelName(model){
+            return String(model || selectedModel || '').trim();
+        }
+        function onlineIsGptImageModel(model){
+            return /^gpt-image-2/i.test(onlineModelName(model));
+        }
+        /* 基础款（gpt-image-2 / 2.5 / 2.6）只认 1K 一档像素，高清靠 quality */
+        function onlineIsGptBaseModel(model){
+            return /^gpt-image-2(\.\d+)?$/i.test(onlineModelName(model));
+        }
+        function onlineIsNanoModel(model){
+            const raw = onlineModelName(model);
+            const tail = raw.includes('/') ? raw.split('/').pop() : raw;
+            return /^nano-banana/i.test(tail) || /^gemini[-a-z0-9.]*image/i.test(tail);
+        }
+        function onlineIsNano2Series(model){
+            return /^nano-banana-2/i.test(onlineModelName(model));
+        }
+        function onlineResKeys(model){
+            return onlineIsGptBaseModel(model) ? ['1k'] : ['1k', '2k', '4k'];
+        }
+        function onlineOfficialSize(ratioKey, res, model){
+            const ratioValue = ONLINE_RATIO_VALUES[ratioKey] || '';
+            const idx = ONLINE_RES_INDEX[res];
+            if(!ratioValue || idx === undefined) return '';
+            if(onlineIsGptBaseModel(model)) return ONLINE_GPT_BASE_SIZES[ratioValue] || '';
+            if(onlineIsGptImageModel(model)){
+                const row = ONLINE_GPT_FAMILY_SIZES[ratioValue];
+                return row ? (row[idx] || '') : '';
+            }
+            if(onlineIsNanoModel(model)){
+                const row = (onlineIsNano2Series(model) && ONLINE_NANO_EXTREME_SIZES[ratioValue])
+                    || ONLINE_NANO_SIZES[ratioValue] || ONLINE_GPT_FAMILY_SIZES[ratioValue];
+                return row ? (row[idx] || '') : '';
+            }
+            return '';
+        }
+        /* 比例吸附：2% 内直接落到官方比例，否则约分（上游只认白名单比例） */
+        function onlineSnapAspect(width, height, model){
+            const list = ['1:1','2:3','3:2','3:4','4:3','5:4','4:5','9:16','16:9','21:9','9:21'];
+            if(onlineIsNano2Series(model)) list.push('1:4','4:1','1:8','8:1');
+            const target = width / Math.max(1, height);
+            let best = '', diff = Infinity;
+            for(const item of list){
+                const [w, h] = item.split(':').map(Number);
+                const d = Math.abs(w / h - target) / target;
+                if(d < diff){ diff = d; best = item; }
+            }
+            if(best && diff <= 0.02) return best;
+            const gcd = (a, b) => b ? gcd(b, a % b) : a;
+            const d = gcd(width, height) || 1;
+            return `${Math.round(width / d)}:${Math.round(height / d)}`;
+        }
+        /* 参考图尺寸 → 16 对齐的输出像素 + 吸附后的比例；自动档「跟随参考图」用 */
+        function onlineReferenceSize(){
+            const dim = firstReferenceDimension();
+            if(!dim) return null;
+            const rawW = Math.max(1, Math.round(Number(dim.width) || 0));
+            const rawH = Math.max(1, Math.round(Number(dim.height) || 0));
+            const scale = Math.min(1, Math.sqrt((RES_PIXEL_LIMIT['4k'] || 8294400) / (rawW * rawH)));
+            const width = Math.max(64, Math.round(rawW * scale / 16) * 16);
+            const height = Math.max(64, Math.round(rawH * scale / 16) * 16);
+            return {rawW, rawH, width, height, aspect:onlineSnapAspect(width, height, selectedModel)};
+        }
+
         function uniqueModels(list){
             const seen = new Set();
             return (list || []).map(item => String(item || '').trim()).filter(item => item && !seen.has(item) && seen.add(item));
@@ -883,6 +995,7 @@
         }
         function setModel(next){
             selectedModel = next;
+            if(!onlineResKeys(selectedModel).includes(resolution) && resolution !== 'custom') resolution = '1k';
             updateModelSpecificControls();
             updateSizeUI();
             refreshCreditBadge();
@@ -1047,7 +1160,7 @@
             if(mode === 'auto'){
                 customWidth = '';
                 customHeight = '';
-                if(resolution === 'custom') resolution = '1k';
+                resolution = '1k';
                 ratio = '';
             } else if(mode === 'custom'){
                 resolution = 'custom';
@@ -1061,6 +1174,8 @@
 
         function sizeCaptionForRes(res){
             const key = (ratio && ratio !== 'auto' && ratio !== 'custom') ? ratio : 'square';
+            const official = onlineOfficialSize(key, res, selectedModel);
+            if(official) return official;
             const rows = SIZE_OPTIONS[key] || SIZE_OPTIONS.square || [];
             const hit = rows.find(row => row[1] === res);
             return hit ? hit[0] : '';
@@ -1070,7 +1185,7 @@
             const box = document.getElementById('resRows');
             if(!box) return;
             const mode = currentSizeMode();
-            box.innerHTML = ['1k', '2k', '4k'].map(res => {
+            box.innerHTML = onlineResKeys(selectedModel).map(res => {
                 const cls = mode === 'preset' && resolution === res ? ' active' : '';
                 return `<button type="button" class="sp-res-row${cls}" data-res="${res}"><span>${res.toUpperCase()}</span><em>${sizeCaptionForRes(res) || '—'}</em></button>`;
             }).join('');
@@ -1092,6 +1207,19 @@
                 event.preventDefault();
                 setSizeMode(tab.dataset.sizeMode);
             });
+        }
+
+        function renderAutoHint(){
+            const hint = document.querySelector('#sizePicker .sp-auto .sp-hint');
+            if(!hint) return;
+            const ref = onlineReferenceSize();
+            if(ref){
+                hint.textContent = `跟随参考图：原图 ${ref.rawW}×${ref.rawH} → 输出 ${ref.width}×${ref.height}（比例 ${ref.aspect}）`;
+            } else if(isGrsaiNanoModel()){
+                hint.textContent = '不指定比例，由 Grsai nano-banana-pro 自行决定；放一张参考图进来就能按参考图尺寸输出。';
+            } else {
+                hint.textContent = '不指定比例，由渠道按提示词自动决定（不支持时按方图）；放一张参考图进来就能按参考图尺寸输出。';
+            }
         }
 
         function updateSizeUI(){
@@ -1125,6 +1253,7 @@
             const ratioFieldEl = document.getElementById('ratioField');
             if(ratioFieldEl) ratioFieldEl.hidden = ratio !== 'custom';
             renderResRows();
+            renderAutoHint();
             updateResolutionUI();
         }
 
@@ -1143,6 +1272,10 @@
 
         function currentAspectRatio(){
             if(ratio === 'auto' && isGrsaiNanoModel()) return 'auto';
+            if(currentSizeMode() === 'auto'){
+                const ref = onlineReferenceSize();
+                if(ref) return ref.aspect;
+            }
             if(ratio === 'custom'){
                 const width = Number(customRatioWidth);
                 const height = Number(customRatioHeight);
@@ -1161,6 +1294,12 @@
 
         function currentSize(){
             if(resolution === 'custom') return customSizeValue();
+            if(currentSizeMode() === 'auto'){
+                const ref = onlineReferenceSize();
+                if(ref) return `${ref.width}x${ref.height}`;
+            }
+            const official = onlineOfficialSize(ratio, resolution, selectedModel);
+            if(official) return official;
             const options = SIZE_OPTIONS[ratio] || SIZE_OPTIONS.square;
             if(ratio === 'custom'){
                 const parsed = customRatioValue();
