@@ -46,7 +46,7 @@ def test_generic_choice_wiring():
     assert s.count("syncAllSelectChips();") >= 3
     # 厂商/模型名最长，占满整行；模型多时限高滚动而不是把面板拉长
     assert ".size-row > .model-field, .size-row > .provider-field { grid-column:1/-1; }" in s
-    assert "#modelSelectChips { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); max-height:124px; overflow-y:auto;" in s
+    assert "#modelSelectChips { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); max-height:196px; overflow-y:auto;" in s
     # 质量/张数固定 4 项，恒为一行 4 列
     assert "#qualitySelectChips, #countSelectChips { grid-template-columns:repeat(4,minmax(0,1fr)); }" in s
 

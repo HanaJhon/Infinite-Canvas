@@ -59,7 +59,7 @@
         /* 通用：原生下拉 → 模块化按钮（select 保留为状态源，只是隐藏） */
         .choice-native { display:none !important; }
         .choice-chips { display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:3px; padding:3px; border-radius:14px; background:#f8fafc; border:1px solid #edf2f7; }
-        .choice-chips .ratio-chip { height:28px; flex-direction:row; padding:0 8px; border-color:transparent; background:transparent; font-size:11px; font-weight:700; white-space:nowrap; }
+        .choice-chips .ratio-chip { height:56px; flex-direction:row; padding:0 8px; border-color:transparent; background:transparent; font-size:13.5px; font-weight:700; white-space:nowrap; }
         .choice-chips .ratio-chip:hover { border-color:transparent; background:#fff; }
         .choice-chips .ratio-chip.active { background:#fff; border-color:transparent; color:#111827; box-shadow:0 1px 3px rgba(15,23,42,.1); }
         .choice-chips .ratio-chip > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -67,8 +67,8 @@
         .size-row > .model-field, .size-row > .provider-field { grid-column:1/-1; }
         .size-row > #qualityField, .size-row > #countField { grid-column:1/-1; }
         #qualitySelectChips, #countSelectChips { grid-template-columns:repeat(4,minmax(0,1fr)); }
-        #modelSelectChips { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); max-height:124px; overflow-y:auto; scrollbar-width:thin; }
-        #modelSelectChips .ratio-chip { font-size:10.5px; padding:0 8px; }
+        #modelSelectChips { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); max-height:196px; overflow-y:auto; scrollbar-width:thin; }
+        #modelSelectChips .ratio-chip { font-size:11.5px; padding:0 8px; }
         #modelSelectChips::-webkit-scrollbar { width:6px; }
         #modelSelectChips::-webkit-scrollbar-thumb { background:rgba(148,163,184,.4); border-radius:999px; }
         #ratioField { grid-column:1/-1; }
@@ -115,10 +115,10 @@
             .model-option.active{ color:#5b5bd6; }
             .size-select,.size-custom,.size-fit-btn{ height:40px; border-radius:12px; font-size:15.6px; background:#f6f7f9; border-color:rgba(15,23,42,.07); }
             .choice-chips{ gap:3px; padding:3px; border-radius:14px; background:#f2f3f5; border-color:rgba(15,23,42,.06); }
-            .choice-chips .ratio-chip{ height:34px; border-radius:11px; font-size:14.4px; border-color:transparent; background:transparent; }
+            .choice-chips .ratio-chip{ height:68px; border-radius:14px; font-size:15.6px; border-color:transparent; background:transparent; }
             .choice-chips .ratio-chip.active{ background:#6366f1; color:#fff; border-color:transparent; }
-            #modelSelectChips{ max-height:168px; }
-            #modelSelectChips .ratio-chip{ font-size:13.2px; }
+            #modelSelectChips{ max-height:300px; }
+            #modelSelectChips .ratio-chip{ font-size:14.4px; }
             .ratio-chips{ gap:7px; }
             .ratio-chip{ height:58px; border-radius:14px; font-size:12px; gap:6px; background:#f6f7f9; border-color:rgba(15,23,42,.07); }
             .ratio-chip.active{ background:#6366f1; border-color:#6366f1; }
