@@ -19,7 +19,19 @@ def source():
 
 def test_source_contract():
     s = source()
-    assert 'id="ratioChips" class="ratio-chips"' in s, "缺少比例图形容器"
+    assert 'id="ratioChips" class="ratio-chips sp-ratios"' in s, "缺少比例图形容器"
+    # 尺寸选择改成画布同款三页签
+    assert 'id="sizePicker" class="sp"' in s
+    for mode in ("auto", "preset", "custom"):
+        assert f'data-size-mode="{mode}"' in s, mode
+    for fn in ("function currentSizeMode(", "function setSizeMode(", "function renderResRows(",
+               "function handleResRowClick(", "function bindSizePicker(", "function sizeCaptionForRes("):
+        assert fn in s, fn
+    assert 'id="resRows"' in s and 'class="sp-res-row' in s, "缺少分辨率列表"
+    assert 'picker.dataset.mode = currentSizeMode();' in s
+    assert "renderResRows();" in s
+    assert ".sp[data-mode=\"preset\"] .sp-body { display:grid; }" in s
+    assert ".sp[data-mode=\"custom\"] .sp-custom-body { display:block; }" in s
     assert "handleRatioChipClick(event)" in s, "缺少点击委托"
     # 原生下拉必须还在（JS 状态源）但被隐藏
     assert 'id="ratioSelect"' in s and "#ratioSelect { display:none; }" in s
@@ -28,7 +40,7 @@ def test_source_contract():
     assert "renderRatioChips();" in s, "updateSizeUI 未同步图形按钮"
     # 不再用 label 包住按钮（避免点按钮触发 label 行为）
     assert '<label id="ratioField"' not in s
-    assert '<div id="ratioField" class="size-field">' in s
+    assert '<div id="ratioField">' in s
     for cls in ("r-portrait", "r-portrait43", "r-landscape", "r-landscape43", "r-wide", "r-story", "r-custom"):
         assert f".ratio-icon.{cls}" in s, cls
 
@@ -36,7 +48,9 @@ def test_source_contract():
 def test_generic_choice_wiring():
     """其余下拉（厂商/模型/尺寸/质量/张数）走同一套模块化按钮逻辑。"""
     s = source()
-    assert "const SELECT_CHIP_IDS = ['providerSelect', 'modelSelect', 'resolutionSelect', 'qualitySelect', 'countSelect'];" in s
+    assert "const SELECT_CHIP_IDS = ['providerSelect', 'modelSelect', 'qualitySelect', 'countSelect'];" in s
+    # 分辨率不再走 chips，避免和 sp-res 列表重复
+    assert "#resolutionSelectChips" not in s
     for fn in ("function selectChipBox(", "function syncSelectChips(", "function syncAllSelectChips("):
         assert fn in s, fn
     # select 仍是状态源：点按钮只派发 change，不自己改业务状态
@@ -90,9 +104,11 @@ console.log(JSON.stringify({ ratios: m, icons, expect }));
         import json
         data = json.loads(out.stdout.strip().splitlines()[-1])
         # 每个选项一个按钮，顺序与 <select> 一致；空比例没有图形，"auto" 用虚线圆
-        assert data["ratios"] == ["", "auto", "square", "portrait", "landscape",
-                                  "portrait43", "landscape43", "story", "wide", "custom"], data
-        assert data["icons"] == data["expect"][1:], data
+        # 「比例为空」「auto」由「自动」页签承担，网格里只剩具体比例
+        assert data["ratios"] == ["square", "portrait", "landscape", "portrait43",
+                                  "landscape43", "story", "wide", "custom"], data
+        assert data["icons"] == ["r-square", "r-portrait", "r-landscape", "r-portrait43",
+                                 "r-landscape43", "r-story", "r-wide", "r-custom"], data
 
 
 def test_generic_chips_runtime():

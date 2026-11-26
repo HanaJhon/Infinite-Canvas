@@ -72,6 +72,33 @@
         #modelSelectChips .ratio-chip { font-size:11.5px; padding:0 8px; }
         #modelSelectChips::-webkit-scrollbar { width:6px; }
         #modelSelectChips::-webkit-scrollbar-thumb { background:rgba(148,163,184,.4); border-radius:999px; }
+        /* 尺寸选择（照搬画布：自动 / 系统参数 / 自定义） */
+        .sp { display:flex; flex-direction:column; gap:8px; grid-column:1/-1; }
+        .sp-tabs { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:3px; padding:3px; border-radius:14px; background:#f8fafc; border:1px solid #edf2f7; }
+        .sp-tab { height:34px; border:0; border-radius:11px; background:transparent; color:#64748b; font-size:12.5px; font-weight:700; cursor:pointer; transition:background .15s ease, color .15s ease, box-shadow .15s ease; }
+        .sp-tab.active { background:#111827; color:#fff; box-shadow:0 1px 3px rgba(15,23,42,.18); }
+        .sp-hint { margin:0; padding:10px 12px; border-radius:12px; background:#f8fafc; border:1px solid #edf2f7; color:#64748b; font-size:11.5px; line-height:1.5; }
+        .sp-body { display:none; grid-template-columns:minmax(0,1.05fr) minmax(0,1fr); gap:10px; align-items:start; }
+        .sp-custom-body { display:none; }
+        .sp[data-mode="preset"] .sp-body { display:grid; }
+        .sp[data-mode="custom"] .sp-custom-body { display:block; }
+        .sp[data-mode="auto"] .sp-auto { display:block; }
+        .sp-auto { display:none; }
+        .sp-ratios { grid-template-columns:repeat(2,minmax(0,1fr)); grid-auto-rows:56px; gap:6px; max-height:252px; overflow-y:auto; scrollbar-width:thin; padding-right:2px; }
+        .sp-ratios .ratio-chip { height:56px; border-radius:12px; gap:5px; font-size:12.5px; }
+        .sp-ratios .ratio-icon { width:15px; height:15px; }
+        .sp-ratios .ratio-icon.r-portrait { width:12px; height:18px; }
+        .sp-ratios .ratio-icon.r-portrait43 { width:14px; height:19px; }
+        .sp-ratios .ratio-icon.r-landscape { width:21px; height:14px; }
+        .sp-ratios .ratio-icon.r-landscape43 { width:18px; height:14px; }
+        .sp-ratios .ratio-icon.r-wide { width:24px; height:13px; }
+        .sp-ratios .ratio-icon.r-story { width:13px; height:21px; }
+        .sp-res { display:flex; flex-direction:column; gap:6px; }
+        .sp-res-row { display:flex; align-items:center; justify-content:space-between; gap:8px; height:48px; padding:0 12px; border-radius:12px; border:1px solid #edf2f7; background:#f8fafc; color:#64748b; font-size:12px; font-weight:700; cursor:pointer; transition:border-color .15s ease, background .15s ease, color .15s ease; }
+        .sp-res-row em { font-style:normal; font-size:11px; font-weight:600; letter-spacing:.02em; opacity:.8; }
+        .sp-res-row.active { border-color:#111827; color:#111827; }
+        .sp-res-row:disabled { opacity:.45; cursor:not-allowed; }
+        .sp-custom-body .size-pair { display:grid; }
         #ratioField { grid-column:1/-1; }
         #resolutionField { grid-column:1/-1; }
         #ratioSelect { display:none; }
@@ -121,6 +148,20 @@
             #modelSelectChips{ grid-template-columns:minmax(0,1fr); max-height:300px; }
             #providerSelectChips{ grid-template-columns:repeat(2,minmax(0,1fr)); }
             #providerSelectChips .ratio-chip, #countSelectChips .ratio-chip{ height:45px; font-size:14.4px; }
+            .sp-tab{ height:44px; font-size:14.4px; border-radius:13px; }
+            .sp-hint{ font-size:12.5px; padding:12px 14px; }
+            .sp-body{ grid-template-columns:minmax(0,1fr); }
+            .sp-ratios{ grid-template-columns:repeat(2,minmax(0,1fr)); grid-auto-rows:76px; max-height:none; padding-right:0; }
+            .sp-ratios .ratio-chip{ height:76px; font-size:14px; border-radius:14px; }
+            .sp-ratios .ratio-icon{ width:19px; height:19px; }
+            .sp-ratios .ratio-icon.r-portrait{ width:15px; height:23px; }
+            .sp-ratios .ratio-icon.r-portrait43{ width:18px; height:24px; }
+            .sp-ratios .ratio-icon.r-landscape{ width:27px; height:18px; }
+            .sp-ratios .ratio-icon.r-landscape43{ width:23px; height:18px; }
+            .sp-ratios .ratio-icon.r-wide{ width:31px; height:17px; }
+            .sp-ratios .ratio-icon.r-story{ width:17px; height:27px; }
+            .sp-res-row{ height:56px; font-size:13px; }
+            .sp-res-row em{ font-size:12px; }
 
             #modelSelectChips .ratio-chip{ font-size:14.4px; height:60px; }
             #modelSelectChips .ratio-chip > span{ white-space:nowrap; overflow:visible; text-overflow:clip; }
@@ -394,39 +435,50 @@
                         <i data-lucide="ruler" class="w-3.5 h-3.5"></i>
                         <span data-i18n="online.size">Size</span>
                     </div>
-                    <div class="size-row">
-                        <label id="resolutionField" class="size-field">
-                            <select id="resolutionSelect" class="size-select" onchange="setResolution(this.value)">
-                                <option value="1k" selected>1K</option>
-                                <option value="2k">2K</option>
-                                <option value="4k">4K</option>
-                                <option value="custom" data-i18n="online.customSize">自定义尺寸</option>
-                            </select>
-                            <span class="size-pair with-fit">
+                    <div id="sizePicker" class="sp">
+                        <div class="sp-tabs" role="tablist">
+                            <button type="button" class="sp-tab" data-size-mode="auto" role="tab">自动</button>
+                            <button type="button" class="sp-tab" data-size-mode="preset" role="tab">系统参数</button>
+                            <button type="button" class="sp-tab" data-size-mode="custom" role="tab">自定义</button>
+                        </div>
+                        <div class="sp-pane sp-auto" data-pane="auto">
+                            <p class="sp-hint">不指定比例，由渠道按提示词与参考图自行决定。Grsai 的 nano-banana-pro 会真正走“auto”；其他渠道不支持时按方图输出。</p>
+                        </div>
+                        <div class="sp-body" data-pane="preset">
+                            <div id="ratioChips" class="ratio-chips sp-ratios" onclick="handleRatioChipClick(event)"></div>
+                            <div id="resRows" class="sp-res" onclick="handleResRowClick(event)"></div>
+                            <div id="ratioField">
+                                <select id="ratioSelect" class="size-select" onchange="setRatio(this.value)" tabindex="-1" aria-hidden="true">
+                                    <option value="" data-i18n="online.emptyRatio">比例为空</option>
+                                    <option id="grsaiAutoRatioOption" value="auto" hidden>Auto</option>
+                                    <option value="square" selected data-i18n="online.square">1:1 方图</option>
+                                    <option value="portrait" data-i18n="online.portrait">2:3 竖图</option>
+                                    <option value="landscape" data-i18n="online.landscape">3:2 横图</option>
+                                    <option value="portrait43">3:4 竖图</option>
+                                    <option value="landscape43">4:3 横图</option>
+                                    <option value="story" data-i18n="online.story">9:16 竖屏</option>
+                                    <option value="wide" data-i18n="online.wide">16:9 宽屏</option>
+                                    <option value="custom" data-i18n="online.customRatio">自定义比例</option>
+                                </select>
+                                <span class="size-pair">
+                                    <input id="ratioCustomWidth" class="size-custom" type="number" min="1" step="1" placeholder="宽" data-i18n-placeholder="online.ratioWidth" oninput="setCustomRatio()">
+                                    <input id="ratioCustomHeight" class="size-custom" type="number" min="1" step="1" placeholder="高" data-i18n-placeholder="online.ratioHeight" oninput="setCustomRatio()">
+                                </span>
+                            </div>
+                        </div>
+                        <div class="sp-custom-body" data-pane="custom">
+                            <div class="size-pair with-fit">
                                 <input id="sizeCustomWidth" class="size-custom" type="number" min="64" step="64" placeholder="宽度" data-i18n-placeholder="online.width" oninput="setCustomSize()">
                                 <input id="sizeCustomHeight" class="size-custom" type="number" min="64" step="64" placeholder="高度" data-i18n-placeholder="online.height" oninput="setCustomSize()">
                                 <button id="fitImageSizeBtn" class="size-fit-btn" type="button" onclick="fitCustomSizeToImage(event)">适配图片</button>
-                            </span>
-                        </label>
-                        <div id="ratioField" class="size-field">
-                            <div id="ratioChips" class="ratio-chips" onclick="handleRatioChipClick(event)"></div>
-                            <select id="ratioSelect" class="size-select" onchange="setRatio(this.value)" tabindex="-1" aria-hidden="true">
-                                <option value="" data-i18n="online.emptyRatio">比例为空</option>
-                                <option id="grsaiAutoRatioOption" value="auto" hidden>Auto</option>
-                                <option value="square" selected data-i18n="online.square">1:1 方图</option>
-                                <option value="portrait" data-i18n="online.portrait">2:3 竖图</option>
-                                <option value="landscape" data-i18n="online.landscape">3:2 横图</option>
-                                <option value="portrait43">3:4 竖图</option>
-                                <option value="landscape43">4:3 横图</option>
-                                <option value="story" data-i18n="online.story">9:16 竖屏</option>
-                                <option value="wide" data-i18n="online.wide">16:9 宽屏</option>
-                                <option value="custom" data-i18n="online.customRatio">自定义比例</option>
-                            </select>
-                            <span class="size-pair">
-                                <input id="ratioCustomWidth" class="size-custom" type="number" min="1" step="1" placeholder="宽" data-i18n-placeholder="online.ratioWidth" oninput="setCustomRatio()">
-                                <input id="ratioCustomHeight" class="size-custom" type="number" min="1" step="1" placeholder="高" data-i18n-placeholder="online.ratioHeight" oninput="setCustomRatio()">
-                            </span>
+                            </div>
                         </div>
+                        <select id="resolutionSelect" class="size-select" hidden>
+                            <option value="1k" selected>1K</option>
+                            <option value="2k">2K</option>
+                            <option value="4k">4K</option>
+                            <option value="custom" data-i18n="online.customSize">自定义尺寸</option>
+                        </select>
                     </div>
                 </div>
 
@@ -880,7 +932,7 @@
         /* 通用：把任意原生 <select> 升级成模块化按钮。
          * select 仍是唯一状态源（隐藏），点按钮只改 value + 派发 change，
          * 因此原有 onchange handler / updateSizeUI 都不用改；新控件接入只要把 id 加进 SELECT_CHIP_IDS。 */
-        const SELECT_CHIP_IDS = ['providerSelect', 'modelSelect', 'resolutionSelect', 'qualitySelect', 'countSelect'];
+        const SELECT_CHIP_IDS = ['providerSelect', 'modelSelect', 'qualitySelect', 'countSelect'];
         function selectChipBox(selectId){
             const select = document.getElementById(selectId);
             if(!select) return null;
@@ -931,7 +983,8 @@
             const box = document.getElementById('ratioChips');
             const select = document.getElementById('ratioSelect');
             if(!box || !select) return;
-            const options = [...select.options].filter(o => !o.hidden);
+            // 「比例为空」「auto」由上面的「自动」页签承担，网格里不再重复
+            const options = [...select.options].filter(o => !o.hidden && o.value !== '' && o.value !== 'auto');
             const signature = options.map(o => `${o.value}|${o.textContent}`).join(',');
             if(force || signature !== ratioChipSignature){
                 ratioChipSignature = signature;
@@ -984,6 +1037,63 @@
             updateSizeUI();
         }
 
+        function currentSizeMode(){
+            if(resolution === 'custom') return 'custom';
+            if(ratio === '' || ratio === 'auto') return 'auto';
+            return 'preset';
+        }
+
+        function setSizeMode(mode){
+            if(mode === 'auto'){
+                customWidth = '';
+                customHeight = '';
+                if(resolution === 'custom') resolution = '1k';
+                ratio = '';
+            } else if(mode === 'custom'){
+                resolution = 'custom';
+                ratio = '';
+            } else {
+                if(ratio === '' || ratio === 'auto') ratio = 'square';
+                if(resolution === 'custom') resolution = '1k';
+            }
+            updateSizeUI();
+        }
+
+        function sizeCaptionForRes(res){
+            const key = (ratio && ratio !== 'auto' && ratio !== 'custom') ? ratio : 'square';
+            const rows = SIZE_OPTIONS[key] || SIZE_OPTIONS.square || [];
+            const hit = rows.find(row => row[1] === res);
+            return hit ? hit[0] : '';
+        }
+
+        function renderResRows(){
+            const box = document.getElementById('resRows');
+            if(!box) return;
+            const mode = currentSizeMode();
+            box.innerHTML = ['1k', '2k', '4k'].map(res => {
+                const cls = mode === 'preset' && resolution === res ? ' active' : '';
+                return `<button type="button" class="sp-res-row${cls}" data-res="${res}"><span>${res.toUpperCase()}</span><em>${sizeCaptionForRes(res) || '—'}</em></button>`;
+            }).join('');
+        }
+
+        function handleResRowClick(event){
+            const btn = event.target.closest('[data-res]');
+            if(!btn || btn.disabled) return;
+            setResolution(btn.dataset.res);
+        }
+
+        function bindSizePicker(){
+            const picker = document.getElementById('sizePicker');
+            if(!picker || picker.dataset.bound) return;
+            picker.dataset.bound = '1';
+            picker.addEventListener('click', event => {
+                const tab = event.target.closest('[data-size-mode]');
+                if(!tab) return;
+                event.preventDefault();
+                setSizeMode(tab.dataset.sizeMode);
+            });
+        }
+
         function updateSizeUI(){
             const ratioSelect = document.getElementById('ratioSelect');
             const ratioField = document.getElementById('ratioField');
@@ -991,7 +1101,6 @@
             const ratioCustomWidthInput = document.getElementById('ratioCustomWidth');
             const ratioCustomHeightInput = document.getElementById('ratioCustomHeight');
             const resolutionSelect = document.getElementById('resolutionSelect');
-            const resolutionField = document.getElementById('resolutionField');
             const sizeCustomWidthInput = document.getElementById('sizeCustomWidth');
             const sizeCustomHeightInput = document.getElementById('sizeCustomHeight');
             const fitImageSizeBtn = document.getElementById('fitImageSizeBtn');
@@ -1003,14 +1112,24 @@
             ratioCustomWidthInput.value = customRatioWidth;
             ratioCustomHeightInput.value = customRatioHeight;
             resolutionSelect.value = resolution;
-            resolutionField.classList.toggle('custom', resolution === 'custom');
             sizeCustomWidthInput.value = customWidth;
             sizeCustomHeightInput.value = customHeight;
             if(fitImageSizeBtn) fitImageSizeBtn.disabled = !firstReferenceDimension();
+            const picker = document.getElementById('sizePicker');
+            if(picker){
+                picker.dataset.mode = currentSizeMode();
+                picker.querySelectorAll('[data-size-mode]').forEach(tab => {
+                    tab.classList.toggle('active', tab.dataset.sizeMode === picker.dataset.mode);
+                });
+            }
+            const ratioFieldEl = document.getElementById('ratioField');
+            if(ratioFieldEl) ratioFieldEl.hidden = ratio !== 'custom';
+            renderResRows();
             updateResolutionUI();
         }
 
         function updateResolutionUI(){}
+        bindSizePicker();
         function fitCustomSizeToImage(event){
             if(event) event.preventDefault();
             const dim = firstReferenceDimension();
