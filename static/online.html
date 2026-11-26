@@ -56,6 +56,14 @@
         .ratio-chip.active { background:#111827; border-color:#111827; color:#fff; }
         .ratio-chip:disabled { opacity:.45; cursor:not-allowed; }
         .ratio-chip > span:last-child { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        /* 通用：原生下拉 → 模块化按钮（select 保留为状态源，只是隐藏） */
+        .choice-native { display:none !important; }
+        .choice-chips { display:grid; grid-template-columns:repeat(auto-fit,minmax(76px,1fr)); gap:3px; padding:3px; border-radius:14px; background:#f8fafc; border:1px solid #edf2f7; }
+        .choice-chips .ratio-chip { height:28px; flex-direction:row; padding:0 8px; border-color:transparent; background:transparent; font-size:11px; font-weight:700; white-space:nowrap; }
+        .choice-chips .ratio-chip:hover { border-color:transparent; background:#fff; }
+        .choice-chips .ratio-chip.active { background:#fff; border-color:transparent; color:#111827; box-shadow:0 1px 3px rgba(15,23,42,.1); }
+        .choice-chips .ratio-chip > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        #modelSelectChips { grid-template-columns:minmax(0,1fr); }
         #ratioField { grid-column:1/-1; }
         #resolutionField { grid-column:1/-1; }
         #ratioSelect { display:none; }
@@ -99,6 +107,9 @@
             .model-option{ height:38px; font-size:15px; }
             .model-option.active{ color:#5b5bd6; }
             .size-select,.size-custom,.size-fit-btn{ height:40px; border-radius:12px; font-size:15.6px; background:#f6f7f9; border-color:rgba(15,23,42,.07); }
+            .choice-chips{ gap:3px; padding:3px; border-radius:14px; background:#f2f3f5; border-color:rgba(15,23,42,.06); }
+            .choice-chips .ratio-chip{ height:34px; border-radius:11px; font-size:14.4px; border-color:transparent; background:transparent; }
+            .choice-chips .ratio-chip.active{ background:#6366f1; color:#fff; border-color:transparent; }
             .ratio-chips{ gap:7px; }
             .ratio-chip{ height:58px; border-radius:14px; font-size:12px; gap:6px; background:#f6f7f9; border-color:rgba(15,23,42,.07); }
             .ratio-chip.active{ background:#6366f1; border-color:#6366f1; }
@@ -692,6 +703,7 @@
             }
             updateModelSpecificControls();
             updateAdaptivePanel();
+            syncAllSelectChips();
         }
 
         /* ---- 协议自适应：根据所选 provider 的 protocol 调整参数栏 ----
@@ -734,6 +746,7 @@
             if(cf) cf.style.display = (proto === 'runninghub') ? 'none' : '';
             const cs = document.getElementById('countSelect');
             if(cs) cs.value = String(outputCount);
+            syncAllSelectChips();
             refreshCreditBadge();
         }
         function setQuality(next){ quality = next || 'auto'; }
@@ -850,6 +863,50 @@
             updateSizeUI();
         }
 
+        /* 通用：把任意原生 <select> 升级成模块化按钮。
+         * select 仍是唯一状态源（隐藏），点按钮只改 value + 派发 change，
+         * 因此原有 onchange handler / updateSizeUI 都不用改；新控件接入只要把 id 加进 SELECT_CHIP_IDS。 */
+        const SELECT_CHIP_IDS = ['providerSelect', 'modelSelect', 'resolutionSelect', 'qualitySelect', 'countSelect'];
+        function selectChipBox(selectId){
+            const select = document.getElementById(selectId);
+            if(!select) return null;
+            let box = document.getElementById(selectId + 'Chips');
+            if(!box){
+                box = document.createElement('div');
+                box.id = selectId + 'Chips';
+                box.className = 'choice-chips';
+                select.parentNode.insertBefore(box, select);
+                select.classList.add('choice-native');
+                box.addEventListener('click', event => {
+                    const btn = event.target.closest('.ratio-chip');
+                    if(!btn || btn.disabled) return;
+                    select.value = btn.dataset.value;
+                    select.dispatchEvent(new Event('change'));
+                    syncSelectChips(selectId);
+                });
+            }
+            return box;
+        }
+        function syncSelectChips(selectId){
+            const select = document.getElementById(selectId);
+            if(!select) return;
+            const box = selectChipBox(selectId);
+            if(!box) return;
+            const options = [...select.options].filter(o => !o.hidden);
+            const signature = `${select.disabled ? 1 : 0}::` + options.map(o => `${o.value}|${o.textContent}`).join(',');
+            if(box.dataset.signature !== signature){
+                box.dataset.signature = signature;
+                box.innerHTML = options.map(o => `<button type="button" class="ratio-chip" data-value="${escapeHtml(o.value)}" title="${escapeHtml(o.textContent)}"><span>${escapeHtml(o.textContent)}</span></button>`).join('');
+            }
+            box.querySelectorAll('.ratio-chip').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.value === select.value);
+                btn.disabled = select.disabled;
+            });
+        }
+        function syncAllSelectChips(){
+            SELECT_CHIP_IDS.forEach(syncSelectChips);
+        }
+
         /* 比例图形选择：从隐藏的 <select> 生成图形按钮（文案/国际化沿用 option，不加新 key） */
         const RATIO_ICON_CLASS = {
             '': 'r-auto', auto: 'r-auto', square: 'r-square', portrait: 'r-portrait', landscape: 'r-landscape',
@@ -928,6 +985,7 @@
             ratioSelect.disabled = resolution === 'custom';
             ratioField.classList.toggle('custom', ratio === 'custom');
             renderRatioChips();
+            syncAllSelectChips();
             ratioCustomWidthInput.value = customRatioWidth;
             ratioCustomHeightInput.value = customRatioHeight;
             resolutionSelect.value = resolution;
