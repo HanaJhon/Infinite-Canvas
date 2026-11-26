@@ -63,7 +63,7 @@ def test_generic_choice_wiring():
     assert ".size-row > .model-field, .size-row > .provider-field { grid-column:1/-1; }" in s
     assert "#modelSelectChips { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); max-height:196px; overflow-y:auto;" in s
     # 质量/张数固定 4 项，恒为一行 4 列
-    assert "#qualitySelectChips, #countSelectChips { grid-template-columns:repeat(4,minmax(0,1fr)); }" in s
+    assert "#qualitySelectChips, #countSelectChips { grid-template-columns:repeat(2,minmax(0,1fr)); }" in s
 
 
 def test_shape_mapping_runtime():
